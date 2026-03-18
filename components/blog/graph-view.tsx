@@ -7,9 +7,48 @@ interface GraphNode {
   id: string; title: string; tags: string[]; type?: "note" | "tag"
   x?: number; y?: number; vx?: number; vy?: number
   fx?: number | null; fy?: number | null
+  linkCount: number
 }
 interface GraphLink { source: string | GraphNode; target: string | GraphNode }
 interface GraphData { nodes: GraphNode[]; links: GraphLink[] }
+
+const LOCAL_DEPTH = 2
+
+/** Extract the subgraph reachable within `depth` hops from `rootId`. */
+function extractLocalGraph(data: GraphData, rootId: string, depth: number): GraphData {
+  const adjacency = new Map<string, Set<string>>()
+  for (const l of data.links) {
+    const s = typeof l.source === "string" ? l.source : l.source.id
+    const t = typeof l.target === "string" ? l.target : l.target.id
+    if (!adjacency.has(s)) adjacency.set(s, new Set())
+    if (!adjacency.has(t)) adjacency.set(t, new Set())
+    adjacency.get(s)!.add(t)
+    adjacency.get(t)!.add(s)
+  }
+
+  const visited = new Set<string>()
+  let frontier = [rootId]
+  for (let d = 0; d <= depth && frontier.length; d++) {
+    const next: string[] = []
+    for (const id of frontier) {
+      if (visited.has(id)) continue
+      visited.add(id)
+      for (const neighbor of adjacency.get(id) ?? []) {
+        if (!visited.has(neighbor)) next.push(neighbor)
+      }
+    }
+    frontier = next
+  }
+
+  const nodeSet = visited
+  const nodes = data.nodes.filter(n => nodeSet.has(n.id))
+  const links = data.links.filter(l => {
+    const s = typeof l.source === "string" ? l.source : l.source.id
+    const t = typeof l.target === "string" ? l.target : l.target.id
+    return nodeSet.has(s) && nodeSet.has(t)
+  })
+  return { nodes, links }
+}
 
 export function GraphView({ currentSlug }: { currentSlug?: string }) {
   const svgRef = useRef<SVGSVGElement>(null)
@@ -35,14 +74,36 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
       const w = svgRef.current.clientWidth || 280
       const h = 260
 
-      const nodesCopy = data!.nodes.map(n => ({ ...n }))
-      const linksCopy = data!.links.map(l => ({ ...l }))
+      // Local graph: only nodes within LOCAL_DEPTH hops of current page
+      const graphData = currentSlug
+        ? extractLocalGraph(data!, currentSlug, LOCAL_DEPTH)
+        : data!
+
+      // Count incoming links per node for proportional sizing
+      const linkCounts = new Map<string, number>()
+      for (const l of graphData.links) {
+        const s = typeof l.source === "string" ? l.source : l.source.id
+        const t = typeof l.target === "string" ? l.target : l.target.id
+        linkCounts.set(s, (linkCounts.get(s) ?? 0) + 1)
+        linkCounts.set(t, (linkCounts.get(t) ?? 0) + 1)
+      }
+
+      const nodesCopy = graphData.nodes.map(n => ({ ...n, linkCount: linkCounts.get(n.id) ?? 0 }))
+      const linksCopy = graphData.links.map(l => ({ ...l }))
+
+      // Node radius: scale by link count (min 4, max 12, current page always prominent)
+      const maxLinks = Math.max(...nodesCopy.map(n => n.linkCount), 1)
+      const nodeRadius = (d: GraphNode) => {
+        if (d.id === currentSlug) return Math.max(8, 4 + (d.linkCount / maxLinks) * 8)
+        if (d.type === "tag") return 3.5
+        return 4 + (d.linkCount / maxLinks) * 6
+      }
 
       const sim = d3.forceSimulation<GraphNode>(nodesCopy)
         .force("link", d3.forceLink<GraphNode, GraphLink>(linksCopy).id(d => d.id).distance(35))
         .force("charge", d3.forceManyBody().strength(-50))
         .force("center", d3.forceCenter(0, 0))
-        .force("collision", d3.forceCollide(10))
+        .force("collision", d3.forceCollide<GraphNode>(d => nodeRadius(d) + 2))
 
       sim.stop()
       for (let i = 0; i < 300; i++) sim.tick()
@@ -60,9 +121,18 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
 
       const g = svg.append("g")
 
+      let currentZoomScale = fitScale
+
       const zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.2, 4])
-        .on("zoom", e => g.attr("transform", e.transform))
+        .on("zoom", e => {
+          g.attr("transform", e.transform)
+          const scale = e.transform.k
+          if (Math.abs(scale - currentZoomScale) > 0.05) {
+            currentZoomScale = scale
+            labels.attr("opacity", scale > 1.2 ? Math.min((scale - 1.2) / 0.8, 1) : 0)
+          }
+        })
 
       svg.call(zoomBehavior)
       svg.call(zoomBehavior.transform, initTransform)
@@ -102,6 +172,8 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
           node.selectAll<SVGCircleElement | SVGRectElement, GraphNode>("circle, rect")
             .attr("opacity", n => connected.has(n.id) ? 1 : 0.12)
 
+          labels.attr("opacity", n => connected.has(n.id) ? 1 : 0)
+
           link
             .attr("stroke-opacity", l => {
               const s = (l.source as GraphNode).id
@@ -118,6 +190,7 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
           setHoveredId(null)
           node.selectAll<SVGCircleElement | SVGRectElement, GraphNode>("circle, rect")
             .attr("opacity", 1)
+          labels.attr("opacity", currentZoomScale > 1.2 ? Math.min((currentZoomScale - 1.2) / 0.8, 1) : 0)
           link.attr("stroke-opacity", 0.2).attr("stroke-width", 1)
         })
         .call(d3.drag<SVGGElement, GraphNode>()
@@ -125,12 +198,14 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
           .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y })
           .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null }))
 
+      // Render node shapes
       node.each(function(d) {
         const el = d3.select(this)
         if (d.type === "tag") {
+          const r = nodeRadius(d)
           el.append("rect")
-            .attr("width", 7).attr("height", 7)
-            .attr("x", -3.5).attr("y", -3.5)
+            .attr("width", r * 2).attr("height", r * 2)
+            .attr("x", -r).attr("y", -r)
             .attr("transform", "rotate(45)")
             .attr("fill", "hsl(var(--chart-1))")
             .attr("fill-opacity", 0.7)
@@ -138,8 +213,9 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
             .attr("stroke-width", 1)
             .attr("stroke-opacity", 0.9)
         } else {
+          const r = nodeRadius(d)
           el.append("circle")
-            .attr("r", d.id === currentSlug ? 8 : 5)
+            .attr("r", r)
             .attr("fill", d.id === currentSlug ? "hsl(var(--primary))" : "hsl(var(--foreground))")
             .attr("fill-opacity", d.id === currentSlug ? 1 : 0.55)
             .attr("stroke", "hsl(var(--background))")
@@ -147,6 +223,17 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
             .attr("stroke-opacity", 1)
         }
       })
+
+      // Zoom-based text labels
+      const labels = node.append("text")
+        .text(d => d.title)
+        .attr("dx", d => nodeRadius(d) + 3)
+        .attr("dy", "0.35em")
+        .attr("font-size", "8px")
+        .attr("fill", "currentColor")
+        .attr("fill-opacity", 0.8)
+        .attr("pointer-events", "none")
+        .attr("opacity", fitScale > 1.2 ? Math.min((fitScale - 1.2) / 0.8, 1) : 0)
 
       const updatePositions = () => {
         link

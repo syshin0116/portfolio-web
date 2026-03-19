@@ -53,7 +53,6 @@ function extractLocalGraph(data: GraphData, rootId: string, depth: number): Grap
 export function GraphView({ currentSlug }: { currentSlug?: string }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [data, setData] = useState<GraphData | null>(null)
-  const [hoveredId, setHoveredId] = useState<string | null>(null)
   const router = useRouter()
 
   useEffect(() => {
@@ -73,6 +72,20 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
 
       const w = svgRef.current.clientWidth || 280
       const h = 260
+
+      // SVG defs for glow filter
+      const defs = svg.append("defs")
+      const glowFilter = defs.append("filter")
+        .attr("id", "node-glow")
+        .attr("x", "-50%").attr("y", "-50%")
+        .attr("width", "200%").attr("height", "200%")
+      glowFilter.append("feGaussianBlur")
+        .attr("stdDeviation", "2.5")
+        .attr("result", "blur")
+      glowFilter.append("feComposite")
+        .attr("in", "SourceGraphic")
+        .attr("in2", "blur")
+        .attr("operator", "over")
 
       // Local graph: only nodes within LOCAL_DEPTH hops of current page
       const graphData = currentSlug
@@ -100,16 +113,19 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
       }
 
       const sim = d3.forceSimulation<GraphNode>(nodesCopy)
-        .force("link", d3.forceLink<GraphNode, GraphLink>(linksCopy).id(d => d.id).distance(35))
-        .force("charge", d3.forceManyBody().strength(-50))
+        .force("link", d3.forceLink<GraphNode, GraphLink>(linksCopy).id(d => d.id).distance(55))
+        .force("charge", d3.forceManyBody().strength(-90))
         .force("center", d3.forceCenter(0, 0))
-        .force("collision", d3.forceCollide<GraphNode>(d => nodeRadius(d) + 2))
+        .force("collision", d3.forceCollide<GraphNode>(d => nodeRadius(d) + 4))
 
       sim.stop()
       for (let i = 0; i < 300; i++) sim.tick()
 
+      // Center on the centroid (weighted center) of all nodes for better visual balance
       const xs = nodesCopy.map(d => d.x ?? 0)
       const ys = nodesCopy.map(d => d.y ?? 0)
+      const cx = xs.reduce((a, b) => a + b, 0) / xs.length
+      const cy = ys.reduce((a, b) => a + b, 0) / ys.length
       const minX = Math.min(...xs), maxX = Math.max(...xs)
       const minY = Math.min(...ys), maxY = Math.max(...ys)
       const gw = Math.max(maxX - minX, 1)
@@ -117,7 +133,9 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
       const pad = 24
       const rawScale = Math.min((w - pad * 2) / gw, (h - pad * 2) / gh)
       const fitScale = Math.min(Math.max(rawScale, 0.5), 2)
-      const initTransform = d3.zoomIdentity.translate(w / 2, h / 2).scale(fitScale)
+      const initTransform = d3.zoomIdentity
+        .translate(w / 2 - cx * fitScale, h / 2 - cy * fitScale)
+        .scale(fitScale)
 
       const g = svg.append("g")
 
@@ -141,12 +159,14 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
         svg.transition().duration(350).call(zoomBehavior.transform, initTransform)
       )
 
+      // Curved links using quadratic bezier paths
       const link = g.append("g")
-        .selectAll("line")
+        .selectAll("path")
         .data(linksCopy)
-        .join("line")
+        .join("path")
+        .attr("fill", "none")
         .attr("stroke", "currentColor")
-        .attr("stroke-opacity", 0.2)
+        .attr("stroke-opacity", 0.15)
         .attr("stroke-width", 1)
 
       const node = g.append("g")
@@ -159,8 +179,6 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
           else router.push(`/blog/${d.id}`)
         })
         .on("mouseenter", (_, d) => {
-          setHoveredId(d.id)
-
           const connected = new Set<string>([d.id])
           linksCopy.forEach(l => {
             const s = (l.source as GraphNode).id
@@ -171,14 +189,18 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
 
           node.selectAll<SVGCircleElement | SVGRectElement, GraphNode>("circle, rect")
             .attr("opacity", n => connected.has(n.id) ? 1 : 0.12)
+            .attr("filter", n => connected.has(n.id) ? "url(#node-glow)" : "none")
 
-          labels.attr("opacity", n => connected.has(n.id) ? 1 : 0)
+          // Show full title on hover (undo truncation)
+          labels
+            .attr("opacity", n => connected.has(n.id) ? 1 : 0)
+            .text(n => connected.has(n.id) ? n.title : (n.title.length > 20 ? n.title.slice(0, 18) + "…" : n.title))
 
           link
             .attr("stroke-opacity", l => {
               const s = (l.source as GraphNode).id
               const t = (l.target as GraphNode).id
-              return s === d.id || t === d.id ? 0.65 : 0.05
+              return s === d.id || t === d.id ? 0.5 : 0.03
             })
             .attr("stroke-width", l => {
               const s = (l.source as GraphNode).id
@@ -187,18 +209,20 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
             })
         })
         .on("mouseleave", () => {
-          setHoveredId(null)
           node.selectAll<SVGCircleElement | SVGRectElement, GraphNode>("circle, rect")
             .attr("opacity", 1)
-          labels.attr("opacity", currentZoomScale > 1.2 ? Math.min((currentZoomScale - 1.2) / 0.8, 1) : 0)
-          link.attr("stroke-opacity", 0.2).attr("stroke-width", 1)
+            .attr("filter", "none")
+          labels
+            .attr("opacity", currentZoomScale > 1.0 ? Math.min((currentZoomScale - 1.0) / 0.6, 1) : 0)
+            .text(n => n.title.length > 20 ? n.title.slice(0, 18) + "…" : n.title)
+          link.attr("stroke-opacity", 0.15).attr("stroke-width", 1)
         })
         .call(d3.drag<SVGGElement, GraphNode>()
           .on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y })
           .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y })
           .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null }))
 
-      // Render node shapes
+      // Render node shapes with glow on current page
       node.each(function(d) {
         const el = d3.select(this)
         if (d.type === "tag") {
@@ -214,33 +238,59 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
             .attr("stroke-opacity", 0.9)
         } else {
           const r = nodeRadius(d)
+          const isCurrent = d.id === currentSlug
           el.append("circle")
             .attr("r", r)
-            .attr("fill", d.id === currentSlug ? "hsl(var(--primary))" : "hsl(var(--foreground))")
-            .attr("fill-opacity", d.id === currentSlug ? 1 : 0.55)
+            .attr("fill", isCurrent ? "hsl(var(--primary))" : "hsl(var(--foreground))")
+            .attr("fill-opacity", isCurrent ? 1 : 0.55)
             .attr("stroke", "hsl(var(--background))")
             .attr("stroke-width", 1.5)
             .attr("stroke-opacity", 1)
+            .attr("filter", isCurrent ? "url(#node-glow)" : "none")
         }
       })
 
-      // Zoom-based text labels
+      // Zoom-based text labels with truncation
       const labels = node.append("text")
-        .text(d => d.title)
-        .attr("dx", d => nodeRadius(d) + 3)
+        .text(d => d.title.length > 20 ? d.title.slice(0, 18) + "…" : d.title)
+        .attr("dx", d => nodeRadius(d) + 4)
         .attr("dy", "0.35em")
-        .attr("font-size", "8px")
+        .attr("font-size", "10px")
         .attr("fill", "currentColor")
-        .attr("fill-opacity", 0.8)
+        .attr("fill-opacity", 0.85)
         .attr("pointer-events", "none")
-        .attr("opacity", fitScale > 1.2 ? Math.min((fitScale - 1.2) / 0.8, 1) : 0)
+        .attr("opacity", fitScale > 1.0 ? Math.min((fitScale - 1.0) / 0.6, 1) : 0)
+
+      // Simple overlap avoidance: flip label to left side if another node is too close on the right
+      nodesCopy.forEach((d, i) => {
+        const r = nodeRadius(d)
+        const hasRightNeighbor = nodesCopy.some((other, j) => {
+          if (i === j) return false
+          const dx = (other.x ?? 0) - (d.x ?? 0)
+          const dy = (other.y ?? 0) - (d.y ?? 0)
+          return dx > 0 && dx < 60 && Math.abs(dy) < 12
+        })
+        if (hasRightNeighbor) {
+          d3.select(labels.nodes()[i])
+            .attr("dx", -(r + 4))
+            .attr("text-anchor", "end")
+        }
+      })
 
       const updatePositions = () => {
-        link
-          .attr("x1", d => (d.source as GraphNode).x!)
-          .attr("y1", d => (d.source as GraphNode).y!)
-          .attr("x2", d => (d.target as GraphNode).x!)
-          .attr("y2", d => (d.target as GraphNode).y!)
+        // Curved paths: slight arc using quadratic bezier
+        link.attr("d", (d) => {
+          const s = d.source as GraphNode
+          const t = d.target as GraphNode
+          const dx = t.x! - s.x!
+          const dy = t.y! - s.y!
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          // Curvature proportional to distance, subtle
+          const curve = dist * 0.12
+          const mx = (s.x! + t.x!) / 2 - (dy / dist) * curve
+          const my = (s.y! + t.y!) / 2 + (dx / dist) * curve
+          return `M${s.x},${s.y} Q${mx},${my} ${t.x},${t.y}`
+        })
         node.attr("transform", d => `translate(${d.x},${d.y})`)
       }
 
@@ -268,18 +318,11 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
   return (
     <div className="w-full mt-4">
       <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Graph</p>
-      <div className="relative">
-        <svg
-          ref={svgRef}
-          className="w-full rounded-lg border bg-muted/5"
-          style={{ height: 260 }}
-        />
-        {hoveredId && (
-          <div className="absolute bottom-2 left-2 right-2 rounded-md bg-background/95 px-2.5 py-1.5 text-sm text-foreground backdrop-blur pointer-events-none truncate border shadow-sm">
-            {data.nodes.find(n => n.id === hoveredId)?.title ?? hoveredId}
-          </div>
-        )}
-      </div>
+      <svg
+        ref={svgRef}
+        className="w-full rounded-lg border bg-muted/5"
+        style={{ height: 260 }}
+      />
     </div>
   )
 }

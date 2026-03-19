@@ -88,7 +88,7 @@ export function BlogList({
                 )}
                 <div className="mt-2 flex flex-wrap gap-1">
                   {category && (
-                    <Badge variant="outline" className="text-xs font-normal">
+                    <Badge variant="outline" className="text-xs font-normal border-primary/40 text-primary">
                       {category}
                     </Badge>
                   )}

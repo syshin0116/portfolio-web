@@ -17,7 +17,7 @@ enableToc: true
 description: RAG-Anything의 내부 구조를 파헤쳐본다. MinerU 파서, LightRAG 기반 지식 그래프 구축, 멀티모달 처리, VLM 강화 쿼리까지 전체 파이프라인을 상세히 분석한다.
 summary: RAG-Anything은 LightRAG(그래프 기반 RAG)를 핵심 엔진으로 사용하면서 이미지, 표, 수식 등 멀티모달 콘텐츠 처리를 추가한 프레임워크다. MinerU를 기본 파서로 사용하여 PDF를 구조화된 데이터로 변환하고, LLM 기반 엔티티/관계 추출로 지식 그래프를 구축한 뒤, 벡터 유사도 + 그래프 탐색 하이브리드 검색으로 답변을 생성한다.
 published: 2026-03-22
-modified: 2026-03-22
+modified: 2026-03-23
 ---
 
 > [!summary]
@@ -258,37 +258,11 @@ Based on the last extraction task, identify and extract any
 
 ### 지식 그래프 구축 파이프라인
 
-```
-┌──────────────────────────────────────┐
-│ Phase 1: 청킹                         │
-│ 텍스트 → 1200 토큰 청크 (100 오버랩)    │
-└──────────────┬───────────────────────┘
-               ↓
-┌──────────────────────────────────────┐
-│ Phase 2: LLM 추출 (청크별)             │
-│ 각 청크 → LLM → 엔티티 + 관계 파싱      │
-│ + Gleaning으로 누락분 재추출             │
-└──────────────┬───────────────────────┘
-               ↓
-┌──────────────────────────────────────┐
-│ Phase 3: 결과 파싱                     │
-│ <|#|> 구분자로 분리                     │
-│ → 엔티티: (name, type, description)   │
-│ → 관계: (src, tgt, keywords, desc)    │
-└──────────────┬───────────────────────┘
-               ↓
-┌──────────────────────────────────────┐
-│ Phase 4: 엔티티 병합 (동시, 엔티티별 락) │
-│ 같은 이름 → 설명 수집 → Map-Reduce 요약 │
-│ → Graph DB + Entity VDB에 upsert      │
-└──────────────┬───────────────────────┘
-               ↓
-┌──────────────────────────────────────┐
-│ Phase 5: 관계 병합 (동시, (src,tgt) 락) │
-│ 같은 쌍 → 설명+키워드 병합 → 가중치 합산  │
-│ → Graph DB + Relationship VDB에 upsert│
-└──────────────────────────────────────┘
-```
+1. **청킹** — 텍스트를 1200 토큰 단위로 분할 (100 토큰 오버랩)
+2. **LLM 추출** — 각 청크에서 LLM으로 엔티티 + 관계를 동시 추출. Gleaning으로 누락분 재추출
+3. **결과 파싱** — `<|#|>` 구분자로 LLM 출력을 엔티티(name, type, description)와 관계(src, tgt, keywords, description)로 분리
+4. **엔티티 병합** — 같은 이름의 엔티티는 설명을 수집하여 Map-Reduce 방식으로 LLM 요약 → Graph DB + Entity VDB에 upsert
+5. **관계 병합** — 같은 (src, tgt) 쌍의 관계는 설명+키워드 병합, 가중치 합산 → Graph DB + Relationship VDB에 upsert
 
 ### 엔티티/관계 병합 — Map-Reduce 요약
 
@@ -330,17 +304,109 @@ Based on the last extraction task, identify and extract any
 }
 ```
 
-### 스토리지 구조
+### 스토리지 구조 — 벡터 DB + 그래프 DB 동시 사용
 
-| 스토리지 | 용도 |
-|----------|------|
-| `chunk_entity_relation_graph` | 그래프 DB (NetworkX, Neo4j, Memgraph 등) |
-| `entities_vdb` | 엔티티 임베딩 벡터 DB |
-| `relationships_vdb` | 관계 임베딩 벡터 DB |
-| `text_chunks` | 청크 원문 KV 저장소 |
-| `chunks_vdb` | 청크 임베딩 벡터 DB |
-| `full_entities` / `full_relations` | 엔티티/관계 전체 메타데이터 |
-| `doc_status` | 문서 처리 상태 추적 |
+LightRAG는 **벡터 DB와 그래프 DB를 동시에** 사용한다. 같은 데이터가 양쪽에 저장되어, 검색 시 벡터 유사도 + 그래프 탐색을 결합할 수 있다.
+
+| 스토리지 | 타입 | 용도 |
+|----------|------|------|
+| `chunk_entity_relation_graph` | **Graph DB** | 엔티티-관계 그래프 (노드 + 엣지) |
+| `entities_vdb` | **Vector DB** | 엔티티 임베딩 (의미 검색용) |
+| `relationships_vdb` | **Vector DB** | 관계 임베딩 (의미 검색용) |
+| `chunks_vdb` | **Vector DB** | 텍스트 청크 임베딩 |
+| `text_chunks` | KV 저장소 | 청크 원문 텍스트 |
+| `full_entities` / `full_relations` | KV 저장소 | 엔티티/관계 전체 메타데이터 |
+| `llm_response_cache` | KV 저장소 | LLM 응답 캐시 |
+| `doc_status` | KV 저장소 | 문서 처리 상태 추적 |
+
+인덱싱 시 엔티티는 **Graph DB에 노드로** + **Vector DB에 임베딩으로** 동시 저장된다. 관계도 마찬가지로 Graph DB의 엣지 + Vector DB의 임베딩으로 이중 저장된다.
+
+---
+
+## 지원 백엔드 및 설정
+
+### 파서 (Document Parser)
+
+| 파서 | 설명 | 기본값 |
+|------|------|--------|
+| **MineruParser** | MinerU CLI 래퍼. 레이아웃 분석 + OCR 최강 | ✅ 기본 |
+| **DoclingParser** | IBM docling 기반. 복잡한 문서 구조에 강함 | |
+| **PaddleOCRParser** | PaddleOCR 기반 경량 파서 | |
+| **커스텀 파서** | `register_parser()`로 등록 가능 | |
+
+### 벡터 DB
+
+| 백엔드 | 외부 서비스 필요 | 기본값 |
+|--------|----------------|--------|
+| **NanoVectorDB** | 아니오 (파일 기반) | ✅ 기본 |
+| **FAISS** | 아니오 (파일 기반) | |
+| **Qdrant** | 예 (`QDRANT_URL`) | |
+| **Milvus** | 예 (`MILVUS_URI`) | |
+| **PostgreSQL pgvector** | 예 (`POSTGRES_*`) | |
+| **MongoDB** | 예 (`MONGO_URI`) | |
+| **Chroma** | 아니오 | (deprecated) |
+
+### 그래프 DB
+
+| 백엔드 | 외부 서비스 필요 | 기본값 |
+|--------|----------------|--------|
+| **NetworkX** | 아니오 (파일 기반) | ✅ 기본 |
+| **Neo4j** | 예 (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`) | |
+| **Memgraph** | 예 (`MEMGRAPH_URI`) | |
+| **AGE** (PostgreSQL 확장) | 예 (`AGE_POSTGRES_*`) | |
+| **PostgreSQL** | 예 (`POSTGRES_*`) | |
+| **MongoDB** | 예 (`MONGO_URI`) | |
+
+### KV 저장소
+
+| 백엔드 | 외부 서비스 필요 | 기본값 |
+|--------|----------------|--------|
+| **JsonKVStorage** | 아니오 (파일 기반) | ✅ 기본 |
+| **Redis** | 예 (`REDIS_URI`) | |
+| **PostgreSQL** | 예 (`POSTGRES_*`) | |
+| **MongoDB** | 예 (`MONGO_URI`) | |
+
+### 기본값 정리
+
+별도 설정 없이 사용하면 **모든 스토리지가 파일 기반**으로 동작한다:
+
+```python
+# LightRAG 기본값 (외부 서비스 불필요)
+working_dir = "./rag_storage"
+vector_storage = "NanoVectorDBStorage"      # 파일 기반 벡터 DB
+graph_storage = "NetworkXStorage"           # 파일 기반 그래프
+kv_storage = "JsonKVStorage"                # JSON 파일 기반 KV
+doc_status_storage = "JsonDocStatusStorage"  # JSON 파일 기반
+```
+
+프로덕션 환경에서는 이렇게 변경할 수 있다:
+
+```python
+rag = LightRAG(
+    working_dir="./rag_storage",
+    vector_storage="QdrantVectorDBStorage",
+    graph_storage="Neo4JStorage",
+    kv_storage="RedisKVStorage",
+    vector_db_storage_cls_kwargs={
+        "cosine_better_than_threshold": 0.3
+    }
+)
+```
+
+환경변수로도 설정 가능하다:
+
+```bash
+VECTOR_STORAGE=MilvusVectorDBStorage
+MILVUS_URI=http://milvus:19530
+GRAPH_STORAGE=Neo4JStorage
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=password
+```
+
+> [!tip]
+>
+> RAG-Anything은 스토리지 설정을 LightRAG에 위임한다. `lightrag_kwargs`로 원하는 백엔드를 전달하면 된다. RAG-Anything 자체의 설정은 파서 선택, 멀티모달 처리 ON/OFF, 컨텍스트 윈도우 등 문서 처리 관련에 집중한다.
 
 ---
 
@@ -574,33 +640,33 @@ MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한�
 
 총 12개 파일이 추출되었다: 논문 Figure 7개 + Table 이미지 2개 + 수식 이미지 3개
 
-#### Figure 추출 (7/7 완벽 추출)
+#### Figure 추출 (7/7 모두 추출)
 
 **Figure 3 — SEISMIC 아키텍처 다이어그램:**
 
 ![[attachments/rag-anything-test/extracted-figure3-architecture.jpg]]
 
-> 색상, 점선, 텍스트 라벨까지 원본과 동일하게 추출. 복잡한 구조적 다이어그램도 문제없다.
+> 색상, 점선, 텍스트 라벨까지 원본과 동일하게 추출되었다. 복잡한 구조적 다이어그램도 깨끗하게 나온다.
 
 **Figure 1 — L1 mass 차트:**
 
 ![[attachments/rag-anything-test/extracted-figure1-l1mass.jpg]]
 
-> 축 라벨, 범례, 곡선 모두 깨끗하게 추출.
+> 축 라벨, 범례, 곡선 모두 선명하게 추출.
 
-#### 표 추출 (2/2 완벽 추출)
+#### 표 추출 (2/2 모두 추출)
 
 **Table 1 — 대형 성능 비교 표 (4개 데이터셋 × 8개 정확도 수준):**
 
 ![[attachments/rag-anything-test/extracted-table1-latency.jpg]]
 
-> 이미지로도 추출되었지만, 동시에 **HTML 구조**로도 파싱되었다 (5,507자의 `<table>` HTML). 행/열 구조, 소수점, 괄호 안 speedup 값까지 정확하게 추출.
+> 이미지로도 추출되었지만, 동시에 **HTML 구조**로도 파싱되었다 (5,507자의 `<table>` HTML). 행/열 구조, 소수점, 괄호 안 speedup 값까지 잘 살아있다.
 
 **Table 2 — 인덱스 크기/빌드 시간:**
 
 ![[attachments/rag-anything-test/extracted-table2-indexsize.jpg]]
 
-> 간결한 표로 HTML 구조(399자)까지 완벽 추출.
+> 간결한 표도 HTML 구조(399자)로 깔끔하게 파싱.
 
 #### 수식 추출 (3/3 추출)
 
@@ -637,9 +703,9 @@ MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한�
 | 항목 | 평가 |
 |------|------|
 | **레이아웃 분석** | 2단 레이아웃, 차트/표/본문 분리 모두 정확 |
-| **이미지 추출** | 7/7 Figure 완벽 추출, 불필요 이미지 0 |
-| **표 추출** | HTML 구조 + 이미지 이중 추출, 셀 데이터 정확 |
-| **수식 추출** | 이미지 + LaTeX 이중 추출 |
+| **이미지 추출** | 7/7 Figure 모두 추출, 불필요 이미지 0 |
+| **표 추출** | HTML 구조 + 이미지 동시 추출, 셀 데이터 정확 |
+| **수식 추출** | 이미지 + LaTeX 동시 추출 |
 | **텍스트 품질** | 참조 번호, 특수 문자, 2단 레이아웃 순서 모두 정확 |
 | **처리 속도** | 11페이지 / 7분 22초 (CPU only, Apple M4 Pro) |
 

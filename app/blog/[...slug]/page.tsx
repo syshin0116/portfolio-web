@@ -237,26 +237,12 @@ export default async function BlogPostPage({
   }
 
   const knownSlugs = new Set(files.map((f) => f.slug))
-  const rawResult = await renderMarkdown(raw, { resolveLink, knownSlugs })
+  const rawResult = await renderMarkdown(raw, { resolveLink, knownSlugs, filePath: slug.join("/") + ".md" })
 
-  // Fix relative image paths: convert /api/content/image.png to /blog/api/content/slug/image.png
-  const fileDir = slug.slice(0, -1).join('/')
-  let html = rawResult.html.replaceAll('/api/content/', '/blog/api/content/')
-
-  // Handle relative image paths in the current directory
-  html = html.replace(
-    /\/blog\/api\/content\/([^\/]+\.(png|jpg|jpeg|gif|webp|svg|mp4|pdf))/gi,
-    (match, filename) => {
-      // If the path already looks like it has directory structure, leave it
-      if (filename.includes('/')) return match
-      // Otherwise, prepend the current file's directory
-      return `/blog/api/content/${fileDir}/${filename}`
-    }
-  )
-
+  // Rewrite /api/content/ to /blog/api/content/ for the blog prefix
   const result = {
     ...rawResult,
-    html,
+    html: rawResult.html.replaceAll('/api/content/', '/blog/api/content/'),
   }
 
   // Build backlink index — use raw text wikilink detection instead of full renderMarkdown

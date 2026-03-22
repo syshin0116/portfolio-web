@@ -57,7 +57,7 @@ MinerU 2.0에서 PyMuPDF를 pypdfium2로 교체하면서 라이센스 문제가 
 
 RAG-Anything의 파이프라인은 크게 5단계로 나뉜다:
 
-![[rag-anything-kg-pipeline.png]]
+![RAG-Anything KG Pipeline](https://i.imgur.com/Dw0Czd6.png)
 
 ### 핵심 구조
 
@@ -616,7 +616,7 @@ Type distribution:
 
 MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한다:
 
-![[attachments/rag-anything-test/layout-page1.png]]
+![레이아웃 감지 결과 - 1페이지](https://i.imgur.com/xXwUYaK.png)
 
 > [!info]
 >
@@ -626,13 +626,13 @@ MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한�
 
 **4페이지 (차트 + 본문 혼합):**
 
-![[attachments/rag-anything-test/layout-page4.png]]
+![레이아웃 감지 결과 - 4페이지](https://i.imgur.com/Hq7aBSO.png)
 
 차트(Figure 1, 2)와 캡션이 정확히 분리되었다. 2단 레이아웃에서 차트가 한 컬럼만 차지하는 경우도 올바르게 처리한다.
 
 **8페이지 (대형 표 + 차트 + 본문):**
 
-![[attachments/rag-anything-test/layout-page8.png]]
+![레이아웃 감지 결과 - 8페이지](https://i.imgur.com/Mt7T1CZ.png)
 
 페이지 상단의 대형 성능 비교 표(Table 1)가 정확히 인식되었고, 하단의 차트(Figure 4)와 소형 표(Table 2)도 개별적으로 분리되었다.
 
@@ -644,13 +644,13 @@ MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한�
 
 **Figure 3 — SEISMIC 아키텍처 다이어그램:**
 
-![[attachments/rag-anything-test/extracted-figure3-architecture.jpg]]
+![추출된 아키텍처 Figure](https://i.imgur.com/AbYmRG5.jpeg)
 
 > 색상, 점선, 텍스트 라벨까지 원본과 동일하게 추출되었다. 복잡한 구조적 다이어그램도 깨끗하게 나온다.
 
 **Figure 1 — L1 mass 차트:**
 
-![[attachments/rag-anything-test/extracted-figure1-l1mass.jpg]]
+![추출된 Figure - L1 Mass](https://i.imgur.com/nadR5Vl.jpeg)
 
 > 축 라벨, 범례, 곡선 모두 선명하게 추출.
 
@@ -658,23 +658,23 @@ MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한�
 
 **Table 1 — 대형 성능 비교 표 (4개 데이터셋 × 8개 정확도 수준):**
 
-![[attachments/rag-anything-test/extracted-table1-latency.jpg]]
+![추출된 테이블 - Latency](https://i.imgur.com/IH9cLaV.jpeg)
 
 > 이미지로도 추출되었지만, 동시에 **HTML 구조**로도 파싱되었다 (5,507자의 `<table>` HTML). 행/열 구조, 소수점, 괄호 안 speedup 값까지 잘 살아있다.
 
 **Table 2 — 인덱스 크기/빌드 시간:**
 
-![[attachments/rag-anything-test/extracted-table2-indexsize.jpg]]
+![추출된 테이블 - Index Size](https://i.imgur.com/64BCyH6.jpeg)
 
 > 간결한 표도 HTML 구조(399자)로 깔끔하게 파싱.
 
 #### 수식 추출 (3/3 추출)
 
-![[attachments/rag-anything-test/extracted-equation1.jpg]]
+![추출된 수식 1](https://i.imgur.com/6TOi3eb.jpeg)
 
-![[attachments/rag-anything-test/extracted-equation2.jpg]]
+![추출된 수식 2](https://i.imgur.com/kwZdKzC.jpeg)
 
-![[attachments/rag-anything-test/extracted-equation3.jpg]]
+![추출된 수식 3](https://i.imgur.com/l7w92ei.jpeg)
 
 > 수식은 이미지로 추출되며, 마크다운에서는 LaTeX 형식(`$S = \arg\max_{x \in X}^{(k)} \langle q, x \rangle$`)으로도 변환된다.
 

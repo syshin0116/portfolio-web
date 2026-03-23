@@ -228,7 +228,7 @@ export default async function BlogPostPage({
     if (!slugByName.has(name)) slugByName.set(name, f.slug)
   }
   const resolveLink = (target: string): string => {
-    const normalized = target.toLowerCase().replace(/\s+/g, "-").replace(/[^\w/-]/g, "")
+    const normalized = target.toLowerCase().replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_/-]/gu, "")
     const exact = files.find((f) => f.slug === normalized)
     if (exact) return `/blog/${exact.slug}`
     const byName = slugByName.get(normalized.split("/").pop()!)
@@ -254,7 +254,7 @@ export default async function BlogPostPage({
     const matches = file.raw.matchAll(wikilinkPattern)
     for (const match of matches) {
       const target = match[1].trim()
-      const normalized = target.toLowerCase().replace(/\s+/g, "-").replace(/[^\w/-]/g, "")
+      const normalized = target.toLowerCase().replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_/-]/gu, "")
       const targetName = normalized.split("/").pop()!
       const currentName = slugStr.split("/").pop()!.toLowerCase().replace(/\s+/g, "-")
       if (normalized === slugStr.toLowerCase() || targetName === currentName) {

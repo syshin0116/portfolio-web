@@ -1,5 +1,5 @@
 ---
-title: PyMuPDF4LLM - GPU 없이 가장 빠른 PDF 파서
+title: PyMuPDF4LLM - 경량 GNN으로 GPU 없이 가장 빠른 PDF 파서
 date: 2026-03-25
 tags:
   - pdf-parser
@@ -10,15 +10,15 @@ tags:
   - markdown
 draft: false
 enableToc: true
-description: PyMuPDF4LLM v1.27.2.2의 내부 구조를 분석하고, 4종 문서(영문 논문, 한국어 보고서, PPT 슬라이드, 복잡한 레이아웃)로 성능을 테스트한다. ML 모델 없이 규칙 기반으로 동작하며, 페이지당 0.05~0.25초의 압도적 속도를 보여준다.
-summary: PyMuPDF4LLM은 Artifex Software의 MuPDF 엔진 위에 구축된 규칙 기반 PDF-to-Markdown 변환기다. ML 모델 없이 PDF 내부 구조를 직접 파싱하여 페이지당 0.05~0.25초의 압도적 속도를 달성한다. GPU 불필요, 의존성 최소, 설치 즉시 사용 가능하지만, 수식 LaTeX 변환 불가, 스캔 문서 OCR 제한, 헤딩 레벨 부정확 등의 한계가 있다.
+description: PyMuPDF4LLM v1.27.2.2의 내부 구조를 분석하고, 4종 문서(영문 논문, 한국어 보고서, PPT 슬라이드, 복잡한 레이아웃)로 성능을 테스트한다. 경량 GNN 모델(ONNX)로 레이아웃을 분석하고 규칙 기반으로 텍스트를 추출하여, 페이지당 0.05~0.25초의 압도적 속도를 보여준다.
+summary: PyMuPDF4LLM은 Artifex Software의 MuPDF 엔진 위에 구축된 PDF-to-Markdown 변환기다. PDF 내부 구조를 직접 파싱하고, pymupdf-layout의 경량 GNN 모델(ONNX Runtime)로 레이아웃을 분석하여 페이지당 0.05~0.25초의 압도적 속도를 달성한다. GPU 불필요, 의존성 최소, 설치 즉시 사용 가능하지만, 수식 LaTeX 변환 불가, 스캔 문서 OCR 제한, 헤딩 레벨 부정확 등의 한계가 있다.
 published: 2026-03-25
 modified: 2026-03-25
 ---
 
 > [!summary]
 >
-> PyMuPDF4LLM은 Artifex Software의 MuPDF 엔진 위에 구축된 규칙 기반 PDF-to-Markdown 변환기다. ML 모델 없이 PDF 내부 구조를 직접 파싱하여 페이지당 0.05~0.25초의 압도적 속도를 달성한다. GPU 불필요, 의존성 최소, 설치 즉시 사용 가능하지만, 수식 LaTeX 변환 불가, 스캔 문서 OCR 제한, 헤딩 레벨 부정확 등의 한계가 있다.
+> PyMuPDF4LLM은 Artifex Software의 MuPDF 엔진 위에 구축된 PDF-to-Markdown 변환기다. PDF 내부 구조를 직접 파싱하고, pymupdf-layout의 경량 GNN 모델(ONNX Runtime)로 레이아웃을 분석하여 페이지당 0.05~0.25초의 압도적 속도를 달성한다. GPU 불필요, 의존성 최소, 설치 즉시 사용 가능하지만, 수식 LaTeX 변환 불가, 스캔 문서 OCR 제한, 헤딩 레벨 부정확 등의 한계가 있다.
 
 ## 개요
 
@@ -28,13 +28,14 @@ modified: 2026-03-25
 | **GitHub** | [pymupdf/pymupdf4llm](https://github.com/pymupdf/pymupdf4llm) |
 | **최신 버전** | v1.27.2.2 (2026-03-20) |
 | **라이선스** | AGPL-3.0 (상용 라이선스 별도 구매 가능) |
-| **GitHub Stars** | ~3,000+ |
-| **Python** | 3.9+ |
-| **GPU 필요** | X (CPU만으로 동작) |
-| **모델 다운로드** | 없음 |
-| **설치 크기** | ~50MB (PyMuPDF 포함) |
+| **GitHub Stars** | ~1,465 (PyMuPDF 본체: ~9,300) |
+| **Python** | 3.10+ |
+| **GPU 필요** | X (ONNX Runtime CPU 추론) |
+| **모델 다운로드** | pymupdf-layout에 GNN 모델 내장 (별도 다운로드 불필요) |
+| **설치 크기** | ~84KB (pymupdf4llm) + PyMuPDF + pymupdf-layout |
+| **상용 라이선스** | Artifex에서 별도 구매 가능 (AGPL 회피) |
 
-PyMuPDF4LLM은 [[MinerU - PDF Parser|MinerU]]나 Docling 같은 ML 기반 파서와 근본적으로 다른 접근을 취한다. YOLO, Transformer 같은 딥러닝 모델을 사용하지 않고, PDF 내부의 텍스트 객체, 폰트 정보, 좌표 데이터를 직접 읽어 규칙 기반으로 Markdown을 생성한다. 그래서 **빠르다**. 압도적으로 빠르다.
+PyMuPDF4LLM은 [[MinerU - PDF Parser|MinerU]]나 Docling 같은 대형 ML 파서와 다른 접근을 취한다. YOLO, Transformer 같은 무거운 모델 대신 PDF 내부의 텍스트 객체, 폰트 정보, 좌표 데이터를 직접 읽고, 레이아웃 분석에만 **경량 GNN 모델**(ONNX Runtime, CPU 추론)을 사용한다. 그래서 **빠르다**. 압도적으로 빠르다.
 
 ---
 
@@ -54,15 +55,18 @@ MuPDF (C 라이브러리, Artifex)
 - **pymupdf-layout**: PDF 텍스트 레이아웃 분석 확장 모듈 (다단 감지, 읽기 순서)
 - **PyMuPDF4LLM**: 위 세 라이브러리를 활용하여 LLM/RAG에 최적화된 Markdown 출력 생성
 
-### 핵심 특징: 규칙 기반 접근
+### 핵심 특징: 경량 ML + 규칙 기반 하이브리드
 
-ML 모델 없이 PDF 내부 구조를 직접 활용한다:
+PDF 내부 구조를 직접 활용하되, 레이아웃 분석에는 경량 ML을 사용한다:
 
-- **텍스트 추출**: PDF 텍스트 객체에서 직접 추출 (OCR 불필요, 텍스트 PDF인 경우)
-- **헤딩 감지**: 폰트 크기와 볼드 여부로 판별
-- **테이블 감지**: PDF 내부의 선(line) 객체와 텍스트 좌표로 테이블 구조 추론
-- **이미지 추출**: PDF 내장 이미지 객체 직접 추출
-- **다단 감지**: `pymupdf-layout` 모듈로 XY-Cut 알고리즘 기반 레이아웃 분석
+- **텍스트 추출**: PDF 텍스트 객체에서 직접 추출 — 규칙 기반 (OCR 불필요, 텍스트 PDF인 경우)
+- **레이아웃 분석**: `pymupdf-layout`의 **GNN(Graph Neural Network)** 모델 — 텍스트 박스를 노드, 공간 관계를 엣지로 처리하여 제목/단락/표/그림 패턴 학습. **ONNX Runtime**으로 CPU 추론 (GPU 불필요)
+- **헤딩 감지**: 폰트 크기와 볼드 여부로 판별 — 규칙 기반
+- **테이블 감지**: PDF 내부의 선(line) 객체와 텍스트 좌표로 테이블 구조 추론 — 규칙 기반
+- **이미지 추출**: PDF 내장 이미지 객체 직접 추출 — 규칙 기반
+- **다단 감지**: GNN 레이아웃 분석 + XY-Cut 알고리즘
+
+> "Heuristics do the heavy lifting upfront, so the model doesn't have to" — 휴리스틱이 특성을 먼저 추출하고, GNN은 패턴 분류만 수행하는 구조다.
 
 ---
 
@@ -75,12 +79,13 @@ PDF 입력
   → 페이지별 처리:
       ├── OCR 필요 여부 판단 (analyze_page)
       ├── (필요시) OCR 실행 (Tesseract/PaddleOCR/RapidOCR)
-      ├── pymupdf-layout으로 레이아웃 분석
-      │   ├── 텍스트 블록 좌표 추출
-      │   ├── 다단 감지 (XY-Cut)
+      ├── pymupdf-layout으로 레이아웃 분석 (GNN + ONNX Runtime)
+      │   ├── 텍스트 블록 → 그래프 노드/엣지 변환
+      │   ├── GNN 모델로 블록 분류 (title/text/table/picture)
+      │   ├── 다단 감지 (Stripe-based Column Clustering)
       │   └── 읽기 순서 결정
       ├── 폰트 크기 기반 헤딩 감지
-      ├── 선(line) 기반 테이블 감지
+      ├── 선(line) + 가상선(virtual line) 기반 테이블 감지
       └── 이미지 객체 추출
   → ParsedDocument 생성
   → to_markdown() / to_json() / to_text() 변환

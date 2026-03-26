@@ -344,6 +344,7 @@ export default async function BlogPostPage({
         <HeadingAnchors />
         <PopoverPreview />
         <article
+          data-pagefind-body
           className="prose max-w-none"
           dangerouslySetInnerHTML={{ __html: result.html }}
         />

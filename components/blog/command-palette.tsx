@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useRef, useDeferredValue } from "react"
 import { useRouter } from "next/navigation"
 import { FileText, Hash, Loader2 } from "lucide-react"
-import { Document as FlexDocument } from "flexsearch"
 import {
   CommandDialog,
   CommandEmpty,
@@ -22,67 +21,50 @@ interface Result {
   type: "note" | "tag"
 }
 
-// CJK-aware tokenizer
-function cjkEncoder(str: string): string[] {
-  const tokens: string[] = []
-  let buf = ""
-  for (const char of str.toLowerCase()) {
-    const cp = char.codePointAt(0)!
-    const isCJK =
-      (cp >= 0x3040 && cp <= 0x309f) ||
-      (cp >= 0x30a0 && cp <= 0x30ff) ||
-      (cp >= 0x4e00 && cp <= 0x9fff) ||
-      (cp >= 0xac00 && cp <= 0xd7af)
-    const isSpace = cp === 32 || cp === 9 || cp === 10 || cp === 13
-    if (isCJK) {
-      if (buf) { tokens.push(buf); buf = "" }
-      tokens.push(char)
-    } else if (isSpace) {
-      if (buf) { tokens.push(buf); buf = "" }
-    } else {
-      buf += char
-    }
-  }
-  if (buf) tokens.push(buf)
-  return tokens
+interface PagefindResult {
+  url: string
+  meta?: { title?: string }
+  excerpt?: string
 }
 
-type IndexDoc = { id: number; slug: string; title: string; content: string; tags: string[] }
+interface PagefindResponse {
+  results: Array<{ data: () => Promise<PagefindResult> }>
+}
+
+type Pagefind = {
+  init: () => Promise<void>
+  search: (query: string) => Promise<PagefindResponse>
+}
 
 export function CommandPalette() {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<{ notes: Result[]; tags: Result[] }>({ notes: [], tags: [] })
-  const [indexReady, setIndexReady] = useState(false)
-  const indexRef = useRef<FlexDocument<IndexDoc> | null>(null)
+  const [ready, setReady] = useState(false)
+  const pfRef = useRef<Pagefind | null>(null)
   const entriesRef = useRef<SearchEntry[]>([])
-  const fetchedRef = useRef(false)
+  const useFallbackRef = useRef(false)
+  const initRef = useRef(false)
   const deferredQuery = useDeferredValue(query)
 
-  // Fetch search index after mount
+  // On mount, try Pagefind first; fall back to API search index for dev mode
   useEffect(() => {
-    if (fetchedRef.current) return
-    fetchedRef.current = true
-    fetch("/blog/api/search")
-      .then((r) => r.json())
-      .then((data: SearchEntry[]) => {
-        entriesRef.current = data
-        const idx = new FlexDocument<IndexDoc>({
-          encode: cjkEncoder,
-          document: {
-            id: "id",
-            index: [
-              { field: "title", tokenize: "forward" },
-              { field: "content", tokenize: "forward" },
-              { field: "tags", tokenize: "forward" },
-            ],
-          },
-        })
-        data.forEach((e, i) => idx.add({ id: i, slug: e.slug, title: e.title, content: e.content, tags: e.tags }))
-        indexRef.current = idx
-        setIndexReady(true)
-      })
+    if (initRef.current) return
+    initRef.current = true
+    ;(async () => {
+      try {
+        const pf: Pagefind = await Function('return import("/pagefind/pagefind.js")')()
+        await pf.init()
+        pfRef.current = pf
+      } catch {
+        // Pagefind not available (dev mode) — fall back to API
+        useFallbackRef.current = true
+        const res = await fetch("/blog/api/search")
+        entriesRef.current = await res.json()
+      }
+      setReady(true)
+    })()
   }, [])
 
   useEffect(() => {
@@ -97,45 +79,59 @@ export function CommandPalette() {
   }, [])
 
   const search = useCallback(
-    (q: string) => {
-      const entries = entriesRef.current
+    async (q: string) => {
       if (!q.trim()) { setResults({ notes: [], tags: [] }); return }
 
+      // Tag search (works in both modes)
       if (q.startsWith("#")) {
-        const lower = q.slice(1).toLowerCase()
-        const tags = [...new Set(entries.flatMap((e) => e.tags))]
-          .filter((t) => t.toLowerCase().includes(lower))
-          .slice(0, 5)
-          .map((t) => ({ slug: `tags/${t}`, title: `#${t}`, excerpt: "Browse tag", type: "tag" as const }))
-        setResults({ notes: [], tags })
+        if (useFallbackRef.current) {
+          const lower = q.slice(1).toLowerCase()
+          const tags = [...new Set(entriesRef.current.flatMap((e) => e.tags))]
+            .filter((t) => t.toLowerCase().includes(lower))
+            .slice(0, 5)
+            .map((t) => ({ slug: `tags/${t}`, title: `#${t}`, excerpt: "Browse tag", type: "tag" as const }))
+          setResults({ notes: [], tags })
+        }
         return
       }
 
-      const idx = indexRef.current
-      if (!idx) return
+      // Pagefind search
+      const pf = pfRef.current
+      if (pf) {
+        const response = await pf.search(q)
+        const items = await Promise.all(
+          response.results.slice(0, 7).map((r) => r.data())
+        )
+        const notes: Result[] = items.map((item) => {
+          let slug = item.url
+          slug = slug.replace(/^\//, "").replace(/\/index\.html$/, "").replace(/\.html$/, "")
+          return {
+            slug,
+            title: item.meta?.title ?? slug,
+            excerpt: item.excerpt ?? "",
+            type: "note" as const,
+          }
+        })
+        setResults({ notes, tags: [] })
+        return
+      }
 
-      const tokens = q.trim().split(/\s+/).filter(Boolean)
-      const tokenSets = tokens.map((token) => {
-        const raw = idx.search(token, { limit: 100, enrich: false }) as Array<{ field: string; result: number[] }>
-        const set = new Set<number>()
-        for (const r of raw) for (const id of r.result) set.add(id)
-        return set
-      })
-      const ids: number[] = tokenSets.length === 0 ? [] :
-        [...tokenSets[0]].filter((id) => tokenSets.every((s) => s.has(id))).slice(0, 8)
-
-      const lower = q.toLowerCase()
-      const notes: Result[] = ids.slice(0, 7).map((id) => {
-        const e = entries[id]
-        const pos = e.content.toLowerCase().indexOf(lower)
-        const start = Math.max(0, pos - 50)
-        const excerpt = pos >= 0
-          ? "…" + e.content.slice(start, start + 120) + "…"
-          : (e.description ?? e.content.slice(0, 120) + "…")
-        return { slug: e.slug, title: e.title, excerpt, type: "note" as const }
-      })
-
-      setResults({ notes, tags: [] })
+      // Fallback: substring matching on API data
+      if (useFallbackRef.current) {
+        const lower = q.toLowerCase()
+        const notes: Result[] = entriesRef.current
+          .filter((e) => e.title.toLowerCase().includes(lower) || e.content.toLowerCase().includes(lower))
+          .slice(0, 7)
+          .map((e) => {
+            const pos = e.content.toLowerCase().indexOf(lower)
+            const start = Math.max(0, pos - 50)
+            const excerpt = pos >= 0
+              ? "\u2026" + e.content.slice(start, start + 120) + "\u2026"
+              : (e.description ?? e.content.slice(0, 120) + "\u2026")
+            return { slug: e.slug, title: e.title, excerpt, type: "note" as const }
+          })
+        setResults({ notes, tags: [] })
+      }
     },
     []
   )
@@ -154,29 +150,29 @@ export function CommandPalette() {
   return (
     <CommandDialog open={open} onOpenChange={setOpen} shouldFilter={false}>
       <CommandInput
-        placeholder="Search notes or type # for tags…"
+        placeholder="Search notes or type # for tags\u2026"
         value={query}
         onValueChange={setQuery}
       />
       <CommandList>
         {/* Loading state: index not ready yet */}
-        {!indexReady && query.trim() && !query.startsWith("#") && (
+        {!ready && query.trim() && !query.startsWith("#") && (
           <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Loading search index…
+            Loading search index\u2026
           </div>
         )}
 
         {/* Searching indicator */}
-        {isSearching && indexReady && (
+        {isSearching && ready && (
           <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Searching…
+            Searching\u2026
           </div>
         )}
 
         {/* No results */}
-        {!isSearching && indexReady && query.trim() && !hasResults && (
+        {!isSearching && ready && query.trim() && !hasResults && (
           <CommandEmpty>No results for &ldquo;{query}&rdquo;</CommandEmpty>
         )}
 

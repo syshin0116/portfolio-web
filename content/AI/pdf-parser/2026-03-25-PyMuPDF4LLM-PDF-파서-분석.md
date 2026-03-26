@@ -158,13 +158,61 @@ md = pymupdf4llm.to_markdown("input.pdf", force_ocr=True, ocr_language="kor")
 ---
 
 
-### Attention Is All You Need 파싱 결과
+### 파싱 결과 예시 (Attention Is All You Need)
 
-![PyMuPDF4LLM 파싱 결과](https://i.imgur.com/yGlyfRM.png)
-*원본 PDF 1페이지*
+#### 헤딩
 
-![PyMuPDF4LLM 파싱 결과](https://i.imgur.com/tubUhFL.png)
-*PyMuPDF4LLM의 Markdown 출력*
+![원본 PDF 1페이지](https://i.imgur.com/yGlyfRM.png)
+
+출력 소스:
+```markdown
+# **Attention Is All You Need**
+## **Abstract**
+## **1 Introduction**
+## **3 Model Architecture**
+## **3.1 Encoder and Decoder Stacks**
+## **3.2.1 Scaled Dot-Product Attention**
+```
+
+`#`(H1)은 제목에만, 나머지는 전부 `##`(H2). 하위 섹션(`3.2.1`)도 H2로 처리되어 **계층 구분이 안 됨**.
+
+#### 테이블 (Table 1)
+
+![원본 Table 1 (6페이지)](https://i.imgur.com/6G5zOeN.png)
+
+출력 소스:
+```markdown
+|Layer Type|Complexity per Layer|Sequential|Maximum Path Length|
+|---|---|---|---|
+|||Operations||
+|Self-Attention|_O_(_n_2 _· d_)|_O_(1)|_O_(1)|
+```
+
+렌더링 결과:
+
+|Layer Type|Complexity per Layer|Sequential Operations|Maximum Path Length|
+|---|---|---|---|
+|Self-Attention|_O_(_n_2 _· d_)|_O_(1)|_O_(1)|
+|Recurrent|_O_(_n · d_2)|_O_(_n_)|_O_(_n_)|
+|Convolutional|_O_(_k · n · d_2)|_O_(1)|_O_(_logk_(_n_))|
+|Self-Attention (restricted)|_O_(_r · n · d_)|_O_(1)|_O_(_n/r_)|
+
+Markdown pipe 테이블. 수식은 이탤릭(`_O_(_n_2)`)으로 표현되고 **LaTeX 변환은 안 됨**.
+
+#### 수식
+
+![원본 수식 페이지 (4페이지)](https://i.imgur.com/1u67v7H.png)
+
+출력:
+```
+**==> picture [286 x 26] intentionally omitted <==**
+```
+
+수식이 이미지로 인식되어 `picture intentionally omitted`으로 처리됨. **수식 LaTeX 변환을 지원하지 않음**.
+
+#### 이미지
+
+기본 설정에서는 `==> picture [W x H] intentionally omitted <==`으로 건너뜀. `write_images=True` 설정 시 PDF 내장 이미지를 직접 추출.
 
 ## 테스트 결과
 

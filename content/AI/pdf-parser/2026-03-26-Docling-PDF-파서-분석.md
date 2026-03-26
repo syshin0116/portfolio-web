@@ -155,13 +155,56 @@ docling input.pdf --format markdown
 ---
 
 
-### Attention Is All You Need 파싱 결과
+### 파싱 결과 예시 (Attention Is All You Need)
 
-![Docling 파싱 결과](https://i.imgur.com/yGlyfRM.png)
-*원본 PDF 1페이지*
+#### 헤딩
 
-![Docling 파싱 결과](https://i.imgur.com/oBZDPVg.png)
-*Docling의 Markdown 출력*
+![원본 PDF 1페이지](https://i.imgur.com/yGlyfRM.png)
+
+```markdown
+## Attention Is All You Need
+## Abstract
+## 3 Model Architecture
+## 3.1 Encoder and Decoder Stacks
+## Scaled Dot-Product Attention
+```
+
+전부 `##`(H2). 계층 구분 안 됨.
+
+#### 테이블 (Table 1)
+
+![원본 Table 1](https://i.imgur.com/6G5zOeN.png)
+
+```markdown
+| Layer Type | Complexity per Layer | Sequential Operations | Maximum Path Length |
+|---|---|---|---|
+| Self-Attention | O ( n 2 · d ) | O (1) | O (1) |
+```
+
+렌더링:
+
+| Layer Type | Complexity per Layer | Sequential Operations | Maximum Path Length |
+|---|---|---|---|
+| Self-Attention | O ( n 2 · d ) | O (1) | O (1) |
+| Recurrent | O ( n · d 2 ) | O ( n ) | O ( n ) |
+| Convolutional | O ( k · n · d 2 ) | O (1) | O ( log k ( n )) |
+| Self-Attention (restricted) | O ( r · n · d ) | O (1) | O ( n/r ) |
+
+수식은 공백 포함 텍스트 (`O ( n 2 · d )`). LaTeX 미지원.
+
+#### 수식
+
+![원본 수식](https://i.imgur.com/1u67v7H.png)
+
+```html
+<!-- formula-not-decoded -->
+```
+
+수식을 감지하지만 디코딩 못 함.
+
+#### 이미지
+
+기본 Markdown에 이미지 미포함.
 
 ## READoc 벤치마크 결과
 

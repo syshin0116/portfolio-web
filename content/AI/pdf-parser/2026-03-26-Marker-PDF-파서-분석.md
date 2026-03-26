@@ -109,13 +109,60 @@ images = rendered.images  # dict: filename → PIL.Image
 ---
 
 
-### Attention Is All You Need 파싱 결과
+### 파싱 결과 예시 (Attention Is All You Need)
 
-![Marker 파싱 결과](https://i.imgur.com/yGlyfRM.png)
-*원본 PDF 1페이지*
+#### 헤딩
 
-![Marker 파싱 결과](https://i.imgur.com/LtcqD3s.png)
-*Marker의 Markdown 출력*
+![원본 PDF 1페이지](https://i.imgur.com/yGlyfRM.png)
+
+```markdown
+# Attention Is All You Need
+# Abstract
+# 3 Model Architecture
+### 3.1 Encoder and Decoder Stacks
+# <span id="page-2-0"></span>3.2 Attention
+#### Scaled Dot-Product Attention
+```
+
+**유일하게 헤딩 레벨을 구분**한다: `#`(H1), `###`(H3), `####`(H4).
+
+#### 테이블 (Table 1)
+
+![원본 Table 1](https://i.imgur.com/6G5zOeN.png)
+
+```markdown
+| Layer Type | Complexity per Layer | Sequential<br>Operations | Maximum Path Length |
+|---|---|---|---|
+| Self-Attention | $O(n^2 \cdot d)$ | O(1) | O(1) |
+| Recurrent | $O(n \cdot d^2)$ | O(n) | O(n) |
+```
+
+렌더링:
+
+| Layer Type | Complexity per Layer | Sequential Operations | Maximum Path Length |
+|---|---|---|---|
+| Self-Attention | $O(n^2 \cdot d)$ | O(1) | O(1) |
+| Recurrent | $O(n \cdot d^2)$ | O(n) | O(n) |
+| Convolutional | $O(k \cdot n \cdot d^2)$ | O(1) | $O(log_k(n))$ |
+| Self-Attention (restricted) | $O(r \cdot n \cdot d)$ | O(1) | O(n/r) |
+
+Markdown 테이블 + **LaTeX 수식** (`$O(n^2 \cdot d)$`). 가장 풍부한 출력.
+
+#### 수식
+
+![원본 수식](https://i.imgur.com/1u67v7H.png)
+
+```latex
+$$Attention(Q, K, V) = \operatorname{softmax}(\frac{QK^T}{\sqrt{d_k}})V$$
+```
+
+렌더링: $$Attention(Q, K, V) = \operatorname{softmax}(\frac{QK^T}{\sqrt{d_k}})V$$
+
+**LaTeX 변환 O**. `\operatorname`, `\frac`, `\sqrt` 등 수학 구문 정확.
+
+#### 이미지
+
+6개 이미지 추출 (JPEG). Markdown에서 `![](_page_X_Figure_Y.jpeg)` 형태로 참조.
 
 ## READoc 벤치마크 결과
 

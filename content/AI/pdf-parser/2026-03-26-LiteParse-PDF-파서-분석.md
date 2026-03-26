@@ -132,13 +132,50 @@ const parser = new LiteParse({
 ---
 
 
-### Attention Is All You Need 파싱 결과
+### 파싱 결과 예시 (Attention Is All You Need)
 
-![LiteParse 파싱 결과](https://i.imgur.com/yGlyfRM.png)
-*원본 PDF 1페이지*
+#### 헤딩
 
-![LiteParse 파싱 결과](https://i.imgur.com/l0hUdYT.png)
-*LiteParse의 Markdown 출력*
+![원본 PDF 1페이지](https://i.imgur.com/yGlyfRM.png)
+
+```
+Attention Is All You Need
+Abstract
+3 Model Architecture
+3.1 Encoder and Decoder Stacks
+```
+
+헤딩 구분 없음. `#` 마크다운 구문 없이 순수 텍스트.
+
+#### 테이블 (Table 1)
+
+![원본 Table 1](https://i.imgur.com/6G5zOeN.png)
+
+```
+ Layer Type                Complexity per Layer  Sequential  Maximum Path Length
+                                                 Operations
+ Self-Attention                 O(n2 · d)           O(1)             O(1)
+ Recurrent                      O(n · d2)           O(n)             O(n)
+ Convolutional        O(k · n · d2)                 O(1)          O(logk(n))
+ Self-Attention (restricted)  O(r · n · d)          O(1)            O(n/r)
+```
+
+공간 그리드(ASCII 정렬). Markdown 테이블 구문 없음, 공백으로 열 정렬.
+
+#### 수식
+
+![원본 수식](https://i.imgur.com/1u67v7H.png)
+
+```
+    √dk )V                                                             (1)
+                         Attention(Q, K, V ) = softmax( QK T
+```
+
+공간 배치로 √와 분수를 시각적으로 표현하지만 구조화된 LaTeX는 아님.
+
+#### 이미지
+
+이미지 추출 기능 없음.
 
 ## READoc 벤치마크 결과
 

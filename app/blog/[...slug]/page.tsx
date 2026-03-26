@@ -165,7 +165,7 @@ export default async function BlogPostPage({
     const folderFiles = await getFolderFiles(slug)
     if (folderFiles) {
       return (
-        <div className="mx-auto max-w-3xl px-6 py-10">
+        <div className="mx-auto max-w-6xl w-full px-6 py-10">
           <div className="mb-6">
             <Breadcrumb slug={slug} />
           </div>

@@ -56,9 +56,9 @@ OmniDocBench는 **PDF가 아닌 이미지**를 입력으로 사용한다. 따라
 | 항목 | 스펙 |
 |---|---|
 | **머신** | Apple Silicon Mac |
-| **MinerU** | v2.7.6, pipeline 백엔드, MPS |
-| **Docling** | v2.81.0, CPU |
-| **Marker** | v1.10.1, CPU |
+| **MinerU** | v2.7.6, pipeline 백엔드, MPS — 70/93 성공 (파일명 충돌로 23개 누락) |
+| **Docling** | v2.81.0, CPU — 91/93 성공 |
+| **Marker** | v1.10.1, CPU — 90/93 성공 (단일 이미지라 토큰 제한 문제 거의 없음) |
 | **평가** | OmniDocBench 공식 evaluator (quick_match) |
 
 ---

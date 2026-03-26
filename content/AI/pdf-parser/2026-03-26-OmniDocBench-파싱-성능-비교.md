@@ -161,6 +161,30 @@ Docling은 이미지 기반 파싱에서 전반적으로 낮은 점수를 보였
 
 ---
 
+## 이미지 추출 비교 (OmniDocBench에 없는 항목)
+
+OmniDocBench는 텍스트/테이블/수식/읽기순서만 평가하고, **이미지(Figure) 추출 정확도는 측정하지 않는다**. OmniDocBench GT에 figure 어노테이션(1,249개)이 있지만 공식 evaluator에 이미지 메트릭이 없다.
+
+READoc 92개 문서에서 각 파서가 Markdown에 삽입한 이미지 참조(`![`) 수를 세어 간접 비교했다:
+
+| 파서 | 이미지 참조 수 (92문서 합계) | 방식 |
+|---|---|---|
+| **MinerU** | **506** | 레이아웃 감지(YOLO)로 Figure 영역 추출 → JPG 저장 |
+| **Marker** | 172 | Surya 레이아웃으로 Figure 감지 → JPEG 저장 |
+| **PyMuPDF4LLM** | 3 (기본값은 0) | PDF 내장 이미지 직접 추출 (`write_images=True` 필요) |
+| **Docling** | 0 | 기본 Markdown export에 이미지 미포함 |
+| **LiteParse** | 0 | 이미지 추출 기능 없음 |
+
+> 이 수치는 "얼마나 많이 추출했는가"이지 "얼마나 정확하게 추출했는가"는 아니다. 잘못된 영역을 이미지로 추출하면 수치만 높아진다. 정확한 평가는 GT figure 바운딩박스와 추출된 이미지의 IoU를 비교해야 하지만, 이는 현재 벤치마크 범위를 벗어난다.
+
+**관찰:**
+- MinerU가 가장 적극적으로 이미지를 추출한다 (YOLO 레이아웃 감지의 ImageBody 카테고리)
+- Marker도 이미지를 추출하지만 MinerU의 1/3 수준
+- PyMuPDF4LLM은 설정을 켜야 하고, Docling/LiteParse는 기본 Markdown에 이미지가 없다
+- RAG 시스템에서 이미지 정보가 중요하다면 MinerU나 Marker를 선택해야 한다
+
+---
+
 ## READoc vs OmniDocBench 비교
 
 두 벤치마크에서 파서 순위가 다르다:

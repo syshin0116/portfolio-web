@@ -38,6 +38,7 @@ description: 주요 PDF 파서 9종을 직접 설치하고, READoc 벤치마크(
 | Marker | 34/100 | 27.4% | **80.6%** | 80.8% | 237초 | GPL-3.0 |
 | Docling | 92/100 | 68.3% | **74.3%** | 77.9% | 3.4초 | MIT |
 | PyMuPDF4LLM | 92/100 | 67.6% | **73.4%** | 75.8% | 1.9초 | AGPL-3.0 |
+| OpenDataLoader | 91/100 | 66.1% | **72.6%** | 75.9% | ~3초 | Apache 2.0 |
 | LiteParse | 92/100 | 46.6% | **50.7%** | 45.6% | 0.1초 | Apache 2.0 |
 
 > **측정 방법**: READoc arXiv 논문 100개 샘플 (92개 PDF 다운로드 성공, 8개 arXiv 404). GT Markdown 대비 Normalized Edit Distance. PyMuPDF4LLM/Docling은 3회 반복+워밍업 median, MinerU/Marker는 1회 측정 (문서당 69~237초로 반복 비현실적). 상세 방법론은 [METHODOLOGY.md](https://github.com/syshin0116/pdf-parser-comparison/blob/main/METHODOLOGY.md) 참고.
@@ -65,16 +66,16 @@ description: 주요 PDF 파서 9종을 직접 설치하고, READoc 벤치마크(
 - [[2026-03-26-Docling-PDF-파서-분석|Docling]] — IBM MIT 라이선스, Heron RT-DETRv2 + TableFormer, 가성비 최강
 - [[2026-03-26-Marker-PDF-파서-분석|Marker]] — Surya OCR 기반, 성공시 최고 품질 but 안정성 문제
 
-### Tier 2 — 경량 파서
+### Tier 1-2 — Java/규칙 기반 파서
 - [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석|PyMuPDF4LLM]] — 경량 GNN + 규칙 기반, GPU 없이 최고 속도
 - [[2026-03-26-LiteParse-PDF-파서-분석|LiteParse]] — LlamaIndex TypeScript 파서, 0.1초/문서
+- [[2026-03-27-OpenDataLoader-PDF-파서-분석|OpenDataLoader PDF v2]] — 한컴 Java 파서, Apache 2.0, 프롬프트 인젝션 감지
 
 ### 벤치마크 비교
 - [[2026-03-26-OmniDocBench-파싱-성능-비교|OmniDocBench 요소별 파싱 성능 비교]] — 텍스트/테이블/수식/읽기순서 분리 평가
+- [[2026-03-26-PDF-파서-5종-비교-분석|PDF 파서 5종 비교 분석]] — 같은 문서로 직접 비교 (헤딩/테이블/수식/이미지 예시)
 
-### 향후 추가 예정
-- OpenDataLoader PDF v2
-- DeepSeek-OCR 2
-- olmOCR 2
-- Dolphin v2
-- 통합 비교 분석
+### 향후 추가 예정 (GPU 서버 환경 확보 시)
+- DeepSeek-OCR 2 (3B VLM, API 또는 CUDA)
+- olmOCR 2 (7B VLM, vLLM + CUDA)
+- Dolphin v2 (3B VLM, ByteDance)

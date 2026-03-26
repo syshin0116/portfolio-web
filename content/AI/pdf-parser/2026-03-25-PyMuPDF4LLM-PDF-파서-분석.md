@@ -354,6 +354,9 @@ PyMuPDF4LLM은 **"충분히 좋은 품질을 미친 속도로"** 제공하는 �
 
 ---
 
+
+> 이 파서의 헤딩/테이블/수식/이미지 처리 결과를 다른 파서와 직접 비교한 글: [[2026-03-26-PDF-파서-5종-비교-분석|PDF 파서 5종 비교 분석]]
+
 ## 참고
 
 - [PyMuPDF4LLM GitHub](https://github.com/pymupdf/pymupdf4llm)

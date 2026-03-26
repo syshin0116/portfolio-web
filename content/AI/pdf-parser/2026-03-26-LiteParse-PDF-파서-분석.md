@@ -230,6 +230,9 @@ LiteParse는 **"텍스트 내용만 빠르게 뽑으면 되는"** 사용 사례�
 
 ---
 
+
+> 이 파서의 헤딩/테이블/수식/이미지 처리 결과를 다른 파서와 직접 비교한 글: [[2026-03-26-PDF-파서-5종-비교-분석|PDF 파서 5종 비교 분석]]
+
 ## 참고
 
 - [LiteParse GitHub](https://github.com/run-llama/liteparse)

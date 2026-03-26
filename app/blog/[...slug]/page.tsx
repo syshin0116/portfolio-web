@@ -123,7 +123,20 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug } = await params
   const raw = await getMarkdownFile(slug)
-  if (!raw) return {}
+  if (!raw) {
+    // Folder listing pages — noindex to focus crawl budget on actual posts
+    const folderPath = path.join(CONTENT_DIR, ...slug)
+    try {
+      const stat = await fs.stat(folderPath)
+      if (stat.isDirectory()) {
+        return {
+          title: `${slug[slug.length - 1]} | Syshin's Blog`,
+          robots: { index: false, follow: true },
+        }
+      }
+    } catch {}
+    return {}
+  }
   const { data } = matter(raw)
   const title = data.title ?? slug[slug.length - 1]
   const description = data.description ?? ""

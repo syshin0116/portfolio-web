@@ -46,7 +46,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     blogRoutes = files
       .filter((f) => !f.frontmatter.draft && f.frontmatter.published !== false)
       .map((file) => ({
-        url: `${baseUrl}/blog/${file.slug}`,
+        url: `${baseUrl}/blog/${file.slug.split("/").map(encodeURIComponent).join("/")}`,
         lastModified: file.frontmatter.date
           ? new Date(file.frontmatter.date)
           : new Date(),

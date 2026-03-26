@@ -24,7 +24,13 @@ description: 주요 PDF 파서 9종을 직접 설치하고, READoc 벤치마크(
 | **TEDS** | 0~1 | 높을수록 좋음 | 테이블 HTML 트리 구조 유사도 | 0.633 = 63.3% 구조 일치 |
 | **성공률** | 0~100% | 높을수록 좋음 | 에러 없이 파싱 완료한 비율 | 34/100 = 34% |
 
+## 속도 vs 품질
+
+![속도 vs 품질 scatter plot](https://i.imgur.com/3Opw3uV.png)
+
 ## READoc 벤치마크 결과 요약
+
+![READoc Edit Similarity 비교](https://i.imgur.com/JbCuSUt.png)
 
 | 파서 | 성공률 | Sim(전체) | Sim(성공분) | Median | 속도(문서당) | 라이선스 |
 |---|---|---|---|---|---|---|
@@ -37,6 +43,8 @@ description: 주요 PDF 파서 9종을 직접 설치하고, READoc 벤치마크(
 > **측정 방법**: READoc arXiv 논문 100개 샘플 (92개 PDF 다운로드 성공, 8개 arXiv 404). GT Markdown 대비 Normalized Edit Distance. PyMuPDF4LLM/Docling은 3회 반복+워밍업 median, MinerU/Marker는 1회 측정 (문서당 69~237초로 반복 비현실적). 상세 방법론은 [METHODOLOGY.md](https://github.com/syshin0116/pdf-parser-comparison/blob/main/METHODOLOGY.md) 참고.
 
 ## OmniDocBench 요소별 파싱 성능 (이미지 기반, 93 샘플)
+
+![OmniDocBench 레이더 차트](https://i.imgur.com/XXzFgPL.png)
 
 | 요소 | 메트릭 | MinerU | Marker | Docling | 해석 |
 |---|---|---|---|---|---|

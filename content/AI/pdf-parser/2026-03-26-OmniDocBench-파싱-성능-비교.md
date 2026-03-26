@@ -111,6 +111,8 @@ TEDS와 같지만 셀 **내용은 무시**하고 **구조만** 비교한다. `ro
 
 ## 결과
 
+![OmniDocBench 요소별 성능 레이더 차트](https://i.imgur.com/XXzFgPL.png)
+
 ### 요소별 비교
 
 | 요소 | 메트릭 | MinerU | Marker | Docling | 최고 | 해석 |

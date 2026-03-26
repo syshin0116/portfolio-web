@@ -34,7 +34,7 @@ modified: 2026-03-25
 | **모델 다운로드** | pymupdf-layout에 GNN 모델 내장 (별도 다운로드 불필요) |
 | **설치 크기** | ~84KB (pymupdf4llm) + PyMuPDF + pymupdf-layout |
 | **상용 라이선스** | Artifex에서 별도 구매 가능 (AGPL 회피) |
-
+[]()
 PyMuPDF4LLM은 [[MinerU - PDF Parser|MinerU]]나 Docling 같은 대형 ML 파서와 다른 접근을 취한다. YOLO, Transformer 같은 무거운 모델 대신 PDF 내부의 텍스트 객체, 폰트 정보, 좌표 데이터를 직접 읽고, 레이아웃 분석에만 **경량 GNN 모델**(ONNX Runtime, CPU 추론)을 사용한다. 그래서 **빠르다**. 압도적으로 빠르다.
 
 ---

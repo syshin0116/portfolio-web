@@ -24,13 +24,32 @@ modified: 2026-03-27
 
 | 항목 | 내용 |
 |---|---|
-| **개발사** | Hancom (한컴) |
+| **개발사** | Hancom (한컴) — 한글(HWP) 개발사, 한국 오피스 소프트웨어 1위 |
 | **GitHub** | [opendataloader-project/opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf) |
+| **GitHub Stars** | ~9,600 (2026.03 #1 Trending, 하루 1,394스타) |
 | **최신 버전** | v2.1.1 (2026-03-26) |
-| **라이선스** | **Apache 2.0** |
-| **런타임** | Java (JAR 번들) + Python/Node.js wrapper |
-| **GPU 필요** | X |
+| **라이선스** | **Apache 2.0** (v2.0부터, 이전 MPL 2.0) |
+| **런타임** | Java 11+ (JAR 번들) + Python/Node.js/Maven wrapper |
+| **GPU 필요** | X (local 모드), hybrid 모드는 AI 백엔드 필요 |
 | **PyPI** | `pip install opendataloader-pdf` |
+
+### 두 가지 모드
+
+| 모드 | 방식 | 정확도 | 속도 | GPU |
+|---|---|---|---|---|
+| **Local** (기본) | PDF 내부 구조 직접 추출 | 0.72 | **0.05초/페이지** | X |
+| **Hybrid** | Local + AI 백엔드 (Docling) | **0.90** | 0.43초/페이지 | 선택 |
+
+이번 테스트는 **Local 모드만** 사용했다. Hybrid 모드는 별도 서버(`opendataloader-pdf-hybrid`) 실행이 필요하여 미테스트.
+
+### 차별화 기능
+
+- **XY-Cut++**: 개선된 읽기 순서 알고리즘 (0.94 정확도)
+- **바운딩 박스**: 모든 요소에 `[left, bottom, right, top]` 좌표 제공
+- **프롬프트 인젝션 감지**: 숨겨진 텍스트, 투명 폰트, 페이지 밖 콘텐츠 자동 필터 (기본 활성)
+- **개인정보 마스킹**: `--sanitize` 옵션 (이메일, 전화번호, IP, 신용카드)
+- **Tagged PDF 지원**: PDF 구조 태그 읽기 (접근성)
+- **MCP 서버**: v2.1.1에서 AI 에이전트 통합용 MCP 추가
 
 ---
 
@@ -155,10 +174,24 @@ Figure 1: The Transformer - model architecture.
 
 ### 관찰
 
-- Docling(74.3%)과 비슷한 수준이지만 테이블 구조 보존이 약함
-- Apache 2.0 라이선스는 장점
-- 일부 문서에서 Java StackOverflowError 발생 (긴 헤딩 체인)
-- 이미지 추출 지원은 Docling 대비 장점
+- Local 모드로만 테스트하여 Docling(74.3%)보다 약간 낮음 (72.6%)
+- **Hybrid 모드를 사용하면 훨씬 높을 것으로 예상** (공식 벤치마크 0.90)
+- 테이블이 텍스트로만 추출되는 것이 Local 모드의 가장 큰 약점
+- Apache 2.0 라이선스 + 이미지 추출 지원은 Docling 대비 장점
+- 일부 문서에서 Java StackOverflowError 발생 (긴 헤딩 체인 재귀)
+
+### 공식 벤치마크 참고 (opendataloader-bench, 200문서)
+
+| 파서 | Overall | 읽기 순서 | 테이블 | 헤딩 | 속도 |
+|---|---|---|---|---|---|
+| **OpenDataLoader hybrid** | **0.90** | **0.94** | **0.93** | 0.83 | 0.43s/p |
+| Docling | 0.86 | 0.90 | 0.89 | 0.80 | 0.73s/p |
+| OpenDataLoader local | 0.84 | 0.91 | 0.49 | 0.74 | **0.05s/p** |
+| Marker | 0.83 | 0.89 | 0.81 | 0.80 | 53.9s/p |
+| MinerU | 0.82 | 0.86 | 0.87 | 0.74 | 5.96s/p |
+| PyMuPDF4LLM | 0.57 | 0.89 | 0.40 | 0.41 | 0.09s/p |
+
+> 이 벤치마크는 OpenDataLoader 팀이 자체 제작한 것이므로, 객관성에 유의 필요. 다만 벤치마크 코드는 [opendataloader-bench](https://github.com/opendataloader-project/opendataloader-bench)에서 재현 가능.
 
 ---
 

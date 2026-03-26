@@ -14,13 +14,15 @@ description: 주요 PDF 파서 9종을 직접 설치하고, READoc 벤치마크(
 
 ## READoc 벤치마크 결과 요약
 
-| 파서 | Edit Similarity | 속도 (문서당) | 성공률 | 라이선스 |
-|---|---|---|---|---|
-| MinerU (MPS) | 77.2% | 69초 | 100% | AGPL-3.0 |
-| Marker (성공분) | 80.6% | 237초 | 37% | GPL-3.0 |
-| Docling | 74.3% | 4.9초 | 100% | MIT |
-| PyMuPDF4LLM | 73.4% | 1.9초 | 100% | AGPL-3.0 |
-| LiteParse | 50.7% | 0.1초 | 100% | Apache 2.0 |
+| 파서 | 성공률 | Sim(전체) | Sim(성공분) | Median | 속도(문서당) | 라이선스 |
+|---|---|---|---|---|---|---|
+| MinerU (MPS) | 92/100 | 71.1% | **77.2%** | 78.9% | 69초 | AGPL-3.0 |
+| Marker | 34/100 | 27.4% | **80.6%** | 80.8% | 237초 | GPL-3.0 |
+| Docling | 92/100 | 68.3% | **74.3%** | 77.9% | 3.4초 | MIT |
+| PyMuPDF4LLM | 92/100 | 67.6% | **73.4%** | 75.8% | 1.9초 | AGPL-3.0 |
+| LiteParse | 92/100 | 46.6% | **50.7%** | 45.6% | 0.1초 | Apache 2.0 |
+
+> **측정 방법**: READoc arXiv 논문 100개 샘플 (92개 PDF 다운로드 성공, 8개 arXiv 404). GT Markdown 대비 Normalized Edit Distance. PyMuPDF4LLM/Docling은 3회 반복+워밍업 median, MinerU/Marker는 1회 측정 (문서당 69~237초로 반복 비현실적). 상세 방법론은 [METHODOLOGY.md](https://github.com/syshin0116/pdf-parser-comparison/blob/main/METHODOLOGY.md) 참고.
 
 ## 글 목록
 

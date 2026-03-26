@@ -29,7 +29,7 @@ modified: 2026-03-26
 | **GitHub** | [docling-project/docling](https://github.com/docling-project/docling) |
 | **최신 버전** | v2.81.0 (2026-03-20) |
 | **라이선스** | **MIT** (상용 자유) |
-| **GitHub Stars** | ~56,400 (PDF 파서 중 최다) |
+| **GitHub Stars** | ~37,000+ |
 | **Python** | 3.10+ |
 | **GPU 필요** | X (CPU만으로 동작, GPU 가속 선택) |
 | **모델 크기** | ~500MB (Heron + TableFormer) |

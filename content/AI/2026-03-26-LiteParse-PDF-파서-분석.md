@@ -28,7 +28,7 @@ modified: 2026-03-26
 | **GitHub** | [run-llama/liteparse](https://github.com/run-llama/liteparse) |
 | **npm** | [@llamaindex/liteparse](https://www.npmjs.com/package/@llamaindex/liteparse) |
 | **최신 버전** | v1.3.0 (2026-03-25) |
-| **라이선스** | MIT |
+| **라이선스** | Apache 2.0 (Python wrapper는 MIT) |
 | **런타임** | Node.js (TypeScript) — Python 아님 |
 | **GPU 필요** | X |
 | **ML 모델** | 없음 (PDF.js + Tesseract.js) |

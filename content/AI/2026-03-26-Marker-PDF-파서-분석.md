@@ -28,7 +28,7 @@ modified: 2026-03-26
 | **GitHub** | [datalab-to/marker](https://github.com/datalab-to/marker) |
 | **최신 버전** | v1.10.1 (2026-01-31) |
 | **라이선스** | **GPL-3.0** (상용 제한) |
-| **GitHub Stars** | ~20,000+ |
+| **GitHub Stars** | ~33,000+ |
 | **Python** | 3.10+ |
 | **GPU 필요** | 선택 (MPS/CUDA 가속 가능) |
 | **모델 크기** | ~2GB+ (Surya 모델들) |

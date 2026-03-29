@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "syshin0116-dev-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.4",
+    "langgraph>=1.0",
+    "langchain>=0.3",
+    "langchain-anthropic",
+    "langchain-openai",
+    "langgraph-checkpoint-postgres>=3.0",
+    "psycopg[binary,pool]>=3.2",
+    "python-dotenv",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "sse-starlette>=3.0",
+    "pyyaml>=6.0",
+    "chromadb>=0.6",
+    "rank-bm25>=0.2.2",
+    "kiwipiepy>=0.18.0",
+    "pydantic-settings>=2.0",
+]
+
+[project.optional-dependencies]
+arq = ["arq>=0.26", "redis>=5.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort (import 정렬)
+    "N",      # pep8-naming
+    "UP",     # pyupgrade (최신 문법 권장)
+    "B",      # flake8-bugbear (일반적 버그 패턴)
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "ASYNC",  # flake8-async
+    "FAST",   # FastAPI 전용 규칙
+]
+ignore = ["E501"]  # line-length는 formatter에 위임
+
+[tool.ruff.format]
+quote-style = "double"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "httpx",
+    "asgi-lifespan>=2.1.0",
+    "langgraph-cli[inmem]>=0.4.19",
+]

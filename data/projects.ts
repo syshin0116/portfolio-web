@@ -25,6 +25,16 @@ export interface ProjectDetail {
   description: string;
   github?: string;
   demo?: string;
+  blogPost?: string; // 블로그 Overview 글 경로 (e.g. "/blog/Projects/Nuartz/00-Overview")
+  package?: {
+    registry: string; // "npm" | "crates.io" | "pypi" etc.
+    name: string;
+    url: string;
+  };
+  demoImage?: {
+    url: string;
+    alt: string;
+  };
   techStack: {
     [key: string]: string[];
   };
@@ -130,6 +140,34 @@ export const projectsTimeline: ProjectTimeline[] = [
     tags: ["Full Stack", "RAG", "Next.js", "FastAPI"],
     category: "company",
     company: "LabQ"
+  },
+
+  // SK Chemical AI/ML 프로젝트
+  {
+    id: "sk-cooh-prediction",
+    title: "Copolyester COOH 예측 모델",
+    period: "2025 (SK Chemical)",
+    year: 2025,
+    periodType: "H",
+    periodNumber: 1,
+    isCompleted: true,
+    description: "ES-20 COOH 변화 예측으로 온도/유량 사전 Action 가능, Polymer 반응성 안정 운전 지원",
+    tags: ["AI/ML", "Python", "LightGBM", "XGBoost", "시계열"],
+    category: "company",
+    company: "SK Chemical"
+  },
+  {
+    id: "sk-qa-image-classification",
+    title: "이미지 선별 모델 - 이물 분석 검출 지원",
+    period: "2025.02 ~ 2025.04",
+    year: 2025,
+    periodType: "Q",
+    periodNumber: 1,
+    isCompleted: true,
+    description: "PET Chip 이물 이미지 자동 선별 모델로 QA팀 업무 Load 감소",
+    tags: ["Computer Vision", "Python", "이미지 분류", "PDF 처리"],
+    category: "company",
+    company: "SK Chemical"
   },
 
   // 완료된 프로젝트 (최신순)
@@ -704,6 +742,16 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
     role: "1인 개발 / npm 패키지 배포",
     team: "개인 오픈소스 프로젝트",
     description: "Obsidian 볼트를 Next.js 웹사이트로 서빙하기 위한 headless 데이터 레이어 라이브러리. Quartz의 한계(커스텀 UI 불가, AI 연동 어려움)를 해결하기 위해 직접 개발. npm 패키지로 배포하여 누구나 자신의 Next.js 앱에 Obsidian 기능을 통합 가능.",
+    blogPost: "/blog/Projects/Nuartz/00-Overview",
+    package: {
+      registry: "npm",
+      name: "nuartz",
+      url: "https://www.npmjs.com/package/nuartz"
+    },
+    demoImage: {
+      url: "https://raw.githubusercontent.com/syshin0116/nuartz/main/assets/nuartz-homepage.png",
+      alt: "Nuartz 데모 사이트 스크린샷"
+    },
     techStack: {
       core: ["TypeScript", "unified (remark/rehype)"],
       features: ["remark-math", "rehype-katex", "rehype-pretty-code", "FlexSearch", "D3.js"],
@@ -788,6 +836,16 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
     role: "1인 개발 / 오픈소스",
     team: "개인 프로젝트",
     description: "AI 에이전트가 CLI 도구를 자연어로 검색·비교·설치할 수 있는 Rust 기반 인덱스. BM25 + 시노님 확장 + 퍼지 매칭 하이브리드 검색으로 높은 recall 달성. YAML/JSON 출력으로 LLM 친화적.",
+    blogPost: "/blog/Projects/Clidex/01-Overview",
+    package: {
+      registry: "crates.io",
+      name: "clidex",
+      url: "https://crates.io/crates/clidex"
+    },
+    demoImage: {
+      url: "https://raw.githubusercontent.com/syshin0116/clidex/main/assets/demo.gif",
+      alt: "Clidex 터미널 데모"
+    },
     techStack: {
       language: ["Rust (2021 edition)"],
       search: ["BM25 (bm25 crate)", "fuzzy-matcher (Skim algorithm)"],
@@ -1207,6 +1265,125 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
       "확장 가능한 설계: 같은 기술 베이스로 개인용과 회사용 두 버전 배포",
       "회사 내부 시스템 연동: 자체 LLM 서비스와 Notion 워크스페이스 통합",
       "고객사 지원: 간편한 테스트 환경 제공의 가치"
+    ]
+  },
+  "sk-cooh-prediction": {
+    id: "sk-cooh-prediction",
+    title: "Copolyester COOH 예측 모델",
+    subtitle: "Copolyester 생산 공정 COOH 예측",
+    period: "2025 (SK Chemical)",
+    duration: "TBD",
+    role: "ML 모델 개발",
+    team: "SK Chemical DX Lab",
+    description: "ES-20 COOH 변화에 따라 Polymer 반응성이 변하여 제품 품질 Hunting이 발생하는 문제를 해결. COOH 변화 예측으로 온도/유량 사전 Action이 가능하게 하여 안정 운전 지원.",
+    techStack: {
+      ml: ["scikit-learn", "LightGBM", "XGBoost"],
+      dataprocessing: ["Python", "Pandas", "NumPy"],
+      datasource: ["RTIS", "ERP"]
+    },
+    businessGoals: [
+      {
+        title: "As-is",
+        description: "ES-20 COOH 변화에 따라 Polymer 반응성이 변하여 제품 품질 Hunting 발생"
+      },
+      {
+        title: "To-be",
+        description: "ES-20 COOH 변화 예측으로 온도/유량 사전 Action 가능, 안정 운전"
+      }
+    ],
+    keyResponsibilities: [
+      {
+        title: "공정 데이터 분석 및 전처리",
+        details: [
+          "ES-10/20 온도, 레벨, 압력, (열매/물) 유량 등 인풋 데이터 분석",
+          "ES-20 COOH 분석값 기반 피처 엔지니어링",
+          "RTIS, ERP 데이터 소스 통합 및 전처리"
+        ]
+      },
+      {
+        title: "COOH 예측 ML 모델 개발",
+        details: [
+          "다양한 ML 모델 실험 (LightGBM, XGBoost 등)",
+          "모델 성능 평가 및 하이퍼파라미터 튜닝",
+          "예측값 기반 Action 가이드 제공"
+        ]
+      }
+    ],
+    achievements: [
+      "품질 Hunting 최소화로 안정 운전 가능",
+      "온도/유량 사전 Action으로 불량률 감소"
+    ],
+    learnings: [
+      "화학 공정 도메인 지식: Copolyester 반응 메커니즘 이해",
+      "공정 데이터 특성: RTIS/ERP 데이터 전처리 노하우",
+      "예측 모델의 실제 현장 적용: 모델 결과를 운전자 Action으로 연결"
+    ]
+  },
+  "sk-qa-image-classification": {
+    id: "sk-qa-image-classification",
+    title: "이미지 선별 모델 - 이물 분석 검출 지원",
+    subtitle: "PET Chip 이물 이미지 자동 분류",
+    period: "2025.02.24 ~ 2025.04.03",
+    duration: "약 1개월",
+    role: "Computer Vision 모델 개발",
+    team: "풍영환 (QA팀), 전한솔 (DT추진팀)",
+    description: "PET Chip 특성상 원통형이고 불투명하여 선별기기의 한계로 오류값 다수 발생. 이미지 분석을 통해 사람이 직접 확인해야 하는 이미지 수를 최소화하는 모델 개발.",
+    techStack: {
+      ml: ["Python", "Computer Vision"],
+      imageprocessing: ["OpenCV", "PyTorch"],
+      dataprocessing: ["PyPDF2", "pdf2image"]
+    },
+    businessGoals: [
+      {
+        title: "As-is",
+        description: "PET Chip 특성상 원통형이고 불투명하여 선별기기의 한계로 오류값 다수 발생, 사람이 직접 선별 시 업무 Load 과다"
+      },
+      {
+        title: "To-be",
+        description: "이미지 분석을 통해 사람이 직접 확인해야 하는 이미지 수 최소화"
+      }
+    ],
+    keyResponsibilities: [
+      {
+        title: "PDF 파일에서 이미지 추출 및 전처리",
+        details: [
+          "선별기기 결과 Report (PDF 파일)에서 이미지 추출",
+          "이미지 전처리 및 정규화"
+        ]
+      },
+      {
+        title: "이물 검출 이미지 분류 모델 개발",
+        details: [
+          "Binary Classification (정상/이물 분류)",
+          "선별기기 결과를 1차 필터링하는 모델 개발",
+          "모델 성능 평가 (정확도, 재현율, F1-score)"
+        ]
+      }
+    ],
+    keyFeatures: [
+      {
+        title: "이물 검출 파이프라인",
+        details: [
+          "선별기기 결과 → 이미지 선별 모델 1차 필터링 → 사람 최종 선별",
+          "PDF Report에서 자동 이미지 추출",
+          "Binary Classification 기반 정상/이물 분류"
+        ]
+      }
+    ],
+    achievements: [
+      "사람이 확인해야 하는 이미지 수 대폭 감소",
+      "산터우 공장 등 해외 공장 확대 가능성 확인"
+    ],
+    challenges: [
+      {
+        title: "PET Chip 이미지 특성",
+        description: "원통형이고 불투명한 PET Chip 특성으로 선별기기 오류값 다수. 이미지 전처리 및 모델 최적화로 해결"
+      }
+    ],
+    learnings: [
+      "제조업 도메인 CV 적용: 선별기기 한계를 AI로 보완",
+      "Binary Classification 실전: 정밀도와 재현율 균형",
+      "PDF 기반 데이터 파이프라인: 비정형 데이터에서 이미지 추출"
     ]
   },
   "naver-hackathon": {

@@ -142,11 +142,11 @@ export const projectsTimeline: ProjectTimeline[] = [
     company: "LabQ"
   },
 
-  // SK Chemical AI/ML 프로젝트
+  // 화학 공정 AI/ML 프로젝트
   {
     id: "sk-cooh-prediction",
     title: "Copolyester COOH 예측 모델",
-    period: "2025 (SK Chemical)",
+    period: "2025.04 ~ 2025.07",
     year: 2025,
     periodType: "H",
     periodNumber: 1,
@@ -154,7 +154,7 @@ export const projectsTimeline: ProjectTimeline[] = [
     description: "ES-20 COOH 변화 예측으로 온도/유량 사전 Action 가능, Polymer 반응성 안정 운전 지원",
     tags: ["AI/ML", "Python", "LightGBM", "XGBoost", "시계열"],
     category: "company",
-    company: "SK Chemical"
+    company: "LabQ"
   },
   {
     id: "sk-qa-image-classification",
@@ -167,7 +167,7 @@ export const projectsTimeline: ProjectTimeline[] = [
     description: "PET Chip 이물 이미지 자동 선별 모델로 QA팀 업무 Load 감소",
     tags: ["Computer Vision", "Python", "이미지 분류", "PDF 처리"],
     category: "company",
-    company: "SK Chemical"
+    company: "LabQ"
   },
 
   // 완료된 프로젝트 (최신순)
@@ -1271,10 +1271,10 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
     id: "sk-cooh-prediction",
     title: "Copolyester COOH 예측 모델",
     subtitle: "Copolyester 생산 공정 COOH 예측",
-    period: "2025 (SK Chemical)",
-    duration: "TBD",
+    period: "2025.04 ~ 2025.07",
+    duration: "약 3개월",
     role: "ML 모델 개발",
-    team: "SK Chemical DX Lab",
+    team: "DX Lab",
     description: "ES-20 COOH 변화에 따라 Polymer 반응성이 변하여 제품 품질 Hunting이 발생하는 문제를 해결. COOH 변화 예측으로 온도/유량 사전 Action이 가능하게 하여 안정 운전 지원.",
     techStack: {
       ml: ["scikit-learn", "LightGBM", "XGBoost"],

@@ -515,3 +515,6 @@ clidex stats
 Clidex를 만들면서 가장 많이 배운 건 **검색은 데이터가 80%**라는 것이다. BM25든 임베딩이든, 도구 이름에 "rg" alias가 없으면 "rg" 검색이 안 되고, htop이 인덱스에 없으면 아무리 좋은 알고리즘도 소용없다. 알고리즘 튜닝보다 **데이터 품질 개선**(태그 추가, alias 매핑, 누락 도구 보강)이 검색 품질에 훨씬 더 큰 영향을 미쳤다.
 
 - GitHub: [syshin0116/clidex](https://github.com/syshin0116/clidex)
+- crates.io: [clidex](https://crates.io/crates/clidex)
+
+

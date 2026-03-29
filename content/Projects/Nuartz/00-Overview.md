@@ -35,7 +35,8 @@ const { html, toc } = await renderMarkdown(file)
 ```
 
 - GitHub: [syshin0116/nuartz](https://github.com/syshin0116/nuartz)
-- 데모/문서: Vercel 배포
+- npm: [nuartz](https://www.npmjs.com/package/nuartz)
+- 데모/문서: [nuartz.vercel.app](https://nuartz.vercel.app)
 
 ---
 

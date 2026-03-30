@@ -52,3 +52,4 @@ __pycache__/
 
 # agent
 agent/.langgraph_api/
+agent/supabase/.temp/

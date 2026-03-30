@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.store.postgres import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 
 from agent.graph import create_graph
@@ -44,11 +45,14 @@ async def lifespan(app: FastAPI):
         checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()
 
+        store = AsyncPostgresStore(pool)
+        await store.setup()
+
         db = DB(pool)
         await db.setup()
 
         compiled_graphs = {
-            "agent": create_graph(checkpointer=checkpointer),
+            "agent": create_graph(checkpointer=checkpointer, store=store),
         }
 
         redis_url = os.environ.get("REDIS_URL")
@@ -65,6 +69,7 @@ async def lifespan(app: FastAPI):
             logger.info("Using asyncio RunManager (no Redis)")
 
         app.state.checkpointer = checkpointer
+        app.state.store = store
         app.state.db = db
         app.state.graphs = compiled_graphs
         app.state.run_manager = run_manager
@@ -98,6 +103,7 @@ async def ok():
 @app.get("/info")
 async def info():
     return {"version": "0.1.0", "graphs": ["agent"]}
+
 
 
 app.include_router(assistants_router)

@@ -1,12 +1,15 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
-import { User, Session } from '@supabase/supabase-js'
-import { createClient } from '@/lib/supabase/client'
+import { SessionProvider, useSession, signIn, signOut } from 'next-auth/react'
+import { createContext, useContext } from 'react'
 
 interface AuthContextType {
-  user: User | null
-  session: Session | null
+  user: {
+    id?: string
+    name?: string | null
+    email?: string | null
+    image?: string | null
+  } | null
   loading: boolean
   signInWithGoogle: () => Promise<void>
   signInWithGithub: () => Promise<void>
@@ -15,88 +18,38 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
-  const [session, setSession] = useState<Session | null>(null)
-  const [loading, setLoading] = useState(true)
-  const supabase = createClient()
-
-  useEffect(() => {
-    if (!supabase) {
-      setLoading(false)
-      return
-    }
-
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
-
-    return () => subscription.unsubscribe()
-  }, [supabase])
+function AuthContextInner({ children }: { children: React.ReactNode }) {
+  const { data: session, status } = useSession()
+  const loading = status === 'loading'
+  const user = session?.user ?? null
 
   const signInWithGoogle = async () => {
-    if (!supabase) return
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-        },
-      },
-    })
-    if (error) {
-      console.error('Error signing in with Google:', error.message)
-      throw error
-    }
+    await signIn('google', { redirectTo: '/' })
   }
 
   const signInWithGithub = async () => {
-    if (!supabase) return
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'github',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    })
-    if (error) {
-      console.error('Error signing in with GitHub:', error.message)
-      throw error
-    }
+    await signIn('github', { redirectTo: '/' })
   }
 
-  const signOut = async () => {
-    if (!supabase) return
-    const { error } = await supabase.auth.signOut()
-    if (error) {
-      console.error('Error signing out:', error.message)
-      throw error
-    }
+  const handleSignOut = async () => {
+    await signOut({ redirectTo: '/' })
   }
 
-  const value = {
-    user,
-    session,
-    loading,
-    signInWithGoogle,
-    signInWithGithub,
-    signOut,
-  }
+  return (
+    <AuthContext.Provider
+      value={{ user, loading, signInWithGoogle, signInWithGithub, signOut: handleSignOut }}
+    >
+      {children}
+    </AuthContext.Provider>
+  )
+}
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  return (
+    <SessionProvider>
+      <AuthContextInner>{children}</AuthContextInner>
+    </SessionProvider>
+  )
 }
 
 export function useAuth() {

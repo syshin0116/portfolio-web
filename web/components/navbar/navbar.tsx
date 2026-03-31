@@ -239,7 +239,7 @@ export default function Navbar() {
                 <div className="flex items-center gap-2">
                   <UserMenu />
                   <span className="text-sm text-muted-foreground">
-                    {user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0]}
+                    {user.name || user.email?.split("@")[0]}
                   </span>
                 </div>
               ) : (

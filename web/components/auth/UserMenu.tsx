@@ -11,25 +11,21 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { LogOut, User } from 'lucide-react'
-import { useRouter } from 'next/navigation'
 
 export default function UserMenu() {
   const { user, signOut } = useAuth()
-  const router = useRouter()
 
   if (!user) return null
 
   const handleSignOut = async () => {
     try {
       await signOut()
-      router.push('/')
-      router.refresh()
     } catch (error) {
       console.error('Error signing out:', error)
     }
   }
 
-  const getInitials = (name?: string, email?: string) => {
+  const getInitials = (name?: string | null, email?: string | null) => {
     if (name) {
       const names = name.split(' ')
       return names.length > 1
@@ -39,17 +35,16 @@ export default function UserMenu() {
     return email ? email[0].toUpperCase() : 'U'
   }
 
-  const displayName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'User'
-  const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture
+  const displayName = user.name || user.email?.split('@')[0] || 'User'
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button className="flex items-center gap-2 rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-background focus:ring-ring">
           <Avatar className="h-8 w-8 cursor-pointer">
-            <AvatarImage src={avatarUrl} alt={displayName} />
+            <AvatarImage src={user.image ?? undefined} alt={displayName} />
             <AvatarFallback className="bg-gradient-to-br from-purple-500 to-pink-500 text-white text-sm font-medium">
-              {getInitials(user.user_metadata?.full_name || user.user_metadata?.name, user.email)}
+              {getInitials(user.name, user.email)}
             </AvatarFallback>
           </Avatar>
         </button>

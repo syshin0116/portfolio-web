@@ -155,6 +155,12 @@ class DB:
                     ON CONFLICT (model_id) DO NOTHING""",
                     (provider, model_id, display_name, is_default),
                 )
+            # Seed default assistant
+            await conn.execute(
+                """INSERT INTO assistants (graph_id, name, metadata)
+                SELECT 'agent', 'Blog Assistant', '{"name": "Blog Assistant"}'::jsonb
+                WHERE NOT EXISTS (SELECT 1 FROM assistants WHERE graph_id = 'agent')"""
+            )
 
     # ---- Assistants ----
 

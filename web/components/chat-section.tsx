@@ -1,667 +1,766 @@
 "use client"
 
+import { useStream } from "@langchain/react"
+import { useState, useEffect, useRef } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   ChatContainerContent,
   ChatContainerRoot,
   ChatContainerScrollAnchor,
 } from "@/components/ui/chat-container"
+import { Message, MessageContent } from "@/components/ui/message"
+import { Tool, ToolGroup } from "@/components/ui/tool"
+import type { ToolPart } from "@/components/ui/tool"
 import {
-  Message,
-  MessageAction,
-  MessageActions,
-  MessageContent,
-} from "@/components/ui/message"
+  Reasoning,
+  ReasoningTrigger,
+  ReasoningContent,
+} from "@/components/ui/reasoning"
 import {
   PromptInput,
-  PromptInputAction,
-  PromptInputActions,
   PromptInputTextarea,
+  PromptInputActions,
+  PromptInputAction,
 } from "@/components/ui/prompt-input"
+import { PromptSuggestion } from "@/components/ui/prompt-suggestion"
+import { ModelSelector, type Model } from "@/components/ui/model-selector"
 import { ScrollButton } from "@/components/ui/scroll-button"
+import { Loader } from "@/components/ui/loader"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
-  ArrowUp,
-  Copy,
-  Mic,
-  Plus,
-  ThumbsDown,
-  ThumbsUp,
-  Tag,
-  FolderSearch,
-  Network,
-  GitBranch,
-  Database,
-  Info,
-  Zap,
-  Settings,
+  ArrowUpIcon,
+  SquareIcon,
+  CopyIcon,
+  CheckIcon,
+  RefreshCwIcon,
+  PencilIcon,
+  PlusIcon,
+  ShieldCheckIcon,
+  SparklesIcon,
+  SearchIcon,
+  BookOpenIcon,
+  CodeIcon,
+  WifiOffIcon,
+  PlugIcon,
+  XIcon,
 } from "lucide-react"
-import { useState, useEffect } from "react"
-import { useSearchParams } from "next/navigation"
-import { streamChatResponse, ToolCall, ToolResult, SourceInfo } from "@/lib/api-client"
-import { SiOpenai } from "react-icons/si"
-import { Loader } from "@/components/ui/loader"
-import { Tool, ToolPart } from "@/components/ui/tool"
-import { Source, SourceTrigger, SourceContent } from "@/components/ui/source"
 
-interface ChatMessage {
-  id: number
-  role: "user" | "assistant"
-  content: string
-  toolCalls?: Map<string, ToolPart>
-  sources?: SourceInfo[]
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type LGMessage = any
+
+const API_URL = process.env.NEXT_PUBLIC_AGENT_API_URL || "http://localhost:8000"
+
+const SUGGESTIONS = [
+  { text: "블로그에서 LangGraph 관련 글 찾아줘", icon: SearchIcon },
+  { text: "어떤 프로젝트들을 진행했어?", icon: CodeIcon },
+  { text: "AI 엔지니어로서의 경험을 알려줘", icon: BookOpenIcon },
+]
+
+// ── Message Grouping ────────────────────────────────────────
+
+type MessageTurn =
+  | { type: "human"; messages: LGMessage[] }
+  | { type: "ai"; messages: LGMessage[] }
+
+function groupMessagesIntoTurns(messages: LGMessage[]): MessageTurn[] {
+  const turns: MessageTurn[] = []
+  for (const msg of messages) {
+    if (msg.type === "human") {
+      turns.push({ type: "human", messages: [msg] })
+    } else if (msg.type === "ai" || msg.type === "tool") {
+      const last = turns[turns.length - 1]
+      if (last?.type === "ai") {
+        last.messages.push(msg)
+      } else {
+        turns.push({ type: "ai", messages: [msg] })
+      }
+    }
+  }
+  return turns
 }
+
+function extractTextFromMessage(msg: LGMessage): string {
+  return (
+    msg.text ??
+    (typeof msg.content === "string"
+      ? msg.content
+      : Array.isArray(msg.content)
+        ? msg.content
+            .filter((b: { type: string }) => b.type === "text")
+            .map((b: { text?: string }) => b.text ?? "")
+            .join("")
+        : "")
+  )
+}
+
+function isTurnEmpty(turn: MessageTurn): boolean {
+  if (turn.type === "human") return false
+  return turn.messages.every((msg) => {
+    if (msg.type === "tool") return true
+    if (msg.type !== "ai") return true
+    const hasToolCalls = (msg.tool_calls ?? []).length > 0
+    if (hasToolCalls) return false
+    const text = extractTextFromMessage(msg)
+    return !text.trim()
+  })
+}
+
+// ── Tool Calls Renderer ─────────────────────────────────────
+
+function ToolCallsRenderer({
+  toolCalls,
+  allMessages,
+  isStreaming,
+}: {
+  toolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }>
+  allMessages: LGMessage[]
+  isStreaming?: boolean
+}) {
+  const toolParts: ToolPart[] = toolCalls.map((tc) => {
+    const resultMsg = allMessages.find(
+      (m: LGMessage) => m.type === "tool" && m.tool_call_id === tc.id
+    )
+    return {
+      type: tc.name,
+      state: (resultMsg
+        ? "output-available"
+        : isStreaming
+          ? "input-streaming"
+          : "input-available") as ToolPart["state"],
+      input: tc.args,
+      output: resultMsg?.content,
+      toolCallId: tc.id,
+    }
+  })
+
+  if (toolParts.length === 1) return <Tool toolPart={toolParts[0]} />
+  return <ToolGroup tools={toolParts} />
+}
+
+// ── Human Message ───────────────────────────────────────────
+
+function HumanMessageItem({
+  message,
+  isStreaming,
+  metadata,
+  onEdit,
+  onBranchSwitch,
+}: {
+  message: LGMessage
+  isStreaming?: boolean
+  metadata?: any // eslint-disable-line @typescript-eslint/no-explicit-any
+  onEdit?: (text: string, metadata: any) => void // eslint-disable-line @typescript-eslint/no-explicit-any
+  onBranchSwitch?: (branchId: string) => void
+}) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editText, setEditText] = useState("")
+  const [copied, setCopied] = useState(false)
+  const wasStreamingRef = useRef(false)
+  if (isStreaming) wasStreamingRef.current = true
+  const skipAnimation = wasStreamingRef.current
+  const textContent = extractTextFromMessage(message)
+
+  return (
+    <div className={`group ${skipAnimation ? "" : "animate-in fade-in-0 duration-300"} flex justify-end`}>
+      <div className="max-w-[80%]">
+        <Message className="flex-row-reverse">
+          <div className="flex-1 space-y-1">
+            {isEditing ? (
+              <div className="space-y-2 rounded-xl border bg-card p-3">
+                <textarea
+                  className="w-full resize-none rounded-lg border bg-background p-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  rows={3}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      if (metadata && onEdit) onEdit(editText, metadata)
+                      setIsEditing(false)
+                    }}
+                  >
+                    Save & Rerun
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : textContent ? (
+              <MessageContent className="rounded-2xl bg-foreground px-4 py-2.5 shadow-sm whitespace-pre-wrap [&_*]:!text-background [&]:!text-background">
+                {textContent}
+              </MessageContent>
+            ) : null}
+            {!isEditing && (
+              <div className="flex h-7 items-center gap-0.5 justify-end opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                {textContent && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="size-7 text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      navigator.clipboard.writeText(textContent)
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 2000)
+                    }}
+                  >
+                    {copied ? <CheckIcon className="size-3.5 text-green-500" /> : <CopyIcon className="size-3.5" />}
+                  </Button>
+                )}
+                {metadata?.firstSeenState?.parent_checkpoint && onEdit && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="size-7 text-muted-foreground hover:text-foreground"
+                    onClick={() => { setEditText(textContent); setIsEditing(true) }}
+                  >
+                    <PencilIcon className="size-3.5" />
+                  </Button>
+                )}
+                {metadata?.branchOptions?.length > 1 && onBranchSwitch && (
+                  <BranchSwitcher metadata={metadata} onSwitch={onBranchSwitch} />
+                )}
+              </div>
+            )}
+          </div>
+        </Message>
+      </div>
+    </div>
+  )
+}
+
+// ── AI Turn ─────────────────────────────────────────────────
+
+function AITurnItem({
+  turn,
+  allMessages,
+  isStreaming,
+  metadata,
+  onRegenerate,
+  onBranchSwitch,
+}: {
+  turn: MessageTurn
+  allMessages: LGMessage[]
+  isStreaming?: boolean
+  metadata?: any // eslint-disable-line @typescript-eslint/no-explicit-any
+  onRegenerate?: (metadata: any) => void // eslint-disable-line @typescript-eslint/no-explicit-any
+  onBranchSwitch?: (branchId: string) => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const wasStreamingRef = useRef(false)
+  if (isStreaming) wasStreamingRef.current = true
+  const skipAnimation = wasStreamingRef.current
+
+  const allToolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> = []
+  const textParts: string[] = []
+  let reasoningText = ""
+
+  for (const msg of turn.messages) {
+    if (msg.type === "ai") {
+      const tc = msg.tool_calls ?? []
+      allToolCalls.push(...tc)
+      const text = extractTextFromMessage(msg)
+      if (text.trim()) textParts.push(text)
+      const contentBlocks = msg.contentBlocks ?? (Array.isArray(msg.content) ? msg.content : undefined)
+      const r = contentBlocks
+        ?.filter((b: { type: string; reasoning?: string }) => b.type === "reasoning" && b.reasoning?.trim())
+        .map((b: { reasoning: string }) => b.reasoning)
+        .join("") ?? ""
+      if (r) reasoningText += r
+    }
+  }
+
+  const combinedText = textParts.join("")
+
+  return (
+    <div className={`group ${skipAnimation ? "" : "animate-in fade-in-0 duration-300"}`}>
+      <div className="w-full">
+        <Message>
+          <div className="flex-1 space-y-1">
+            {reasoningText && (
+              <Reasoning isStreaming={isStreaming}>
+                <ReasoningTrigger>{isStreaming ? "Thinking..." : "View reasoning"}</ReasoningTrigger>
+                <ReasoningContent markdown>{reasoningText}</ReasoningContent>
+              </Reasoning>
+            )}
+            {allToolCalls.length > 0 && (
+              <ToolCallsRenderer toolCalls={allToolCalls} allMessages={allMessages} isStreaming={isStreaming && !combinedText} />
+            )}
+            {combinedText ? (
+              <MessageContent markdown className="rounded-2xl bg-secondary/60 px-4 py-3">
+                {combinedText}
+              </MessageContent>
+            ) : null}
+            {isStreaming && !combinedText && allToolCalls.length === 0 && !reasoningText && (
+              <Loader variant="typing" size="sm" />
+            )}
+            <div className="flex h-7 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+              {combinedText && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="size-7 text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    navigator.clipboard.writeText(combinedText)
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 2000)
+                  }}
+                >
+                  {copied ? <CheckIcon className="size-3.5 text-green-500" /> : <CopyIcon className="size-3.5" />}
+                </Button>
+              )}
+              {metadata?.firstSeenState?.parent_checkpoint && onRegenerate && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="size-7 text-muted-foreground hover:text-foreground"
+                  onClick={() => onRegenerate(metadata)}
+                >
+                  <RefreshCwIcon className="size-3.5" />
+                </Button>
+              )}
+              {metadata?.branchOptions?.length > 1 && onBranchSwitch && (
+                <BranchSwitcher metadata={metadata} onSwitch={onBranchSwitch} />
+              )}
+            </div>
+          </div>
+        </Message>
+      </div>
+    </div>
+  )
+}
+
+// ── Branch Switcher ─────────────────────────────────────────
+
+function BranchSwitcher({ metadata, onSwitch }: { metadata: any; onSwitch: (id: string) => void }) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const branch = metadata?.branch
+  const branchOptions = metadata?.branchOptions as string[] | undefined
+  if (!branchOptions || branchOptions.length <= 1) return null
+  const idx = branch != null ? branchOptions.indexOf(branch) : -1
+  const current = idx >= 0 ? idx + 1 : 1
+
+  return (
+    <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1 py-0.5 text-xs font-medium text-muted-foreground">
+      <Button variant="ghost" size="sm" disabled={idx <= 0} onClick={(e) => { e.stopPropagation(); onSwitch(branchOptions[idx - 1]) }} className="size-6 rounded-full text-muted-foreground hover:text-foreground">&lt;</Button>
+      <span className="px-1">{current}/{branchOptions.length}</span>
+      <Button variant="ghost" size="sm" disabled={idx >= branchOptions.length - 1} onClick={(e) => { e.stopPropagation(); onSwitch(branchOptions[idx + 1]) }} className="size-6 rounded-full text-muted-foreground hover:text-foreground">&gt;</Button>
+    </span>
+  )
+}
+
+// ── HITL Card ───────────────────────────────────────────────
+
+function HitlCard({ interrupt, onRespond }: {
+  interrupt: any // eslint-disable-line @typescript-eslint/no-explicit-any
+  onRespond: (r: { decision: string; reason?: string; args?: Record<string, unknown> }) => void
+}) {
+  const [mode, setMode] = useState<"review" | "edit" | "reject">("review")
+  const [rejectReason, setRejectReason] = useState("")
+  const [editedArgs, setEditedArgs] = useState<Record<string, unknown>>({})
+
+  const request = interrupt.value
+  const actions = (request?.actionRequests ?? []) as any[] // eslint-disable-line @typescript-eslint/no-explicit-any
+  const configs = (request?.reviewConfigs ?? []) as any[] // eslint-disable-line @typescript-eslint/no-explicit-any
+  const config = configs[0]
+  if (actions.length === 0 || !config) return null
+
+  return (
+    <div className="mx-auto my-2 w-full animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
+      <div className="rounded-xl border border-border bg-card shadow-sm">
+        <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
+          <div className="flex size-8 items-center justify-center rounded-lg bg-amber-500/10">
+            <ShieldCheckIcon className="size-4 text-amber-500" />
+          </div>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold">Review Required</h3>
+            <p className="text-xs text-muted-foreground">
+              {actions.length === 1
+                ? `Agent wants to execute: ${actions[0].action}`
+                : `Agent wants to execute ${actions.length} actions`}
+            </p>
+          </div>
+        </div>
+        <div className="divide-y divide-border">
+          {actions.map((action: { action: string; args: Record<string, unknown>; description?: string }, i: number) => (
+            <div key={i} className="px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-medium">{action.action}</span>
+                {action.description && <span className="text-xs text-muted-foreground">{action.description}</span>}
+              </div>
+              {action.args && Object.keys(action.args).length > 0 && (
+                <pre className="mt-2 overflow-auto rounded-lg bg-muted/50 p-2.5 font-mono text-xs text-muted-foreground">
+                  {JSON.stringify(action.args, null, 2)}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="border-t border-border px-4 py-3">
+          {mode === "review" && (
+            <div className="flex gap-2">
+              {config.allowedDecisions.includes("approve") && (
+                <Button size="sm" onClick={() => onRespond({ decision: "approve" })}>Approve</Button>
+              )}
+              {config.allowedDecisions.includes("reject") && (
+                <Button variant="destructive" size="sm" onClick={() => setMode("reject")}>Reject</Button>
+              )}
+              {actions.length === 1 && config.allowedDecisions.includes("edit") && (
+                <Button variant="outline" size="sm" onClick={() => { setEditedArgs(actions[0].args); setMode("edit") }}>Edit</Button>
+              )}
+            </div>
+          )}
+          {mode === "reject" && (
+            <div className="space-y-3">
+              <Textarea placeholder="Reason..." value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} rows={2} className="min-h-0 text-sm" />
+              <div className="flex gap-2">
+                <Button variant="destructive" size="sm" onClick={() => onRespond({ decision: "reject", reason: rejectReason })}>Confirm</Button>
+                <Button variant="ghost" size="sm" onClick={() => setMode("review")}>Back</Button>
+              </div>
+            </div>
+          )}
+          {mode === "edit" && (
+            <div className="space-y-3">
+              <Textarea value={JSON.stringify(editedArgs, null, 2)} onChange={(e) => { try { setEditedArgs(JSON.parse(e.target.value)) } catch { /* editing */ } }} rows={6} className="min-h-0 font-mono text-xs" />
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => onRespond({ decision: "edit", args: editedArgs })}>Submit</Button>
+                <Button variant="ghost" size="sm" onClick={() => setMode("review")}>Back</Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Connection Dot ──────────────────────────────────────────
+
+function ConnectionDot({ isConnected, savedRunId, onDisconnect, onRejoin }: {
+  isConnected: boolean; savedRunId: string | null; onDisconnect: () => void; onRejoin: (id: string) => void
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className={`inline-block size-1.5 rounded-full transition-colors ${isConnected ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+      <span className="text-[11px] text-muted-foreground">{isConnected ? "Active" : "Idle"}</span>
+      {isConnected ? (
+        <Button variant="ghost" size="sm" className="size-5 rounded" onClick={onDisconnect}><WifiOffIcon className="size-3" /></Button>
+      ) : savedRunId ? (
+        <Button variant="ghost" size="sm" className="size-5 rounded" onClick={() => onRejoin(savedRunId)}><PlugIcon className="size-3" /></Button>
+      ) : null}
+    </div>
+  )
+}
+
+// ── Queue Display ───────────────────────────────────────────
+
+function QueueDisplay({ queue }: { queue: any }) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  return (
+    <div className="border-t bg-muted/30 px-4 py-2.5">
+      <div className="mx-auto max-w-3xl">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Queued ({queue.size})</span>
+          <Button variant="ghost" size="sm" className="h-auto px-1 py-0 text-xs text-destructive hover:text-destructive" onClick={() => queue.clear()}>Clear</Button>
+        </div>
+        <div className="mt-1.5 space-y-1">
+          {queue.entries.slice(0, 3).map((entry: { id: string; values: Record<string, unknown> }) => {
+            const msgs = entry.values?.messages as Array<{ content: string }> | undefined
+            return (
+              <div key={entry.id} className="flex items-center justify-between text-xs">
+                <span className="truncate text-muted-foreground">{msgs?.[0]?.content ?? "..."}</span>
+                <Button variant="ghost" size="sm" className="ml-2 size-5 shrink-0 text-muted-foreground hover:text-destructive" onClick={() => queue.cancel(entry.id)}>
+                  <XIcon className="size-3" />
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main Chat Section ───────────────────────────────────────
 
 export default function ChatSection() {
   const searchParams = useSearchParams()
-  const [prompt, setPrompt] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [input, setInput] = useState("")
+  const [savedRunId, setSavedRunId] = useState<string | null>(null)
+  const [models, setModels] = useState<Model[]>([])
+  const [selectedModel, setSelectedModel] = useState<string>("")
 
-  // Model selection state
-  const selectedModel = "gpt-4.1-nano"
+  const thread = useStream({
+    apiUrl: API_URL,
+    assistantId: "agent",
+    messagesKey: "messages",
+    onCreated(run) {
+      setSavedRunId(run.run_id)
+    },
+  })
 
-  // Search mode state
-  const [searchMode, setSearchMode] = useState<"auto" | "manual">("auto")
-  const [autoAgentType, setAutoAgentType] = useState<"single" | "multi">("single")
+  const interrupt = thread.interrupt as any // eslint-disable-line @typescript-eslint/no-explicit-any
+  const getMetadata = thread.getMessagesMetadata
 
-  // RAG settings state - array of selected modes (for MANUAL mode)
-  const [selectedRagModes, setSelectedRagModes] = useState<string[]>([])
-
-  // Reset chat when reset parameter is present
+  // Reset chat
   useEffect(() => {
-    const reset = searchParams.get('reset')
-    if (reset === 'true') {
-      setChatMessages([])
-      setPrompt("")
-      setIsLoading(false)
-      // Clear the URL parameter
-      window.history.replaceState({}, '', '/')
+    if (searchParams.get("reset") === "true") {
+      thread.switchThread(null)
+      setInput("")
+      window.history.replaceState({}, "", "/")
     }
-  }, [searchParams])
+  }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSubmit = async () => {
-    if (!prompt.trim()) return
+  // Fetch models
+  useEffect(() => {
+    fetch(`${API_URL}/models`)
+      .then((r) => r.json())
+      .then((data: Model[]) => {
+        setModels(data)
+        if (!selectedModel) {
+          const def = data.find((m) => m.is_default)
+          setSelectedModel(def?.model_id ?? data[0]?.model_id ?? "")
+        }
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    const userPrompt = prompt.trim()
-    setPrompt("")
-    setIsLoading(true)
+  const submitMessage = (text: string) => {
+    const newMessage = { type: "human" as const, content: text, id: `optimistic-${Date.now()}` }
+    thread.submit(
+      { messages: [newMessage] } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      {
+        onDisconnect: "continue",
+        streamResumable: true,
+        ...(selectedModel ? { config: { configurable: { model: selectedModel } } } : {}),
+        optimisticValues: (prev: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
+          ...prev,
+          messages: [...(prev?.messages ?? []), newMessage],
+        }),
+      }
+    )
+  }
 
-    // Add user message immediately
-    const newUserMessage: ChatMessage = {
-      id: Date.now(),
-      role: "user",
-      content: userPrompt,
-    }
+  const handleSubmit = () => {
+    if (!input.trim()) return
+    submitMessage(input)
+    setInput("")
+  }
 
-    setChatMessages((prev) => [...prev, newUserMessage])
+  const handleEdit = (text: string, metadata: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const checkpoint = metadata.firstSeenState?.parent_checkpoint
+    if (!checkpoint) return
+    const newMessage = { type: "human" as const, content: text }
+    thread.submit(
+      { messages: [newMessage] } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      {
+        checkpoint,
+        streamMode: ["values"],
+        streamSubgraphs: true,
+        streamResumable: true,
+        optimisticValues: (prev: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+          const values = metadata.firstSeenState?.values
+          if (!values) return prev
+          return { ...values, messages: [...(values.messages ?? []), newMessage] }
+        },
+      }
+    )
+  }
 
-    // Create assistant message placeholder
-    const assistantMessageId = Date.now() + 1
-    const assistantMessage: ChatMessage = {
-      id: assistantMessageId,
-      role: "assistant",
-      content: "",
-      toolCalls: new Map(),
-      sources: [],
-    }
-
-    setChatMessages((prev) => [...prev, assistantMessage])
-
-    // Stream the response using the API client
-    await streamChatResponse({
-      userMessage: userPrompt,
-      searchMode,
-      autoAgentType,
-      ragModes: selectedRagModes,
-      onChunk: (fullContent) => {
-        // Update the assistant message with accumulated content
-        setChatMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessageId ? { ...m, content: fullContent } : m
-          )
-        )
-      },
-      onToolCall: (toolCall: ToolCall) => {
-        // Add or update tool call
-        setChatMessages((prev) =>
-          prev.map((m) => {
-            if (m.id === assistantMessageId) {
-              const newToolCalls = new Map(m.toolCalls)
-              newToolCalls.set(toolCall.id, {
-                type: toolCall.name,
-                state: "input-available",
-                input: toolCall.args,
-                toolCallId: toolCall.id,
-              })
-              return { ...m, toolCalls: newToolCalls }
-            }
-            return m
-          })
-        )
-      },
-      onToolResult: (toolResult: ToolResult) => {
-        // Update tool call with result
-        setChatMessages((prev) =>
-          prev.map((m) => {
-            if (m.id === assistantMessageId) {
-              const newToolCalls = new Map(m.toolCalls)
-              const existingTool = newToolCalls.get(toolResult.tool_call_id)
-              if (existingTool) {
-                newToolCalls.set(toolResult.tool_call_id, {
-                  ...existingTool,
-                  state: "output-available",
-                  output: { result: toolResult.content },
-                })
-              }
-              return { ...m, toolCalls: newToolCalls }
-            }
-            return m
-          })
-        )
-      },
-      onSources: (sources: SourceInfo[]) => {
-        // Update assistant message with sources
-        setChatMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessageId ? { ...m, sources } : m
-          )
-        )
-      },
-      onComplete: () => {
-        setIsLoading(false)
-      },
-      onError: (error) => {
-        console.error("Error streaming response:", error)
-
-        // Update with error message
-        setChatMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessageId
-              ? {
-                  ...m,
-                  content: "Sorry, I encountered an error. Please try again.",
-                }
-              : m
-          )
-        )
-
-        setIsLoading(false)
-      },
+  const handleRegenerate = (metadata: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const checkpoint = metadata.firstSeenState?.parent_checkpoint
+    if (!checkpoint) return
+    thread.submit(undefined, {
+      checkpoint,
+      streamMode: ["values"],
+      streamSubgraphs: true,
+      streamResumable: true,
     })
   }
+
+  const isEmpty = thread.messages.length === 0 && !thread.isLoading
 
   return (
     <section className="w-full h-[calc(100dvh-8rem)] min-h-[400px] md:h-[70vh] md:min-h-[500px] flex flex-col">
       <div className="container mx-auto px-4 md:px-6 py-4 flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div className="flex flex-col items-center space-y-3 text-center mb-6">
-          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
-            AI 어시스턴트에게 물어보세요
-          </h2>
-          <p className="text-muted-foreground max-w-[600px] text-sm md:text-base">
-            블로그 포스트, 프로젝트, 기술 경험에 대해 무엇이든 질문하세요
-          </p>
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <h2 className="text-2xl font-bold tracking-tight">AI Assistant</h2>
+            <ConnectionDot
+              isConnected={thread.isLoading}
+              savedRunId={savedRunId}
+              onDisconnect={() => thread.stop()}
+              onRejoin={(id) => thread.joinStream(id)}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            {thread.queue && thread.queue.size > 0 && (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                {thread.queue.size} queued
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="size-8 rounded-md"
+              onClick={() => thread.switchThread(null)}
+              title="New thread"
+            >
+              <PlusIcon className="size-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="w-full max-w-7xl mx-auto flex-1 flex flex-col min-h-0">
           <div className="relative flex flex-col flex-1 overflow-hidden min-h-0">
-            <ChatContainerRoot className="relative flex-1 space-y-0 overflow-y-auto px-4 py-8">
-              <ChatContainerContent className="space-y-8">
-                {chatMessages.map((message, index) => {
-                  const isAssistant = message.role === "assistant"
-                  const isLastMessage = index === chatMessages.length - 1
+            <ChatContainerRoot className="relative flex-1 px-4">
+              <ChatContainerContent className="mx-auto max-w-3xl gap-3 py-6">
+                {/* Empty state */}
+                {isEmpty && (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-6 pt-24">
+                    <div className="flex size-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5">
+                      <SparklesIcon className="size-8 text-primary" />
+                    </div>
+                    <div className="space-y-2 text-center">
+                      <h2 className="text-2xl font-semibold tracking-tight">
+                        무엇이든 물어보세요
+                      </h2>
+                      <p className="text-sm text-muted-foreground">
+                        블로그 포스트, 프로젝트, 기술 경험에 대해 질문하세요
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {SUGGESTIONS.map((s) => (
+                        <PromptSuggestion
+                          key={s.text}
+                          className="h-auto gap-2 px-4 py-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                          onClick={() => submitMessage(s.text)}
+                        >
+                          <s.icon className="size-4 shrink-0 text-primary/70" />
+                          <span className="text-sm">{s.text}</span>
+                        </PromptSuggestion>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-                  return (
-                    <Message
-                      key={message.id}
-                      className={cn(
-                        isAssistant ? "justify-start" : "justify-end"
-                      )}
-                    >
-                      {isAssistant ? (
-                        <div className="group flex flex-col gap-2 max-w-[85%]">
-                          {/* Tool calls display */}
-                          {message.toolCalls && message.toolCalls.size > 0 && (
-                            <div className="mb-4 space-y-2">
-                              {Array.from(message.toolCalls.values()).map((toolPart) => (
-                                <Tool
-                                  key={toolPart.toolCallId}
-                                  toolPart={toolPart}
-                                  defaultOpen={false}
-                                />
-                              ))}
-                            </div>
-                          )}
+                {/* Messages */}
+                {(() => {
+                  const turns = groupMessagesIntoTurns(thread.messages)
+                  const filtered = turns.filter((t, i) => {
+                    if (!isTurnEmpty(t)) return true
+                    if (thread.isLoading && t.type === "ai" && i === turns.length - 1) return true
+                    return false
+                  })
+                  return filtered.map((turn, idx) => {
+                    const isLast = idx === filtered.length - 1
+                    const firstMsg = turn.messages[0]
+                    const lastMsg = turn.messages[turn.messages.length - 1]
+                    const meta = getMetadata ? (getMetadata(lastMsg) as any) : null // eslint-disable-line @typescript-eslint/no-explicit-any
 
-                          {/* Message content */}
-                          {message.content ? (
-                            <MessageContent
-                              className="prose max-w-none"
-                              markdown
-                            >
-                              {message.content}
-                            </MessageContent>
-                          ) : !message.toolCalls || message.toolCalls.size === 0 ? (
-                            <div className="rounded-lg bg-secondary p-2">
-                              <Loader variant="text-shimmer" text="Thinking" size="md" />
-                            </div>
-                          ) : null}
+                    if (turn.type === "human") {
+                      return (
+                        <HumanMessageItem
+                          key={firstMsg.id}
+                          message={firstMsg}
+                          isStreaming={thread.isLoading && isLast}
+                          metadata={meta}
+                          onEdit={handleEdit}
+                          onBranchSwitch={(id) => thread.setBranch(id)}
+                        />
+                      )
+                    }
+                    return (
+                      <AITurnItem
+                        key={firstMsg.id}
+                        turn={turn}
+                        allMessages={thread.messages}
+                        isStreaming={thread.isLoading && isLast}
+                        metadata={meta}
+                        onRegenerate={handleRegenerate}
+                        onBranchSwitch={(id) => thread.setBranch(id)}
+                      />
+                    )
+                  })
+                })()}
 
-                          {/* Sources display */}
-                          {message.sources && message.sources.length > 0 && (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {message.sources.map((source, idx) => (
-                                <Source key={idx} href={source.url}>
-                                  <SourceTrigger 
-                                    label={source.title}
-                                    showFavicon={true}
-                                  />
-                                  <SourceContent
-                                    title={source.title}
-                                    description={source.summary || ""}
-                                  />
-                                </Source>
-                              ))}
-                            </div>
-                          )}
+                {/* HITL interrupt */}
+                {interrupt && (
+                  <HitlCard
+                    interrupt={interrupt}
+                    onRespond={(response) =>
+                      thread.submit(null, { command: { resume: response } })
+                    }
+                  />
+                )}
 
-                          <MessageActions
-                            className={cn(
-                              "-ml-2.5 flex gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100",
-                              isLastMessage && "opacity-100"
-                            )}
-                          >
-                            <MessageAction tooltip="Copy" delayDuration={100}>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="rounded-full"
-                              >
-                                <Copy />
-                              </Button>
-                            </MessageAction>
-                            <MessageAction tooltip="Upvote" delayDuration={100}>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="rounded-full"
-                              >
-                                <ThumbsUp />
-                              </Button>
-                            </MessageAction>
-                            <MessageAction tooltip="Downvote" delayDuration={100}>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="rounded-full"
-                              >
-                                <ThumbsDown />
-                              </Button>
-                            </MessageAction>
-                          </MessageActions>
-                        </div>
-                      ) : (
-                        <MessageContent className="bg-primary text-primary-foreground max-w-[85%]">
-                          {message.content}
-                        </MessageContent>
-                      )}
-                    </Message>
-                  )
-                })}
                 <ChatContainerScrollAnchor />
               </ChatContainerContent>
 
-              <div className="absolute left-1/2 -translate-x-1/2 bottom-4 z-10">
-                <ScrollButton
-                  className="bg-background/80 hover:bg-background/90 backdrop-blur-sm shadow-lg border border-border/50"
-                  variant="outline"
-                  size="icon"
-                />
-              </div>
+              <ScrollButton className="absolute bottom-4 right-4 z-10 shadow-md" />
             </ChatContainerRoot>
 
-            <div className="sticky bottom-0 left-0 right-0 shrink-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-t border-border/40 p-4">
-              <div className="max-w-5xl mx-auto">
-                <PromptInput
-                  isLoading={isLoading}
-                  value={prompt}
-                  onValueChange={setPrompt}
-                  onSubmit={handleSubmit}
-                  className="border-input bg-background relative z-10 w-full rounded-3xl border p-0 pt-1 shadow-sm"
-                >
-                <div className="flex flex-col">
-                  <PromptInputTextarea
-                    placeholder="Ask anything..."
-                    className="min-h-[44px] pt-3 pl-4 text-base leading-[1.3]"
-                  />
-
-                  <PromptInputActions className="mt-3 flex w-full items-center justify-between gap-2 px-3 pb-3">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <PromptInputAction tooltip="Add attachment">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="size-9 rounded-full"
-                        >
-                          <Plus size={18} />
-                        </Button>
-                      </PromptInputAction>
-
-                      {/* Unified Search Configuration */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="outline"
-                            className="flex items-center gap-1.5 rounded-full cursor-pointer"
-                          >
-                            <Database size={18} />
-                            <span className="hidden sm:inline text-xs text-muted-foreground">RAG Mode:</span>
-                            <span className="hidden sm:inline text-xs font-medium">{searchMode === "auto" ? "AUTO" : "MANUAL"}</span>
-                            {searchMode === "auto" ? (
-                              <span className="hidden sm:inline ml-1 text-xs text-muted-foreground">
-                                ({autoAgentType === "single" ? "Single" : "Multi"})
-                              </span>
-                            ) : selectedRagModes.length > 0 ? (
-                              <span className="ml-1 rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
-                                {selectedRagModes.length}
-                              </span>
-                            ) : null}
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="w-72">
-                          <DropdownMenuLabel>Search Configuration</DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          <TooltipProvider>
-                            {/* AUTO Mode Section */}
-                            <DropdownMenuCheckboxItem
-                              checked={searchMode === "auto"}
-                              onCheckedChange={(checked) => {
-                                if (checked) setSearchMode("auto")
-                              }}
-                              onSelect={(e) => e.preventDefault()}
-                              className="cursor-pointer"
-                            >
-                              <Zap size={16} className="mr-2" />
-                              <span className="flex-1">AUTO Mode</span>
-                              <Tooltip delayDuration={0}>
-                                <TooltipTrigger asChild>
-                                  <div
-                                    className="ml-2"
-                                    onClick={(e) => e.stopPropagation()}
-                                    onMouseDown={(e) => e.stopPropagation()}
-                                  >
-                                    <Info size={14} className="text-muted-foreground cursor-help" />
-                                  </div>
-                                </TooltipTrigger>
-                                <TooltipContent side="right" className="max-w-[240px]" sideOffset={10}>
-                                  <p className="text-balance">AI automatically selects the best search strategy for your query</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </DropdownMenuCheckboxItem>
-
-                            {searchMode === "auto" && (
-                              <div className="ml-8 mt-1 mb-1 space-y-1">
-                                <DropdownMenuCheckboxItem
-                                  checked={autoAgentType === "single"}
-                                  onCheckedChange={(checked) => {
-                                    if (checked) setAutoAgentType("single")
-                                  }}
-                                  onSelect={(e) => e.preventDefault()}
-                                  className="cursor-pointer text-sm"
-                                >
-                                  <span className="flex-1">Single Agent (tool selection)</span>
-                                  <Tooltip delayDuration={0}>
-                                    <TooltipTrigger asChild>
-                                      <div
-                                        className="ml-1"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                      >
-                                        <Info size={12} className="text-muted-foreground cursor-help" />
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right" className="max-w-[200px] text-xs" sideOffset={10}>
-                                      <p className="text-balance">One AI agent with multiple tools to choose from</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </DropdownMenuCheckboxItem>
-                                <DropdownMenuCheckboxItem
-                                  checked={autoAgentType === "multi"}
-                                  onCheckedChange={(checked) => {
-                                    if (checked) setAutoAgentType("multi")
-                                  }}
-                                  onSelect={(e) => e.preventDefault()}
-                                  className="cursor-pointer text-sm"
-                                >
-                                  <span className="flex-1">Multi Agent (agent routing)</span>
-                                  <Tooltip delayDuration={0}>
-                                    <TooltipTrigger asChild>
-                                      <div
-                                        className="ml-1"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                      >
-                                        <Info size={12} className="text-muted-foreground cursor-help" />
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right" className="max-w-[200px] text-xs" sideOffset={10}>
-                                      <p className="text-balance">Multiple specialized AI agents routed based on query type</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </DropdownMenuCheckboxItem>
-                              </div>
-                            )}
-
-                            <DropdownMenuSeparator className="my-1" />
-
-                            {/* MANUAL Mode Section */}
-                            <DropdownMenuCheckboxItem
-                              checked={searchMode === "manual"}
-                              onCheckedChange={(checked) => {
-                                if (checked) setSearchMode("manual")
-                              }}
-                              onSelect={(e) => e.preventDefault()}
-                              className="cursor-pointer"
-                            >
-                              <Settings size={16} className="mr-2" />
-                              <span className="flex-1">MANUAL Mode</span>
-                              <Tooltip delayDuration={0}>
-                                <TooltipTrigger asChild>
-                                  <div
-                                    className="ml-2"
-                                    onClick={(e) => e.stopPropagation()}
-                                    onMouseDown={(e) => e.stopPropagation()}
-                                  >
-                                    <Info size={14} className="text-muted-foreground cursor-help" />
-                                  </div>
-                                </TooltipTrigger>
-                                <TooltipContent side="right" className="max-w-[200px]" sideOffset={10}>
-                                  <p className="text-balance">Manually select specific RAG modes to use</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </DropdownMenuCheckboxItem>
-
-                            {searchMode === "manual" && (
-                              <div className="ml-8 mt-1 space-y-1">
-                                <DropdownMenuCheckboxItem
-                                  checked={selectedRagModes.includes("metadata_search")}
-                                  onCheckedChange={(checked) => {
-                                    setSelectedRagModes(prev =>
-                                      checked
-                                        ? [...prev, "metadata_search"]
-                                        : prev.filter(m => m !== "metadata_search")
-                                    )
-                                  }}
-                                  onSelect={(e) => e.preventDefault()}
-                                  className="cursor-pointer text-sm"
-                                >
-                                  <Tag size={14} className="mr-2" />
-                                  <span className="flex-1">Metadata Search</span>
-                                  <Tooltip delayDuration={0}>
-                                    <TooltipTrigger asChild>
-                                      <div
-                                        className="ml-1"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                      >
-                                        <Info size={12} className="text-muted-foreground cursor-help" />
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right" className="max-w-[240px] text-xs" sideOffset={10}>
-                                      <p className="text-balance">Search through blog post metadata including titles, tags, categories, and dates</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </DropdownMenuCheckboxItem>
-
-                                <DropdownMenuCheckboxItem
-                                  checked={selectedRagModes.includes("filesystem_search")}
-                                  onCheckedChange={(checked) => {
-                                    setSelectedRagModes(prev =>
-                                      checked
-                                        ? [...prev, "filesystem_search"]
-                                        : prev.filter(m => m !== "filesystem_search")
-                                    )
-                                  }}
-                                  onSelect={(e) => e.preventDefault()}
-                                  className="cursor-pointer text-sm"
-                                >
-                                  <FolderSearch size={14} className="mr-2" />
-                                  <span className="flex-1">Filesystem Search</span>
-                                  <Tooltip delayDuration={0}>
-                                    <TooltipTrigger asChild>
-                                      <div
-                                        className="ml-1"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                      >
-                                        <Info size={12} className="text-muted-foreground cursor-help" />
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right" className="max-w-[240px] text-xs" sideOffset={10}>
-                                      <p className="text-balance">Search through project files and code repositories using file system structure</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </DropdownMenuCheckboxItem>
-
-                                <DropdownMenuCheckboxItem
-                                  checked={selectedRagModes.includes("vector_search")}
-                                  onCheckedChange={(checked) => {
-                                    setSelectedRagModes(prev =>
-                                      checked
-                                        ? [...prev, "vector_search"]
-                                        : prev.filter(m => m !== "vector_search")
-                                    )
-                                  }}
-                                  onSelect={(e) => e.preventDefault()}
-                                  className="cursor-pointer text-sm"
-                                >
-                                  <Network size={14} className="mr-2" />
-                                  <span className="flex-1">Vector Search</span>
-                                  <Tooltip delayDuration={0}>
-                                    <TooltipTrigger asChild>
-                                      <div
-                                        className="ml-1"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                      >
-                                        <Info size={12} className="text-muted-foreground cursor-help" />
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right" className="max-w-[240px] text-xs" sideOffset={10}>
-                                      <p className="text-balance">Semantic search using AI embeddings to find contextually relevant content</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </DropdownMenuCheckboxItem>
-
-                                <DropdownMenuCheckboxItem
-                                  checked={selectedRagModes.includes("graph_search")}
-                                  onCheckedChange={(checked) => {
-                                    setSelectedRagModes(prev =>
-                                      checked
-                                        ? [...prev, "graph_search"]
-                                        : prev.filter(m => m !== "graph_search")
-                                    )
-                                  }}
-                                  onSelect={(e) => e.preventDefault()}
-                                  className="cursor-pointer text-sm"
-                                >
-                                  <GitBranch size={14} className="mr-2" />
-                                  <span className="flex-1">Graph Search</span>
-                                  <Tooltip delayDuration={0}>
-                                    <TooltipTrigger asChild>
-                                      <div
-                                        className="ml-1"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                      >
-                                        <Info size={12} className="text-muted-foreground cursor-help" />
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right" className="max-w-[240px] text-xs" sideOffset={10}>
-                                      <p className="text-balance">Knowledge graph-based search to find related concepts and relationships</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </DropdownMenuCheckboxItem>
-                              </div>
-                            )}
-                          </TooltipProvider>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-
-                      <PromptInputAction tooltip={`Model: ${selectedModel} (selection coming soon)`}>
-                        <Button
-                          variant="outline"
-                          className="flex items-center gap-1.5 rounded-full"
-                          disabled={true}
-                        >
-                          <SiOpenai size={18} />
-                          <span className="hidden sm:inline text-xs text-muted-foreground">LLM Model:</span>
-                          <span className="hidden sm:inline text-xs font-medium">{selectedModel}</span>
-                        </Button>
-                      </PromptInputAction>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <PromptInputAction tooltip="Voice input">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="size-9 rounded-full"
-                        >
-                          <Mic size={18} />
-                        </Button>
-                      </PromptInputAction>
-
-                      <Button
-                        size="icon"
-                        disabled={!prompt.trim() || isLoading}
-                        onClick={handleSubmit}
-                        className="size-9 rounded-full"
-                      >
-                        {!isLoading ? (
-                          <ArrowUp size={18} />
-                        ) : (
-                          <span className="size-3 rounded-xs bg-white" />
-                        )}
-                      </Button>
-                    </div>
-                  </PromptInputActions>
-                </div>
-              </PromptInput>
+            {/* Error */}
+            {thread.error != null && (
+              <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+                {String((thread.error as Error)?.message ?? thread.error)}
               </div>
+            )}
+
+            {/* Queue */}
+            {thread.queue && thread.queue.size > 0 && (
+              <QueueDisplay queue={thread.queue} />
+            )}
+
+            {/* Input */}
+            <div className="relative bg-background px-4 pb-4 pt-2">
+              {models.length > 0 && (
+                <div className="mx-auto mb-1 max-w-3xl">
+                  <ModelSelector
+                    models={models}
+                    selectedModelId={selectedModel}
+                    onModelChange={setSelectedModel}
+                    disabled={thread.isLoading}
+                  />
+                </div>
+              )}
+              <PromptInput
+                value={input}
+                onValueChange={setInput}
+                onSubmit={handleSubmit}
+                isLoading={thread.isLoading}
+                className="mx-auto max-w-3xl shadow-sm transition-shadow focus-within:shadow-md"
+              >
+                <PromptInputTextarea placeholder="메시지를 입력하세요..." />
+                <PromptInputActions className="justify-end px-2 pb-2">
+                  {thread.isLoading ? (
+                    <PromptInputAction tooltip="Stop">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="size-8 rounded-full"
+                        onClick={(e) => { e.stopPropagation(); thread.stop() }}
+                      >
+                        <SquareIcon className="size-3.5" />
+                      </Button>
+                    </PromptInputAction>
+                  ) : (
+                    <PromptInputAction tooltip="Send">
+                      <Button
+                        size="sm"
+                        className="size-8 rounded-full bg-primary transition-transform active:scale-90"
+                        disabled={!input.trim()}
+                        onClick={(e) => { e.stopPropagation(); handleSubmit() }}
+                      >
+                        <ArrowUpIcon className="size-3.5" />
+                      </Button>
+                    </PromptInputAction>
+                  )}
+                </PromptInputActions>
+              </PromptInput>
             </div>
           </div>
         </div>

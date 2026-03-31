@@ -1,6 +1,6 @@
 import { Client } from "@langchain/langgraph-sdk"
 
-const API_URL = "https://portfolio-ai-194616966170.asia-northeast3.run.app"
+const API_URL = process.env.NEXT_PUBLIC_AGENT_API_URL || "http://localhost:8000"
 
 // Singleton pattern for client instance
 // Client provides async methods by default

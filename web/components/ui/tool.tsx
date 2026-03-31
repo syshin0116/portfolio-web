@@ -15,7 +15,6 @@ import {
   XCircle,
 } from "lucide-react"
 import { useState } from "react"
-import { BlogSearchResult } from "@/components/ui/blog-search-result"
 
 export type ToolPart = {
   type: string
@@ -25,7 +24,7 @@ export type ToolPart = {
     | "output-available"
     | "output-error"
   input?: Record<string, unknown>
-  output?: Record<string, unknown>
+  output?: unknown
   toolCallId?: string
   errorText?: string
 }
@@ -36,191 +35,154 @@ export type ToolProps = {
   className?: string
 }
 
+function formatArgsInline(args: Record<string, unknown>): string {
+  const parts = Object.entries(args).map(([k, v]) => {
+    const val = typeof v === "string" ? `"${v}"` : JSON.stringify(v)
+    return `${k}: ${val}`
+  })
+  const full = parts.join(", ")
+  return full.length > 80 ? full.slice(0, 77) + "..." : full
+}
+
+function formatOutput(value: unknown): string {
+  if (value === null) return "null"
+  if (value === undefined) return ""
+  if (typeof value === "string") return value
+  if (typeof value === "object") return JSON.stringify(value, null, 2)
+  return String(value)
+}
+
+function StateIcon({ state }: { state: ToolPart["state"] }) {
+  switch (state) {
+    case "input-streaming":
+      return <Loader2 className="size-3.5 animate-spin text-blue-500" />
+    case "input-available":
+      return <Settings className="size-3.5 text-orange-500" />
+    case "output-available":
+      return <CheckCircle className="size-3.5 text-green-500" />
+    case "output-error":
+      return <XCircle className="size-3.5 text-red-500" />
+    default:
+      return <Settings className="size-3.5 text-muted-foreground" />
+  }
+}
+
 const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   const [isOpen, setIsOpen] = useState(defaultOpen)
-
-  const { state, input, output, toolCallId } = toolPart
-
-  const getStateIcon = () => {
-    switch (state) {
-      case "input-streaming":
-        return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-      case "input-available":
-        return <Settings className="h-4 w-4 text-orange-500" />
-      case "output-available":
-        return <CheckCircle className="h-4 w-4 text-green-500" />
-      case "output-error":
-        return <XCircle className="h-4 w-4 text-red-500" />
-      default:
-        return <Settings className="text-muted-foreground h-4 w-4" />
-    }
-  }
-
-  const getStateBadge = () => {
-    const baseClasses = "px-2 py-1 rounded-full text-xs font-medium"
-    switch (state) {
-      case "input-streaming":
-        return (
-          <span
-            className={cn(
-              baseClasses,
-              "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-            )}
-          >
-            Processing
-          </span>
-        )
-      case "input-available":
-        return (
-          <span
-            className={cn(
-              baseClasses,
-              "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
-            )}
-          >
-            Ready
-          </span>
-        )
-      case "output-available":
-        return (
-          <span
-            className={cn(
-              baseClasses,
-              "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-            )}
-          >
-            Completed
-          </span>
-        )
-      case "output-error":
-        return (
-          <span
-            className={cn(
-              baseClasses,
-              "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-            )}
-          >
-            Error
-          </span>
-        )
-      default:
-        return (
-          <span
-            className={cn(
-              baseClasses,
-              "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400"
-            )}
-          >
-            Pending
-          </span>
-        )
-    }
-  }
-
-  const formatValue = (value: unknown): string => {
-    if (value === null) return "null"
-    if (value === undefined) return "undefined"
-    if (typeof value === "string") return value
-    if (typeof value === "object") {
-      return JSON.stringify(value, null, 2)
-    }
-    return String(value)
-  }
+  const { state, input, output } = toolPart
+  const hasArgs = input && Object.keys(input).length > 0
+  const outputStr = formatOutput(output)
+  const hasContent =
+    outputStr ||
+    (state === "output-error" && toolPart.errorText) ||
+    state === "input-streaming"
 
   return (
-    <div
-      className={cn(
-        "border-border mt-3 overflow-hidden rounded-lg border",
-        className
-      )}
-    >
+    <div className={cn("overflow-hidden rounded-lg border border-border bg-muted/30", className)}>
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="bg-background h-auto w-full justify-between rounded-b-none px-3 py-2 font-normal"
+            className="h-auto w-full justify-between rounded-b-none px-3 py-2 font-normal hover:bg-muted/50"
           >
-            <div className="flex items-center gap-2">
-              {getStateIcon()}
-              <span className="font-mono text-sm font-medium">
-                {toolPart.type}
-              </span>
-              {getStateBadge()}
+            <div className="flex min-w-0 items-center gap-1.5">
+              <StateIcon state={state} />
+              <span className="font-mono text-xs font-medium">{toolPart.type}</span>
+              {hasArgs && (
+                <span className="truncate font-mono text-[11px] text-muted-foreground">
+                  ({formatArgsInline(input)})
+                </span>
+              )}
             </div>
-            <ChevronDown className={cn("h-4 w-4", isOpen && "rotate-180")} />
+            {hasContent && (
+              <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-180")} />
+            )}
           </Button>
         </CollapsibleTrigger>
-        <CollapsibleContent
-          className={cn(
-            "border-border border-t",
-            "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
-          )}
-        >
-          <div className="bg-background space-y-3 p-3">
-            {input && Object.keys(input).length > 0 && (
-              <div>
-                <h4 className="text-muted-foreground mb-2 text-sm font-medium">
-                  Input
-                </h4>
-                <div className="rounded border bg-muted/30 p-3">
-                  <div className="space-y-2">
-                    {Object.entries(input).map(([key, value]) => (
-                      <div key={key} className="flex gap-2">
-                        <span className="text-muted-foreground font-medium text-sm min-w-[80px]">
-                          {key}:
-                        </span>
-                        <span className="text-foreground flex-1 text-sm">
-                          {formatValue(value)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+        {hasContent && (
+          <CollapsibleContent className={cn("border-t border-border", "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden")}>
+            <div className="max-h-60 overflow-auto p-3 font-mono text-xs">
+              {state === "input-streaming" && <span className="text-muted-foreground">Running...</span>}
+              {state === "output-error" && toolPart.errorText && <span className="text-red-500">{toolPart.errorText}</span>}
+              {outputStr && <pre className="whitespace-pre-wrap text-foreground">{outputStr}</pre>}
+            </div>
+          </CollapsibleContent>
+        )}
+      </Collapsible>
+    </div>
+  )
+}
 
-            {output && (
-              <div>
-                <h4 className="text-muted-foreground mb-2 text-sm font-medium">
-                  Output
-                </h4>
-                {toolPart.type === "search_blog_metadata" &&
-                typeof output === "object" &&
-                "result" in output &&
-                typeof output.result === "string" ? (
-                  <div className="max-h-96 overflow-auto rounded border p-3">
-                    <BlogSearchResult content={output.result} />
-                  </div>
-                ) : (
-                  <div className="bg-background max-h-60 overflow-auto rounded border p-2 font-mono text-sm">
-                    <pre className="whitespace-pre-wrap">
-                      {formatValue(output)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            )}
+function ToolGroupItem({ toolPart }: { toolPart: ToolPart }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const { state, input, output } = toolPart
+  const hasArgs = input && Object.keys(input).length > 0
+  const outputStr = formatOutput(output)
+  const hasContent = outputStr || (state === "output-error" && toolPart.errorText)
 
-            {state === "output-error" && toolPart.errorText && (
-              <div>
-                <h4 className="mb-2 text-sm font-medium text-red-500">Error</h4>
-                <div className="bg-background rounded border border-red-200 p-2 text-sm dark:border-red-950 dark:bg-red-900/20">
-                  {toolPart.errorText}
-                </div>
-              </div>
-            )}
+  return (
+    <div className="border-t border-border first:border-t-0">
+      <button
+        onClick={() => hasContent && setIsOpen(!isOpen)}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-muted/40 transition-colors"
+      >
+        <StateIcon state={state} />
+        <span className="font-mono text-xs font-medium">{toolPart.type}</span>
+        {hasArgs && (
+          <span className="truncate font-mono text-[11px] text-muted-foreground">
+            ({formatArgsInline(input)})
+          </span>
+        )}
+        {hasContent && (
+          <ChevronDown className={cn("ml-auto size-3 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-180")} />
+        )}
+      </button>
+      {isOpen && hasContent && (
+        <div className="max-h-48 overflow-auto border-t border-border/50 bg-muted/20 px-3 py-2 font-mono text-xs">
+          {state === "output-error" && toolPart.errorText && <span className="text-red-500">{toolPart.errorText}</span>}
+          {outputStr && <pre className="whitespace-pre-wrap text-foreground">{outputStr}</pre>}
+        </div>
+      )}
+    </div>
+  )
+}
 
-            {state === "input-streaming" && (
-              <div className="text-muted-foreground text-sm">
-                Processing tool call...
-              </div>
-            )}
+function ToolGroup({ tools, className }: { tools: ToolPart[]; className?: string }) {
+  const [isOpen, setIsOpen] = useState(true)
+  const doneCount = tools.filter((t) => t.state === "output-available" || t.state === "output-error").length
+  const isRunning = tools.some((t) => t.state === "input-streaming" || t.state === "input-available")
+  const allDone = doneCount === tools.length
+  const hasError = tools.some((t) => t.state === "output-error")
 
-            {toolCallId && (
-              <div className="text-muted-foreground border-t border-blue-200 pt-2 text-xs">
-                <span className="font-mono">Call ID: {toolCallId}</span>
-              </div>
-            )}
+  return (
+    <div className={cn("overflow-hidden rounded-lg border border-border bg-muted/30", className)}>
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="h-auto w-full justify-between px-3 py-2 font-normal hover:bg-muted/50">
+            <div className="flex items-center gap-1.5">
+              {isRunning ? (
+                <Loader2 className="size-3.5 animate-spin text-blue-500" />
+              ) : hasError ? (
+                <XCircle className="size-3.5 text-red-500" />
+              ) : (
+                <CheckCircle className="size-3.5 text-green-500" />
+              )}
+              <span className="text-xs font-medium">
+                {isRunning
+                  ? `Running ${tools.length} tools...`
+                  : allDone
+                    ? `${tools.length} tools executed`
+                    : `${doneCount}/${tools.length} tools completed`}
+              </span>
+            </div>
+            <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-180")} />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+          <div className="border-t border-border">
+            {tools.map((t) => (
+              <ToolGroupItem key={t.toolCallId ?? t.type} toolPart={t} />
+            ))}
           </div>
         </CollapsibleContent>
       </Collapsible>
@@ -228,4 +190,4 @@ const Tool = ({ toolPart, defaultOpen = false, className }: ToolProps) => {
   )
 }
 
-export { Tool }
+export { Tool, ToolGroup }

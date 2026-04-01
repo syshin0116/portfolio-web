@@ -11,6 +11,7 @@ import {
 import { Message, MessageContent } from "@/components/ui/message"
 import { Tool, ToolGroup } from "@/components/ui/tool"
 import type { ToolPart } from "@/components/ui/tool"
+import { Steps, StepsTrigger, StepsContent, StepsItem } from "@/components/ui/steps"
 import {
   Reasoning,
   ReasoningTrigger,
@@ -40,6 +41,7 @@ import {
   SquareIcon,
   CopyIcon,
   CheckIcon,
+  CheckCircle,
   RefreshCwIcon,
   PencilIcon,
   PlusIcon,
@@ -57,6 +59,8 @@ import {
   NetworkIcon,
   ListIcon,
   FileTextIcon,
+  Loader2,
+  Settings,
 } from "lucide-react"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,6 +132,39 @@ function isTurnEmpty(turn: MessageTurn): boolean {
   })
 }
 
+// ── Tool Classification ──────────────────────────────────────
+
+const SEARCH_TOOL_NAMES = new Set([
+  "keyword_search", "semantic_search", "metadata_filter",
+  "graph_traverse", "list_posts", "read_post",
+])
+
+const FILESYSTEM_TOOL_NAMES = new Set([
+  "ls", "read_file", "glob", "grep", "write_file", "edit_file",
+])
+
+function isCollapsibleTool(name: string): boolean {
+  return SEARCH_TOOL_NAMES.has(name) || FILESYSTEM_TOOL_NAMES.has(name)
+}
+
+function getToolSummary(toolParts: ToolPart[]): string {
+  const searchCount = toolParts.filter(t => SEARCH_TOOL_NAMES.has(t.type)).length
+  const fsCount = toolParts.filter(t => FILESYSTEM_TOOL_NAMES.has(t.type)).length
+  const otherCount = toolParts.length - searchCount - fsCount
+
+  const doneCount = toolParts.filter(t => t.state === "output-available").length
+  const isRunning = toolParts.some(t => t.state === "input-streaming")
+
+  const parts: string[] = []
+  if (searchCount > 0) parts.push(`${searchCount} search${searchCount > 1 ? "es" : ""}`)
+  if (fsCount > 0) parts.push(`${fsCount} file op${fsCount > 1 ? "s" : ""}`)
+  if (otherCount > 0) parts.push(`${otherCount} other`)
+
+  const action = isRunning ? "Running" : "Ran"
+  const progress = isRunning ? ` (${doneCount}/${toolParts.length} done)` : ""
+  return `${action} ${parts.join(", ")}${progress}`
+}
+
 // ── Tool Calls Renderer ─────────────────────────────────────
 
 function ToolCallsRenderer({
@@ -156,8 +193,53 @@ function ToolCallsRenderer({
     }
   })
 
-  if (toolParts.length === 1) return <Tool toolPart={toolParts[0]} />
-  return <ToolGroup tools={toolParts} />
+  // Split into collapsible (search/fs) and non-collapsible
+  const collapsible = toolParts.filter(t => isCollapsibleTool(t.type))
+  const nonCollapsible = toolParts.filter(t => !isCollapsibleTool(t.type))
+
+  return (
+    <div className="space-y-2">
+      {/* Collapsed group for search/filesystem operations */}
+      {collapsible.length > 0 && (
+        <Steps defaultOpen={collapsible.some(t => t.state === "input-streaming")}>
+          <StepsTrigger
+            leftIcon={
+              collapsible.every(t => t.state === "output-available")
+                ? <CheckCircle className="size-4 text-green-500" />
+                : collapsible.some(t => t.state === "input-streaming")
+                  ? <Loader2 className="size-4 animate-spin text-blue-500" />
+                  : <SearchIcon className="size-4 text-muted-foreground" />
+            }
+          >
+            {getToolSummary(collapsible)}
+          </StepsTrigger>
+          <StepsContent>
+            {collapsible.map((tp) => (
+              <StepsItem key={tp.toolCallId} className={cn(
+                tp.state === "output-available" ? "text-foreground" : "text-muted-foreground"
+              )}>
+                <div className="flex items-center gap-1.5">
+                  {tp.state === "input-streaming" && <Loader2 className="size-3 animate-spin text-blue-500" />}
+                  {tp.state === "output-available" && <CheckCircle className="size-3 text-green-500" />}
+                  {tp.state === "input-available" && <Settings className="size-3 text-orange-500" />}
+                  <span className="font-mono text-xs">{tp.type}</span>
+                  {tp.input && Object.keys(tp.input).length > 0 && (
+                    <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                      ({Object.values(tp.input).map(v => typeof v === "string" ? v : JSON.stringify(v)).join(", ")})
+                    </span>
+                  )}
+                </div>
+              </StepsItem>
+            ))}
+          </StepsContent>
+        </Steps>
+      )}
+
+      {/* Non-collapsible tools shown individually */}
+      {nonCollapsible.length === 1 && <Tool toolPart={nonCollapsible[0]} />}
+      {nonCollapsible.length > 1 && <ToolGroup tools={nonCollapsible} />}
+    </div>
+  )
 }
 
 // ── Human Message ───────────────────────────────────────────

@@ -1,22 +1,38 @@
 ---
 name: blog-search
-description: Search strategy guidance for blog content retrieval using semantic, keyword, metadata, and graph tools
+description: Search strategy for blog content — when to use keyword, BM25, metadata, or wikilink graph search
 ---
 
 # Blog Search Skill
 
-## Overview
+## Available Tools
 
-Guide the agent on effective search strategies for the blog knowledge base.
+| Tool | Engine | Best For |
+|------|--------|----------|
+| `keyword_search` | ripgrep (regex) | Exact terms, code snippets, error messages, specific names |
+| `semantic_search` | BM25 + kiwipiepy | Natural language queries, Korean text, topic exploration |
+| `metadata_filter` | Frontmatter index | Filtering by tags, category, date range |
+| `graph_traverse` | Wikilink graph | Finding related/connected posts from a known post |
+| `list_posts` | Content loader | Browsing recent posts, category overview |
+| `read_post` | File reader | Reading full content of a specific post |
 
-## When to Use
+## Categories
 
-When the user asks questions about blog content, projects, or technical topics covered in the blog.
+Posts are organized by folder: `AI`, `Dev`, `Study`, `Projects`, `Tools`, `Events`, `Others`
 
-## Strategy
+## Search Strategy
 
-1. **Simple factual queries** -> `semantic_search` first, `read_file` for details
-2. **Keyword-specific queries** -> `keyword_search` (especially for Korean terms, code names)
-3. **Topic exploration** -> `semantic_search` + `graph_traverse` for related content
-4. **Filtered queries** (by date, tag) -> `metadata_filter` first, then `semantic_search` within results
-5. **Comprehensive research** -> Combine multiple tools: semantic + keyword + graph traverse
+1. **Simple factual queries** → `semantic_search` first, then `read_post` for details
+2. **Exact keyword/code** → `keyword_search` (ripgrep is faster and more precise for exact matches)
+3. **Korean natural language** → `semantic_search` (BM25 with morphological analysis)
+4. **By tag or date** → `metadata_filter` first, then search within results
+5. **"What else is related to X?"** → `graph_traverse` from a known post
+6. **Browsing/overview** → `list_posts` to see what's available
+7. **Comprehensive research** → Combine: `semantic_search` + `keyword_search` + `graph_traverse`
+
+## Tips
+
+- Korean queries work best with `semantic_search` (kiwipiepy tokenization)
+- `keyword_search` supports regex: `"LangGraph|LangChain"` matches either
+- Combine `metadata_filter(tags=["AI"])` + `semantic_search("agent architecture")` for scoped search
+- `graph_traverse` requires a known post path — use `list_posts` or search first to find one

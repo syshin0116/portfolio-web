@@ -28,6 +28,12 @@ import { ScrollButton } from "@/components/ui/scroll-button"
 import { Loader } from "@/components/ui/loader"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import {
   ArrowUpIcon,
@@ -45,6 +51,12 @@ import {
   WifiOffIcon,
   PlugIcon,
   XIcon,
+  DatabaseIcon,
+  TextSearchIcon,
+  TagIcon,
+  NetworkIcon,
+  ListIcon,
+  FileTextIcon,
 } from "lucide-react"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,6 +69,15 @@ const SUGGESTIONS = [
   { text: "어떤 프로젝트들을 진행했어?", icon: CodeIcon },
   { text: "AI 엔지니어로서의 경험을 알려줘", icon: BookOpenIcon },
 ]
+
+const SEARCH_SKILLS = [
+  { id: "keyword_search", label: "Keyword", icon: TextSearchIcon, description: "ripgrep 기반 정확한 키워드/정규식 매칭. 코드, 에러 메시지, 정확한 이름 검색." },
+  { id: "semantic_search", label: "BM25", icon: DatabaseIcon, description: "BM25 랭킹 + 한국어 형태소 분석. 자연어 질문, 주제 탐색." },
+  { id: "metadata_filter", label: "Metadata", icon: TagIcon, description: "태그, 카테고리(AI/Dev/Study/...), 날짜 범위로 필터링." },
+  { id: "graph_traverse", label: "Graph", icon: NetworkIcon, description: "위키링크([[link]]) 기반 연관 글 탐색." },
+  { id: "list_posts", label: "List", icon: ListIcon, description: "최신 글 목록 조회. 카테고리별 브라우징." },
+  { id: "read_post", label: "Read", icon: FileTextIcon, description: "특정 글 전체 내용 읽기." },
+] as const
 
 // ── Message Grouping ────────────────────────────────────────
 
@@ -491,6 +512,7 @@ export default function ChatSection() {
   const [savedRunId, setSavedRunId] = useState<string | null>(null)
   const [models, setModels] = useState<Model[]>([])
   const [selectedModel, setSelectedModel] = useState<string>("")
+  const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set())
 
   const thread = useStream({
     apiUrl: API_URL,
@@ -529,15 +551,30 @@ export default function ChatSection() {
 
   const submitMessage = (text: string) => {
     const newMessage = { type: "human" as const, content: text, id: `optimistic-${Date.now()}` }
+    const configurable: Record<string, unknown> = {}
+    if (selectedModel) configurable.model = selectedModel
+
+    // Build messages: optionally prepend skill restriction as system message
+    const messages: Array<Record<string, string>> = []
+    if (selectedSkills.size > 0) {
+      const skills = [...selectedSkills].join(", ")
+      messages.push({
+        type: "system",
+        content: `[User selected skills: ${skills}] Use ONLY these search tools. Do not use other search tools unless these cannot answer the query.`,
+        id: `skill-hint-${Date.now()}`,
+      })
+    }
+    messages.push(newMessage)
+
     thread.submit(
-      { messages: [newMessage] } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      { messages } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
       {
         onDisconnect: "continue",
         streamResumable: true,
-        ...(selectedModel ? { config: { configurable: { model: selectedModel } } } : {}),
+        ...(Object.keys(configurable).length > 0 ? { config: { configurable } } : {}),
         optimisticValues: (prev: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
           ...prev,
-          messages: [...(prev?.messages ?? []), newMessage],
+          messages: [...(prev?.messages ?? []), newMessage], // only show human message optimistically
         }),
       }
     )
@@ -717,16 +754,62 @@ export default function ChatSection() {
 
             {/* Input */}
             <div className="relative bg-background px-4 pb-4 pt-2">
-              {models.length > 0 && (
-                <div className="mx-auto mb-1 max-w-3xl">
+              <div className="mx-auto mb-2 max-w-3xl flex items-center gap-2 flex-wrap">
+                {models.length > 0 && (
                   <ModelSelector
                     models={models}
                     selectedModelId={selectedModel}
                     onModelChange={setSelectedModel}
                     disabled={thread.isLoading}
                   />
-                </div>
-              )}
+                )}
+                <div className="h-4 w-px bg-border" />
+                <TooltipProvider delayDuration={0}>
+                  {SEARCH_SKILLS.map((tool) => {
+                    const isSelected = selectedSkills.has(tool.id)
+                    const Icon = tool.icon
+                    return (
+                      <Tooltip key={tool.id}>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant={isSelected ? "default" : "outline"}
+                            size="sm"
+                            className={cn(
+                              "h-7 gap-1.5 rounded-full text-xs transition-all",
+                              isSelected && "shadow-sm"
+                            )}
+                            onClick={() => {
+                              setSelectedSkills(prev => {
+                                const next = new Set(prev)
+                                if (next.has(tool.id)) next.delete(tool.id)
+                                else next.add(tool.id)
+                                return next
+                              })
+                            }}
+                          >
+                            <Icon className="size-3" />
+                            <span className="hidden sm:inline">{tool.label}</span>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-[200px]">
+                          <p className="font-medium">{tool.label}</p>
+                          <p className="text-xs text-muted-foreground">{tool.description}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    )
+                  })}
+                </TooltipProvider>
+                {selectedSkills.size > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs text-muted-foreground"
+                    onClick={() => setSelectedSkills(new Set())}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
               <PromptInput
                 value={input}
                 onValueChange={setInput}

@@ -61,6 +61,7 @@ import {
   FileTextIcon,
   Loader2,
   Settings,
+  ChevronDown,
 } from "lucide-react"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -165,6 +166,48 @@ function getToolSummary(toolParts: ToolPart[]): string {
   return `${action} ${parts.join(", ")}${progress}`
 }
 
+// ── Expandable Step Item ─────────────────────────────────────
+
+function ExpandableStepItem({ toolPart: tp }: { toolPart: ToolPart }) {
+  const [expanded, setExpanded] = useState(false)
+  const hasOutput = tp.state === "output-available" && tp.output
+  const outputStr = hasOutput
+    ? (typeof tp.output === "string" ? tp.output : JSON.stringify(tp.output, null, 2))
+    : null
+
+  return (
+    <StepsItem className={cn(
+      tp.state === "output-available" ? "text-foreground" : "text-muted-foreground"
+    )}>
+      <button
+        className="flex items-center gap-1.5 w-full text-left hover:bg-muted/40 rounded px-1 -mx-1 py-0.5 transition-colors"
+        onClick={() => outputStr && setExpanded(!expanded)}
+      >
+        {tp.state === "input-streaming" && <Loader2 className="size-3 animate-spin text-blue-500 shrink-0" />}
+        {tp.state === "output-available" && <CheckCircle className="size-3 text-green-500 shrink-0" />}
+        {tp.state === "input-available" && <Settings className="size-3 text-orange-500 shrink-0" />}
+        <span className="font-mono text-xs">{tp.type}</span>
+        {tp.input && Object.keys(tp.input).length > 0 && (
+          <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+            ({Object.values(tp.input).map(v => typeof v === "string" ? v : JSON.stringify(v)).join(", ")})
+          </span>
+        )}
+        {outputStr && (
+          <ChevronDown className={cn(
+            "size-3 ml-auto shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-180"
+          )} />
+        )}
+      </button>
+      {expanded && outputStr && (
+        <div className="mt-1 ml-4.5 max-h-48 overflow-auto rounded bg-muted/30 border border-border/50 p-2">
+          <pre className="text-xs text-muted-foreground whitespace-pre-wrap break-words">{outputStr}</pre>
+        </div>
+      )}
+    </StepsItem>
+  )
+}
+
 // ── Tool Calls Renderer ─────────────────────────────────────
 
 function ToolCallsRenderer({
@@ -215,21 +258,7 @@ function ToolCallsRenderer({
           </StepsTrigger>
           <StepsContent>
             {collapsible.map((tp) => (
-              <StepsItem key={tp.toolCallId} className={cn(
-                tp.state === "output-available" ? "text-foreground" : "text-muted-foreground"
-              )}>
-                <div className="flex items-center gap-1.5">
-                  {tp.state === "input-streaming" && <Loader2 className="size-3 animate-spin text-blue-500" />}
-                  {tp.state === "output-available" && <CheckCircle className="size-3 text-green-500" />}
-                  {tp.state === "input-available" && <Settings className="size-3 text-orange-500" />}
-                  <span className="font-mono text-xs">{tp.type}</span>
-                  {tp.input && Object.keys(tp.input).length > 0 && (
-                    <span className="text-xs text-muted-foreground truncate max-w-[200px]">
-                      ({Object.values(tp.input).map(v => typeof v === "string" ? v : JSON.stringify(v)).join(", ")})
-                    </span>
-                  )}
-                </div>
-              </StepsItem>
+              <ExpandableStepItem key={tp.toolCallId} toolPart={tp} />
             ))}
           </StepsContent>
         </Steps>

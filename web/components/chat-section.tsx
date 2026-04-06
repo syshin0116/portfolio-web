@@ -705,7 +705,7 @@ export default function ChatSection() {
       { messages: [newMessage] } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
       {
         checkpoint,
-        streamMode: ["values"],
+        streamMode: ["values", "messages-tuple"],
         streamSubgraphs: true,
         streamResumable: true,
         optimisticValues: (prev: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -722,7 +722,7 @@ export default function ChatSection() {
     if (!checkpoint) return
     thread.submit(undefined, {
       checkpoint,
-      streamMode: ["values"],
+      streamMode: ["values", "messages-tuple"],
       streamSubgraphs: true,
       streamResumable: true,
     })

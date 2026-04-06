@@ -116,7 +116,7 @@ class RunCreate(BaseModel):
     interrupt_before: list[str] | Literal["*"] | None = None
     interrupt_after: list[str] | Literal["*"] | None = None
     webhook: str | None = None
-    multitask_strategy: MultitaskStrategy = "reject"
+    multitask_strategy: MultitaskStrategy = "enqueue"
     if_not_exists: Literal["create", "reject"] | None = None
     on_disconnect: DisconnectMode = "cancel"
     on_completion: OnCompletionBehavior | None = None

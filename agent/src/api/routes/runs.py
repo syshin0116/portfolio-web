@@ -124,7 +124,7 @@ async def stream_run(
             assistant_id=body.assistant_id,
             assistant_config=assistant_config,
             metadata=body.metadata,
-            stream_mode=body.stream_mode or "values",
+            stream_mode=body.stream_mode or ["values", "messages-tuple"],
             multitask_strategy=body.multitask_strategy,
             interrupt_before=body.interrupt_before,
             interrupt_after=body.interrupt_after,
@@ -260,7 +260,7 @@ async def stateless_stream_run(
         assistant_id=body.assistant_id,
         assistant_config=assistant_config,
         metadata=body.metadata,
-        stream_mode=body.stream_mode or "values",
+        stream_mode=body.stream_mode or ["values", "messages-tuple"],
         interrupt_before=body.interrupt_before,
         interrupt_after=body.interrupt_after,
     )

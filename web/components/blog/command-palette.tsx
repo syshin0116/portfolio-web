@@ -104,7 +104,7 @@ export function CommandPalette() {
         )
         const notes: Result[] = items.map((item) => {
           let slug = item.url
-          slug = slug.replace(/^\//, "").replace(/\/index\.html$/, "").replace(/\.html$/, "")
+          slug = slug.replace(/^\//, "").replace(/\/index\.html$/, "").replace(/\.html$/, "").replace(/^blog\//, "")
           return {
             slug,
             title: item.meta?.title ?? slug,

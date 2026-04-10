@@ -1,5 +1,3 @@
-import { getAllMarkdownFiles } from "nuartz"
-import type { MarkdownFile } from "nuartz"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -12,25 +10,24 @@ import {
   PaginationNext,
   PaginationEllipsis,
 } from "@/components/ui/pagination"
-import { CONTENT_DIR } from "@/lib/content"
+import notesList from "@/.generated/notes-list.json"
 
 export const NOTES_PER_PAGE = 10
 
-export async function getPublishedNotes(): Promise<MarkdownFile[]> {
-  let files: MarkdownFile[] = []
-  try {
-    files = await getAllMarkdownFiles(CONTENT_DIR)
-  } catch {
-    files = []
-  }
+export interface NoteEntry {
+  slug: string
+  title: string
+  description: string | null
+  summary: string | null
+  date: string | null
+  dateRaw: string | null
+  tags: string[]
+  draft: boolean
+  category: string | null
+}
 
-  return files
-    .filter((f) => !f.frontmatter.draft && f.frontmatter.published !== false)
-    .sort((a, b) => {
-      const da = a.frontmatter.date ? new Date(a.frontmatter.date).getTime() : 0
-      const db = b.frontmatter.date ? new Date(b.frontmatter.date).getTime() : 0
-      return db - da
-    })
+export function getPublishedNotes(): NoteEntry[] {
+  return notesList as NoteEntry[]
 }
 
 function blogPageHref(page: number): string {
@@ -43,7 +40,7 @@ export function BlogList({
   totalPages,
   totalCount,
 }: {
-  notes: MarkdownFile[]
+  notes: NoteEntry[]
   currentPage: number
   totalPages: number
   totalCount: number
@@ -60,16 +57,14 @@ export function BlogList({
       <Separator className="mb-8" />
 
       <div className="space-y-2">
-        {notes.map((file) => {
-          const title = file.frontmatter.title ?? file.slug.split("/").pop()
-          const date = file.frontmatter.date
-            ? new Date(file.frontmatter.date).toLocaleDateString("en-CA")
-            : null
-          const tags: string[] = file.frontmatter.tags ?? []
-          const category = file.slug.includes("/") ? file.slug.split("/")[0] : null
+        {notes.map((note) => {
+          const title = note.title
+          const date = note.date
+          const tags = note.tags
+          const category = note.category
 
           return (
-            <Link key={file.slug} href={`/blog/${file.slug}`} className="group block">
+            <Link key={note.slug} href={`/blog/${note.slug}`} className="group block">
               <div className="rounded-lg border px-4 py-3 transition-colors hover:bg-muted/50">
                 <div className="flex items-start justify-between gap-4">
                   <span className="font-medium group-hover:underline underline-offset-4">
@@ -81,9 +76,9 @@ export function BlogList({
                     </span>
                   )}
                 </div>
-                {file.frontmatter.description && (
+                {note.description && (
                   <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
-                    {file.frontmatter.description}
+                    {note.description}
                   </p>
                 )}
                 <div className="mt-2 flex flex-wrap gap-1">

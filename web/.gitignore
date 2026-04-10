@@ -1,1 +1,5 @@
 .vercel
+.generated/
+public/graph.json
+public/preview-index.json
+public/content/

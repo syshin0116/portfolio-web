@@ -1,5 +1,6 @@
-import { getAllMarkdownFiles } from "nuartz"
-import { CONTENT_DIR } from "@/lib/content"
+import notesList from "@/.generated/notes-list.json"
+
+export const dynamic = "force-static"
 
 const BASE_URL = "https://syshin0116.vercel.app"
 
@@ -13,29 +14,23 @@ function escapeXml(str: string): string {
 }
 
 export async function GET() {
-  const files = await getAllMarkdownFiles(CONTENT_DIR)
-  const posts = files
-    .filter((f) => !f.frontmatter.draft && f.frontmatter.published !== false)
-    .sort((a, b) => {
-      const da = a.frontmatter.date ? new Date(a.frontmatter.date).getTime() : 0
-      const db = b.frontmatter.date ? new Date(b.frontmatter.date).getTime() : 0
-      return db - da
-    })
+  const posts = (notesList as any[])
+    .filter((f) => !f.draft)
     .slice(0, 50)
 
-  const lastBuildDate = posts[0]?.frontmatter.date
-    ? new Date(posts[0].frontmatter.date).toUTCString()
+  const lastBuildDate = posts[0]?.dateRaw
+    ? new Date(posts[0].dateRaw).toUTCString()
     : new Date().toUTCString()
 
   const items = posts
     .map((post) => {
-      const title = escapeXml(String(post.frontmatter.title ?? post.slug.split("/").pop()!))
-      const description = escapeXml(String(post.frontmatter.description ?? ""))
+      const title = escapeXml(String(post.title))
+      const description = escapeXml(String(post.description ?? ""))
       const url = `${BASE_URL}/blog/${post.slug.split("/").map(encodeURIComponent).join("/")}`
-      const pubDate = post.frontmatter.date
-        ? new Date(post.frontmatter.date).toUTCString()
+      const pubDate = post.dateRaw
+        ? new Date(post.dateRaw).toUTCString()
         : ""
-      const categories = (post.frontmatter.tags as string[] ?? [])
+      const categories = (post.tags as string[])
         .map((tag) => `<category>${escapeXml(tag)}</category>`)
         .join("")
 

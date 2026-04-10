@@ -1,9 +1,8 @@
 import { MetadataRoute } from "next";
 import { projectsTimeline } from "@/data/projects";
-import { getAllMarkdownFiles } from "nuartz";
-import { CONTENT_DIR } from "@/lib/content";
+import sitemapData from "@/.generated/sitemap-data.json"
 
-export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+export default function sitemap(): MetadataRoute.Sitemap {
   const baseUrl = "https://syshin0116.vercel.app";
 
   const routes: MetadataRoute.Sitemap = [
@@ -40,22 +39,18 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.8,
   }));
 
-  let blogRoutes: MetadataRoute.Sitemap = [];
-  try {
-    const files = await getAllMarkdownFiles(CONTENT_DIR);
-    blogRoutes = files
-      .filter((f) => !f.frontmatter.draft && f.frontmatter.published !== false)
-      .map((file) => ({
-        url: `${baseUrl}/blog/${file.slug.split("/").map(encodeURIComponent).join("/")}`,
-        lastModified: file.frontmatter.date
-          ? new Date(file.frontmatter.date)
+  const blogRoutes: MetadataRoute.Sitemap = (sitemapData as { slug: string; mtime: string | null; date: string | null }[]).map(
+    (entry) => ({
+      url: `${baseUrl}/blog/${entry.slug.split("/").map(encodeURIComponent).join("/")}`,
+      lastModified: entry.date
+        ? new Date(entry.date)
+        : entry.mtime
+          ? new Date(entry.mtime)
           : new Date(),
-        changeFrequency: "monthly" as const,
-        priority: 0.7,
-      }));
-  } catch {
-    // ignore if content dir unavailable
-  }
+      changeFrequency: "monthly" as const,
+      priority: 0.7,
+    })
+  );
 
   return [...routes, ...projectRoutes, ...blogRoutes];
 }

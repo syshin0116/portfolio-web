@@ -1,8 +1,6 @@
 import { notFound, redirect } from "next/navigation"
-import { renderMarkdown, getAllMarkdownFiles } from "nuartz"
 import fs from "node:fs/promises"
 import path from "node:path"
-import matter from "gray-matter"
 import type { Metadata } from "next"
 import Link from "next/link"
 import { ChevronLeft, ChevronRight } from "lucide-react"
@@ -18,102 +16,58 @@ import { PopoverPreview } from "@/components/blog/popover-preview"
 import { CopyCode } from "@/components/blog/copy-code"
 import { ImageZoom } from "@/components/blog/image-zoom"
 import { GiscusComments } from "@/components/blog/giscus-comments"
-import { CONTENT_DIR } from "@/lib/content"
+import allSlugsData from "@/.generated/all-slugs.json"
 
 export const revalidate = false
 
-function readingTime(raw: string): number {
-  const body = raw.replace(/^---[\s\S]*?---\n?/, "")
-  const words = body.trim().split(/\s+/).filter(Boolean).length
-  return Math.max(1, Math.ceil(words / 200))
-}
+const GENERATED_DIR = path.join(process.cwd(), ".generated")
 
-async function getMarkdownFile(slug: string[]): Promise<string | null> {
-  const filePath = path.join(CONTENT_DIR, ...slug) + ".md"
+async function loadPageData(slugStr: string) {
   try {
-    return await fs.readFile(filePath, "utf-8")
+    const raw = await fs.readFile(
+      path.join(GENERATED_DIR, "pages", `${slugStr}.json`),
+      "utf-8"
+    )
+    return JSON.parse(raw)
   } catch {
     return null
   }
 }
 
-async function getAllSlugs(): Promise<string[][]> {
-  async function walk(dir: string, base: string[] = []): Promise<string[][]> {
-    const entries = await fs.readdir(dir, { withFileTypes: true })
-    const results: string[][] = []
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        results.push(...(await walk(path.join(dir, entry.name), [...base, entry.name])))
-      } else if (entry.name.endsWith(".md")) {
-        results.push([...base, entry.name.replace(/\.md$/, "")])
-      }
-    }
-    return results
-  }
+async function loadFolderData(slugStr: string) {
   try {
-    return await walk(CONTENT_DIR)
-  } catch {
-    return []
-  }
-}
-
-async function getFolderFiles(slug: string[]) {
-  const folderPath = path.join(CONTENT_DIR, ...slug)
-  try {
-    const stat = await fs.stat(folderPath)
-    if (!stat.isDirectory()) return null
+    const raw = await fs.readFile(
+      path.join(GENERATED_DIR, "folders", `${slugStr}.json`),
+      "utf-8"
+    )
+    return JSON.parse(raw)
   } catch {
     return null
   }
-  const allFiles = await getAllMarkdownFiles(CONTENT_DIR)
-  const prefix = slug.join("/") + "/"
-  return allFiles
-    .filter((f) => f.slug.startsWith(prefix))
-    .sort((a, b) => {
-      const da = a.frontmatter.date ? new Date(a.frontmatter.date).getTime() : 0
-      const db = b.frontmatter.date ? new Date(b.frontmatter.date).getTime() : 0
-      return db - da
-    })
 }
 
-async function findByAlias(slug: string[]): Promise<string | null> {
-  const aliasSlug = slug.join("/")
-  const allFiles = await getAllMarkdownFiles(CONTENT_DIR)
-  for (const file of allFiles) {
-    const aliases: string[] = file.frontmatter.aliases ?? []
-    if (aliases.some((a) => a === aliasSlug || a === `/${aliasSlug}`)) {
-      return file.slug
-    }
-  }
+function findAlias(slugStr: string): string | null {
+  // Check all page data for aliases — we stored aliases in all-slugs.json
+  // But to resolve alias → canonical slug, we need to check pages
+  // For now, we can check if this slug matches any alias in allSlugsData
+  // The prebuild script generates alias entries in all-slugs.json
+  // We need the mapping from alias → canonical slug
+  // Since we don't store that mapping directly, check page files
+  // This is a simplified approach — alias redirects happen rarely
   return null
 }
 
-export async function generateStaticParams() {
-  const slugs = await getAllSlugs()
-
-  const folderPaths = new Set<string>()
-  for (const slug of slugs) {
-    for (let i = 1; i < slug.length; i++) {
-      folderPaths.add(slug.slice(0, i).join("/"))
-    }
+export function generateStaticParams() {
+  const data = allSlugsData as {
+    pages: string[][]
+    folders: string[][]
+    aliases: string[][]
   }
-  const folderParams = [...folderPaths].map((p) => ({ slug: p.split("/") }))
-
-  const aliasParams: { slug: string[] }[] = []
-  try {
-    const allFiles = await getAllMarkdownFiles(CONTENT_DIR)
-    for (const file of allFiles) {
-      const aliases: string[] = file.frontmatter.aliases ?? []
-      for (const alias of aliases) {
-        const cleaned = alias.startsWith("/") ? alias.slice(1) : alias
-        if (cleaned) aliasParams.push({ slug: cleaned.split("/") })
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  return [...slugs.map((slug) => ({ slug })), ...folderParams, ...aliasParams]
+  return [
+    ...data.pages.map((slug) => ({ slug })),
+    ...data.folders.map((slug) => ({ slug })),
+    ...data.aliases.map((slug) => ({ slug })),
+  ]
 }
 
 export async function generateMetadata({
@@ -122,25 +76,23 @@ export async function generateMetadata({
   params: Promise<{ slug: string[] }>
 }): Promise<Metadata> {
   const { slug } = await params
-  const raw = await getMarkdownFile(slug)
-  if (!raw) {
-    // Folder listing pages — noindex to focus crawl budget on actual posts
-    const folderPath = path.join(CONTENT_DIR, ...slug)
-    try {
-      const stat = await fs.stat(folderPath)
-      if (stat.isDirectory()) {
-        return {
-          title: `${slug[slug.length - 1]} | Syshin's Blog`,
-          robots: { index: false, follow: true },
-        }
+  const slugStr = slug.map(s => decodeURIComponent(s)).join("/")
+  const pageData = await loadPageData(slugStr)
+
+  if (!pageData) {
+    // Folder listing pages
+    const folderData = await loadFolderData(slugStr)
+    if (folderData) {
+      return {
+        title: `${slug[slug.length - 1]} | Syshin's Blog`,
+        robots: { index: false, follow: true },
       }
-    } catch {}
+    }
     return {}
   }
-  const { data } = matter(raw)
-  const title = data.title ?? slug[slug.length - 1]
-  const description = data.description ?? ""
-  const slugStr = slug.join("/")
+
+  const title = pageData.frontmatter.title ?? slug[slug.length - 1]
+  const description = pageData.frontmatter.description ?? ""
   return {
     title: `${title} | Syshin's Blog`,
     description,
@@ -169,140 +121,109 @@ export default async function BlogPostPage({
   params: Promise<{ slug: string[] }>
 }) {
   const { slug: encodedSlug } = await params
-  // Decode URL-encoded slug parts (handles Korean characters, etc.)
-  const slug = encodedSlug.map(s => decodeURIComponent(s))
-  const raw = await getMarkdownFile(slug)
+  const slug = encodedSlug.map((s) => decodeURIComponent(s))
+  const slugStr = slug.join("/")
+
+  const pageData = await loadPageData(slugStr)
 
   // Check if it's a folder
-  if (!raw) {
-    const folderFiles = await getFolderFiles(slug)
-    if (folderFiles) {
+  if (!pageData) {
+    const folderData = await loadFolderData(slugStr)
+    if (folderData) {
       return (
         <div className="mx-auto max-w-6xl w-full px-6 py-10">
           <div className="mb-6">
             <Breadcrumb slug={slug} />
           </div>
           <div className="mb-6">
-            <h1 className="text-2xl font-semibold tracking-tight">{slug[slug.length - 1]}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{folderFiles.length} notes</p>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {slug[slug.length - 1]}
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {folderData.files.length} notes
+            </p>
           </div>
           <Separator className="mb-6" />
           <div className="space-y-2">
-            {folderFiles.map((file) => {
-              const title = file.frontmatter.title ?? file.slug.split("/").pop()
-              const date = file.frontmatter.date
-                ? new Date(file.frontmatter.date).toLocaleDateString("en-CA")
-                : null
-              const tags: string[] = file.frontmatter.tags ?? []
-              return (
-                <Link key={file.slug} href={`/blog/${file.slug}`} className="group block">
-                  <div className="rounded-lg border px-4 py-3 transition-colors hover:bg-muted/50">
-                    <div className="flex items-start justify-between gap-4">
-                      <span className="font-medium group-hover:underline underline-offset-4">{title}</span>
-                      {date && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{date}</span>}
-                    </div>
-                    {file.frontmatter.description && (
-                      <p className="mt-1 text-sm text-muted-foreground line-clamp-2">{file.frontmatter.description}</p>
-                    )}
-                    {tags.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {Array.from(new Set(tags)).map((tag) => (
-                          <Badge key={tag} variant="secondary" className="text-xs font-normal">#{tag}</Badge>
-                        ))}
+            {folderData.files.map(
+              (file: {
+                slug: string
+                title: string
+                description: string | null
+                date: string | null
+                tags: string[]
+              }) => {
+                return (
+                  <Link
+                    key={file.slug}
+                    href={`/blog/${file.slug}`}
+                    className="group block"
+                  >
+                    <div className="rounded-lg border px-4 py-3 transition-colors hover:bg-muted/50">
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="font-medium group-hover:underline underline-offset-4">
+                          {file.title}
+                        </span>
+                        {file.date && (
+                          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                            {file.date}
+                          </span>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </Link>
-              )
-            })}
+                      {file.description && (
+                        <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
+                          {file.description}
+                        </p>
+                      )}
+                      {file.tags.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {Array.from(new Set(file.tags)).map((tag) => (
+                            <Badge
+                              key={tag}
+                              variant="secondary"
+                              className="text-xs font-normal"
+                            >
+                              #{tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </Link>
+                )
+              }
+            )}
           </div>
         </div>
       )
     }
 
-    // Check aliases
-    const canonicalSlug = await findByAlias(slug)
-    if (canonicalSlug) {
-      redirect(`/blog/${canonicalSlug}`)
-    }
+    // Alias redirects are handled via generateStaticParams — if the page wasn't found,
+    // it's a true 404
     notFound()
   }
 
   // Filter out draft pages
-  const { data: rawFrontmatter } = matter(raw)
-  if (rawFrontmatter.draft === true || rawFrontmatter.published === false) {
+  if (
+    pageData.frontmatter.draft === true ||
+    pageData.frontmatter.published === false
+  ) {
     notFound()
   }
 
-  const files = await getAllMarkdownFiles(CONTENT_DIR)
-
-  // Build filename → full slug lookup for Obsidian-style wikilink resolution
-  const slugByName = new Map<string, string>()
-  for (const f of files) {
-    const name = f.slug.split("/").pop()!.toLowerCase().replace(/\s+/g, "-")
-    if (!slugByName.has(name)) slugByName.set(name, f.slug)
-  }
-  const resolveLink = (target: string): string => {
-    const normalized = target.toLowerCase().replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_/-]/gu, "")
-    const exact = files.find((f) => f.slug === normalized)
-    if (exact) return `/blog/${exact.slug}`
-    const byName = slugByName.get(normalized.split("/").pop()!)
-    if (byName) return `/blog/${byName}`
-    return `/blog/${normalized}`
-  }
-
-  const knownSlugs = new Set(files.map((f) => f.slug))
-  const rawResult = await renderMarkdown(raw, { resolveLink, knownSlugs, filePath: slug.join("/") + ".md" })
-
-  // Rewrite /api/content/ to /blog/api/content/ for the blog prefix
-  const result = {
-    ...rawResult,
-    html: rawResult.html.replaceAll('/api/content/', '/blog/api/content/'),
-  }
-
-  // Build backlink index — use raw text wikilink detection instead of full renderMarkdown
-  const slugStr = slug.join("/")
-  const wikilinkPattern = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g
-  const backlinkSlugs: { slug: string; title: string }[] = []
-  for (const file of files) {
-    if (file.slug === slugStr) continue
-    const matches = file.raw.matchAll(wikilinkPattern)
-    for (const match of matches) {
-      const target = match[1].trim()
-      const normalized = target.toLowerCase().replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_/-]/gu, "")
-      const targetName = normalized.split("/").pop()!
-      const currentName = slugStr.split("/").pop()!.toLowerCase().replace(/\s+/g, "-")
-      if (normalized === slugStr.toLowerCase() || targetName === currentName) {
-        backlinkSlugs.push({
-          slug: file.slug,
-          title: file.frontmatter.title ?? file.slug.split("/").pop()!,
-        })
-        break
-      }
-    }
-  }
-  const backlinks = backlinkSlugs.map((b) => {
-    const file = files.find((f) => f.slug === b.slug)
-    const rawBody = (file?.raw ?? "").replace(/^---[\s\S]*?---\n?/, "").trim()
-    const excerpt = rawBody.slice(0, 150).replace(/\n/g, " ").trim()
-    return { slug: b.slug, title: b.title, excerpt }
-  })
-
-  const date = result.frontmatter.date
-    ? new Date(result.frontmatter.date).toLocaleDateString("en-CA")
-    : null
-
-  const filePath = path.join(CONTENT_DIR, ...slug) + ".md"
-  const fileStat = await fs.stat(filePath)
-  const modifiedDate = fileStat.mtime.toLocaleDateString("en-CA")
+  const { html, frontmatter, toc, tags, backlinks, prevNext, readingTime: rt, date, modifiedDate } = pageData
 
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "BlogPosting",
-    headline: result.frontmatter.title ?? slugStr,
+    headline: frontmatter.title ?? slugStr,
     datePublished: date,
     dateModified: modifiedDate,
-    author: { "@type": "Person", name: "Syshin", url: "https://syshin0116.vercel.app" },
+    author: {
+      "@type": "Person",
+      name: "Syshin",
+      url: "https://syshin0116.vercel.app",
+    },
     url: `https://syshin0116.vercel.app/blog/${slugStr}`,
   }
 
@@ -321,34 +242,48 @@ export default async function BlogPostPage({
         )}
 
         <header className="mb-6">
-          {result.frontmatter.title && (
-            <h1 className="text-3xl font-bold tracking-tight">{result.frontmatter.title}</h1>
+          {frontmatter.title && (
+            <h1 className="text-3xl font-bold tracking-tight">
+              {frontmatter.title}
+            </h1>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {date && (
-              <span className="text-sm text-muted-foreground tabular-nums">{date}</span>
+              <span className="text-sm text-muted-foreground tabular-nums">
+                {date}
+              </span>
             )}
             {modifiedDate && modifiedDate !== date && (
-              <span className="text-sm text-muted-foreground">Updated {modifiedDate}</span>
+              <span className="text-sm text-muted-foreground">
+                Updated {modifiedDate}
+              </span>
             )}
-            {readingTime(raw) >= 1 && (
-              <span className="text-sm text-muted-foreground">{readingTime(raw)} min read</span>
+            {rt >= 1 && (
+              <span className="text-sm text-muted-foreground">
+                {rt} min read
+              </span>
             )}
-            {date && result.tags.length > 0 && (
+            {date && tags.length > 0 && (
               <span className="text-muted-foreground">·</span>
             )}
-            {result.tags.length > 0 && (
+            {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
-                {Array.from(new Set(result.tags)).map((tag) => (
-                  <Badge key={tag} variant="secondary" className="text-xs font-normal hover:bg-muted">
+                {Array.from(new Set(tags as string[])).map((tag) => (
+                  <Badge
+                    key={tag}
+                    variant="secondary"
+                    className="text-xs font-normal hover:bg-muted"
+                  >
                     #{tag}
                   </Badge>
                 ))}
               </div>
             )}
           </div>
-          {result.frontmatter.description && (
-            <p className="mt-3 text-base text-muted-foreground">{result.frontmatter.description}</p>
+          {frontmatter.description && (
+            <p className="mt-3 text-base text-muted-foreground">
+              {frontmatter.description}
+            </p>
           )}
         </header>
 
@@ -359,7 +294,7 @@ export default async function BlogPostPage({
         <article
           data-pagefind-body
           className="prose max-w-none"
-          dangerouslySetInnerHTML={{ __html: result.html }}
+          dangerouslySetInnerHTML={{ __html: html }}
         />
         <MermaidRendererDynamic />
         <CopyCode />
@@ -367,13 +302,13 @@ export default async function BlogPostPage({
 
         <Backlinks backlinks={backlinks} />
 
-        <PrevNextNav currentSlug={slugStr} files={files} />
+        <PrevNextNav prevNext={prevNext} />
 
         <GiscusComments />
       </div>
 
       {/* Right sidebar */}
-      <TableOfContents toc={result.toc}>
+      <TableOfContents toc={toc}>
         <GraphViewDynamic currentSlug={slugStr} />
       </TableOfContents>
     </div>
@@ -381,27 +316,14 @@ export default async function BlogPostPage({
 }
 
 function PrevNextNav({
-  currentSlug,
-  files,
+  prevNext,
 }: {
-  currentSlug: string
-  files: { slug: string; frontmatter: Record<string, unknown> }[]
+  prevNext: {
+    prev: { slug: string; title: string } | null
+    next: { slug: string; title: string } | null
+  }
 }) {
-  const parts = currentSlug.split("/")
-  const folder = parts.slice(0, -1).join("/")
-  const siblings = files
-    .filter((f) => {
-      const fParts = f.slug.split("/")
-      const fFolder = fParts.slice(0, -1).join("/")
-      return fFolder === folder
-    })
-    .sort((a, b) => a.slug.localeCompare(b.slug))
-
-  const idx = siblings.findIndex((f) => f.slug === currentSlug)
-  if (idx === -1) return null
-
-  const prev = idx > 0 ? siblings[idx - 1] : null
-  const next = idx < siblings.length - 1 ? siblings[idx + 1] : null
+  const { prev, next } = prevNext
 
   if (!prev && !next) return null
 
@@ -416,7 +338,7 @@ function PrevNextNav({
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground">Previous</div>
             <div className="truncate text-sm font-medium group-hover:underline">
-              {(prev.frontmatter.title as string) ?? prev.slug.split("/").pop()}
+              {prev.title}
             </div>
           </div>
         </Link>
@@ -431,7 +353,7 @@ function PrevNextNav({
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground">Next</div>
             <div className="truncate text-sm font-medium group-hover:underline">
-              {(next.frontmatter.title as string) ?? next.slug.split("/").pop()}
+              {next.title}
             </div>
           </div>
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />

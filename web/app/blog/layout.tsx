@@ -1,29 +1,16 @@
 import "katex/dist/katex.min.css"
-import { unstable_cache } from "next/cache"
-import { getAllMarkdownFiles, buildFileTree } from "nuartz"
 import { NavSidebar } from "@/components/blog/nav-sidebar"
 import { BlogTreeProvider } from "@/components/blog/blog-tree-provider"
 import { CommandPaletteDynamic } from "@/components/blog/command-palette-dynamic"
 import { Navbar } from "@/components/navbar"
-import { CONTENT_DIR } from "@/lib/content"
+import fileTree from "@/.generated/file-tree.json"
 
-const getCachedBlogData = unstable_cache(
-  async () => {
-    const files = await getAllMarkdownFiles(CONTENT_DIR)
-    return {
-      tree: buildFileTree(files, { sortBy: "date" }),
-    }
-  },
-  ["blog-layout-data"],
-  { revalidate: false }
-)
-
-export default async function BlogLayout({
+export default function BlogLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const { tree } = await getCachedBlogData()
+  const tree = fileTree as any
 
   return (
     <BlogTreeProvider tree={tree}>

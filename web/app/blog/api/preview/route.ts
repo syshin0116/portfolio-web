@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import fs from "node:fs/promises"
-import path from "node:path"
-import matter from "gray-matter"
-import { CONTENT_DIR } from "@/lib/content"
+import previewIndex from "@/public/preview-index.json"
 
 export async function GET(request: NextRequest) {
   const slug = request.nextUrl.searchParams.get("slug")
@@ -19,28 +16,13 @@ export async function GET(request: NextRequest) {
   return handleInternalPreview(slug)
 }
 
-async function handleInternalPreview(slug: string) {
-  const filePath = path.join(CONTENT_DIR, slug) + ".md"
-
-  try {
-    const raw = await fs.readFile(filePath, "utf-8")
-    const { data, content } = matter(raw)
-    const title = data.title ?? slug.split("/").pop() ?? slug
-
-    const excerpt = content
-      .replace(/^---[\s\S]*?---\n?/, "")
-      .replace(/!\[\[.*?\]\]/g, "")
-      .replace(/\[\[([^\]|#]+?)(?:#[^\]|]*?)?(?:\|([^\]]+?))?\]\]/g, (_, _t, alias) => alias ?? _t)
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/[#*_~`>]/g, "")
-      .replace(/\n+/g, " ")
-      .trim()
-      .slice(0, 350)
-
-    return NextResponse.json({ title, excerpt, type: "internal" })
-  } catch {
+function handleInternalPreview(slug: string) {
+  const idx = previewIndex as Record<string, { title: string; excerpt: string }>
+  const entry = idx[slug]
+  if (!entry) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
+  return NextResponse.json({ title: entry.title, excerpt: entry.excerpt, type: "internal" })
 }
 
 async function handleExternalPreview(url: string) {

@@ -4,8 +4,8 @@ import { getPublishedNotes, BlogList, NOTES_PER_PAGE } from "@/lib/blog"
 
 export const revalidate = false
 
-export async function generateStaticParams() {
-  const published = await getPublishedNotes()
+export function generateStaticParams() {
+  const published = getPublishedNotes()
   const totalPages = Math.max(1, Math.ceil(published.length / NOTES_PER_PAGE))
 
   // Generate params for page 2 onwards (page 1 is handled by /blog)
@@ -43,7 +43,7 @@ export default async function BlogPaginatedPage({
     notFound()
   }
 
-  const published = await getPublishedNotes()
+  const published = getPublishedNotes()
   const totalPages = Math.max(1, Math.ceil(published.length / NOTES_PER_PAGE))
 
   if (currentPage > totalPages) {

@@ -44,7 +44,7 @@ export default function AboutPage() {
       <main className="min-h-screen bg-background">
         <div className="container mx-auto px-4 md:px-6 py-14 max-w-3xl">
           <section className="mb-12">
-            <h1 className="text-4xl font-bold tracking-tight mb-2">AI Engineer</h1>
+            <h1 className="text-4xl font-bold tracking-tight mb-2">AI Research Engineer</h1>
             <p className="text-xl text-muted-foreground mb-6">
               BrainCrew
             </p>
@@ -98,7 +98,7 @@ export default function AboutPage() {
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                 <div>
-                  <p className="font-medium">AI Engineer</p>
+                  <p className="font-medium">AI Research Engineer</p>
                   <p className="text-sm text-muted-foreground">BrainCrew</p>
                 </div>
                 <span className="text-sm text-muted-foreground">2026.02 ~</span>

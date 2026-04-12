@@ -16,10 +16,10 @@ export const metadata: Metadata = {
     default: "Syshin0116 Dev",
     template: "%s | Syshin0116 Dev",
   },
-  description: "Syshin0116 Dev — AI Engineer · Blog · Projects",
+  description: "Syshin0116 Dev — AI Research Engineer · Blog · Projects",
   keywords: [
     "Portfolio",
-    "AI Engineer",
+    "AI Research Engineer",
     "RAG",
     "LangGraph",
     "Syshin",
@@ -35,12 +35,12 @@ export const metadata: Metadata = {
     url: "https://syshin0116.vercel.app",
     title: "Syshin0116 Dev",
     description:
-      "AI Engineer portfolio & tech blog.",
+      "AI Research Engineer portfolio & tech blog.",
   },
   twitter: {
     card: "summary_large_image",
     title: "Syshin0116 Dev",
-    description: "AI Engineer portfolio & tech blog.",
+    description: "AI Research Engineer portfolio & tech blog.",
     creator: "@syshin0116",
   },
   authors: [

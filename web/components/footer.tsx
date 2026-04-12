@@ -10,7 +10,7 @@ const Footer = () => {
           <div className="flex flex-col items-center sm:items-start gap-1">
             <span className="text-sm font-medium">Syshin0116</span>
             <span className="text-xs text-muted-foreground">
-              AI Engineer @ BrainCrew
+              AI Research Engineer @ BrainCrew
             </span>
           </div>
 

@@ -50,7 +50,7 @@ export async function GET() {
   <channel>
     <title>Syshin0116 Dev Blog</title>
     <link>${BASE_URL}/blog</link>
-    <description>AI Engineer portfolio &amp; tech blog</description>
+    <description>AI Research Engineer portfolio &amp; tech blog</description>
     <language>ko</language>
     <lastBuildDate>${lastBuildDate}</lastBuildDate>
     <atom:link href="${BASE_URL}/feed.xml" rel="self" type="application/rss+xml"/>

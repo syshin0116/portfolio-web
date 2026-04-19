@@ -14,7 +14,7 @@ enableToc: true
 description: 프로덕션 환경에서 LLM 기반 Text-to-SQL을 구축하면서 배운 것들. 동적 스키마 조회, COMMENT 기반 zero-shot, 보안 레이어, 그리고 52문항 5모델 Eval 결과까지 정리한다.
 summary: LLM에게 자연어를 SQL로 바꾸게 하는 건 쉬워 보이지만, 프로덕션에서 안정적으로 동작하게 만드는 건 전혀 다른 문제다. 동적 스키마 조회, COMMENT 기반 zero-shot 접근, AST 기반 보안 검증, 그리고 52문항 5모델 벤치마크까지 — 실제 구축 과정에서 얻은 교훈을 정리한다.
 published: 2026-04-19
-modified: 2026-04-20
+modified: 2026-04-19
 ---
 
 > [!summary]

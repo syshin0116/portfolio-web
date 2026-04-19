@@ -65,7 +65,7 @@ A personal tech blog, portfolio, and AI chatbot — built with [Next.js 15](http
 
 ```bash
 git clone https://github.com/syshin0116/syshin0116.dev.git
-cd syshin0116.dev
+cd syshin0116.dev/web
 bun install
 ```
 
@@ -86,6 +86,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ### Development
 
 ```bash
+cd web
 bun dev       # Start dev server (Turbopack)
 bun build     # Production build
 bun start     # Start production server
@@ -96,22 +97,19 @@ Open [http://localhost:3000](http://localhost:3000).
 ## Project Structure
 
 ```
-syshin0116.dev/
-├── app/
-│   ├── page.tsx              # Home (hero + chat + recent posts/projects)
-│   ├── blog/                 # Blog pages + API routes
-│   ├── projects/             # Project timeline + detail pages
-│   ├── about/                # About page
-│   └── auth/                 # OAuth callback
-├── components/
-│   ├── ui/                   # shadcn/ui components
-│   ├── blog/                 # Blog components (sidebar, TOC, graph, search)
-│   ├── navbar/               # Navigation
-│   └── chat-section.tsx      # AI chat interface
-├── content/                  # Blog content (Obsidian vault)
-├── data/                     # Project & event data
-├── lib/                      # API client, utilities, Supabase
-└── public/                   # Static assets
+syshin0116.dev/          # Monorepo root
+├── web/                 # Next.js frontend (Vercel Root Directory)
+│   ├── app/             # App Router pages + API routes
+│   ├── components/      # UI components (shadcn/ui, blog, chat)
+│   ├── lib/             # API client, utilities, Supabase
+│   ├── public/          # Static assets
+│   └── data/            # Project & event data
+├── content/             # Blog content (Obsidian vault, shared)
+│   ├── AI/              # AI/ML posts
+│   ├── Dev/             # Development posts
+│   ├── Projects/        # Project write-ups
+│   └── ...
+└── agent/               # LangGraph agent backend
 ```
 
 ## Related Repositories

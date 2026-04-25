@@ -8,8 +8,7 @@ tags:
 - Summer/Winter-Coding
 draft: false
 enableToc: true
-summary: '출처: [Programmers > 코딩테스트 연습 > 연습문제 > Summer/Winder Coding(~2018) > 영어 끝말잇기](https://school.programmers.co.kr/learn/courses/30/lessons/12981)
-  1부터 n까지 번호가 붙어있는 n명의 사람이 영어 끝말잇기를 하고 있습니다. 영어 끝말잇기는 다음과 같은 규칙으로 진행됩니다.'
+summary: "출처: [Programmers > 코딩테스트 연습 > 연습문제 > Summer/Winder Coding(~2018) > 영어 끝말잇기](https://school.programmers.co.kr/learn/courses/30/lessons/12981) 1부터 n까지 번호가 붙어있는 n명의 사람이 영어 끝말잇기를 하고 있습니다. 영어 끝말잇기는 다음과 같은 규칙으로 진행됩니다."
 published: 2023-05-01 10:31:29 +0900
 modified: 2023-05-01 10:31:29 +0900
 layout: post
@@ -17,12 +16,6 @@ categories:
 - Code-Test
 - Programmers
 ---
-
-> [!summary]
-> 
-> 출처: [Programmers > 코딩테스트 연습 > 연습문제 > Summer/Winder Coding(~2018) > 영어 끝말잇기](https://school.programmers.co.kr/learn/courses/30/lessons/12981) 1부터 n까지 번호가 붙어있는 n명의 사람이 영어 끝말잇기를 하고 있습니다. 영어 끝말잇기는 다음과 같은 규칙으로 진행됩니다.
-
-
 출처: [Programmers > 코딩테스트 연습 > 연습문제 > Summer/Winder Coding(~2018) > 영어 끝말잇기](https://school.programmers.co.kr/learn/courses/30/lessons/12981)
 
 ## 문제 설명:

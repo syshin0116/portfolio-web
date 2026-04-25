@@ -12,12 +12,8 @@ tags:
 draft: false
 enableToc: true
 description: Obsidian 노트를 Next.js로 서빙하는 오픈소스 라이브러리. Quartz를 headless 데이터 레이어로 재해석한다.
-summary: Obsidian으로 관리하는 노트를 웹에 퍼블리싱하고 싶었다. Quartz를 쓰다 UI 한계와 AI Agent 연동 욕심이 생겼고, shadcn/ui + Next.js 기반으로 직접 만든 게 Nuartz다. UI는 없고 데이터 레이어만 제공하는 headless 라이브러리로, 어떤 Next.js 앱이든 가져다 자기 UI로 감쌀 수 있다.
+summary: "Obsidian으로 관리하는 노트를 웹에 퍼블리싱하고 싶었다. Quartz를 쓰다 UI 한계와 AI Agent 연동 욕심이 생겼고, shadcn/ui + Next.js 기반으로 직접 만든 게 Nuartz다. UI는 없고 데이터 레이어만 제공하는 headless 라이브러리로, 어떤 Next.js 앱이든 가져다 자기 UI로 감쌀 수 있다."
 ---
-
-> [!summary]
-> Obsidian으로 관리하는 노트를 웹에 퍼블리싱하고 싶었다. Quartz를 쓰다 UI 한계와 AI Agent 연동 욕심이 생겼고, shadcn/ui + Next.js 기반으로 직접 만든 게 Nuartz다. UI는 없고 데이터 레이어만 제공하는 headless 라이브러리로, 어떤 Next.js 앱이든 가져다 자기 UI로 감쌀 수 있다.
-
 ---
 
 ## 프로젝트 소개

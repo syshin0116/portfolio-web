@@ -8,7 +8,7 @@ tags:
 - Data-Science
 draft: false
 enableToc: true
-summary: 1. https://studio.azureml.net/ 접속 1. Experiments > Blank Experiment
+summary: "1. https://studio.azureml.net/ 접속 1. Experiments > Blank Experiment"
 published: 2023-11-21 14:58 +0900
 modified: 2023-11-21 14:58 +0900
 layout: post
@@ -17,11 +17,6 @@ categories:
 - Computer-Vision
 math: true
 ---
-
-> [!summary]
-> 
-> 1. https://studio.azureml.net/ 접속 1. Experiments > Blank Experiment
-
 ## Azure ml classic
 
 - No Coding Tool 이 아닌 Low Coding Tool이라 부른다

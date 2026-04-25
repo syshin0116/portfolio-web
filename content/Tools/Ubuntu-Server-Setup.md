@@ -16,15 +16,11 @@ tags:
 draft: false
 enableToc: true
 description: Ubuntu 서버 초기 설정을 자동화하는 bash 스크립트와 설치되는 각 패키지의 상세 설명 및 사용법 가이드
-summary: Ubuntu 서버 초기 설정을 자동화하는 bash 스크립트와 설치되는 각 패키지의 상세 설명 및 사용법 가이드
+summary: "Ubuntu 서버를 새로 받을 때마다 반복적으로 설치해야 하는 필수 패키지들이 귀찮아서 한 번에 설치하는 스크립트를 만들어 둔 것이다. Git, Docker, UV, 각종 개발 도구들을 자동으로 설치하고, 각 패키지가 무엇인지 간단히 정리해둔다."
 published: 2025-01-27
 modified: 2025-01-27
 ---
-
 # Ubuntu 서버 초기 설정 스크립트
-
-> [!summary]
-> Ubuntu 서버를 새로 받을 때마다 반복적으로 설치해야 하는 필수 패키지들이 귀찮아서 한 번에 설치하는 스크립트를 만들어 둔 것이다. Git, Docker, UV, 각종 개발 도구들을 자동으로 설치하고, 각 패키지가 무엇인지 간단히 정리해둔다.
 
 > [!warning] Ubuntu 전용 스크립트
 > 이 스크립트는 **Ubuntu (Debian 계열)** 전용이다. 다른 Linux 배포판에서는 작동하지 않을 수 있다.

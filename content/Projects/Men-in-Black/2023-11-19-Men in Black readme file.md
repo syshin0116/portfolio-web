@@ -12,13 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: 블랙박스 영상에서 교통 법규 위반 차량을 자동으로 감지하고 신고하는 AI 시스템 프로젝트
-summary: 블랙박스 영상에서 교통 법규 위반 차량을 자동으로 감지하고 신고하는 AI 시스템 프로젝트
+summary: "운전 중 발견한 도로 교통 법규 위반 차량을 즉각 신고하기 어려운 문제를 해결하기 위한 자동 감지 및 신고 시스템 프로젝트이다. YOLOv8을 활용한 차량 및 번호판 감지, EasyOCR을 통한 번호판 인식, ZoeDepth/MiDaS를 활용한 거리 추정 등 종합적인 Computer Vision 기술을 적용하여 교통 법규 위반을 자동으로 탐지한다."
 published: 2023-11-19
 modified: 2023-11-19
 ---
-
-> [!summary]
-> 운전 중 발견한 도로 교통 법규 위반 차량을 즉각 신고하기 어려운 문제를 해결하기 위한 자동 감지 및 신고 시스템 프로젝트이다. YOLOv8을 활용한 차량 및 번호판 감지, EasyOCR을 통한 번호판 인식, ZoeDepth/MiDaS를 활용한 거리 추정 등 종합적인 Computer Vision 기술을 적용하여 교통 법규 위반을 자동으로 탐지한다.
 # Men-in-Black
 
 ## 1. 개요

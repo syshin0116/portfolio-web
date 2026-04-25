@@ -10,16 +10,10 @@ tags:
 draft: false
 enableToc: true
 description: Groq LPU 모델을 활용한 RAG 시스템 구축 및 성능 특징 설명
-summary: 이 문서는 RAG(Retrieval-Augmented Generation) 시스템에 Groq의 고성능 LPU(Language Processing
-  Unit)를 결합한 아키텍처를 설명한다. Groq는 GenAI 추론 속도의 새로운 기준을 제시하며, 특히 LPU는 언어 처리와 같은 순차적 특성을
-  가진 계산 집약적 애플리케이션에 최적화된 처리 유닛이다. 이 조합을 통해 높은 처리 속도와 정확성을 동시에 달성할 수 있는 방법을 소개한다.
+summary: "이 문서는 RAG(Retrieval-Augmented Generation) 시스템에 Groq의 고성능 LPU(Language Processing Unit)를 결합한 아키텍처를 설명한다. Groq는 GenAI 추론 속도의 새로운 기준을 제시하며, 특히 LPU는 언어 처리와 같은 순차적 특성을 가진 계산 집약적 애플리케이션에 최적화된 처리 유닛이다. 이 조합을 통해 높은 처리 속도와 정확성을 동시에 달성할 수 있는 방법을 소개한다."
 published: 2024-04-29
 modified: 2024-04-29
 ---
-> [!summary]
-> 
-> 이 문서는 RAG(Retrieval-Augmented Generation) 시스템에 Groq의 고성능 LPU(Language Processing Unit)를 결합한 아키텍처를 설명한다. Groq는 GenAI 추론 속도의 새로운 기준을 제시하며, 특히 LPU는 언어 처리와 같은 순차적 특성을 가진 계산 집약적 애플리케이션에 최적화된 처리 유닛이다. 이 조합을 통해 높은 처리 속도와 정확성을 동시에 달성할 수 있는 방법을 소개한다.
-
 ## 개요
 
 RAG(Retrieval-Augmented Generation)와 Groq의 고성능 LPU(Language Processing Unit)를 결합하여 빠르고 정확한 정보 검색 및 생성 시스템을 구축하는 방법을 살펴본다.

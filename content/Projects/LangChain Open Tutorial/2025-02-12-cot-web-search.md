@@ -11,13 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Chain-of-Thought를 활용한 스마트 웹 검색 시스템 튜토리얼
-summary: Chain-of-Thought를 활용한 스마트 웹 검색 시스템 튜토리얼
+summary: "LangChain Open Tutorial에서 작성한 Chain-of-Thought 기반 스마트 웹 검색 시스템 튜토리얼이다. CoT 추론을 활용하여 사용자 질의를 분석하고, 효과적인 검색 전략을 수립하며, 정확한 답변을 생성하는 전체 프로세스를 상세한 코드와 함께 설명한다."
 published: 2025-02-13
 modified: 2025-02-13
 ---
-
-> [!summary]
-> LangChain Open Tutorial에서 작성한 Chain-of-Thought 기반 스마트 웹 검색 시스템 튜토리얼이다. CoT 추론을 활용하여 사용자 질의를 분석하고, 효과적인 검색 전략을 수립하며, 정확한 답변을 생성하는 전체 프로세스를 상세한 코드와 함께 설명한다.
 # CoT Based Smart Web Search
 
   

@@ -5,20 +5,13 @@ tags:
 - github
 draft: false
 enableToc: true
-summary: '<img width="900" alt="Screen Shot 2022-09-09 at 12 50 10 AM" src="https://t1.daumcdn.net/cfile/tistory/993CCF4B5F17C75211
-  출처: [https://ux.stories.pe.kr/182 [UX 공작소:티스토리]](https://ux.stories.pe.kr/182)'
+summary: "<img width=\"900\" alt=\"Screen Shot 2022-09-09 at 12 50 10 AM\" src=\"https://t1.daumcdn.net/cfile/tistory/993CCF4B5F17C75211 출처: [https://ux.stories.pe.kr/182 [UX 공작소:티스토리]](https://ux.stories.pe.kr/182)"
 published: 2022-09-08 02:35:29 +0900
 modified: 2022-09-08 02:35:29 +0900
 categories:
 - ETC
 - Github
 ---
-
-> [!summary]
-> 
-> <img width="900" alt="Screen Shot 2022-09-09 at 12 50 10 AM" src="https://t1.daumcdn.net/cfile/tistory/993CCF4B5F17C75211 출처: [https://ux.stories.pe.kr/182 [UX 공작소:티스토리]](https://ux.stories.pe.kr/182)
-
-
 # [Github]Github 정리
 
 ## Git이란?

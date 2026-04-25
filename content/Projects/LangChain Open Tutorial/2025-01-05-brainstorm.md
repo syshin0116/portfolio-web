@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: LangChain Open Tutorial Week 2 신규 튜토리얼 개발을 위한 브레인스토밍 세션
-summary: LangChain Open Tutorial Week 2 신규 튜토리얼 개발을 위한 브레인스토밍 세션
+summary: "LangChain Open Tutorial Week 2에서 진행한 신규 튜토리얼 개발을 위한 브레인스토밍 세션 기록이다. 팀 구성원들과 함께 튜토리얼 주제 선정, 제출 항목 정리, 아이디어 논의 과정을 통해 프로젝트 방향성을 수립한 내용을 포함한다."
 published: 2025-01-05
 modified: 2025-01-05
 ---
-
-> [!summary]
-> LangChain Open Tutorial Week 2에서 진행한 신규 튜토리얼 개발을 위한 브레인스토밍 세션 기록이다. 팀 구성원들과 함께 튜토리얼 주제 선정, 제출 항목 정리, 아이디어 논의 과정을 통해 프로젝트 방향성을 수립한 내용을 포함한다.
-
 ## 신규 튜토리얼 개발자 1팀
 
 ### 제출 항목:

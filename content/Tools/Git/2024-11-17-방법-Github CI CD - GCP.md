@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: GitHub Actions를 활용하여 GCP Compute Engine에 Docker 기반 CI/CD 파이프라인 구축하기
-summary: GitHub Actions를 활용하여 GCP Compute Engine에 Docker 기반 CI/CD 파이프라인 구축하기
+summary: "GitHub Actions를 활용하여 GCP Compute Engine에 자동 배포 파이프라인을 구축하는 상세 가이드이다. Docker Hub를 통한 이미지 관리, GCP 인스턴스 설정, GitHub Secrets 구성, 그리고 자동화된 빌드/배포 워크플로우 전체 과정을 단계별로 설명한다."
 published: 2024-11-17
 modified: 2024-11-17
 ---
-
-> [!summary]
-> GitHub Actions를 활용하여 GCP Compute Engine에 자동 배포 파이프라인을 구축하는 상세 가이드이다. Docker Hub를 통한 이미지 관리, GCP 인스턴스 설정, GitHub Secrets 구성, 그리고 자동화된 빌드/배포 워크플로우 전체 과정을 단계별로 설명한다.
-
 ## 사전 준비
 
 1 GCP 계정 및 Compute Engine 인스턴스

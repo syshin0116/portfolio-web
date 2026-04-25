@@ -11,16 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: SAM을 비디오에 적용한 Track Anything Model(TAM)의 특징과 활용 방안을 정리한 글이다.
-summary: Track Anything Model(TAM)은 Segment Anything Model(SAM)의 이미지 분할 능력을 비디오에 확장한
-  모델이다. 최소한의 사용자 상호작용으로 비디오 내 객체를 추적하고 분할할 수 있으며, 별도의 추가 학습 없이도 효과적인 결과를 제공한다.
+summary: "Track Anything Model(TAM)은 Segment Anything Model(SAM)의 이미지 분할 능력을 비디오에 확장한 모델이다. 최소한의 사용자 상호작용으로 비디오 내 객체를 추적하고 분할할 수 있으며, 별도의 추가 학습 없이도 효과적인 결과를 제공한다."
 published: 2023-06-19
 modified: 2023-06-19
 ---
-
-> [!summary]
-> 
-> Track Anything Model(TAM)은 Segment Anything Model(SAM)의 이미지 분할 능력을 비디오에 확장한 모델이다. 최소한의 사용자 상호작용으로 비디오 내 객체를 추적하고 분할할 수 있으며, 별도의 추가 학습 없이도 효과적인 결과를 제공한다.
-
 ## 소개
 
 Track Anything Model(TAM)은 비디오 객체 추적 및 분할에 혁신적인 접근 방식을 제공한다. Segment Anything Model(SAM)의 뛰어난 분할 성능과 비디오의 동적 특성을 결합했다. 최소한의 사용자 상호작용으로 비디오 내 관심 객체를 추적하고 단일 패스 추론으로 만족스러운 결과를 제공한다. 이 모델은 추가 학습이 필요 없으며, 대화형 설계로 비디오 객체 추적 및 분할에서 인상적인 성능을 보여준다.

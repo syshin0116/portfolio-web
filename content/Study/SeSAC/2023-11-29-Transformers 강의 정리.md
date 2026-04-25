@@ -9,8 +9,7 @@ tags:
 - 교육
 draft: false
 enableToc: true
-summary: 예를 들어, '나는'이라는 단어(Query)에 대해, 모델은 학습 데이터에서 이와 관련된 Key-Value 쌍을 찾아 'I'(Value)로
-  번역한다. 이러한 과정이 전체 문장에 걸쳐 이루어지며, 최종적으로 '나는 학교에 간다'는 'I go to school'로 변환된다.
+summary: "예를 들어, '나는'이라는 단어(Query)에 대해, 모델은 학습 데이터에서 이와 관련된 Key-Value 쌍을 찾아 'I'(Value)로 번역한다. 이러한 과정이 전체 문장에 걸쳐 이루어지며, 최종적으로 '나는 학교에 간다'는 'I go to school'로 변환된다."
 published: 2023-11-30 16:08 +0900
 modified: 2023-11-30 16:08 +0900
 layout: post
@@ -19,12 +18,6 @@ categories:
 - NLP
 math: true
 ---
-
-> [!summary]
-> 
-> 예를 들어, '나는'이라는 단어(Query)에 대해, 모델은 학습 데이터에서 이와 관련된 Key-Value 쌍을 찾아 'I'(Value)로 번역한다. 이러한 과정이 전체 문장에 걸쳐 이루어지며, 최종적으로 '나는 학교에 간다'는 'I go to school'로 변환된다.
-
-
 ## Intro: 
 ### Attention Function
 

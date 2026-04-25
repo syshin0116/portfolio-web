@@ -8,19 +8,13 @@ tags:
 - Cloud
 draft: false
 enableToc: true
-summary: 'Services covered in this course: Question: If you need to launch a new application,
-  where should you do it?'
+summary: "Services covered in this course: Question: If you need to launch a new application, where should you do it?"
 published: 2022-12-07 16:50:23 +0900
 modified: 2022-12-07 16:50:23 +0900
 categories:
 - AWS
 - Architect-Associate
 ---
-
-> [!summary]
-> 
-> Services covered in this course: Question: If you need to launch a new application, where should you do it?
-
 # Architect Associate Certification SAA-C03 Notes
 
 AWS: Amazon Web Services

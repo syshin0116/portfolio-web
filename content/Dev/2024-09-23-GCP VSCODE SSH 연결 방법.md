@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Google Cloud Platform VM 인스턴스에 SSH 키를 생성하고 VS Code로 원격 연결하는 방법
-summary: Google Cloud Platform VM 인스턴스에 SSH 키를 생성하고 VS Code로 원격 연결하는 방법
+summary: "GCP(Google Cloud Platform) VM 인스턴스에 SSH 키 페어를 생성하고 등록하여 VS Code에서 원격 접속하는 전체 과정을 설명한다. ssh-keygen으로 로컬에서 키를 생성하고, GCP Console에서 공개 키를 VM에 등록한 후, VS Code의 Remote Explorer 설정을 통해 편리하게 원격 개발 환경을 구축할 수 있다. 터미널과 VS Code 두 가지 방법으로 접속을 확인한다."
 published: 2024-09-23
 modified: 2024-09-23
 ---
-
-> [!summary]
-> GCP(Google Cloud Platform) VM 인스턴스에 SSH 키 페어를 생성하고 등록하여 VS Code에서 원격 접속하는 전체 과정을 설명한다. ssh-keygen으로 로컬에서 키를 생성하고, GCP Console에서 공개 키를 VM에 등록한 후, VS Code의 Remote Explorer 설정을 통해 편리하게 원격 개발 환경을 구축할 수 있다. 터미널과 VS Code 두 가지 방법으로 접속을 확인한다.
-
 ### Metadata-managed SSH connections
 https://cloud.google.com/compute/docs/instances/ssh#third-party-tools
 

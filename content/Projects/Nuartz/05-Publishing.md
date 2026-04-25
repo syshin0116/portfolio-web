@@ -10,12 +10,8 @@ tags:
 draft: false
 enableToc: true
 description: Nuartz를 npm에 배포하고, 버전 관리와 CHANGELOG를 정착시키고, GitHub Actions로 publish를 자동화한 과정을 기록한다.
-summary: 0.1.0을 수동으로 첫 배포하고, CHANGELOG.md로 버전 히스토리를 관리하고, git 태그를 push하면 GitHub Actions가 자동으로 npm publish하는 파이프라인을 만들었다. 다음 릴리즈부터는 버전 올리고 태그 push하면 끝이다.
+summary: "0.1.0을 수동으로 첫 배포하고, CHANGELOG.md로 버전 히스토리를 관리하고, git 태그를 push하면 GitHub Actions가 자동으로 npm publish하는 파이프라인을 만들었다. 다음 릴리즈부터는 버전 올리고 태그 push하면 끝이다."
 ---
-
-> [!summary]
-> 0.1.0을 수동으로 첫 배포하고, CHANGELOG.md로 버전 히스토리를 관리하고, git 태그를 push하면 GitHub Actions가 자동으로 npm publish하는 파이프라인을 만들었다. 다음 릴리즈부터는 버전 올리고 태그 push하면 끝이다.
-
 > [!info] 이전 글
 > Headless 설계와 레포 재편 과정은 [[04-Headless-and-Ecosystem|이전 글]]에서 다뤘다.
 

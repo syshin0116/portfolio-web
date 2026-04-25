@@ -12,13 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: Agentic RAG의 개념과 구현 방법을 다룬 TeddyNote 세미나 정리
-summary: Agentic RAG의 개념과 구현 방법을 다룬 TeddyNote 세미나 정리
+summary: "TeddyNote의 Agentic RAG 세미나 내용을 정리한 노트이다. Agent의 정의와 경계, Tool Calling의 개념, RAG와 Agent의 결합인 Agentic RAG의 특징, LangGraph를 활용한 복잡한 워크플로우 구현, 그리고 실제 구현 예시와 사례 연구를 포함한다. Agent가 도구를 능동적으로 선택하고 활용하여 더 정확한 답변을 생성하는 과정을 다룬다."
 published: 2024-09-07
 modified: 2024-09-07
 ---
-
-> [!summary]
-> TeddyNote의 Agentic RAG 세미나 내용을 정리한 노트이다. Agent의 정의와 경계, Tool Calling의 개념, RAG와 Agent의 결합인 Agentic RAG의 특징, LangGraph를 활용한 복잡한 워크플로우 구현, 그리고 실제 구현 예시와 사례 연구를 포함한다. Agent가 도구를 능동적으로 선택하고 활용하여 더 정확한 답변을 생성하는 과정을 다룬다.
 테디노트 유튜브 링크 [https://www.youtube.com/watch?v=J610NhUrj-s&t=2236s](https://www.youtube.com/watch?v=J610NhUrj-s&t=2236s)
 
 

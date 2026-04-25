@@ -12,14 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: Supervisord를 사용한 Flask, Celery, Redis 등 다중 프로세스 관리 및 문제 해결
-summary: Supervisord를 사용한 Flask, Celery, Redis 등 다중 프로세스 관리 및 문제 해결
+summary: "Supervisord는 UNIX 시스템에서 여러 프로세스를 모니터링하고 제어하는 도구로, 웹 서버나 백그라운드 작업 등 지속 실행 프로세스의 자동 시작, 재시작, 로깅을 관리한다. 프로젝트에서 Flask, Celery, Redis를 Docker 컨테이너 내에서 효율적으로 관리하기 위해 Supervisord를 도입했으며, Celery-Redis 연결 문제와 로깅 문제를 supervisord.conf 설정을 통해 해결했다. 웹 인터페이스와 CLI를 제공하여 편리한 프로세스 관리가 가능하다."
 published: 2024-03-31
 modified: 2024-03-31
 ---
-
-> [!summary]
-> Supervisord는 UNIX 시스템에서 여러 프로세스를 모니터링하고 제어하는 도구로, 웹 서버나 백그라운드 작업 등 지속 실행 프로세스의 자동 시작, 재시작, 로깅을 관리한다. 프로젝트에서 Flask, Celery, Redis를 Docker 컨테이너 내에서 효율적으로 관리하기 위해 Supervisord를 도입했으며, Celery-Redis 연결 문제와 로깅 문제를 supervisord.conf 설정을 통해 해결했다. 웹 인터페이스와 CLI를 제공하여 편리한 프로세스 관리가 가능하다.
-
 Supervisord는 UNIX 계열 운영 시스템에서 여러 프로세스를 모니터링하고 제어하는 클라이언트/서버 시스템으로, 주로 긴 실행 시간을 요하는 프로세스들의 시작, 유지 관리 및 로깅을 관리하는 데 사용된다
 
 ## 프로세스 관리의 필요성

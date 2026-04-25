@@ -11,15 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: PyMuPDF4LLM v1.27.2.2의 내부 구조를 분석하고, 4종 문서(영문 논문, 한국어 보고서, PPT 슬라이드, 복잡한 레이아웃)로 성능을 테스트한다. 경량 GNN 모델(ONNX)로 레이아웃을 분석하고 규칙 기반으로 텍스트를 추출하여, 페이지당 0.05~0.25초의 압도적 속도를 보여준다.
-summary: PyMuPDF4LLM은 Artifex Software의 MuPDF 엔진 위에 구축된 PDF-to-Markdown 변환기다. PDF 내부 구조를 직접 파싱하고, pymupdf-layout의 경량 GNN 모델(ONNX Runtime)로 레이아웃을 분석하여 페이지당 0.05~0.25초의 압도적 속도를 달성한다. GPU 불필요, 의존성 최소, 설치 즉시 사용 가능하지만, 수식 LaTeX 변환 불가, 스캔 문서 OCR 제한, 헤딩 레벨 부정확 등의 한계가 있다.
+summary: "PyMuPDF4LLM은 Artifex Software의 MuPDF 엔진 위에 구축된 PDF-to-Markdown 변환기다. PDF 내부 구조를 직접 파싱하고, pymupdf-layout의 경량 GNN 모델(ONNX Runtime)로 레이아웃을 분석하여 페이지당 0.05~0.25초의 압도적 속도를 달성한다. GPU 불필요, 의존성 최소, 설치 즉시 사용 가능하지만, 수식 LaTeX 변환 불가, 스캔 문서 OCR 제한, 헤딩 레벨 부정확 등의 한계가 있다."
 published: 2026-03-25
 modified: 2026-03-25
 ---
-
-> [!summary]
->
-> PyMuPDF4LLM은 Artifex Software의 MuPDF 엔진 위에 구축된 PDF-to-Markdown 변환기다. PDF 내부 구조를 직접 파싱하고, pymupdf-layout의 경량 GNN 모델(ONNX Runtime)로 레이아웃을 분석하여 페이지당 0.05~0.25초의 압도적 속도를 달성한다. GPU 불필요, 의존성 최소, 설치 즉시 사용 가능하지만, 수식 LaTeX 변환 불가, 스캔 문서 OCR 제한, 헤딩 레벨 부정확 등의 한계가 있다.
-
 ## 개요
 
 | 항목 | 내용 |

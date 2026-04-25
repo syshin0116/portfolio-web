@@ -11,15 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: LiteParse는 LlamaIndex가 LlamaParse의 오픈소스 코어로 공개한 TypeScript 기반 PDF 파서다. PDF.js + Tesseract.js로 구현되어 ML 모델 없이 0.1초/문서의 극한 속도를 달성하지만, Markdown 구조화 없이 순수 텍스트만 추출하는 한계가 있다. READoc 벤치마크 결과 50.7%로 구조화 파서 대비 낮은 품질.
-summary: LiteParse는 LlamaIndex가 2026년 3월 공개한 TypeScript PDF 파서로, LlamaParse의 경량 오픈소스 코어다. PDF.js로 텍스트를 추출하고 Tesseract.js로 OCR을 수행한다. ML 모델 없이 순수 좌표 기반 공간 배치(spatial grid)로 텍스트를 재구성하며, 0.1초/문서의 극한 속도를 보여준다. 다만 헤딩/테이블/수식 등의 Markdown 구조화를 하지 않아 READoc 벤치마크에서 50.7%의 Edit Similarity를 기록했다.
+summary: "LiteParse는 LlamaIndex가 2026년 3월 공개한 TypeScript PDF 파서로, LlamaParse의 경량 오픈소스 코어다. PDF.js로 텍스트를 추출하고 Tesseract.js로 OCR을 수행한다. ML 모델 없이 순수 좌표 기반 공간 배치(spatial grid)로 텍스트를 재구성하며, 0.1초/문서의 극한 속도를 보여준다. 다만 헤딩/테이블/수식 등의 Markdown 구조화를 하지 않아 READoc 벤치마크에서 50.7%의 Edit Similarity를 기록했다."
 published: 2026-03-26
 modified: 2026-03-26
 ---
-
-> [!summary]
->
-> LiteParse는 LlamaIndex가 2026년 3월 공개한 TypeScript PDF 파서로, LlamaParse의 경량 오픈소스 코어다. PDF.js로 텍스트를 추출하고 Tesseract.js로 OCR을 수행한다. ML 모델 없이 순수 좌표 기반 공간 배치(spatial grid)로 텍스트를 재구성하며, 0.1초/문서의 극한 속도를 보여준다. 다만 헤딩/테이블/수식 등의 Markdown 구조화를 하지 않아 READoc 벤치마크에서 50.7%의 Edit Similarity를 기록했다.
-
 ## 개요
 
 | 항목 | 내용 |

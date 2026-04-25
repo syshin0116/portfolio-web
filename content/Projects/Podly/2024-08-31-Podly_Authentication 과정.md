@@ -11,15 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Podly 서비스의 소셜 로그인 및 JWT 기반 인증 시스템 구현 과정
-summary: Podly 서비스의 소셜 로그인 및 JWT 기반 인증 시스템 구현 과정
+summary: "Podly 서비스의 인증 시스템 구현 과정을 정리한 문서이다. 소셜 로그인(OAuth) 초기 인증부터 JWT 토큰 발급, Access Token/Refresh Token 관리, 자동 로그인, 로그아웃 처리까지 전체 인증 프로세스를 단계별로 설명한다."
 published: 2024-08-31
 modified: 2024-08-31
 ---
-
-> [!summary]
-> Podly 서비스의 인증 시스템 구현 과정을 정리한 문서이다. 소셜 로그인(OAuth) 초기 인증부터 JWT 토큰 발급, Access Token/Refresh Token 관리, 자동 로그인, 로그아웃 처리까지 전체 인증 프로세스를 단계별로 설명한다.
-
-
 ## 1. 소셜 로그인 (초기 인증)
 
 - **프로세스**: 소셜 로그인 버튼 클릭 → 소셜 제공자 인증 → 백엔드로 인증 코드 전송

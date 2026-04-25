@@ -9,14 +9,10 @@ tags:
 draft: false
 enableToc: true
 description: Obsidian 노트를 Quartz를 사용하여 GitHub Pages에 배포하는 방법을 단계별로 설명
-summary: Obsidian 노트를 Quartz를 사용하여 GitHub Pages에 배포하는 방법을 단계별로 설명
+summary: "이 문서는 Obsidian에서 작성한 Markdown 노트를 Quartz를 사용하여 정적 웹사이트로 변환하고 GitHub Pages에 배포하는 방법을 안내한다. 먼저 Quartz를 클론하고 초기화한 후, GitHub 저장소를 설정하여 Quartz 프로젝트를 자신의 저장소와 연결한다. 배포 자동화를 위해 GitHub Actions 설정 파일을 생성하고, GitHub Pages를 활성화한다. 로컬에서 Quartz 사이트를 빌드하여 확인한 후, 변경사항을 GitHub에 동기화한다. 마지막으로, 사용자 정의 도메인을 설정하는 방법도 안내한다. 이 가이드를 통해 Obsidian 노트를 쉽게 공유하고 관리할 수 있다."
 published: 2025-03-06
 modified: 2025-03-06
 ---
-> [!summary]
-
-> 이 문서는 Obsidian에서 작성한 Markdown 노트를 Quartz를 사용하여 정적 웹사이트로 변환하고 GitHub Pages에 배포하는 방법을 안내한다. 먼저 Quartz를 클론하고 초기화한 후, GitHub 저장소를 설정하여 Quartz 프로젝트를 자신의 저장소와 연결한다. 배포 자동화를 위해 GitHub Actions 설정 파일을 생성하고, GitHub Pages를 활성화한다. 로컬에서 Quartz 사이트를 빌드하여 확인한 후, 변경사항을 GitHub에 동기화한다. 마지막으로, 사용자 정의 도메인을 설정하는 방법도 안내한다. 이 가이드를 통해 Obsidian 노트를 쉽게 공유하고 관리할 수 있다. 
-
 ## 개요
 
 이 가이드는 **Obsidian**에서 작성한 Markdown 노트를 **Quartz**를 사용하여 정적 웹사이트로 변환하고 **GitHub Pages**에 배포하는 방법을 설명한다.

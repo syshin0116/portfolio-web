@@ -12,13 +12,9 @@ tags:
 draft: false
 enableToc: true
 description: AI 에이전트가 CLI 도구를 발견하고, 비교하고, 설치할 수 있도록 설계한 CLI 도구 인덱스. 검색 전략 선택 과정과 BM25 기반 구현 결과를 기록한다.
-summary: MCP의 등장 이후 AI 에이전트와 CLI 도구의 연동이 주목받고 있지만, 에이전트가 필요한 도구를 검색하고 설치 명령어까지 얻을 수 있는 수단은 없었다. Clidex는 440개 CLI 도구의 메타데이터(설치 명령어, stars, llms.txt 등)를 구조화된 YAML/JSON으로 제공하는 에이전트-퍼스트 검색기다. BM25 + 시노님 확장 + 카테고리 부스트 조합으로 21개 실사용 쿼리 기준 100% recall을 달성했다.
+summary: "Claude Code, Codex, Gemini CLI 같은 AI 에이전트들이 \"CSV를 JSON으로 변환하는 도구가 뭐가 있지?\"라고 물었을 때 답을 줄 수 있는 시스템이 없었다. 사람이 구글링하듯 에이전트도 CLI 도구를 검색할 수 있어야 한다고 생각했고, 구조화된 출력(YAML/JSON)으로 도구 메타데이터를 반환하는 CLI 도구 인덱스를 Rust로 만들었다. 검색 전략으로 임베딩 모델과 BM25를 비교 검토했고, 결론적으로 BM25 + 시노님 확장 + 카테고리 부스트 조합이 배포 크기 대비 최적이었다. 21개 실사용 쿼리 기준 100% recall을 달성했다."
 ---
-
 ![Clidex Logo](https://raw.githubusercontent.com/syshin0116/clidex/main/assets/logo.gif)
-
-> [!summary]
-> Claude Code, Codex, Gemini CLI 같은 AI 에이전트들이 "CSV를 JSON으로 변환하는 도구가 뭐가 있지?"라고 물었을 때 답을 줄 수 있는 시스템이 없었다. 사람이 구글링하듯 에이전트도 CLI 도구를 검색할 수 있어야 한다고 생각했고, 구조화된 출력(YAML/JSON)으로 도구 메타데이터를 반환하는 CLI 도구 인덱스를 Rust로 만들었다. 검색 전략으로 임베딩 모델과 BM25를 비교 검토했고, 결론적으로 BM25 + 시노님 확장 + 카테고리 부스트 조합이 배포 크기 대비 최적이었다. 21개 실사용 쿼리 기준 100% recall을 달성했다.
 
 ---
 

@@ -11,12 +11,8 @@ tags:
 draft: false
 enableToc: true
 description: Quartz 플러그인 구조를 직접 뜯어보고, Next.js에서 재사용 가능한 것과 그렇지 않은 것을 구분한다. OFM이 Quartz의 진짜 자산인 이유.
-summary: Quartz 플러그인 대부분은 npm 패키지 래퍼였다. GFM, LaTeX, SyntaxHighlighting은 직접 써도 동일하다. 진짜 Quartz의 자산은 OFM — wikilink, callout, tag 파싱 로직을 직접 구현한 플러그인이다. externalResources는 Quartz 자체 런타임에 의존해서 Next.js에서 쓸 수 없고, React 컴포넌트로 대체하면 된다.
+summary: "Quartz 플러그인 대부분은 npm 패키지 래퍼였다. GFM, LaTeX, SyntaxHighlighting은 직접 써도 동일하다. 진짜 Quartz의 자산은 OFM — wikilink, callout, tag 파싱 로직을 직접 구현한 플러그인이다. externalResources는 Quartz 자체 런타임에 의존해서 Next.js에서 쓸 수 없고, React 컴포넌트로 대체하면 된다."
 ---
-
-> [!summary]
-> Quartz 플러그인 대부분은 npm 패키지 래퍼였다. GFM, LaTeX, SyntaxHighlighting은 직접 써도 동일하다. 진짜 Quartz의 자산은 OFM — wikilink, callout, tag 파싱 로직을 직접 구현한 플러그인이다. externalResources는 Quartz 자체 런타임에 의존해서 Next.js에서 쓸 수 없고, React 컴포넌트로 대체하면 된다.
-
 > [!info] 이전 글
 > sync-quartz 전략이 왜 막혔는지는 [[01-Motivation|첫 번째 글]]에서 다뤘다. 이 글은 그 원인을 파악하기 위해 Quartz 플러그인 구조를 직접 해부한 기록이다.
 

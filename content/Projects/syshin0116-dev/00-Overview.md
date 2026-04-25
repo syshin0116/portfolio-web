@@ -12,12 +12,8 @@ tags:
 draft: false
 enableToc: true
 description: 흩어져 있던 4개 레포를 3개로 재편하고, 블로그와 포트폴리오를 하나로 합치는 리팩토링 계획.
-summary: portfolio-web, portfolio-ai, nuartz, syshin0116.github.io 4개 레포를 syshin0116.dev + blog-rag + nuartz 3개로 재편한다. syshin0116.dev는 Nuartz 기반 블로그 + 포트폴리오 통합 사이트, blog-rag는 Modular RAG 백엔드다. MoAI-ADK의 SPEC-First 방식을 blog-rag 설계에 도입하기로 했다.
+summary: "portfolio-web, portfolio-ai, nuartz, syshin0116.github.io 4개 레포를 syshin0116.dev + blog-rag + nuartz 3개로 재편한다. syshin0116.dev는 Nuartz 기반 블로그 + 포트폴리오 통합 사이트, blog-rag는 Modular RAG 백엔드다. MoAI-ADK의 SPEC-First 방식을 blog-rag 설계에 도입하기로 했다."
 ---
-
-> [!summary]
-> portfolio-web, portfolio-ai, nuartz, syshin0116.github.io 4개 레포를 syshin0116.dev + blog-rag + nuartz 3개로 재편한다. syshin0116.dev는 Nuartz 기반 블로그 + 포트폴리오 통합 사이트, blog-rag는 Modular RAG 백엔드다. MoAI-ADK의 SPEC-First 방식을 blog-rag 설계에 도입하기로 했다.
-
 > [!info] 관련 글
 > 레포 재편 결정 과정은 [[Projects/Nuartz/04-Headless-and-Ecosystem|Nuartz — Headless 설계와 레포 생태계 재편]]에서 먼저 다뤘다.
 

@@ -11,13 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: LlamaParse를 활용한 문서 파싱 튜토리얼 - PDF 및 다양한 문서 형식 처리
-summary: LlamaParse를 활용한 문서 파싱 튜토리얼 - PDF 및 다양한 문서 형식 처리
+summary: "LangChain Open Tutorial 프로젝트에서 작성한 LlamaParse 튜토리얼이다. PDF를 포함한 다양한 문서 형식을 효과적으로 파싱하는 방법, LlamaParse API 사용법, 실전 예제 코드, 그리고 피어 리뷰를 통해 개선된 완성본을 포함한다."
 published: 2025-01-12
 modified: 2025-01-12
 ---
-
-> [!summary]
-> LangChain Open Tutorial 프로젝트에서 작성한 LlamaParse 튜토리얼이다. PDF를 포함한 다양한 문서 형식을 효과적으로 파싱하는 방법, LlamaParse API 사용법, 실전 예제 코드, 그리고 피어 리뷰를 통해 개선된 완성본을 포함한다.
 # LlamaParse
 
 - Author: [syshin0116](https://github.com/syshin0116)

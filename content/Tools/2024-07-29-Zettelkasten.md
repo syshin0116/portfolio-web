@@ -10,14 +10,10 @@ tags:
 draft: false
 enableToc: true
 description: Zettelkasten 노트 작성 시스템의 원리와 Second Brain 구축 방법
-summary: Zettelkasten 노트 작성 시스템의 원리와 Second Brain 구축 방법
+summary: "Zettelkasten은 독일어로 '카드 상자'를 의미하며, 지식을 연결하여 저장하는 강력한 노트 작성 시스템이다. 각 아이디어를 개별 노트로 작성하고 서로 연결하는 방식으로 Second Brain을 구축하며, Obsidian과 같은 도구를 활용하여 효과적인 개인 지식 관리 시스템(PKM)을 만들 수 있다."
 published: 2024-07-29
 modified: 2024-07-29
 ---
-
-> [!summary]
-> Zettelkasten은 독일어로 '카드 상자'를 의미하며, 지식을 연결하여 저장하는 강력한 노트 작성 시스템이다. 각 아이디어를 개별 노트로 작성하고 서로 연결하는 방식으로 Second Brain을 구축하며, Obsidian과 같은 도구를 활용하여 효과적인 개인 지식 관리 시스템(PKM)을 만들 수 있다.
-
 ## What is Zettelkasten?
 - means "books of cards" in German
 - a method to deal with knowledge in your life

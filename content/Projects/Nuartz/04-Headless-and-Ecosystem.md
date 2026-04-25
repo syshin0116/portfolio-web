@@ -10,12 +10,8 @@ tags:
 draft: false
 enableToc: true
 description: Nuartz를 UI 없는 데이터 레이어로 유지하기로 결정한 이유, 그리고 개인 블로그/포트폴리오를 포함한 레포 생태계를 어떻게 재편했는지 기록한다.
-summary: Nuartz를 headless로 유지하기로 했다. 공식 데모 사이트와 개인 포트폴리오가 UI가 달라야 해서, packages/nuartz는 데이터 레이어만 export한다. 기존 4개 레포(syshin0116.github.io, portfolio-web, portfolio-ai, nuartz)를 nuartz + syshin0116.dev + blog-rag 3개로 재편했다.
+summary: "Nuartz를 headless로 유지하기로 했다. 공식 데모 사이트와 개인 포트폴리오가 UI가 달라야 해서, packages/nuartz는 데이터 레이어만 export한다. 기존 4개 레포(syshin0116.github.io, portfolio-web, portfolio-ai, nuartz)를 nuartz + syshin0116.dev + blog-rag 3개로 재편했다."
 ---
-
-> [!summary]
-> Nuartz를 headless로 유지하기로 했다. 공식 데모 사이트와 개인 포트폴리오가 UI가 달라야 해서, packages/nuartz는 데이터 레이어만 export한다. 기존 4개 레포(syshin0116.github.io, portfolio-web, portfolio-ai, nuartz)를 nuartz + syshin0116.dev + blog-rag 3개로 재편했다.
-
 > [!info] 이전 글
 > Nuartz 첫 배포 과정은 [[03-Vercel-Deployment|이전 글]]에서 다뤘다.
 

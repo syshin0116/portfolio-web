@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: LangChain Open Tutorial 오픈소스 프로젝트 7주간의 기여 경험 회고록
-summary: LangChain Open Tutorial 오픈소스 프로젝트 7주간의 기여 경험 회고록
+summary: "TeddyNote의 LangChain 오픈소스 튜토리얼 프로젝트에 7주간 기여한 경험을 정리한 회고록이다. 2,000+ 커밋의 활발한 프로젝트에서 튜토리얼 번역, 새로운 콘텐츠 작성, 코드 구현을 담당하며 얻은 배움과 성장, 그리고 오픈소스 협업의 가치를 공유한다."
 published: 2025-02-24
 modified: 2025-02-24
 ---
-
-> [!summary]
-> TeddyNote의 LangChain 오픈소스 튜토리얼 프로젝트에 7주간 기여한 경험을 정리한 회고록이다. 2,000+ 커밋의 활발한 프로젝트에서 튜토리얼 번역, 새로운 콘텐츠 작성, 코드 구현을 담당하며 얻은 배움과 성장, 그리고 오픈소스 협업의 가치를 공유한다.
-
 ## 배경
 
 유튜버 **TeddyNote님**이 최근 가장 관심 있어하는 **RAG(Retrieval-Augmented Generation)** 관련 **LangChain 오픈소스 튜토리얼** 기여자를 모집한다는 소식을 접했다. 단순히 팬으로서가 아니라, **관심 있는 주제에 직접 기여할 수 있는 기회**라는 점에서 매력적이었다. 특히, 규모 있는 오픈소스 프로젝트에 참여하고, 다양한 사람들과 협업하는 경험이 처음이라 더욱 기대되었다.

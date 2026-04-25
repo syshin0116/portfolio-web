@@ -15,19 +15,10 @@ tags:
 draft: false
 enableToc: true
 description: MinerU는 PDF 문서를 Markdown과 JSON으로 고품질 변환해주는 오픈소스 데이터 추출 도구이다.
-summary: MinerU는 복잡한 PDF 파일을 구조화된 Markdown과 JSON으로 고품질 변환하는 오픈소스 도구다. PDF-Extract-Kit,
-  DocLayout-YOLO, StructEqTable, RapidTable 등 최신 문서 처리 기술을 통합하여 정교한 레이아웃 분석과 요소 추출을
-  제공한다. PaddleOCR로 텍스트 인식, PyMuPDF로 PDF 처리, layoutreader로 구조 분석, fast-langdetect로
-  언어 감지, pdfminer.six로 기본 파싱을 수행한다. 복잡한 레이아웃, 표, 수식, 이미지 등을 정확하게 인식하여 변환하며, CPU/GPU/NPU
-  가속을 지원해 효율적인 처리가 가능하다. AGPL-3 라이센스 제약이 있지만 PDF 파싱 성능은 최고 수준이다.
+summary: "MinerU는 복잡한 PDF 파일을 구조화된 Markdown과 JSON으로 고품질 변환하는 오픈소스 도구다. PDF-Extract-Kit, DocLayout-YOLO, StructEqTable, RapidTable 등 최신 문서 처리 기술을 통합하여 정교한 레이아웃 분석과 요소 추출을 제공한다. PaddleOCR로 텍스트 인식, PyMuPDF로 PDF 처리, layoutreader로 구조 분석, fast-langdetect로 언어 감지, pdfminer.six로 기본 파싱을 수행한다. 복잡한 레이아웃, 표, 수식, 이미지 등을 정확하게 인식하여 변환하며, CPU/GPU/NPU 가속을 지원해 효율적인 처리가 가능하다. AGPL-3 라이센스 제약이 있지만 PDF 파싱 성능은 최고 수준이다."
 published: 2025-04-03
 modified: 2025-04-03
 ---
-
-> [!summary]
->
-> MinerU는 복잡한 PDF 파일을 구조화된 Markdown과 JSON으로 고품질 변환하는 오픈소스 도구다. PDF-Extract-Kit, DocLayout-YOLO, StructEqTable, RapidTable 등 최신 문서 처리 기술을 통합하여 정교한 레이아웃 분석과 요소 추출을 제공한다. PaddleOCR로 텍스트 인식, PyMuPDF로 PDF 처리, layoutreader로 구조 분석, fast-langdetect로 언어 감지, pdfminer.six로 기본 파싱을 수행한다. 복잡한 레이아웃, 표, 수식, 이미지 등을 정확하게 인식하여 변환하며, CPU/GPU/NPU 가속을 지원해 효율적인 처리가 가능하다. AGPL-3 라이센스 제약이 있지만 PDF 파싱 성능은 최고 수준이다.
-
 ## MinerU 소개
 
 RAG(Retrieval-Augmented Generation) 시스템 구축을 위해 PDF 파서를 찾던 중 발견한 MinerU는 내가 찾던 대부분의 조건을 충족시키는 도구다. [[RAG용 PDF Loader 비교]] 문서에서 다룬 다른 PDF 로더들과 비교했을 때, 특히 레이아웃 분석과 문서 구조 이해 측면에서 뛰어난 성능을 보여준다. [[LayoutLM]]과 같은 최신 문서 이해 기술을 활용하여 복잡한 문서 구조도 정확하게 처리할 수 있다.

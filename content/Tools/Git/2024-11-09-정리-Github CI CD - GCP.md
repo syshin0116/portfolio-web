@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: GitHub Actions와 GCP를 연동한 CI/CD 파이프라인 개념 및 구조 정리
-summary: GitHub Actions와 GCP를 연동한 CI/CD 파이프라인 개념 및 구조 정리
+summary: "GitHub Actions와 GCP를 연동하여 CI/CD 파이프라인을 구축하는 개념과 구조를 정리한 문서이다. 지속적 통합(CI)과 지속적 배포(CD)의 원리, GitHub Actions 워크플로우 구성, GCP 서비스 활용, 그리고 전체 시스템 아키텍처를 개념적으로 이해한다."
 published: 2024-11-09
 modified: 2024-11-09
 ---
-
-> [!summary]
-> GitHub Actions와 GCP를 연동하여 CI/CD 파이프라인을 구축하는 개념과 구조를 정리한 문서이다. 지속적 통합(CI)과 지속적 배포(CD)의 원리, GitHub Actions 워크플로우 구성, GCP 서비스 활용, 그리고 전체 시스템 아키텍처를 개념적으로 이해한다.
-
 ## Intro:
 
 GCP에 개인 서버를 만들고, 관리하려는데, CI/CD를 만들어놔야 시간 절약을 할 수 있을것 같아 공부해보려 한다.

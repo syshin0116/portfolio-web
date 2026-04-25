@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: 효율적인 채팅 기록 저장과 확장 가능한 구조 설계 - Chat Session과 Messages 분리
-summary: 효율적인 채팅 기록 저장과 확장 가능한 구조 설계 - Chat Session과 Messages 분리
+summary: "Modular RAG 챗봇의 효율적인 채팅 기록 저장 방식을 설계한 내용이다. Chat Session과 Chat Messages를 분리하여 저장하는 구조, 일반 챗봇과 카카오톡 봇 모두에 적합한 설계, 확장 가능한 데이터베이스 스키마, 그리고 실시간 채팅과 히스토리 조회를 모두 지원하는 아키텍처를 포함한다."
 published: 2024-11-17
 modified: 2024-11-17
 ---
-
-> [!summary]
-> Modular RAG 챗봇의 효율적인 채팅 기록 저장 방식을 설계한 내용이다. Chat Session과 Chat Messages를 분리하여 저장하는 구조, 일반 챗봇과 카카오톡 봇 모두에 적합한 설계, 확장 가능한 데이터베이스 스키마, 그리고 실시간 채팅과 히스토리 조회를 모두 지원하는 아키텍처를 포함한다.
-
 ## 효율적인 Chat History 저장과 확장 가능한 구조 설계
 
 챗봇을 설계하다, 기본적인 채팅 기록 저장 방식에 대해 고민하게 되었다. 일반적으로 채팅 기록을 저장하는 방법은 **Chat Session**과 **Chat Messages**로 나눌 수 있다. 기본적인 저장 방식에 추가로 고려한 기능, 이를 구현하기 위한 구조, 그리고 일반적인 챗봇과 카카오톡 봇 모두에 적합한 설계를 정리해 보았다.

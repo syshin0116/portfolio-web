@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: 챗봇의 단기 기억과 장기 기억 구현 - 사람처럼 기억하는 AI 시스템 설계
-summary: 챗봇의 단기 기억과 장기 기억 구현 - 사람처럼 기억하는 AI 시스템 설계
+summary: "Modular RAG 챗봇이 사람처럼 기억할 수 있도록 Short Term Memory와 Long Term Memory를 구현한 설계 내용이다. 각 채팅방에서 최신 정보는 단기 기억으로, 중요한 정보는 장기 기억으로 저장하여 효율적인 메모리 관리와 자연스러운 대화 경험을 제공하는 방법을 다룬다."
 published: 2024-12-22
 modified: 2024-12-22
 ---
-
-> [!summary]
-> Modular RAG 챗봇이 사람처럼 기억할 수 있도록 Short Term Memory와 Long Term Memory를 구현한 설계 내용이다. 각 채팅방에서 최신 정보는 단기 기억으로, 중요한 정보는 장기 기억으로 저장하여 효율적인 메모리 관리와 자연스러운 대화 경험을 제공하는 방법을 다룬다.
-
 ## Intro
 Memory 기능을 구현하는데 어떻게 하면 챗봇이 사람처럼 기억을 할 수 있을까, 어떻게 구현하면 가장 도움이 될까 고민했다. 고민 결과, 각 채팅방에 중요 정보는 Long Term memory로, 최신 정보는 Shot Term memory로 구현하고자 한다.
 

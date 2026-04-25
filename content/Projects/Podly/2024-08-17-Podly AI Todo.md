@@ -12,14 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: Podly 프로젝트 AI 기능 개발을 위한 상세 작업 계획 및 Todo 리스트
-summary: Podly 프로젝트 AI 기능 개발을 위한 상세 작업 계획 및 Todo 리스트
+summary: "Podly 프로젝트의 AI 기능 개발을 위한 종합 작업 계획이다. LangChain을 활용한 뉴스 요약 및 콘텐츠 생성 모델 개발, RAG 시스템 구현, 프롬프트 엔지니어링, AI 서비스 최적화까지 전체 AI 개발 과정의 체계적인 Todo 리스트를 포함한다."
 published: 2024-08-17
 modified: 2024-08-17
 ---
-
-> [!summary]
-> Podly 프로젝트의 AI 기능 개발을 위한 종합 작업 계획이다. LangChain을 활용한 뉴스 요약 및 콘텐츠 생성 모델 개발, RAG 시스템 구현, 프롬프트 엔지니어링, AI 서비스 최적화까지 전체 AI 개발 과정의 체계적인 Todo 리스트를 포함한다.
-
 ### **1. AI 모델 설계 및 구현**
 
 - [ ]  **뉴스 요약 및 콘텐츠 생성 모델 개발**

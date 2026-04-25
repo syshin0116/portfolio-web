@@ -11,13 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: LangChain 기반 Web Search 시스템 연구 - Language Agent Tree Search, Plan-and-Execute
-summary: LangChain 기반 Web Search 시스템 연구 - Language Agent Tree Search, Plan-and-Execute
+summary: "LangChain Open Tutorial에서 Web Search 시스템을 개발하기 위한 연구 자료 정리이다. Language Agent Tree Search, WebLangChain, Plan-and-Execute Agents 등 주요 논문과 기술을 분석하여 효과적인 웹 검색 에이전트 구현 방법을 탐구한다."
 published: 2025-01-18
 modified: 2025-01-18
 ---
-
-> [!summary]
-> LangChain Open Tutorial에서 Web Search 시스템을 개발하기 위한 연구 자료 정리이다. Language Agent Tree Search, WebLangChain, Plan-and-Execute Agents 등 주요 논문과 기술을 분석하여 효과적인 웹 검색 에이전트 구현 방법을 탐구한다.
 ## Research
 
 - [Language Agent Tree Search Unifies Reasoning Acting and Planning in Language Models](https://arxiv.org/abs/2310.04406)

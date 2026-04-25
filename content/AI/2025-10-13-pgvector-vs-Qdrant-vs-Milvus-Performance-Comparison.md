@@ -15,18 +15,10 @@ draft: false
 enableToc: true
 description: 2025년 최신 버전을 기준으로 pgvector (PostgreSQL 18), Qdrant 1.15, Milvus 2.6의
   실제 성능, 기능, 비용을 상세 비교한다. 데이터 삽입, 검색 속도, 필터링, 확장성, 실전 시나리오별 권장사항을 다룬다.
-summary: 2025년 현재 주요 벡터 데이터베이스인 **pgvector (PostgreSQL 18)**, **Qdrant 1.15**, **Milvus
-  2.6**의 상세 성능 비교다. PostgreSQL 18의 비동기 I/O는 pgvector의 처리량을 11.4배 향상시켰고, Milvus 2.6은
-  72% 메모리 절약과 4배 QPS 향상을 달성했으며, Qdrant 1.15는 sparse vector 성능을 16배 개선했다. 각 DB는 뚜렷한
-  강점을 가지며, 사용 사례에 따라 최적 선택이 달라진다.
+summary: "2025년 현재 주요 벡터 데이터베이스인 **pgvector (PostgreSQL 18)**, **Qdrant 1.15**, **Milvus 2.6**의 상세 성능 비교다. PostgreSQL 18의 비동기 I/O는 pgvector의 처리량을 11.4배 향상시켰고, Milvus 2.6은 72% 메모리 절약과 4배 QPS 향상을 달성했으며, Qdrant 1.15는 sparse vector 성능을 16배 개선했다. 각 DB는 뚜렷한 강점을 가지며, 사용 사례에 따라 최적 선택이 달라진다."
 published: 2025-10-13
 modified: 2025-10-13
 ---
-
-> [!summary]
->
-> 2025년 현재 주요 벡터 데이터베이스인 **pgvector (PostgreSQL 18)**, **Qdrant 1.15**, **Milvus 2.6**의 상세 성능 비교다. PostgreSQL 18의 비동기 I/O는 pgvector의 처리량을 11.4배 향상시켰고, Milvus 2.6은 72% 메모리 절약과 4배 QPS 향상을 달성했으며, Qdrant 1.15는 sparse vector 성능을 16배 개선했다. 각 DB는 뚜렷한 강점을 가지며, 사용 사례에 따라 최적 선택이 달라진다.
-
 ## 테스트 환경 및 버전
 
 ### 비교 대상 버전

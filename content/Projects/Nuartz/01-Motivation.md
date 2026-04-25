@@ -10,12 +10,8 @@ tags:
 draft: false
 enableToc: true
 description: Quartz 기반 블로그의 UI 한계를 느끼고, Next.js + shadcn/ui + AI Agent를 결합한 디지털 가든 nuartz를 기획하기까지의 기술 의사결정 과정을 기록한다.
-summary: Obsidian으로 노트를 관리하다 웹 퍼블리싱이 필요해졌고, Obsidian 호환성이 가장 좋은 Quartz를 선택했다. 그런데 UI 커스터마이징 한계와 AI Agent 연동 욕심이 생기면서 shadcn/ui + Next.js 기반으로 직접 다시 만들기로 했다. 처음엔 Quartz를 통째로 래핑하는 전략을 썼다가 구조적 문제를 발견했고, 결국 필요한 것만 가져오는 현실적인 전략으로 방향을 바꿨다.
+summary: "Obsidian으로 노트를 관리하다 웹 퍼블리싱이 필요해졌고, Obsidian 호환성이 가장 좋은 Quartz를 선택했다. 그런데 UI 커스터마이징 한계와 AI Agent 연동 욕심이 생기면서 shadcn/ui + Next.js 기반으로 직접 다시 만들기로 했다. 처음엔 Quartz를 통째로 래핑하는 전략을 썼다가 구조적 문제를 발견했고, 결국 필요한 것만 가져오는 현실적인 전략으로 방향을 바꿨다. 이 글은 그 과정에서 고민한 것들의 기록이다."
 ---
-
-> [!summary]
-> Obsidian으로 노트를 관리하다 웹 퍼블리싱이 필요해졌고, Obsidian 호환성이 가장 좋은 Quartz를 선택했다. 그런데 UI 커스터마이징 한계와 AI Agent 연동 욕심이 생기면서 shadcn/ui + Next.js 기반으로 직접 다시 만들기로 했다. 처음엔 Quartz를 통째로 래핑하는 전략을 썼다가 구조적 문제를 발견했고, 결국 필요한 것만 가져오는 현실적인 전략으로 방향을 바꿨다. 이 글은 그 과정에서 고민한 것들의 기록이다.
-
 > [!info] 아이러니
 > 이 글 자체는 Quartz 위에서 작성되고 서빙된다. nuartz가 완성되면 이 글도 그 위에서 보이게 될 것이다.
 

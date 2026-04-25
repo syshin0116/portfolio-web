@@ -11,13 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: LEGO 블록처럼 조합 가능한 Modular RAG 시스템 설계 - 재사용 가능한 RAG 모듈 구축
-summary: LEGO 블록처럼 조합 가능한 Modular RAG 시스템 설계 - 재사용 가능한 RAG 모듈 구축
+summary: "Naive RAG와 Advanced RAG를 넘어 Modular RAG 방식으로 진화한 설계 내용이다. LEGO 블록처럼 모듈을 조합하여 재사용 가능한 RAG 자산을 구축하는 것이 목표이며, 시스템의 유연성과 확장성을 크게 향상시켜 다양한 애플리케이션 요구사항에 맞게 모듈을 조합하고 최적화할 수 있는 아키텍처를 제시한다."
 published: 2024-10-20
 modified: 2024-10-20
 ---
-
-> [!summary]
-> Naive RAG와 Advanced RAG를 넘어 Modular RAG 방식으로 진화한 설계 내용이다. LEGO 블록처럼 모듈을 조합하여 재사용 가능한 RAG 자산을 구축하는 것이 목표이며, 시스템의 유연성과 확장성을 크게 향상시켜 다양한 애플리케이션 요구사항에 맞게 모듈을 조합하고 최적화할 수 있는 아키텍처를 제시한다.
 Naive RAG에 여러 RAG를 하기 위해 Advanced RAG를 충분히 다뤘다고 생각한다. 하지만, 점점 더 복잡한 작업을 최소화하고 효율성을 높이기 위해 Modular RAG 방식을 적용하고자 한다. 마치 LEGO 블록처럼 모듈들을 쌓아가며 나만의 재사용 가능한 RAG 자산을 구축하는 것이 목표다. Modular RAG는 시스템의 유연성과 확장성을 크게 향상시킬 수 있어, 이를 통해 다양한 애플리케이션 요구 사항에 맞게 모듈을 조합하고 최적화하는 방향으로 발전시키고자 한다
 
 Modular RAG 논문: [https://arxiv.org/html/2407.21059v1](https://arxiv.org/html/2407.21059v1)

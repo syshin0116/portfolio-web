@@ -12,16 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: LangChain에서 사용 가능한 다양한 PDF Loader 라이브러리들의 특징과 성능을 비교 분석한 문서
-summary: RAG 시스템의 성능은 PDF 문서에서 얼마나 정확하게 텍스트와 이미지를 추출하는지에 크게 의존한다. PyMuPDF와 PyPDFium2
-  같은 Loader들은 각각 고유한 장단점을 가지고 있으며, 사용 목적에 따라 적절한 선택이 필요하다.
+summary: "RAG 시스템의 성능은 PDF 문서에서 얼마나 정확하게 텍스트와 이미지를 추출하는지에 크게 의존한다. PyMuPDF와 PyPDFium2 같은 Loader들은 각각 고유한 장단점을 가지고 있으며, 사용 목적에 따라 적절한 선택이 필요하다."
 published: 2024-05-22
 modified: 2024-05-22
 ---
-
-> [!summary]
-> 
-> RAG 시스템의 성능은 PDF 문서에서 얼마나 정확하게 텍스트와 이미지를 추출하는지에 크게 의존한다. PyMuPDF와 PyPDFium2 같은 Loader들은 각각 고유한 장단점을 가지고 있으며, 사용 목적에 따라 적절한 선택이 필요하다.
-
 ## 개요
 
 RAG 성능 향상 방법엔 여러가지 기법이 있지만, 기본적으로 자료에서 Document를 얼마나 잘 가져오느냐가 중요하다. 특히, Hallucination 확인, 자세한 출처 표기, 그리고 알맞은 image extraction을 위해, 성능이 좋은 PDF Loader는 필수적이다. [[LangChain]]에서 제공하는 다양한 PDF Loader들의 특징과 성능을 비교해보자.

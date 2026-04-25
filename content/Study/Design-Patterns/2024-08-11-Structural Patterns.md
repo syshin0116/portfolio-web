@@ -10,7 +10,7 @@ tags:
 - Pattern
 draft: false
 enableToc: true
-summary: 객체들의 조합을 통해 더 큰 구조를 만드는 디자인 패턴들을 다룬다. Adapter, Decorator, Facade, Proxy, Bridge 등 구조 패턴의 개념, 특징, 장단점, 실제 구현 예시를 포함한다.
+summary: "Structural Patterns에 대한 내용을 다룬다."
 published: 2024-08-11 17:47 +0900
 modified: 2024-08-11 17:47 +0900
 layout: post
@@ -19,11 +19,6 @@ categories:
 - Design Pattern
 math: true
 ---
-
-> [!summary]
-> 
-> Structural Patterns에 대한 내용을 다룬다.
-
 ## Adapter
 
 ### Adapter 이란?

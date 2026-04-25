@@ -12,15 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: LangChain을 활용한 LLM 애플리케이션 개발 강의 전체 내용 정리
-summary: LangChain을 활용한 LLM 애플리케이션 개발 강의 전체 내용 정리
+summary: "DeepLearning.AI의 LangChain 강의 전체 내용을 정리한 노트이다. LangChain의 핵심 컴포넌트(Models, Prompts, Indexes, Chains, Agents), 프롬프트 템플릿 활용법, 출력 파서, 메모리 관리, RAG 구현, Document Loaders와 Text Splitters, Vector Stores와 Embeddings, Question Answering, Evaluation, Agents와 Tools 활용까지 LLM 애플리케이션 개발의 전 과정을 포괄한다."
 published: 2024-03-02
 modified: 2024-03-02
 ---
-
-> [!summary]
-> DeepLearning.AI의 LangChain 강의 전체 내용을 정리한 노트이다. LangChain의 핵심 컴포넌트(Models, Prompts, Indexes, Chains, Agents), 프롬프트 템플릿 활용법, 출력 파서, 메모리 관리, RAG 구현, Document Loaders와 Text Splitters, Vector Stores와 Embeddings, Question Answering, Evaluation, Agents와 Tools 활용까지 LLM 애플리케이션 개발의 전 과정을 포괄한다.
-
-
 [https://www.deeplearning.ai/short-courses/langchain-for-llm-application-development/](https://www.deeplearning.ai/short-courses/langchain-for-llm-application-development/)
 
 ## Components

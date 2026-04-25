@@ -9,7 +9,7 @@ tags:
 - 교육
 draft: false
 enableToc: true
-summary: '<table border="1" class="dataframe"> <tr style="text-align: right;">'
+summary: "<table border=\"1\" class=\"dataframe\"> <tr style=\"text-align: right;\">"
 published: 2023-11-30 16:09 +0900
 modified: 2023-11-30 16:09 +0900
 layout: post
@@ -18,12 +18,6 @@ categories:
 - NLP
 math: true
 ---
-
-> [!summary]
-> 
-> <table border="1" class="dataframe"> <tr style="text-align: right;">
-
-
 ```python
 import numpy as np
 import matplotlib.pyplot as plt

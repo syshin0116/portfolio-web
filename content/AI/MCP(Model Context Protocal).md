@@ -13,15 +13,13 @@ tags:
 draft: false
 enableToc: true
 description: Anthropic에서 개발한 MCP(Model Context Protocol)의 개념, 구조 및 활용에 대한 설명
-summary: Anthropic에서 개발한 MCP(Model Context Protocol)의 개념, 구조 및 활용에 대한 설명
+summary: |
+  MCP(Model Context Protocol)는 Anthropic에서 개발한 개방형 프로토콜로, AI 모델과 외부 데이터/도구를 표준화된 방식으로 연결한다.
+  USB-C와 같이 AI 애플리케이션과 다양한 데이터 소스 간의 통합을 단순화하며, 클라이언트-서버 구조를 통해 안전하고 확장 가능한 AI 시스템 구축을 지원한다.
+  Smithery를 통해 3,200개 이상의 MCP 서버에 접근할 수 있으며, Cursor와 Claude에서 쉽게 설정하여 사용할 수 있다.
 published: 2025-03-31
 modified: 2025-03-31
 ---
-> [!summary]
-> MCP(Model Context Protocol)는 Anthropic에서 개발한 개방형 프로토콜로, AI 모델과 외부 데이터/도구를 표준화된 방식으로 연결한다.
-> USB-C와 같이 AI 애플리케이션과 다양한 데이터 소스 간의 통합을 단순화하며, 클라이언트-서버 구조를 통해 안전하고 확장 가능한 AI 시스템 구축을 지원한다.
-> Smithery를 통해 3,200개 이상의 MCP 서버에 접근할 수 있으며, Cursor와 Claude에서 쉽게 설정하여 사용할 수 있다.
-
 ## 개요
 
 ### MCP란?

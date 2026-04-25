@@ -7,9 +7,7 @@ tags:
 - python
 draft: false
 enableToc: true
-summary: '출처: [Programmers > 코딩테스트 연습 > 연습문제 > 동적계획법(Dynamic Programming) > 정수 삼각형"](https://school.programmers.co.kr/learn/courses/30/lessons/43105)
-  위와 같은 삼각형의 꼭대기에서 바닥까지 이어지는 경로 중, 거쳐간 숫자의 합이 가장 큰 경우를 찾아보려고 합니다. 아래 칸으로 이동할 때는 대각선
-  방향으로 한 칸 오른쪽 또는 왼쪽으로만 이동 가능합니다. 예를 들어 3에서는 그 아래칸의 8 또는 1로만 이동이 가능합니다.'
+summary: "출처: [Programmers > 코딩테스트 연습 > 연습문제 > 동적계획법(Dynamic Programming) > 정수 삼각형\"](https://school.programmers.co.kr/learn/courses/30/lessons/43105) 위와 같은 삼각형의 꼭대기에서 바닥까지 이어지는 경로 중, 거쳐간 숫자의 합이 가장 큰 경우를 찾아보려고 합니다. 아래 칸으로 이동할 때는 대각선 방향으로 한 칸 오른쪽 또는 왼쪽으로만 이동 가능합니다. 예를 들어 3에서는 그 아래칸의 8 또는 1로만 이동이 가능합니다."
 published: 2023-05-01 10:31:29 +0900
 modified: 2023-05-01 10:31:29 +0900
 layout: post
@@ -17,12 +15,6 @@ categories:
 - Code-Test
 - Programmers
 ---
-
-> [!summary]
-> 
-> 출처: [Programmers > 코딩테스트 연습 > 연습문제 > 동적계획법(Dynamic Programming) > 정수 삼각형"](https://school.programmers.co.kr/learn/courses/30/lessons/43105) 위와 같은 삼각형의 꼭대기에서 바닥까지 이어지는 경로 중, 거쳐간 숫자의 합이 가장 큰 경우를 찾아보려고 합니다. 아래 칸으로 이동할 때는 대각선 방향으로 한 칸 오른쪽 또는 왼쪽으로만 이동 가능합니다. 예를 들어 3에서는 그 아래칸의 8 또는 1로만 이동이 가능합니다.
-
-
 출처: [Programmers > 코딩테스트 연습 > 연습문제 > 동적계획법(Dynamic Programming) > 정수 삼각형"](https://school.programmers.co.kr/learn/courses/30/lessons/43105)
 
 ## 문제 설명:

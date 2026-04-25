@@ -289,6 +289,13 @@ export default async function BlogPostPage({
 
         <Separator className="mb-8" />
 
+        {frontmatter.summary && (
+          <div className="callout callout-summary not-prose mb-8" data-callout="summary">
+            <div className="callout-title">Summary</div>
+            <p>{frontmatter.summary as string}</p>
+          </div>
+        )}
+
         <HeadingAnchors />
         <PopoverPreview />
         <article

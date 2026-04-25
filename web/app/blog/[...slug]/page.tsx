@@ -280,11 +280,6 @@ export default async function BlogPostPage({
               </div>
             )}
           </div>
-          {frontmatter.description && (
-            <p className="mt-3 text-base text-muted-foreground">
-              {frontmatter.description}
-            </p>
-          )}
         </header>
 
         <Separator className="mb-8" />

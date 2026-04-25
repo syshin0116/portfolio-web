@@ -180,9 +180,10 @@ function setFrontmatterSummary(fm: string, value: string): string {
         while (j < lines.length && (/^\s+/.test(lines[j]) || lines[j] === "")) j++
         return [...lines.slice(0, i), encoded, ...lines.slice(j)].join("\n")
       }
-      // Inline scalar — but YAML allows folded continuation on subsequent indented lines
+      // Inline scalar — YAML continuation = anything that's not a new top-level key.
+      // Lines starting with letter+colon at column 0 indicate the next key.
       let j = i + 1
-      while (j < lines.length && /^\s+\S/.test(lines[j])) j++
+      while (j < lines.length && !/^[A-Za-z_][\w-]*:/.test(lines[j])) j++
       return [...lines.slice(0, i), encoded, ...lines.slice(j)].join("\n")
     }
     i++

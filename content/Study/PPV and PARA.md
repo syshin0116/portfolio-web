@@ -10,17 +10,10 @@ tags:
 draft: false
 enableToc: true
 description: PPV와 PARA 지식 관리 시스템의 개념과 구조를 비교 설명
-summary: 이 문서는 두 가지 주요 지식 관리 시스템인 PPV(Pillars, Pipelines, Vaults)와 PARA(Projects,
-  Areas, Resources, Archives)의 개념과 특징을 비교 설명한다. PPV는 조직이나 시스템의 성공적 운영을 위한 세 가지 핵심
-  구성요소를 나타내며, PARA는 Tiago Forte가 개발한 개인 지식 관리를 위한 체계적 방법론이다. 두 시스템 모두 정보를 구조화하고 효율적으로
-  관리하는 방법을 제공하지만, 각각의 초점과 적용 영역에 차이가 있다.
+summary: "이 문서는 두 가지 주요 지식 관리 시스템인 PPV(Pillars, Pipelines, Vaults)와 PARA(Projects, Areas, Resources, Archives)의 개념과 특징을 비교 설명한다. PPV는 조직이나 시스템의 성공적 운영을 위한 세 가지 핵심 구성요소를 나타내며, PARA는 Tiago Forte가 개발한 개인 지식 관리를 위한 체계적 방법론이다. 두 시스템 모두 정보를 구조화하고 효율적으로 관리하는 방법을 제공하지만, 각각의 초점과 적용 영역에 차이가 있다."
 published: 2023-06-25
 modified: 2023-06-25
 ---
-> [!summary]
-> 
-> 이 문서는 두 가지 주요 지식 관리 시스템인 PPV(Pillars, Pipelines, Vaults)와 PARA(Projects, Areas, Resources, Archives)의 개념과 특징을 비교 설명한다. PPV는 조직이나 시스템의 성공적 운영을 위한 세 가지 핵심 구성요소를 나타내며, PARA는 Tiago Forte가 개발한 개인 지식 관리를 위한 체계적 방법론이다. 두 시스템 모두 정보를 구조화하고 효율적으로 관리하는 방법을 제공하지만, 각각의 초점과 적용 영역에 차이가 있다.
-
 ## 개요
 
 최근 관심을 갖게 된 PARA를 노션 팀 프로젝트 페이지에 적용할 수 있는지 고민하던 중, 우연히 유튜브에서 PPV 방법론을 접하게 되었다. 이 문서에서는 두 시스템을 비교하여 각각의 장단점과 적용 방안을 살펴본다.

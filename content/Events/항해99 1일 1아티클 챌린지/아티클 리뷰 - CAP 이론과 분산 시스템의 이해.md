@@ -10,19 +10,10 @@ tags:
 draft: false
 enableToc: true
 description: CAP 이론의 핵심 개념과 분산 시스템에서의 트레이드오프에 대한 아티클을 읽고 리뷰한다.
-summary: '이 글은 IBM의 "What is the CAP theorem?" 아티클에 대한 리뷰이다. 원문에서는 분산 시스템에서 일관성(Consistency),
-  가용성(Availability), 분할 허용성(Partition tolerance) 중 동시에 두 가지만 제공할 수 있다는 CAP 이론의 핵심
-  개념과 실제 데이터베이스 시스템에서의 적용을 설명하고 있다. 이 리뷰에서는 특히 "Cheap, Fast, and Good: Pick Two"라는
-  비유를 통해 복잡한 개념을 이해하기 쉽게 설명한 접근 방식을 높이 평가하고, CP 데이터베이스인 MongoDB와 AP 데이터베이스인 Cassandra의
-  특성을 비교하며, 마이크로서비스 아키텍처에서의 데이터베이스 선택에 대한 저자의 관점을 공유한다.'
+summary: "이 글은 IBM의 \"What is the CAP theorem?\" 아티클에 대한 리뷰이다. 원문에서는 분산 시스템에서 일관성(Consistency), 가용성(Availability), 분할 허용성(Partition tolerance) 중 동시에 두 가지만 제공할 수 있다는 CAP 이론의 핵심 개념과 실제 데이터베이스 시스템에서의 적용을 설명하고 있다. 이 리뷰에서는 특히 \"Cheap, Fast, and Good: Pick Two\"라는 비유를 통해 복잡한 개념을 이해하기 쉽게 설명한 접근 방식을 높이 평가하고, CP 데이터베이스인 MongoDB와 AP 데이터베이스인 Cassandra의 특성을 비교하며, 마이크로서비스 아키텍처에서의 데이터베이스 선택에 대한 저자의 관점을 공유한다."
 published: 2025-04-21
 modified: 2025-04-21
 ---
-
-> [!summary]
->
-> 이 글은 IBM의 "What is the CAP theorem?" 아티클에 대한 리뷰이다. 원문에서는 분산 시스템에서 일관성(Consistency), 가용성(Availability), 분할 허용성(Partition tolerance) 중 동시에 두 가지만 제공할 수 있다는 CAP 이론의 핵심 개념과 실제 데이터베이스 시스템에서의 적용을 설명하고 있다. 이 리뷰에서는 특히 "Cheap, Fast, and Good: Pick Two"라는 비유를 통해 복잡한 개념을 이해하기 쉽게 설명한 접근 방식을 높이 평가하고, CP 데이터베이스인 MongoDB와 AP 데이터베이스인 Cassandra의 특성을 비교하며, 마이크로서비스 아키텍처에서의 데이터베이스 선택에 대한 저자의 관점을 공유한다.
-
 > [!info]
 > 이 글은 [[항해99 1일 1아티클 챌린지|항해99 1일 1아티클 챌린지]] 참여 글입니다.
 > - [챌린지 페이지 바로가기](https://99clubarticle.vercel.app/)

@@ -11,16 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: MCP 도구를 쉽게 호스팅하고 사용할 수 있는 플랫폼 Hostit의 설치 및 사용 가이드
-summary: MCP 도구를 쉽게 호스팅하고 사용할 수 있는 플랫폼 Hostit의 설치 및 사용 가이드
+summary: "MCP 도구를 쉽게 호스팅하고 사용할 수 있는 플랫폼 Hostit의 설치 및 사용 가이드"
 published: 2025-05-04
 modified: 2025-05-04
 ---
-
-> [!summary]
-> 
-> MCP 도구를 쉽게 호스팅하고 사용할 수 있는 플랫폼 Hostit의 설치 및 사용 가이드
-
-
 # Host it!
 
 <p align="center">

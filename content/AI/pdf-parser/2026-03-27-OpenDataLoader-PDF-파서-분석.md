@@ -11,15 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: OpenDataLoader PDF v2.1.1의 READoc 벤치마크 결과와 파싱 예시를 분석한다. Java 기반 Apache 2.0 파서로, 72.6% Edit Similarity에 ~3초/문서 속도를 보여주지만, 테이블 구조 보존과 수식 LaTeX 변환에 한계가 있다.
-summary: OpenDataLoader PDF v2는 Hancom이 개발한 Java 기반 Apache 2.0 PDF 파서다. READoc 벤치마크에서 72.6% Edit Similarity(91% 성공률)를 달성했다. 이미지 추출을 지원하고 XY-Cut++ 읽기 순서 알고리즘을 사용하지만, 테이블은 구조 없이 텍스트로 추출되고 수식 LaTeX 변환은 미지원이다.
+summary: "OpenDataLoader PDF v2는 Hancom이 개발한 Java 기반 Apache 2.0 PDF 파서다. READoc 72.6%, 91% 성공률, ~3초/문서. 이미지 추출 O, 하지만 테이블 구조 보존과 수식 LaTeX 변환은 미지원."
 published: 2026-03-27
 modified: 2026-03-27
 ---
-
-> [!summary]
->
-> OpenDataLoader PDF v2는 Hancom이 개발한 Java 기반 Apache 2.0 PDF 파서다. READoc 72.6%, 91% 성공률, ~3초/문서. 이미지 추출 O, 하지만 테이블 구조 보존과 수식 LaTeX 변환은 미지원.
-
 ## 개요
 
 | 항목 | 내용 |

@@ -11,17 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: RAG(Retrieval-Augmented Generation) 시스템에서 지식 그래프 활용 방법과 Neo4j 구현
-summary: 지식 그래프(Knowledge Graph)는 노드(entities)와 관계(relationships)로 정보를 저장하는 데이터베이스로,
-  RAG 시스템에서 정보 검색과 컨텍스트 제공을 향상시킨다. Neo4j와 같은 그래프 데이터베이스를 통해 구현되며, Cypher라는 쿼리 언어를
-  사용해 복잡한 관계를 검색할 수 있다. 지식 그래프는 데이터를 구조화하고 관계를 강조하며, 노드와 엣지 모두 속성을 가질 수 있어 풍부한 정보
-  표현이 가능하다.
+summary: "지식 그래프(Knowledge Graph)는 노드(entities)와 관계(relationships)로 정보를 저장하는 데이터베이스로, RAG 시스템에서 정보 검색과 컨텍스트 제공을 향상시킨다. Neo4j와 같은 그래프 데이터베이스를 통해 구현되며, Cypher라는 쿼리 언어를 사용해 복잡한 관계를 검색할 수 있다. 지식 그래프는 데이터를 구조화하고 관계를 강조하며, 노드와 엣지 모두 속성을 가질 수 있어 풍부한 정보 표현이 가능하다."
 published: 2024-08-15
 modified: 2024-08-15
 ---
-> [!summary]
-> 
-> 지식 그래프(Knowledge Graph)는 노드(entities)와 관계(relationships)로 정보를 저장하는 데이터베이스로, RAG 시스템에서 정보 검색과 컨텍스트 제공을 향상시킨다. Neo4j와 같은 그래프 데이터베이스를 통해 구현되며, Cypher라는 쿼리 언어를 사용해 복잡한 관계를 검색할 수 있다. 지식 그래프는 데이터를 구조화하고 관계를 강조하며, 노드와 엣지 모두 속성을 가질 수 있어 풍부한 정보 표현이 가능하다.
-
 ## 개요
 
 지식 그래프(Knowledge Graph)는 RAG(Retrieval-Augmented Generation) 시스템에서 정보 검색과 컨텍스트 제공을 향상시키는 데 활용되는 강력한 도구다. 이 문서에서는 지식 그래프의 기본 개념과 Neo4j를 활용한 구현 방법에 대해 알아본다.

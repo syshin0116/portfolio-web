@@ -12,14 +12,10 @@ draft: false
 enableToc: true
 description: LangChain Open Tutorial open-source project 7-week contribution retrospective
   (English version)
-summary: LangChain Open Tutorial open-source project 7-week contribution retrospective
-  (English version)
+summary: "A retrospective of my 7-week contribution to TeddyNote's LangChain open-source tutorial project. This English version covers my experience translating tutorials, creating new content, implementing code in a highly active project with over 2,000 commits, and the valuable lessons learned about open-source collaboration."
 published: 2025-02-27
 modified: 2025-02-27
 ---
-
-> [!summary]
-> A retrospective of my 7-week contribution to TeddyNote's LangChain open-source tutorial project. This English version covers my experience translating tutorials, creating new content, implementing code in a highly active project with over 2,000 commits, and the valuable lessons learned about open-source collaboration.
 ## Background
 
 I recently came across the news that **TeddyNote**, a YouTuber I follow, was recruiting contributors for the **LangChain open-source tutorial** on **Retrieval-Augmented Generation (RAG)**—a topic I was particularly interested in. This was an exciting opportunity, not just as a fan, but as a chance to **actively contribute to a topic I’m passionate about**. Since it was my first time participating in a large-scale open-source project and collaborating with various contributors, I was even more eager to take part.

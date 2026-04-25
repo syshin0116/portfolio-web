@@ -12,15 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: Docling v2.81.0의 내부 구조를 분석하고 READoc 벤치마크로 성능을 평가한다. IBM Research가 개발한 MIT 라이선스 파서로, Heron 레이아웃 모델과 Granite-Docling VLM을 사용하며, GPU 없이 4.9초/문서에 74.3% Edit Similarity를 달성한다.
-summary: Docling은 IBM Research가 개발한 MIT 라이선스 문서 변환 프레임워크다. Heron(RT-DETRv2 기반) 레이아웃 감지, TableFormer 테이블 인식, EasyOCR/Tesseract OCR, 그리고 Granite-Docling-258M VLM을 사용한다. GPU 없이 4.9초/문서에 74.3%의 Edit Similarity를 달성하여 속도 대비 품질(가성비)이 가장 뛰어나다. PDF뿐 아니라 DOCX, PPTX, HTML, 오디오, 비디오까지 지원하는 멀티포맷 파서다.
+summary: "Docling은 IBM Research가 개발한 MIT 라이선스 문서 변환 프레임워크다. Heron(RT-DETRv2 기반) 레이아웃 감지, TableFormer 테이블 인식, EasyOCR/Tesseract OCR을 사용한다. GPU 없이 4.9초/문서에 74.3%의 Edit Similarity를 달성하여 **속도 대비 품질(가성비)이 가장 뛰어나다**. PDF뿐 아니라 DOCX, PPTX, HTML, 오디오, 비디오까지 지원하는 멀티포맷 파서다."
 published: 2026-03-26
 modified: 2026-03-26
 ---
-
-> [!summary]
->
-> Docling은 IBM Research가 개발한 MIT 라이선스 문서 변환 프레임워크다. Heron(RT-DETRv2 기반) 레이아웃 감지, TableFormer 테이블 인식, EasyOCR/Tesseract OCR을 사용한다. GPU 없이 4.9초/문서에 74.3%의 Edit Similarity를 달성하여 **속도 대비 품질(가성비)이 가장 뛰어나다**. PDF뿐 아니라 DOCX, PPTX, HTML, 오디오, 비디오까지 지원하는 멀티포맷 파서다.
-
 ## 개요
 
 | 항목 | 내용 |

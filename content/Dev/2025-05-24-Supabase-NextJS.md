@@ -10,19 +10,10 @@ tags:
 draft: false
 enableToc: true
 description: Supabase와 NextJS를 활용한 풀스택 웹 애플리케이션 개발 완전 가이드
-summary: Supabase와 NextJS는 현대적인 풀스택 웹 애플리케이션 개발을 위한 이상적인 조합이다. Supabase는 PostgreSQL
-  기반 오픈소스 Firebase 대안으로 실시간 데이터베이스, 인증, 스토리지를 제공하며, NextJS는 React 기반 프로덕션 프레임워크다.
-  `npx create-next-app -e with-supabase` 템플릿을 사용하면 Cookie-based 인증, TypeScript, Tailwind
-  CSS가 사전 구성된 프로젝트를 즉시 시작할 수 있다. 이 템플릿에는 모든 기본 설정이 포함되어 있어 복잡한 설정 없이 바로 개발에 집중할 수
-  있으며, 필요한 부분만 기존 프로젝트에 이식하는 것도 가능하다.
+summary: "Supabase와 NextJS는 현대적인 풀스택 웹 애플리케이션 개발을 위한 이상적인 조합이다. Supabase는 PostgreSQL 기반 오픈소스 Firebase 대안으로 실시간 데이터베이스, 인증, 스토리지를 제공하며, NextJS는 React 기반 프로덕션 프레임워크다. `npx create-next-app -e with-supabase` 템플릿을 사용하면 Cookie-based 인증, TypeScript, Tailwind CSS가 사전 구성된 프로젝트를 즉시 시작할 수 있다. 이 템플릿에는 모든 기본 설정이 포함되어 있어 복잡한 설정 없이 바로 개발에 집중할 수 있으며, 필요한 부분만 기존 프로젝트에 이식하는 것도 가능하다."
 published: 2025-05-24
 modified: 2025-05-24
 ---
-
-> [!summary]
->
-> Supabase와 NextJS는 현대적인 풀스택 웹 애플리케이션 개발을 위한 이상적인 조합이다. Supabase는 PostgreSQL 기반 오픈소스 Firebase 대안으로 실시간 데이터베이스, 인증, 스토리지를 제공하며, NextJS는 React 기반 프로덕션 프레임워크다. `npx create-next-app -e with-supabase` 템플릿을 사용하면 Cookie-based 인증, TypeScript, Tailwind CSS가 사전 구성된 프로젝트를 즉시 시작할 수 있다. 이 템플릿에는 모든 기본 설정이 포함되어 있어 복잡한 설정 없이 바로 개발에 집중할 수 있으며, 필요한 부분만 기존 프로젝트에 이식하는 것도 가능하다.
-
 ## Supabase + NextJS 소개
 
 [[Hostit]]이라는 사이드 프로젝트를 효율적으로 빠르게 진행할겸, 최신 유행하는 기술들을 사용해보려는 취지로 리서치하던 중 이 조합을 찾게 되었다. [[Hostit 개요|Hostit]]은 LangChain의 Model Context Protocol(MCP)을 활용한 AI 도구 관리 플랫폼으로, 사용자 인증, 서버 관리, 실시간 데이터 동기화 등 복잡한 백엔드 기능이 필요한 프로젝트였다.

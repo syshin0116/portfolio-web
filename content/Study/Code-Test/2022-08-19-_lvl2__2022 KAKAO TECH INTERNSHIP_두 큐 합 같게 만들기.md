@@ -8,10 +8,7 @@ tags:
 - kakao-tech-internship
 draft: false
 enableToc: true
-summary: '출처: [Programmers > 2022 KAKAO Tech Intership > 두 큐 합 같게 만들기](https://school.programmers.co.kr/learn/courses/30/lessons/118667)
-  길이가 같은 두 개의 큐가 주어집니다. 하나의 큐를 골라 원소를 추출(pop)하고, 추출된 원소를 다른 큐에 집어넣는(insert) 작업을 통해
-  각 큐의 원소 합이 같도록 만들려고 합니다. 이때 필요한 작업의 최소 횟수를 구하고자 합니다. 한 번의 pop과 한 번의 insert를 합쳐서
-  작업을 1회 수행...'
+summary: "출처: [Programmers > 2022 KAKAO Tech Intership > 두 큐 합 같게 만들기](https://school.programmers.co.kr/learn/courses/30/lessons/118667) 길이가 같은 두 개의 큐가 주어집니다. 하나의 큐를 골라 원소를 추출(pop)하고, 추출된 원소를 다른 큐에 집어넣는(insert) 작업을 통해 각 큐의 원소 합이 같도록 만들려고 합니다. 이때 필요한 작업의 최소 횟수를 구하고자 합니다. 한 번의 pop과 한 번의 insert를 합쳐서 작업을 1회 수행..."
 published: 2022-08-19 10:35:29 +0900
 modified: 2022-08-19 10:35:29 +0900
 layout: post
@@ -19,12 +16,6 @@ categories:
 - Code-Test
 - Programmers
 ---
-
-> [!summary]
-> 
-> 출처: [Programmers > 2022 KAKAO Tech Intership > 두 큐 합 같게 만들기](https://school.programmers.co.kr/learn/courses/30/lessons/118667) 길이가 같은 두 개의 큐가 주어집니다. 하나의 큐를 골라 원소를 추출(pop)하고, 추출된 원소를 다른 큐에 집어넣는(insert) 작업을 통해 각 큐의 원소 합이 같도록 만들려고 합니다. 이때 필요한 작업의 최소 횟수를 구하고자 합니다. 한 번의 pop과 한 번의 insert를 합쳐서 작업을 1회 수행...
-
-
 출처: [Programmers > 2022 KAKAO Tech Intership > 두 큐 합 같게 만들기](https://school.programmers.co.kr/learn/courses/30/lessons/118667)
 
 # 두 큐 합 같게 만들기

@@ -15,16 +15,10 @@ draft: false
 enableToc: true
 description: Google Search Console's Domain property covers all URLs, while URL Prefix
   tracks only specific URL prefixes, offering different verification methods.
-summary: Google Search Console's Domain property covers all URLs, while URL Prefix
-  tracks only specific URL prefixes, offering different verification methods.
+summary: "When registering a website on Google Search Console, users can choose between Domain and URL Prefix property types. Domain properties encompass all URLs within a domain, regardless of protocol or subdomain, verified through DNS authentication, offering comprehensive data collection. URL Prefix properties track only specific URLs, including the designated protocol and subdomain, verifiable through various methods like HTML file uploads or meta tags. Domain properties are recommended for websites with multiple subdomains or both HTTP and HTTPS versions, aiming for comprehensive SEO analysis. URL Prefix properties suit those managing specific subdomains or analyzing only HTTP or HTTPS versions. It's advisable to primarily register as a Domain property and add URL Prefix properties as needed for both comprehensive and granular data insights."
 published: 2025-03-22
 modified: 2025-03-22
 ---
-
-> [!summary]
-> When registering a website on Google Search Console, users can choose between Domain and URL Prefix property types. Domain properties encompass all URLs within a domain, regardless of protocol or subdomain, verified through DNS authentication, offering comprehensive data collection. URL Prefix properties track only specific URLs, including the designated protocol and subdomain, verifiable through various methods like HTML file uploads or meta tags. Domain properties are recommended for websites with multiple subdomains or both HTTP and HTTPS versions, aiming for comprehensive SEO analysis. URL Prefix properties suit those managing specific subdomains or analyzing only HTTP or HTTPS versions. It's advisable to primarily register as a Domain property and add URL Prefix properties as needed for both comprehensive and granular data insights.
-> 
-
 ---
 
 

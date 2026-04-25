@@ -10,15 +10,10 @@ tags:
 draft: false
 enableToc: true
 description: AI 파이프라인의 반복되는 작업을 블록 단위로 정의하고, 조합하고, 어디서든 재사용할 수 있게 하는 Python 라이브러리
-summary: 프로젝트마다 반복되는 AI 파이프라인 로직(파싱, 청킹, 임베딩 등)을 한 번 정의하고 어디서든 재사용하기 위한 Python 라이브러리. Block(dict → dict) 단일 인터페이스, 연산자 조합, 플랫폼 독립이 핵심.
+summary: "misen(mise en place)은 AI 워크플로우의 반복되는 작업 단위를 블록으로 정의하고, 다양한 방식으로 조합하며, 어떤 플랫폼에서든 재사용할 수 있게 하는 Python 라이브러리다. 핵심은 `Block(dict → dict)` 단일 인터페이스와 연산자 기반 조합."
 published: 2026-04-04
 modified: 2026-04-04
 ---
-
-> [!summary]
->
-> misen(mise en place)은 AI 워크플로우의 반복되는 작업 단위를 블록으로 정의하고, 다양한 방식으로 조합하며, 어떤 플랫폼에서든 재사용할 수 있게 하는 Python 라이브러리다. 핵심은 `Block(dict → dict)` 단일 인터페이스와 연산자 기반 조합.
-
 ## 왜 만들었나
 
 AI 에이전트 시스템을 여러 프로젝트에서 개발하다 보면, 같은 작업이 반복된다.

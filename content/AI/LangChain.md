@@ -13,17 +13,10 @@ tags:
 draft: false
 enableToc: true
 description: LangChain 프레임워크의 기본 개념, 활용 방법 및 LLama2와 결합한 실전 프로젝트 구현 과정 설명
-summary: LangChain은 대규모 언어 모델을 활용한 애플리케이션 개발을 위한 프레임워크로, LLM을 다양한 데이터 소스 및 환경과 연결하는
-  도구를 제공한다. 이 문서는 LangChain의 기초부터 LLM(OpenAI, Llama2, Gemini Pro)과의 통합, PDF 쿼리 구현,
-  블로그 생성 애플리케이션 개발까지 실습 중심으로 다룬다. 특히 Llama2의 아키텍처, 훈련 세부사항, 하드웨어 요구사항 및 미세 조정 방법에
-  대한 연구 내용을 포함한다.
+summary: "LangChain은 대규모 언어 모델을 활용한 애플리케이션 개발을 위한 프레임워크로, LLM을 다양한 데이터 소스 및 환경과 연결하는 도구를 제공한다. 이 문서는 LangChain의 기초부터 LLM(OpenAI, Llama2, Gemini Pro)과의 통합, PDF 쿼리 구현, 블로그 생성 애플리케이션 개발까지 실습 중심으로 다룬다. 특히 Llama2의 아키텍처, 훈련 세부사항, 하드웨어 요구사항 및 미세 조정 방법에 대한 연구 내용을 포함한다."
 published: 2024-02-02
 modified: 2024-02-02
 ---
-> [!summary]
-> 
-> LangChain은 대규모 언어 모델을 활용한 애플리케이션 개발을 위한 프레임워크로, LLM을 다양한 데이터 소스 및 환경과 연결하는 도구를 제공한다. 이 문서는 LangChain의 기초부터 LLM(OpenAI, Llama2, Gemini Pro)과의 통합, PDF 쿼리 구현, 블로그 생성 애플리케이션 개발까지 실습 중심으로 다룬다. 특히 Llama2의 아키텍처, 훈련 세부사항, 하드웨어 요구사항 및 미세 조정 방법에 대한 연구 내용을 포함한다.
-
 ## 개요
 
 LangChain은 대규모 언어 모델(LLM)을 다양한 애플리케이션에 통합하기 위한 프레임워크다. 이 문서에서는 LangChain의 기본 개념부터 실제 프로젝트 구현까지 실습 중심으로 살펴본다.

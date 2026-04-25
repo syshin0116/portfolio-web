@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Excalidraw를 활용한 시각적 Zettelkasten 시스템 구축
-summary: Excalidraw를 활용한 시각적 Zettelkasten 시스템 구축
+summary: "Excalidraw 플러그인을 활용하여 Zettelkasten 시스템을 시각화하는 방법을 다룬다. 텍스트 기반 노트에 시각적 요소를 추가하여 지식 그래프를 만들고, 아이디어 간의 연결을 더 직관적으로 표현하는 Visual Zettelkasten 구축 방법을 설명한다."
 published: 2024-08-25
 modified: 2024-08-25
 ---
-
-> [!summary]
-> Excalidraw 플러그인을 활용하여 Zettelkasten 시스템을 시각화하는 방법을 다룬다. 텍스트 기반 노트에 시각적 요소를 추가하여 지식 그래프를 만들고, 아이디어 간의 연결을 더 직관적으로 표현하는 Visual Zettelkasten 구축 방법을 설명한다.
-
 ## Intro
 
 ![](https://i.imgur.com/57noLAD.png)

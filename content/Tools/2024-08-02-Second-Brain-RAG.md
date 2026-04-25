@@ -11,15 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Second Brain 개념을 RAG 시스템에 적용하여 개인화된 AI 에이전트 구축하기
-summary: Second Brain 개념을 RAG 시스템에 적용하여 개인화된 AI 에이전트 구축하기
+summary: "Second Brain 개념을 RAG(Retrieval-Augmented Generation) 시스템에 적용하는 아이디어를 탐구한다. 개인의 지식 데이터베이스를 체계적으로 구축하고 이를 RAG에 활용하면 성능 향상은 물론, 개인의 경험과 지식을 가진 Multi-Agent 구현이 가능할 것으로 기대한다."
 published: 2024-08-02
 modified: 2024-08-02
 ---
-
-> [!summary]
-> Second Brain 개념을 RAG(Retrieval-Augmented Generation) 시스템에 적용하는 아이디어를 탐구한다. 개인의 지식 데이터베이스를 체계적으로 구축하고 이를 RAG에 활용하면 성능 향상은 물론, 개인의 경험과 지식을 가진 Multi-Agent 구현이 가능할 것으로 기대한다.
-
-
 ## Intro
 
 RAG 공부를 하다보니, 문득 이전에 잠깐 관심 가졌었던 Second Brain 개념을 RAG에 활용하면 성능 향상에 도움이 되지 않을까 생각이 들었다. Second Brain과 note taking 방법 등 공부해봐야 확실해지겠지만, 충분히 가능할것 같고, 이를 응용하고, 나의 지식 데이터베이스가 충분히 쌓인다면, 나의 경험을 가진 Multi-Agent 구현이 가능해질것이라 기대해본다.

@@ -11,13 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Modular RAG 프로젝트를 위한 RDBMS와 NoSQL 비교 및 최적 데이터베이스 선택
-summary: Modular RAG 프로젝트를 위한 RDBMS와 NoSQL 비교 및 최적 데이터베이스 선택
+summary: "Modular RAG 프로젝트에 적합한 데이터베이스를 선택하기 위해 RDBMS와 NoSQL의 특성을 비교 분석한 내용이다. 유연성과 확장성을 중요시하는 Modular RAG의 특성을 고려하여 각 데이터베이스의 장단점, 적합한 사용 사례, 성능 특성을 평가하고 최종 선택을 제시한다."
 published: 2024-11-25
 modified: 2024-11-25
 ---
-
-> [!summary]
-> Modular RAG 프로젝트에 적합한 데이터베이스를 선택하기 위해 RDBMS와 NoSQL의 특성을 비교 분석한 내용이다. 유연성과 확장성을 중요시하는 Modular RAG의 특성을 고려하여 각 데이터베이스의 장단점, 적합한 사용 사례, 성능 특성을 평가하고 최종 선택을 제시한다.
 ### **RDBMS와 NoSQL의 차이점 및 Modular RAG에 적합한 선택**
 
 Modular RAG는 다양한 모듈을 조합하며 유연성과 확장성을 중요하게 여기는 프로젝트다. 이를 구현하기 위한 데이터베이스 선택에서 RDBMS와 NoSQL의 특성을 비교하고, Modular RAG에 더 적합한 데이터베이스를 선택하고자 한다.

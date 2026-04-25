@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Spring Security의 기본 개념과 인증, 인가 메커니즘 설명
-summary: Spring Security의 기본 개념과 인증, 인가 메커니즘 설명
+summary: "Spring Security는 스프링 기반 애플리케이션의 보안을 담당하는 프레임워크로, 인증(Authentication)과 인가(Authorization)를 제공한다. 서블릿 필터와 필터 체인을 통해 작동하며, 개발자가 보안 로직을 일일이 작성하지 않아도 되도록 체계적인 옵션을 제공한다. 로그인/비로그인 사용자 구분, Role/Permission 기반 접근 제어, Thymeleaf와의 통합 등 핵심 기능을 다룬다."
 published: 2022-09-04
 modified: 2022-09-04
 ---
-
-> [!summary]
-> Spring Security는 스프링 기반 애플리케이션의 보안을 담당하는 프레임워크로, 인증(Authentication)과 인가(Authorization)를 제공한다. 서블릿 필터와 필터 체인을 통해 작동하며, 개발자가 보안 로직을 일일이 작성하지 않아도 되도록 체계적인 옵션을 제공한다. 로그인/비로그인 사용자 구분, Role/Permission 기반 접근 제어, Thymeleaf와의 통합 등 핵심 기능을 다룬다.
-
 # [spring]spring security
 
 ## spring security란

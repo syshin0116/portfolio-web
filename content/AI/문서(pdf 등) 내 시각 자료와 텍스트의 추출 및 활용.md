@@ -10,16 +10,10 @@ tags:
 draft: false
 enableToc: true
 description: 멀티모달 RAG를 활용한 PDF 문서 내 시각 자료와 텍스트 추출 및 활용 기법
-summary: 멀티모달 RAG를 활용한 PDF 문서 내 시각 자료와 텍스트 추출 및 활용 기법
+summary: "멀티모달 RAG를 활용한 PDF 문서 내 시각 자료와 텍스트 추출 및 활용 기법"
 published: 2024-07-23
 modified: 2024-07-23
 ---
-
-> [!summary]
-> 
-> 멀티모달 RAG를 활용한 PDF 문서 내 시각 자료와 텍스트 추출 및 활용 기법
-
-
 # 1. 문서(pdf 등) 내 시각 자료와 텍스트의 추출 및 활용
 
 ## 1-1. 배경

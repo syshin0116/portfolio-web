@@ -11,14 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: Spring 프레임워크에서 사용되는 DAO, DTO, VO의 개념과 차이점 설명
-summary: Spring 프레임워크에서 사용되는 DAO, DTO, VO의 개념과 차이점 설명
+summary: "Spring 개발에서 자주 사용되는 DAO, DTO, VO의 개념과 차이점을 설명한다. DAO는 데이터베이스 접근을 전담하는 객체로 커넥션 효율성과 보안을 제공하고, DTO는 계층 간 데이터 전달을 위한 가변 객체이며, VO는 불변의 값 객체로 읽기 전용 특성을 가진다. 각 객체의 목적과 사용 사례를 이해하면 효율적인 애플리케이션 아키텍처를 설계할 수 있다."
 published: 2022-09-04
 modified: 2022-09-04
 ---
-
-> [!summary]
-> Spring 개발에서 자주 사용되는 DAO, DTO, VO의 개념과 차이점을 설명한다. DAO는 데이터베이스 접근을 전담하는 객체로 커넥션 효율성과 보안을 제공하고, DTO는 계층 간 데이터 전달을 위한 가변 객체이며, VO는 불변의 값 객체로 읽기 전용 특성을 가진다. 각 객체의 목적과 사용 사례를 이해하면 효율적인 애플리케이션 아키텍처를 설계할 수 있다.
-
 # [Spring]DTO vs DAO vs VO
 ## DAO
 ### : Data Access Object

@@ -19,15 +19,10 @@ draft: false
 enableToc: true
 description: 워크플로우와 에이전트의 차이점, 그리고 ReAct, Plan-and-Execute, Supervisor 아키텍처의 특징과 장단점을
   체계적으로 비교 분석한 포괄적 가이드
-summary: 워크플로우와 에이전트의 차이점, 그리고 ReAct, Plan-and-Execute, Supervisor 아키텍처의 특징과 장단점을
-  체계적으로 비교 분석한 포괄적 가이드
+summary: "LLM 기반 시스템의 두 가지 주요 접근법인 워크플로우와 에이전트의 근본적인 차이점을 설명하고, 에이전트 아키텍처인 ReAct, Plan-and-Execute, Supervisor의 작동 원리와 장단점을 비교 분석한다. 각 아키텍처의 적합한 사용 사례와 함께 사용자 경험 향상을 위한 의사결정 과정 시각화의 중요성, 그리고 MCP와 A2A 같은 표준화 프로토콜의 미래 발전 방향을 알아본다."
 published: 2025-06-04
 modified: 2025-06-04
 ---
-
-> [!summary]
-> LLM 기반 시스템의 두 가지 주요 접근법인 워크플로우와 에이전트의 근본적인 차이점을 설명하고, 에이전트 아키텍처인 ReAct, Plan-and-Execute, Supervisor의 작동 원리와 장단점을 비교 분석한다. 각 아키텍처의 적합한 사용 사례와 함께 사용자 경험 향상을 위한 의사결정 과정 시각화의 중요성, 그리고 MCP와 A2A 같은 표준화 프로토콜의 미래 발전 방향을 알아본다.
-
 > [!info]
 > 이 글은 [[데블챌 데이터 블로그 챌린지]] 참여 글입니다.
 

@@ -10,7 +10,7 @@ tags:
 - Pattern
 draft: false
 enableToc: true
-summary: 객체의 동작과 책임을 분배하는 디자인 패턴들을 다룬다. Iterator, Strategy, Observer, Command, State 등 행동 패턴의 개념, 특징, 장단점, 실제 구현 예시를 포함한다.
+summary: "Behavior Patterns에 대한 내용을 다룬다."
 published: 2024-08-11 17:50 +0900
 modified: 2024-08-11 17:50 +0900
 layout: post
@@ -19,12 +19,6 @@ categories:
 - Design Pattern
 math: true
 ---
-
-> [!summary]
-> 
-> Behavior Patterns에 대한 내용을 다룬다.
-
-
 ## Iterator(반복자 패턴)
 
 

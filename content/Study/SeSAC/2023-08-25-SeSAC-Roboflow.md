@@ -9,8 +9,7 @@ tags:
 - 교육
 draft: false
 enableToc: true
-summary: 'Image Classification과 Object Detection의 차이: ImageNet - 1000만장이 넘는 이미지에 1000개
-  class'
+summary: "Image Classification과 Object Detection의 차이: ImageNet - 1000만장이 넘는 이미지에 1000개 class"
 published: 2023-08-25 09:09 +0900
 modified: 2023-08-25 09:09 +0900
 layout: post
@@ -19,12 +18,6 @@ categories:
 - 머신러닝 데이터분석
 math: true
 ---
-
-> [!summary]
-> 
-> Image Classification과 Object Detection의 차이: ImageNet - 1000만장이 넘는 이미지에 1000개 class
-
-
 ## Roboflow
 
 얀 르쿤(Yann LeCun): 

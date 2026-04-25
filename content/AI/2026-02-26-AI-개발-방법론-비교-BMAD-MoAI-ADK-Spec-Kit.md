@@ -17,14 +17,10 @@ tags:
 draft: false
 enableToc: true
 description: AI 코딩 도구가 넘쳐나는 시대, 실제로 개발 워크플로우를 바꿀 수 있는 방법론 4가지 — BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done — 를 철학, 워크플로우, 커뮤니티 반응까지 철저하게 비교한다.
-summary: AI 코딩 도구가 넘쳐나는 시대, 실제로 개발 워크플로우를 바꿀 수 있는 방법론 4가지 — BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done — 를 철학, 워크플로우, 커뮤니티 반응까지 철저하게 비교한다.
+summary: "Claude Code, Cursor 같은 AI 코딩 어시스턴트가 대중화되면서, 이를 더 체계적으로 활용하기 위한 방법론들이 등장하고 있다. 이 글에서는 가장 주목받는 네 가지 — BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done — 를 철학, 워크플로우, 에이전트 시스템, 실사용 경험과 커뮤니티 반응까지 세세하게 비교한다."
 published: 2026-02-26
 modified: 2026-03-19
 ---
-
-> [!summary]
-> Claude Code, Cursor 같은 AI 코딩 어시스턴트가 대중화되면서, 이를 더 체계적으로 활용하기 위한 방법론들이 등장하고 있다. 이 글에서는 가장 주목받는 네 가지 — BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done — 를 철학, 워크플로우, 에이전트 시스템, 실사용 경험과 커뮤니티 반응까지 세세하게 비교한다.
-
 ---
 
 ## 왜 지금 이 비교인가

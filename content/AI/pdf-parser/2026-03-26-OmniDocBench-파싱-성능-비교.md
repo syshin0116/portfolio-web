@@ -13,15 +13,10 @@ tags:
 draft: false
 enableToc: true
 description: OmniDocBench(CVPR 2025)로 MinerU, Docling, Marker 3개 파서의 요소별 파싱 성능을 측정한다. 텍스트 정확도, 테이블 TEDS, 수식 인식, 읽기 순서를 분리하여 평가하며, MinerU가 텍스트/테이블/읽기순서에서 압도적 1위, Marker는 수식에서 강점을 보인다.
-summary: OmniDocBench(CVPR 2025, 1355페이지, 9종 문서)에서 93개 샘플로 MinerU, Docling, Marker의 요소별 파싱 성능을 측정했다. MinerU가 텍스트(Edit Dist 0.073), 테이블(TEDS 0.633), 읽기 순서(Edit Dist 0.092)에서 압도적 1위를 기록했고, Marker는 수식 인식(Edit Dist 0.258)에서 MinerU(0.421)를 앞섰다. Docling은 이미지 기반 파싱에서 OCR 한계로 전반적으로 낮은 점수를 보였다.
+summary: "OmniDocBench(CVPR 2025)에서 93개 샘플로 MinerU, Docling, Marker의 요소별 파싱 성능을 측정했다. MinerU가 텍스트, 테이블, 읽기 순서에서 1위, Marker는 수식에서 강점. Docling은 이미지 기반 파싱에서 OCR 한계."
 published: 2026-03-26
 modified: 2026-03-26
 ---
-
-> [!summary]
->
-> OmniDocBench(CVPR 2025)에서 93개 샘플로 MinerU, Docling, Marker의 요소별 파싱 성능을 측정했다. MinerU가 텍스트, 테이블, 읽기 순서에서 1위, Marker는 수식에서 강점. Docling은 이미지 기반 파싱에서 OCR 한계.
-
 ## 왜 OmniDocBench인가
 
 [[2026-03-23-MinerU-2x-파이프라인-분석|이전 글들]]에서 READoc 벤치마크(Edit Similarity)로 파서를 비교했지만, 이 메트릭은 **전체 텍스트 유사도만 측정**한다. 테이블 구조가 정확한지, 수식이 LaTeX로 변환되었는지, 읽기 순서가 맞는지는 알 수 없다.

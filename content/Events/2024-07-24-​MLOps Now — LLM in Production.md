@@ -14,14 +14,10 @@ tags:
 draft: false
 enableToc: true
 description: 프로덕션 환경에서의 LLM 운영을 위한 MLOps 전략 세미나 정리
-summary: 프로덕션 환경에서의 LLM 운영을 위한 MLOps 전략 세미나 정리
+summary: "모두의연구소 주최 MLOps Now 세미나에서 다룬 프로덕션 환경에서의 LLM 운영 방법론이다. VESSL의 LLM 파이프라인 관리, Weaviate의 벡터 데이터베이스 활용, 삼성SDS의 엔터프라이즈 LLM 운영 사례, Liner의 실시간 LLM 서비스 최적화 전략 등 실무에서의 LLMOps 구현 경험과 노하우를 포함한다."
 published: 2024-07-24
 modified: 2024-07-24
 ---
-
-> [!summary]
-> 모두의연구소 주최 MLOps Now 세미나에서 다룬 프로덕션 환경에서의 LLM 운영 방법론이다. VESSL의 LLM 파이프라인 관리, Weaviate의 벡터 데이터베이스 활용, 삼성SDS의 엔터프라이즈 LLM 운영 사례, Liner의 실시간 LLM 서비스 최적화 전략 등 실무에서의 LLMOps 구현 경험과 노하우를 포함한다.
-
 ## ​발표 내용 및 연사
 
 - ​**Building AI-native applications with Weaviate**

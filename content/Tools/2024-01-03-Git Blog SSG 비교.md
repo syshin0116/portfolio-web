@@ -12,14 +12,10 @@ tags:
 draft: false
 enableToc: true
 description: Git 블로그를 위한 정적 사이트 생성기(SSG) 비교 및 선택 가이드
-summary: Git 블로그를 위한 정적 사이트 생성기(SSG) 비교 및 선택 가이드
+summary: "GitHub Pages로 배포하는 정적 웹사이트 생성기(SSG) 중 Jekyll, Hugo, Hexo, Gatsby 등의 특징과 장단점을 비교 분석한다. 각 SSG의 성능, 생태계, 학습 곡선, 커스터마이징 난이도를 평가하여 자신에게 맞는 블로그 플랫폼을 선택하는 가이드를 제공한다."
 published: 2024-01-03
 modified: 2024-01-03
 ---
-
-> [!summary]
-> GitHub Pages로 배포하는 정적 웹사이트 생성기(SSG) 중 Jekyll, Hugo, Hexo, Gatsby 등의 특징과 장단점을 비교 분석한다. 각 SSG의 성능, 생태계, 학습 곡선, 커스터마이징 난이도를 평가하여 자신에게 맞는 블로그 플랫폼을 선택하는 가이드를 제공한다.
-
 ## Intro: 
 깃 블로그 리뉴얼을 위해 알아보던 중, Github Pages로 배포하는 정적 웹사이트 생성기 방식 중 기존에 내가 쓰던 Jekyll 외에도 Hexo, Hugo, Gatsby 등 많은 SSG(Static Site Generators)가 있다는걸 알게 되었다. 
 

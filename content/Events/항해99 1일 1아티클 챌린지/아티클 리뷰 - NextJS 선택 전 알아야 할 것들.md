@@ -10,18 +10,10 @@ draft: false
 enableToc: true
 description: '"You should know this before choosing Next.js" 아티클 리뷰로, Next.js 프레임워크의
   거버넌스 및 오픈소스 특성에 관한 고려사항을 다루고 있다.'
-summary: 이 글은 "You should know this before choosing Next.js"에 관한 리뷰이다. 원문은 Next.js
-  프레임워크와 Vercel 간의 관계, 오픈소스 프로젝트로서의 투명성과 상호운용성 이슈를 다루고 있다. 특히 Next.js가 Vercel에 최적화된
-  비공개 코드 경로를 가지고 있고, 다른 클라우드 제공업체에서 완전히 지원되지 않는 문제, 최근 보안 취약점 처리 방식의 문제점 등을 상세히 설명한다.
-  이 아티클은 기술 스택 선택 시 단순히 기능뿐 아니라 프레임워크의 거버넌스와 지속 가능성도 중요한 고려 사항임을 상기시킨다.
+summary: "이 글은 \"You should know this before choosing Next.js\"에 관한 리뷰이다. 원문은 Next.js 프레임워크와 Vercel 간의 관계, 오픈소스 프로젝트로서의 투명성과 상호운용성 이슈를 다루고 있다. 특히 Next.js가 Vercel에 최적화된 비공개 코드 경로를 가지고 있고, 다른 클라우드 제공업체에서 완전히 지원되지 않는 문제, 최근 보안 취약점 처리 방식의 문제점 등을 상세히 설명한다. 이 아티클은 기술 스택 선택 시 단순히 기능뿐 아니라 프레임워크의 거버넌스와 지속 가능성도 중요한 고려 사항임을 상기시킨다."
 published: 2025-04-18
 modified: 2025-04-18
 ---
-
-> [!summary]
->
-> 이 글은 "You should know this before choosing Next.js"에 관한 리뷰이다. 원문은 Next.js 프레임워크와 Vercel 간의 관계, 오픈소스 프로젝트로서의 투명성과 상호운용성 이슈를 다루고 있다. 특히 Next.js가 Vercel에 최적화된 비공개 코드 경로를 가지고 있고, 다른 클라우드 제공업체에서 완전히 지원되지 않는 문제, 최근 보안 취약점 처리 방식의 문제점 등을 상세히 설명한다. 이 아티클은 기술 스택 선택 시 단순히 기능뿐 아니라 프레임워크의 거버넌스와 지속 가능성도 중요한 고려 사항임을 상기시킨다.
-
 > [!info]
 > 이 글은 [[항해99 1일 1아티클 챌린지|항해99 1일 1아티클 챌린지]] 참여 글이다.
 > - [챌린지 페이지 바로가기](https://99clubarticle.vercel.app/)

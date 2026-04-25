@@ -11,18 +11,10 @@ tags:
 draft: false
 enableToc: true
 description: 고차원 데이터를 효과적으로 시각화하는 비선형 차원 축소 기법인 t-SNE의 원리와 활용법을 설명한 글이다.
-summary: t-SNE(t-distributed stochastic neighbor embedding)는 고차원 데이터를 2차원이나 3차원으로
-  축소하는 비선형 차원 축소 기법이다. PCA와 달리 비선형적 관계를 보존하며, 고차원 공간에서 비슷한 데이터 포인트는 저차원에서도 가깝게, 다른
-  포인트는 멀리 배치한다. 알고리즘은 두 차원 공간 간의 조건부 확률 분포의 KL-divergence를 최소화하는 방식으로 작동하며, 복잡한 데이터
-  구조의 시각화에 특히 유용하다.
+summary: "t-SNE(t-distributed stochastic neighbor embedding)는 고차원 데이터를 2차원이나 3차원으로 축소하는 비선형 차원 축소 기법이다. PCA와 달리 비선형적 관계를 보존하며, 고차원 공간에서 비슷한 데이터 포인트는 저차원에서도 가깝게, 다른 포인트는 멀리 배치한다. 알고리즘은 두 차원 공간 간의 조건부 확률 분포의 KL-divergence를 최소화하는 방식으로 작동하며, 복잡한 데이터 구조의 시각화에 특히 유용하다."
 published: 2024-03-16
 modified: 2024-03-16
 ---
-
-> [!summary]
-> 
-> t-SNE(t-distributed stochastic neighbor embedding)는 고차원 데이터를 2차원이나 3차원으로 축소하는 비선형 차원 축소 기법이다. PCA와 달리 비선형적 관계를 보존하며, 고차원 공간에서 비슷한 데이터 포인트는 저차원에서도 가깝게, 다른 포인트는 멀리 배치한다. 알고리즘은 두 차원 공간 간의 조건부 확률 분포의 KL-divergence를 최소화하는 방식으로 작동하며, 복잡한 데이터 구조의 시각화에 특히 유용하다.
-
 ## 개요
 
 t-SNE(t-distributed stochastic neighbor embedding)는 복잡한 고차원 데이터를 시각화하기 위한 강력한 비선형 차원 축소 기법이다. PCA와 같은 선형 차원 축소 방법과 달리, t-SNE는 데이터의 비선형적 관계를 효과적으로 보존할 수 있다.

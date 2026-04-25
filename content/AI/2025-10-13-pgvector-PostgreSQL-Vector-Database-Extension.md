@@ -15,18 +15,10 @@ draft: false
 enableToc: true
 description: PostgreSQL에서 벡터 검색을 가능하게 하는 pgvector 익스텐션의 개념, 작동 원리, 인덱스 알고리즘(HNSW),
   그리고 다른 벡터 데이터베이스와의 비교를 다룬다.
-summary: pgvector는 PostgreSQL에서 벡터 데이터를 저장하고 검색할 수 있게 해주는 오픈소스 익스텐션이다. HNSW(Hierarchical
-  Navigable Small World) 알고리즘을 통해 빠른 ANN(Approximate Nearest Neighbor) 검색을 지원하며, PostgreSQL의
-  모든 기능(트랜잭션, JOIN, 집계)을 벡터 검색과 함께 활용할 수 있다는 점이 최대 강점이다. Qdrant, Milvus 같은 전용 벡터 DB
-  대비 운영 복잡도가 낮고, Full Text Search와 결합한 Hybrid Search를 SQL 네이티브로 구현할 수 있다.
+summary: "pgvector는 PostgreSQL에서 벡터 데이터를 저장하고 검색할 수 있게 해주는 오픈소스 익스텐션이다. HNSW(Hierarchical Navigable Small World) 알고리즘을 통해 빠른 ANN(Approximate Nearest Neighbor) 검색을 지원하며, PostgreSQL의 모든 기능(트랜잭션, JOIN, 집계)을 벡터 검색과 함께 활용할 수 있다는 점이 최대 강점이다. Qdrant, Milvus 같은 전용 벡터 DB 대비 운영 복잡도가 낮고, Full Text Search와 결합한 Hybrid Search를 SQL 네이티브로 구현할 수 있다."
 published: 2025-10-13
 modified: 2025-10-13
 ---
-
-> [!summary]
->
-> pgvector는 PostgreSQL에서 벡터 데이터를 저장하고 검색할 수 있게 해주는 오픈소스 익스텐션이다. HNSW(Hierarchical Navigable Small World) 알고리즘을 통해 빠른 ANN(Approximate Nearest Neighbor) 검색을 지원하며, PostgreSQL의 모든 기능(트랜잭션, JOIN, 집계)을 벡터 검색과 함께 활용할 수 있다는 점이 최대 강점이다. Qdrant, Milvus 같은 전용 벡터 DB 대비 운영 복잡도가 낮고, Full Text Search와 결합한 Hybrid Search를 SQL 네이티브로 구현할 수 있다.
-
 ## pgvector란?
 
 ### 개념

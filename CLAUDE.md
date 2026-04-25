@@ -17,7 +17,7 @@ content/
 └── wiki/                                                     ← curated knowledge layer
 agent/    Python RAG chatbot (do not modify)
 web/      Next.js + Nuartz frontend (do not modify)
-skills/   skill definitions — see each SKILL.md frontmatter for when to use
+.claude/skills/   skill definitions (auto-discovered) — see each SKILL.md frontmatter for when to use
 ```
 
 ## Hard rules

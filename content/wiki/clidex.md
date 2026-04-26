@@ -5,19 +5,21 @@ tags:
   - cli
   - rust
   - ai
+  - ai-agent
+  - bm25
+  - search
+  - fuzzy-search
+  - edit-distance
+  - testing
 sources:
   - content/Projects/Clidex/03-Search-Quality-Hardening.md
   - content/Projects/Clidex/04-CLI-UX-Design.md
+summary: "Clidex는 AI 에이전트와 인간 모두를 위한 CLI 도구 발견(discovery) 도구로, Rust로 구현된 BM25 기반 검색 엔진을 갖는다. 5,277개 도구 인덱스를 대상으로 퍼지 매칭, 동의어 확장, edit distance 오타 교정을 지원하며, TTY 감지 기반 출력 형식 자동 전환으로 사람과 에이전트가 동일 명령을 공유할 수 있다."
 created: 2026-04-25
-updated: 2026-04-25
+updated: 2026-04-26
 author: wiki-curator
 draft: false
-coverage: medium
 ---
-
-## Summary
-
-Clidex는 AI 에이전트와 인간 모두를 위한 CLI 도구 발견(discovery) 도구로, Rust로 구현된 BM25 기반 검색 엔진을 갖는다. 5,277개 도구 인덱스를 대상으로 퍼지 매칭, 동의어 확장, edit distance 오타 교정을 지원하며, TTY 감지 기반 출력 형식 자동 전환으로 사람과 에이전트가 동일 명령을 공유할 수 있다.
 
 ## Key Claims
 

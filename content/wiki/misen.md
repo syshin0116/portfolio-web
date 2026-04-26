@@ -5,18 +5,20 @@ tags:
   - python
   - ai
   - llm
+  - pipeline
+  - workflow
+  - open-source
+  - library
+  - agent
+  - operator
 sources:
   - content/Projects/misen/2026-04-04-misen-overview.md
+summary: "misen(mise en place)은 AI 워크플로우의 반복 작업을 Block(dict→dict) 단일 인터페이스로 정의하고 연산자로 조합해 어떤 플랫폼에서든 재사용할 수 있게 하는 Python 라이브러리다. 조합의 결과도 Block이므로 중첩이 자유롭고(닫힘 성질), 플랫폼 어댑터가 LangGraph, MCP, FastAPI 변환을 담당한다."
 created: 2026-04-25
-updated: 2026-04-25
+updated: 2026-04-26
 author: wiki-curator
 draft: false
-coverage: low
 ---
-
-## Summary
-
-misen(mise en place)은 AI 워크플로우의 반복 작업을 `Block(dict → dict)` 단일 인터페이스로 정의하고 연산자로 조합해 어떤 플랫폼에서든 재사용할 수 있게 하는 Python 라이브러리다. 조합의 결과도 Block이므로 중첩이 자유롭고(닫힘 성질), 플랫폼 어댑터가 LangGraph, MCP, FastAPI 변환을 담당한다.
 
 ## Key Claims
 

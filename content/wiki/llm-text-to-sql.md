@@ -4,20 +4,20 @@ type: pattern
 tags:
   - text-to-sql
   - llm
-  - prompt-engineering
   - ai
+  - agent
+  - postgresql
+  - prompt-engineering
+  - evaluation
+  - security
 sources:
   - content/AI/2026-04-19-LLM-Text-to-SQL-실전-가이드.md
+summary: "LLM 기반 Text-to-SQL 시스템을 프로덕션에서 안정적으로 운영하려면 프롬프트 튜닝보다 DB 스키마 품질이 결정적 요소다. 동적 스키마 조회, COMMENT 기반 zero-shot, AST 검증 기반 보안 레이어, 에이전트 위임 방식 self-correction을 조합하면 OLTP 수준 질의에서 높은 정확도를 달성할 수 있다."
 created: 2026-04-25
-updated: 2026-04-25
+updated: 2026-04-26
 author: wiki-curator
 draft: false
-coverage: low
 ---
-
-## Summary
-
-LLM 기반 Text-to-SQL 시스템을 프로덕션에서 안정적으로 운영하려면 프롬프트 튜닝보다 **DB 스키마 품질**이 결정적 요소다. 동적 스키마 조회, COMMENT 기반 zero-shot, AST 검증 기반 보안 레이어, 에이전트 위임 방식 self-correction을 조합하면 OLTP 수준 질의에서 높은 정확도를 달성할 수 있다.
 
 ## Key Claims
 

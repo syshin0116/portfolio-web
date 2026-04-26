@@ -1,6 +1,14 @@
 # wiki-curator: ingest
 
-Convert one or more source posts into wiki pages. Read [SKILL.md](./SKILL.md) and [conventions.md](./conventions.md) first.
+Convert source posts into wiki pages. Read [SKILL.md](./SKILL.md) and [conventions.md](./conventions.md) first.
+
+## Anti-patterns specific to ingest
+
+- **Forced cross-links.** Zero `[[wikilinks]]` is valid. Don't pad to look thorough.
+- **Chat-style preamble.** Wiki pages don't open with "Here's a summary…".
+- **Body `## Summary` section.** summary lives in frontmatter only.
+- **Folder placement.** Always write to `content/wiki/<slug>.md` at root. migrate handles folders.
+- **Full rewrites.** Surgical edits only. >30% body change → escalate.
 
 ## Inputs
 
@@ -88,19 +96,22 @@ If the source is too thin or too narrow (e.g., a quick tip, a personal note), fi
 
 Follow the page structure in [conventions.md](./conventions.md#page-structure).
 
+**File location: always `content/wiki/<slug>.md` at root.** Do not create folders. Don't try to fit pages into an existing folder structure either — let migrate consolidate later.
+
 **Surgical updates only.** When updating an existing page:
 
 - Use targeted Edit operations, not full rewrites.
 - If you'd change >30% of the page → stop. Note in `log.md`: `skip | <page> needs human re-review (>30% rewrite)`.
 - Bump `updated:` field.
 - Append the new source path to `sources:` (don't replace).
-- Recompute `coverage:` from new `sources` length.
+- Update `summary:` if the new source materially changes the takeaway. Otherwise leave it.
 
 **For new pages:**
 
-- All mandatory sections present (Summary, Key Claims).
+- All mandatory frontmatter fields present, including `summary:` (1–3 sentences, single source — do not also write a `## Summary` section in body).
+- Mandatory body sections: `## Key Claims`, `## Footnotes`. Other sections only if non-empty.
 - Filename follows [conventions](./conventions.md#filename-rules).
-- `created` = today, `updated` = today.
+- `created` = today (UTC), `updated` = today (UTC).
 
 ### 6. Update cross-links (forward only)
 
@@ -113,24 +124,15 @@ grep -rli "$NEW_PAGE_TITLE" content/wiki/
 
 If you find a natural place to add a `[[wikilink]]`, add it. **Naturalness rule: only if the surrounding sentence already discusses the linked concept.** Never insert a "See also: [[X]]" appendix to satisfy a connection count.
 
-### 7. Verify all wikilinks resolve
+### 7. Verify wikilinks
+
+Run the script (deterministic — don't validate by reading files):
 
 ```bash
-# Extract all wikilinks
-grep -roE '\[\[[^]]+\]\]' content/wiki/ \
-  | sed 's/.*\[\[\([^]|#]*\).*/\1/' \
-  | sort -u > /tmp/wikilinks.txt
-
-# Compare to actual filenames
-ls content/wiki/*.md \
-  | xargs -n1 basename \
-  | sed 's/\.md$//' \
-  | sort -u > /tmp/wikipages.txt
-
-comm -23 /tmp/wikilinks.txt /tmp/wikipages.txt  # broken links
+bun .claude/skills/wiki-curator/scripts/verify-wikilinks.ts
 ```
 
-If any broken links → fix or remove before commit.
+Exit 0 = all resolve. Non-zero = broken links printed to stdout. Fix or remove broken links before commit.
 
 ## Deletion handling
 
@@ -148,9 +150,9 @@ When a source is deleted (`D` in git diff):
 After processing all sources:
 
 - Rebuild `content/wiki/index.md` from scratch using current page set.
-- Append one line to `content/wiki/log.md`:
+- Append one line to `content/wiki/log.md` (use `date -u +'%Y-%m-%d %H:%M UTC'` for the timestamp):
   ```
-  ## [YYYY-MM-DD HH:MM] ingest | N sources → A new, B updated, C skipped
+  ## [YYYY-MM-DD HH:MM UTC] ingest | N sources → A new, B updated, C skipped
   ```
 
 ## Commit & PR
@@ -178,13 +180,3 @@ The PR body must include:
 - Any skipped sources with the reason
 - Any contradictions surfaced (if `## Contradictions` was added/extended)
 
-## Anti-patterns to avoid
-
-| Anti-pattern | Why it's bad | What to do instead |
-|--------------|--------------|---------------------|
-| Paraphrase the whole post into one wiki page | Loses fidelity, duplicates content, drift | Extract atomic claims, distribute across concept pages |
-| Add `[[See also: X]]` lists | Forced links pollute the graph | Link only inline where the connection is natural |
-| Rewrite a page to "improve" it | Self-corruption, loss of original phrasing | Surgical edits only; if >30% needed, escalate |
-| Create empty placeholder pages "to be filled later" | Litter | Don't create until you have content |
-| Drop `sources` entries when content is rephrased | Breaks provenance | Sources are append-only (except on source deletion) |
-| Use chat-style preamble ("Here's a wiki page on…") | Wiki readers see this | Start with a heading or substantive sentence |

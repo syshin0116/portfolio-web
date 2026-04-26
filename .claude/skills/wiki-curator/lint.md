@@ -94,23 +94,12 @@ List every page that has a `## Contradictions` section. These are intentional, n
 grep -l "^## Contradictions" content/wiki/*.md
 ```
 
-### 7. Coverage tier accuracy (severity: yellow)
+### 7. Legacy `coverage` field (severity: yellow)
 
-`coverage` field should match `sources` count: `high` (5+), `medium` (2–4), `low` (1).
+`coverage:` is deprecated — derived in index.md, not stored. Flag pages that still carry it; migrate removes them.
 
 ```bash
-for page in content/wiki/*.md; do
-  declared=$(awk '/^coverage:/{print $2}' "$page" | tr -d '"')
-  source_count=$(awk '/^sources:/{f=1;next} /^[a-z]/{f=0} f && /^  - /{c++} END{print c+0}' "$page")
-  
-  expected="low"
-  [ "$source_count" -ge 5 ] && expected="high"
-  [ "$source_count" -ge 2 ] && [ "$source_count" -le 4 ] && expected="medium"
-  
-  if [ "$declared" != "$expected" ]; then
-    echo "$page (declared: $declared, expected: $expected, sources: $source_count)"
-  fi
-done
+grep -l "^coverage:" content/wiki/**/*.md 2>/dev/null
 ```
 
 ### 8. Tag vocabulary drift (severity: blue)

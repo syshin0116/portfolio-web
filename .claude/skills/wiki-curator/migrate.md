@@ -13,7 +13,7 @@ Restructure folders, types, and tag vocabulary to reflect emergent patterns. Rea
 
 migrate has broad authority over the wiki's shape:
 
-- **Introduce sub-folders** when 5+ pages of the same kind have accumulated.
+- **Introduce sub-folders** when a coherent group has emerged. Judge whether a folder name would carry meaning to a human reader; if not, leave the pages at root.
 - **Move pages** between folders.
 - **Rename folders** to better reflect their contents.
 - **Remove folders** that no longer hold a coherent group.
@@ -66,19 +66,15 @@ Save to `.wiki-cache/inventory.tsv` for later inspection. This is the input to a
 
 #### a. Folder candidates
 
-Group pages by `type:`. If a type has 5+ pages and they're all at root → candidate folder.
+Group pages by `type:`, by tag overlap, or by topical coherence. For each candidate group, ask:
 
-```
-type=concept   12 pages at root  → propose concepts/
-type=pattern    8 pages at root  → propose patterns/
-type=tool       6 pages at root  → propose tools/
-type=reference  3 pages at root  → not enough, leave at root
-type=experiment 2 pages at root  → not enough
-```
+- Would a folder name carry real meaning to a human reader scanning the file tree?
+- Is the group cohesive enough that someone looking for one of these pages would think to look in that folder?
+- Are there enough pages that the folder isn't just noise?
 
-If a type already has a folder but contains <3 pages → propose dissolving (move back to root).
+If yes to all three → propose the folder. If a clear group exists with only 2–3 pages but the category is unmistakable (e.g., a project with multiple sub-pages), that may still warrant a folder. Conversely, 10 pages with no real shared identity beyond a shared `type` value don't warrant one.
 
-If a folder exists but pages with that type are scattered (some in folder, some at root) → propose consolidating.
+If a folder exists but its contents have drifted (only 1–2 pages left, or pages of mixed kinds) → propose dissolving or consolidating.
 
 #### b. Type vocabulary drift
 
@@ -191,7 +187,7 @@ PR body must include the full migration plan (from step 4) plus actual results (
 
 ## Anti-patterns specific to migrate
 
-- **Moves without a pattern.** A folder needs ≥5 pages of the same kind to be worth introducing. Single-page folders are noise.
+- **Folders without meaning.** A folder name should be something a reader would search for. Single-page folders or folders whose name just restates a `type` value are noise.
 - **Rewriting bodies.** That's ingest's job; this op touches metadata + location only.
 - **Inventing new types/tags.** Only consolidate existing vocabulary; don't enrich on top.
 - **Piecemeal commits.** One PR per migrate run, all-or-nothing — easier to roll back.

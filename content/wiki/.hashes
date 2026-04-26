@@ -3,3 +3,53 @@ content/Projects/Clidex/03-Search-Quality-Hardening.md 04fb4b9738dc2f9ab2395af18
 content/Projects/Clidex/04-CLI-UX-Design.md 4dcffbd1f327be13ca725854195cd58c34e67609
 content/Projects/misen/2026-04-04-misen-overview.md bc81e5b1fd5922fa43f3f317a9c0a1b62f8f0744
 content/AI/2026-04-04-블로그-검색-실험-1-실험설계.md 47976b2e858a60654c1e8895b2e2e6691d384181
+content/Tools/바이브코딩과 커서(Cursor).md 78c1460593ac4ba2e8e9a145039bc6c135dde5fa
+content/Tools/Cursor-Project-Rules.md 41430b51f0f8c805a32c845890fa45b79d985256
+content/Tools/2024-07-29-Zettelkasten.md bd1c6c060e3645eabfea73c740ee61ac5a453f07
+content/Tools/2024-08-02-Second-Brain-RAG.md 1b21a2a0a7fc20dd8c9b315da11c66b865cea2eb
+content/Tools/2026-03-03-Moonlight-AI-논문-리더-활용법.md f31628e7525af8bc35bbfb0cdb883eeba943f390
+content/Tools/LangFlow.md ce636c0d53d833b199fd7aa93fc85f4e7e6e7aad
+content/Tools/Ubuntu-Server-Setup.md b8dea883b4ca9bd31d9002ad5377fd29e4f0588b
+content/Tools/Mac/2025-04-18-맥북 초기 세팅.md 26f9587745f8567e693b8e168e4579fc76a67bc6
+content/Tools/Git/2024-11-17-방법-Github CI CD - GCP.md 818bf8006f5f473bb4cea672516a9e5121f18389
+content/Tools/Git/2024-11-09-정리-Github CI CD - GCP.md 32b2da2a40cf011a6a17dd24560d5c0b01022fb0
+content/Tools/Docker/2023-05-08-Docker와 VM 차이.md 4d02de501722e8471ab1d803fa9cb9182b634def
+content/Tools/Docker/2023-11-09-Docker-실습.md aa4c87a1ab499d55b1b7ad9ce0e3c34f754bf3a0
+content/Tools/Docker/2024-03-27-Docker Compose에서 Flask와 MySQL 연결 문제.md f2d4f526ee1a40d65516f512aa1979a581fdbe11
+content/Tools/2024-01-03-Git Blog SSG 비교.md 0694c80570fd68117f8a18bd5395ef83622715f6
+content/Tools/2024-01-01-깃 블로그 생성.md fbed89b4937487c00c46fb8297f3a975d2e0db96
+content/Tools/2024-01-05-Hugo 블로그 생성 연습.md 467066726ba1103226ebb42318afc55cf0e903c8
+content/Tools/Git/2023-12-11-Git Blog Themes.md a610a7fd346ebdbaa74244d1e31dc63ca18e8d06
+content/Tools/Obsidian/Quartz, GitHub Pages 사용하여 Obsidian 노트 배포.md 595d8445910bb3c5ee36f71ffc33ed41f349966f
+content/Tools/Obsidian/검색 노출 시키는 방법.md f5c3f2a544085612253c9e58800afb40f6a91610
+content/Tools/2024-03-09-Obsidian to Notion 자동화.md 4065f333e59da0df6612b6294cd0fc19108d5a42
+content/Study/SeSAC/2023-11-29-Transformers 강의 정리.md 60c0a2a53ba3afb3df7abf5afc3e149080450971
+content/Study/SeSAC/2023-11-30-Transformers 실습.md 1b8a18e93789792c98e3acde7292b8f9ef6494ed
+content/Study/빅분기/2023-09-22-빅분기.md 760628fac74825a5db1d62582fda8e77d9ae9bbc
+content/Study/빅분기/2023-11-27-빅분기-실기-1유형.md 7101be0ac9b809085c30fdd38770f6075d8fa538
+content/Study/빅분기/2023-11-30-빅분기-실기-2유형.md 0b72de361ad8a95bd372e9e9d4bfc8844f4aec8f
+content/Study/빅분기/2023-12-02-빅분기-실기-3유형.md f26064f239557eeb010e4383f8a87f6766095fde
+content/Study/정보처리기사/2023-07-05-소프트웨어 공학.md 5e222d15947ab351e5a1b83cd5d174cef87f28f5
+content/Study/정보처리기사/2023-07-05-소프트웨어 개발 방법론.md 09d0f2d87a27d1e7323b27b448103f2cb84efa26
+content/Study/정보처리기사/2023-07-08-프로젝트 계획 및 분석.md f44a3564268063c13c9e3e73c3507bccfad6c27a
+content/Study/정보처리기사/2023-07-11-소프트웨어 설계.md e53fb8e7c64df482436ed0526b9e2ce4e01f906a
+content/Study/정보처리기사/2023-07-16-화면 설계.md aef23b14d372f0fd8f9be4edd03c59bad70839ea
+content/Study/정보처리기사/2023-07-16-서버 프로그램 구현.md d2a624a633d00f3a369b781b74ada4e94c799af5
+content/Study/정보처리기사/2023-07-21-정처기-3과목-운영체제.md 27d3f044c7a23088f0be93dbae621cb98d38b3ab
+content/Study/SeSAC/2023-11-17-딥러닝 영상처리.md 5bd16235e9fae6f5074363656f59c65611ec7c2d
+content/Study/SeSAC/2023-11-20-딥러닝 영상처리2.md e8a1c68649d42cf003af547071a1b12c4c8063cd
+content/Study/SeSAC/2023-11-22-딥러닝 영상처리3.md a3df34101f9361f7f72fe5906e3c2cf5eaf56282
+content/Study/SeSAC/2023-11-23-딥러닝 영상처리4.md 24ceba2627839a8fd33ba52ca63a81cb3298b861
+content/Tools/Git/2022-09-08-_Github_Github정리.md 70046dca85f26d96fe91d82ba3e5a0e67e7f5832
+content/Study/SeSAC/data-analysis/2023-07-28-SeSAC-인공지능.md dae33d635b391c7aa1ae5549f7b2af67d77c424c
+content/Study/SeSAC/data-analysis/2023-07-20-SeSAC-SQL로 데이터베이스 다루기-1일차.md 6919ebbe522bc2925f86b3317f60357b7b749ff2
+content/Tools/Git/2024-01-15-Github Action google-protobuf 오류.md 2912f56cca57c5728ccced4f55fe550f658cad4f
+content/Tools/Obsidian/Google Search Console - 도메인 vs URL 접두어 속성.md e027f26449d7a60993e2a940ed2f5bf8d3382a12
+content/Study/프라임칼리지 수업 정리.md 262c964846395b542af902e0a470b16deb351f4b
+content/Study/자바의정석-2장-변수.md 9233b9b2eaae4639d6e138618b953c5d94b63fd2
+content/Study/알고리즘 대회에 필요한 수학.md ed77e59978b622eb51952d283f03ea8c06b4247c
+content/Study/SeSAC/2023-11-21-Orange 실습.md eca5af5ed0759b879bcda07e2f4ffdd1f31bd88c
+content/Study/SeSAC/2023-11-21-Azure ML Classic.md 1facb6f3493bc139200bd17af0d0658a0128993c
+content/Study/SeSAC/data-analysis/2023-07-18-SeSAC-데이터 분석 기초-1일차.md eeb3a59774c75779f8125696c680e5e815fada56
+content/Study/SeSAC/data-analysis/2023-07-19-SeSAC-데이터 분석 기초-2일차.md adfa0968c480d1ecedaf278a96df162dcac5ff00
+content/Tools/2024-08-25-Visual Zettelkasten.md 09f1320e07680c70134a2f9f7fdf106f358447b2

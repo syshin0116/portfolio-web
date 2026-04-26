@@ -5,7 +5,7 @@ tags:
   - cli
   - rust
   - ai
-  - ai-agent
+  - agent
   - bm25
   - search
   - fuzzy-search

@@ -5,7 +5,6 @@ tags:
   - zettelkasten
   - pkm
   - note-taking
-  - knowledge-management
   - second-brain
   - obsidian
   - productivity

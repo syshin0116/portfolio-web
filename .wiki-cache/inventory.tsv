@@ -1,0 +1,6 @@
+slug	folder	type	tags	summary_in_frontmatter	sources_count	updated	outgoing_wikilinks	incoming_wikilinks	has_coverage	has_summary_body
+cli-ux-design		pattern	cli,backend	no	1	2026-04-25	[[clidex]]	[[clidex]]	yes(low)	yes
+clidex		tool	cli,rust,ai	no	2	2026-04-25	[[cli-ux-design]]	[[cli-ux-design]]	yes(medium)	yes
+llm-text-to-sql		pattern	text-to-sql,llm,prompt-engineering,ai	no	1	2026-04-25	[[블로그-검색-실험]]	[[블로그-검색-실험]]	yes(low)	yes
+misen		tool	python,ai,llm	no	1	2026-04-25	(none)	(none)	yes(low)	yes
+블로그-검색-실험		reference	rag,ai,embeddings	no	1	2026-04-25	[[llm-text-to-sql]]	[[llm-text-to-sql]]	yes(low)	yes

@@ -3,19 +3,21 @@ title: "CLI UX 설계 원칙"
 type: pattern
 tags:
   - cli
+  - rust
   - backend
+  - ai-agent
+  - ux
+  - api-design
+  - unix
+  - pattern
 sources:
   - content/Projects/Clidex/04-CLI-UX-Design.md
+summary: "CLI 도구의 사용성은 기능 추가가 아니라 출력 계약과 동작 규칙의 설계 문제다. TTY 감지로 사람과 기계의 출력 기본값 충돌을 해결하고, 출력 스키마를 API 계약처럼 안정적으로 유지하고, 명령의 의미에 따라 exit code를 분리하면 인간과 에이전트 모두가 예측 가능하게 사용할 수 있는 도구가 된다."
 created: 2026-04-25
-updated: 2026-04-25
+updated: 2026-04-26
 author: wiki-curator
 draft: false
-coverage: low
 ---
-
-## Summary
-
-CLI 도구의 사용성은 기능 추가가 아니라 출력 계약과 동작 규칙의 설계 문제다. TTY 감지로 사람과 기계의 출력 기본값 충돌을 해결하고, 출력 스키마를 API 계약처럼 안정적으로 유지하고, 명령의 의미에 따라 exit code를 분리하면 인간과 에이전트 모두가 예측 가능하게 사용할 수 있는 도구가 된다.
 
 ## Key Claims
 

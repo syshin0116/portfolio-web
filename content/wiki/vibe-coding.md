@@ -8,7 +8,7 @@ tags:
   - productivity
   - llm
   - vibe-coding
-  - ai-agent
+  - agent
   - pattern
 summary: "Vibe coding은 Andrej Karpathy가 명명한 개발 철학으로, LLM과 AI 에디터에 코드 생성을 완전히 위임하고 개발자는 의도와 방향에 집중하는 방식이다. Cursor + Composer 조합이 대표적 구현 도구이며, 프로토타입과 주말 프로젝트에 효과적이나 프로덕션 코드에서는 코드 이해 부재가 위험 요소다."
 sources:

@@ -7,7 +7,7 @@ tags:
   - coding-assistant
   - project-rules
   - configuration
-  - ai-agent
+  - agent
   - pattern
 summary: "Cursor의 Project Rules 시스템은 .cursor/rules/ 디렉터리에 YAML+Markdown 파일로 파일 패턴별 AI 동작 규칙을 정의한다. 구버전 .cursorrules 파일보다 유연하고 버전 관리가 가능하며, 팀 코딩 컨벤션 표준화에 효과적이다."
 sources:

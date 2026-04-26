@@ -5,7 +5,7 @@ tags:
   - cli
   - rust
   - backend
-  - ai-agent
+  - agent
   - ux
   - api-design
   - unix

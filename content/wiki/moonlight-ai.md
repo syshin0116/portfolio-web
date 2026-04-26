@@ -9,7 +9,6 @@ tags:
   - rag
   - llm
   - productivity
-  - tools
 summary: "Moonlight는 학술 논문 PDF에 AI를 붙여주는 크롬 확장 프로그램이다. 3줄 요약, 자동 하이라이트(기여점/방법론/결과), 드래그 설명, 스마트 인용, Scholar Deep Search(RAG 기반 관련 논문 추천) 기능을 제공하며, 한국 AI 회사 Corca가 개발했다."
 sources:
   - content/Tools/2026-03-03-Moonlight-AI-논문-리더-활용법.md

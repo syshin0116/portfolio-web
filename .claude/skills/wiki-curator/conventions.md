@@ -38,9 +38,19 @@ draft: false
 
 ## Page organization
 
-ingest writes every new page to `content/wiki/<slug>.md` at root. Folders are [migrate](./migrate.md)'s domain — restructuring happens in one operation, never piecemeal during ingest.
+The wiki uses **three complementary mechanisms** for organizing pages:
 
-When migrate introduces folders or changes type/tag vocabulary, its PR justifies the pattern observed.
+| Mechanism | Role |
+|-----------|------|
+| **Folders** | Primary home. Where a reader would first look for the page in a file tree. |
+| **Wikilinks** | Conceptual connections across folders. Bidirectional graph of related pages. |
+| **Tags** | Facets / cross-cutting metadata. Independent of folder location. |
+
+Folders are **not exclusive partitions**. A page may legitimately belong to several categories — pick the strongest fit as its home, and let tags + wikilinks carry the rest. A page that "could go anywhere" is rare; usually one category is more natural than the others.
+
+**Operational split:**
+- ingest writes every new page to `content/wiki/<slug>.md` at root. It does not pick folders.
+- [migrate](./migrate.md) decides folder structure based on the whole wiki.
 
 **Slugs stay stable.** Folder moves don't break wikilinks (resolution is by basename); slug renames do — backlinks must be updated in the same operation.
 

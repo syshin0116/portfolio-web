@@ -133,7 +133,7 @@ If folders are introduced, append the folder: `concepts/zettelkasten.md`. The sl
 - Targets must exist or be created in the same operation.
 - Verify with the script (LLMs hallucinate links):
   ```bash
-  bun .claude/skills/wiki-curator/scripts/verify-wikilinks.ts
+  bun .claude/skills/wiki-curator/scripts/verify.ts
   ```
 - Each link in `## Connections` gets a one-line context.
 - Zero links is valid output. Don't pad.

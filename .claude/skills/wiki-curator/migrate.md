@@ -157,7 +157,7 @@ Execute the proposals in this order (so partial failure leaves wiki in a consist
 3. **File moves** — `git mv content/wiki/<slug>.md content/wiki/<folder>/<slug>.md` (slugs unchanged so wikilinks still resolve by basename).
 4. **Cleanup** — remove the now-empty old `coverage:` fields, remove empty `## Connections` sections, etc.
 5. **Rebuild `index.md`** — reflects new structure.
-6. **Verify wikilinks** — same check as ingest.
+6. **Verify gate** — `bun .claude/skills/wiki-curator/scripts/verify.ts`. See [SKILL.md → Verify gate](./SKILL.md#verify-gate) for retry behavior.
 
 If any step fails → halt. Do not commit a half-applied migration.
 
@@ -194,7 +194,7 @@ PR body must include the full migration plan (from step 4) plus actual results (
 
 ## Gotchas
 
-- **Slug rename = backlink break.** Renaming a slug requires updating every `[[old-slug]]` reference in the same operation. The verify-wikilinks script catches misses.
+- **Slug rename = backlink break.** Renaming a slug requires updating every `[[old-slug]]` reference in the same operation. The verify gate catches misses.
 - **Wikilinks resolve by basename.** Folder moves are safe; the script confirms.
 - **`git mv` preserves history.** Use it for moves; don't `rm` + `add`.
 - **Tag/type consolidation is one-way.** No undo via re-running migrate. Keep the migration plan reviewable.

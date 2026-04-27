@@ -66,15 +66,24 @@ Save to `.wiki-cache/inventory.tsv` for later inspection. This is the input to a
 
 #### a. Folder candidates
 
-Group pages by `type:`, by tag overlap, or by topical coherence. For each candidate group, ask:
+Folders are **primary homes**, not exclusive partitions. The aim is "where would a reader first look for this page" — not "this category captures every aspect of this page". Cross-cutting concerns are handled by tags and wikilinks (see [conventions → Page organization](./conventions.md#page-organization)).
 
-- Would a folder name carry real meaning to a human reader scanning the file tree?
-- Is the group cohesive enough that someone looking for one of these pages would think to look in that folder?
-- Are there enough pages that the folder isn't just noise?
+For each candidate folder, ask:
 
-If yes to all three → propose the folder. If a clear group exists with only 2–3 pages but the category is unmistakable (e.g., a project with multiple sub-pages), that may still warrant a folder. Conversely, 10 pages with no real shared identity beyond a shared `type` value don't warrant one.
+- Would a reader scanning the file tree expect to find these pages here?
+- Is there a clearly **dominant** theme that one of these pages exemplifies (even if the page also touches other themes)?
+- Does the folder name communicate something specific (better than just restating a `type` value)?
 
-If a folder exists but its contents have drifted (only 1–2 pages left, or pages of mixed kinds) → propose dissolving or consolidating.
+If yes → propose the folder. **Overlap with other potential folders is acceptable** — pick the strongest fit as the home. The fact that a page could plausibly live in two folders is normal and resolved by tags + wikilinks, not by leaving the page at root.
+
+Page count guidance:
+- 1 page → almost never a folder (no benefit over root).
+- 2–3 pages with a strongly cohesive theme (e.g., a project with multiple sub-pages) → folder OK.
+- 4+ pages with a clear shared theme → folder warranted; absence of one means the file tree is harder to navigate than it needs to be.
+
+Pages that don't fit any cohesive group stay at root. A `misc/` or `other/` folder is forbidden — it's noise.
+
+If a folder exists but its contents have drifted (only 1 page left, or pages of mixed kinds with no dominant theme) → propose dissolving or consolidating.
 
 #### b. Type vocabulary drift
 
@@ -187,7 +196,8 @@ PR body must include the full migration plan (from step 4) plus actual results (
 
 ## Anti-patterns specific to migrate
 
-- **Folders without meaning.** A folder name should be something a reader would search for. Single-page folders or folders whose name just restates a `type` value are noise.
+- **Folders without meaning.** A folder name should be something a reader would search for. Single-page folders, `misc/`, `other/`, or folders whose name just restates a `type` value are noise.
+- **Refusing folders because of cross-cutting concerns.** Pages live in their *primary home*; tags and wikilinks handle the rest. Don't keep everything at root just because some pages touch multiple themes.
 - **Rewriting bodies.** That's ingest's job; this op touches metadata + location only.
 - **Inventing new types/tags.** Only consolidate existing vocabulary; don't enrich on top.
 - **Piecemeal commits.** One PR per migrate run, all-or-nothing — easier to roll back.

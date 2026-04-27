@@ -165,7 +165,7 @@ Execute the proposals in this order (so partial failure leaves wiki in a consist
 2. **Type consolidation** — rewrite `type:` field across all affected pages.
 3. **File moves** — `git mv content/wiki/<slug>.md content/wiki/<folder>/<slug>.md` (slugs unchanged so wikilinks still resolve by basename).
 4. **Cleanup** — remove the now-empty old `coverage:` fields, remove empty `## Connections` sections, etc.
-5. **Rebuild `index.md`** — reflects new structure.
+5. **Rebuild `index.md`** — `bun .claude/skills/wiki-curator/scripts/rebuild-index.ts`. The script reads frontmatter and emits the standard format; don't generate the table token-by-token.
 6. **Verify gate** — `bun .claude/skills/wiki-curator/scripts/verify.ts`. See [SKILL.md → Verify gate](./SKILL.md#verify-gate) for retry behavior.
 
 If any step fails → halt. Do not commit a half-applied migration.

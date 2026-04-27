@@ -149,7 +149,10 @@ When a source is deleted (`D` in git diff):
 
 After processing all sources:
 
-- Rebuild `content/wiki/index.md` from scratch using current page set.
+- Rebuild `content/wiki/index.md` via the script (don't generate the table token-by-token):
+  ```bash
+  bun .claude/skills/wiki-curator/scripts/rebuild-index.ts
+  ```
 - Append one line to `content/wiki/log.md` (use `date -u +'%Y-%m-%d %H:%M UTC'` for the timestamp):
   ```
   ## [YYYY-MM-DD HH:MM UTC] ingest | N sources → A new, B updated, C skipped

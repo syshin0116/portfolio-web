@@ -124,15 +124,15 @@ grep -rli "$NEW_PAGE_TITLE" content/wiki/
 
 If you find a natural place to add a `[[wikilink]]`, add it. **Naturalness rule: only if the surrounding sentence already discusses the linked concept.** Never insert a "See also: [[X]]" appendix to satisfy a connection count.
 
-### 7. Verify wikilinks
+### 7. Verify gate
 
-Run the script (deterministic — don't validate by reading files):
+See [SKILL.md → Verify gate](./SKILL.md#verify-gate) for the full check list and retry behavior.
 
 ```bash
-bun .claude/skills/wiki-curator/scripts/verify-wikilinks.ts
+bun .claude/skills/wiki-curator/scripts/verify.ts
 ```
 
-Exit 0 = all resolve. Non-zero = broken links printed to stdout. Fix or remove broken links before commit.
+If exit 1: read the per-check failures, fix in place, re-run. Up to 3 retries. After 3 failures → abort, do not commit.
 
 ## Deletion handling
 

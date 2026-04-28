@@ -58,41 +58,44 @@ A personal tech blog, portfolio, and AI chatbot — built with [Next.js 15](http
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) 1.0+ (or Node.js 18+)
-- API keys for LangGraph and Supabase (optional — site works without them)
+- [Bun](https://bun.sh/) 1.0+ (or Node.js 18+) — for `web/`
+- [uv](https://github.com/astral-sh/uv) — for `agent/` (Python)
+- Postgres database (Neon, Supabase, or local) and API keys (Anthropic/OpenAI, OAuth providers) — see `.env.example`
 
 ### Installation
 
 ```bash
 git clone https://github.com/syshin0116/syshin0116.dev.git
-cd syshin0116.dev/web
-bun install
+cd syshin0116.dev
+
+# Frontend
+cd web && bun install && cd ..
+
+# Agent (optional, for local LangGraph backend)
+cd agent && uv sync && cd ..
 ```
 
 ### Environment Variables
 
-Copy `.env.example` or create `.env`:
+Copy the example files and fill in your values:
 
-```env
-# LangGraph (blog-rag backend) — optional
-LANGGRAPH_API_URL=your_langgraph_api_url
-LANGGRAPH_API_KEY=your_api_key
-
-# Supabase (auth) — optional
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```bash
+cp web/.env.example web/.env.local
+cp agent/.env.example agent/.env
 ```
+
+- `web/.env.local` — Auth.js secret, OAuth credentials, `DATABASE_URL`, agent backend URL
+- `agent/.env` — `DATABASE_URL`, model selection, Anthropic/OpenAI keys, optional LangSmith
 
 ### Development
 
 ```bash
-cd web
-bun dev       # Start dev server (Turbopack)
-bun build     # Production build
-bun start     # Start production server
-```
+# Frontend
+cd web && bun dev       # http://localhost:3000
 
-Open [http://localhost:3000](http://localhost:3000).
+# Agent backend (separate terminal, optional)
+cd agent && uv run langgraph dev
+```
 
 ## Project Structure
 

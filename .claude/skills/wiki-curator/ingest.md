@@ -14,9 +14,9 @@ Convert source posts into wiki pages. Read [SKILL.md](./SKILL.md) and [conventio
 
 This operation takes one of:
 
-- **Explicit list** — caller specifies source paths (e.g., "ingest content/AI/2026-04-19-LLM-Text-to-SQL.md")
-- **Recent N** — caller specifies a count (e.g., "ingest the 5 most recent posts")
-- **Since-last-routine** — no explicit list, no count → process posts changed since the last `routine:` commit
+- **Explicit list** - caller specifies source paths (e.g., "ingest content/AI/2026-04-19-LLM-Text-to-SQL.md")
+- **Recent N** - caller specifies a count (e.g., "ingest the 5 most recent posts")
+- **Since-last-routine** - no explicit list, no count → process posts changed since the last `routine:` commit
 
 ### Resolving "recent N"
 
@@ -96,7 +96,7 @@ If the source is too thin or too narrow (e.g., a quick tip, a personal note), fi
 
 Follow the page structure in [conventions.md](./conventions.md#page-structure).
 
-**File location: always `content/wiki/<slug>.md` at root.** Do not create folders. Don't try to fit pages into an existing folder structure either — let migrate consolidate later.
+**File location: always `content/wiki/<slug>.md` at root.** Do not create folders. Don't try to fit pages into an existing folder structure either - let migrate consolidate later.
 
 **Surgical updates only.** When updating an existing page:
 
@@ -108,7 +108,7 @@ Follow the page structure in [conventions.md](./conventions.md#page-structure).
 
 **For new pages:**
 
-- All mandatory frontmatter fields present, including `summary:` (1–3 sentences, single source — do not also write a `## Summary` section in body).
+- All mandatory frontmatter fields present, including `summary:` (1–3 sentences, single source - do not also write a `## Summary` section in body).
 - Mandatory body sections: `## Key Claims`, `## Footnotes`. Other sections only if non-empty.
 - Filename follows [conventions](./conventions.md#filename-rules).
 - `created` = today (UTC), `updated` = today (UTC).
@@ -167,11 +167,11 @@ TS=$(date -u +%Y%m%d-%H%M%S)
 BRANCH="claude/wiki-ingest-$TS"
 git checkout -b "$BRANCH"
 git add content/wiki/
-git commit -m "routine: wiki ingest — N sources processed"
+git commit -m "routine: wiki ingest - N sources processed"
 git push origin "$BRANCH"
 gh pr create \
   --base main \
-  --title "routine: wiki ingest — N pages affected" \
+  --title "routine: wiki ingest - N pages affected" \
   --body "$(generate_pr_body)"
 ```
 

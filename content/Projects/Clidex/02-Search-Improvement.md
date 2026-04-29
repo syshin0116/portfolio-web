@@ -35,10 +35,10 @@ published: 2026-03-25
 ### 테스트 결과
 
 ```
-커버리지:  38/87 = 43%  — 인기 도구의 절반 이상이 인덱스에 없음
-Phase 2A:  27/30 = 90%  — 인덱스에 있는 건 잘 찾음
-Phase 2B:   1/30 = 3%   — 없는 도구는 당연히 못 찾음
-Overall:   28/60 = 47%  — 실질적 검색 정확도
+커버리지:  38/87 = 43%  - 인기 도구의 절반 이상이 인덱스에 없음
+Phase 2A:  27/30 = 90%  - 인덱스에 있는 건 잘 찾음
+Phase 2B:   1/30 = 3%   - 없는 도구는 당연히 못 찾음
+Overall:   28/60 = 47%  - 실질적 검색 정확도
 ```
 
 ### 무엇이 빠져있었나
@@ -68,7 +68,7 @@ uv가 82K stars인데 인덱스에 없다. ruff가 47K stars인데 없다. **202
 ```
 쿼리: "rename files"
 기대: nomino, f2 (rename 도구)
-실제: trash-cli (삭제 도구) — 1위
+실제: trash-cli (삭제 도구) - 1위
 ```
 
 원인: trash-cli의 카테고리가 "Deleting, **Copying, and Renaming**"이라 "rename"에 +8점 매칭. 설명("Move files to the trash")에는 "rename"이 없는데도 카테고리만으로 1위.
@@ -78,10 +78,10 @@ uv가 82K stars인데 인덱스에 없다. ruff가 47K stars인데 없다. **202
 ```
 쿼리: "fast python linter"
 기대: ruff
-실제: starship, fd, yazi — "fast"에만 매칭
+실제: starship, fd, yazi - "fast"에만 매칭
 
 쿼리: "node version manager fast"
-실제: yazi, gitui, lf — 전부 "fast"에 매칭
+실제: yazi, gitui, lf - 전부 "fast"에 매칭
 ```
 
 "fast", "modern", "simple" 같은 일반적인 수식어가 BM25 스코어를 지배하고, 핵심 키워드("python", "linter", "node")가 묻히는 현상.
@@ -91,7 +91,7 @@ uv가 82K stars인데 인덱스에 없다. ruff가 47K stars인데 없다. **202
 ```
 쿼리: "fuzzy finder"
 기대: fzf (79K★)
-실제: fzy (작은 프로젝트) — BM25 점수가 비슷할 때 인기도 차이를 반영 못함
+실제: fzy (작은 프로젝트) - BM25 점수가 비슷할 때 인기도 차이를 반영 못함
 ```
 
 ---
@@ -121,9 +121,9 @@ Model2Vec은 Sentence Transformer를 정적 임베딩 룩업 테이블로 증류
 
 [Efficient Inverted Indexes for Approximate Retrieval over Learned Sparse Representations](https://arxiv.org/abs/2404.18812)도 검토했다. SPLADE 임베딩 위에서 서브밀리초 검색을 달성하는 인덱스 구조인데, clidex에는 부적합했다:
 
-1. **스케일 미스매치** — SEISMIC은 수백만 문서용. 485개에선 brute-force가 더 빠름
-2. **SPLADE 모델 필요** — 420MB BERT 모델이 필요. CLI 도구에 번들 불가
-3. **문제가 다름** — clidex의 문제는 검색 속도가 아니라 **관련성**과 **커버리지**
+1. **스케일 미스매치** - SEISMIC은 수백만 문서용. 485개에선 brute-force가 더 빠름
+2. **SPLADE 모델 필요** - 420MB BERT 모델이 필요. CLI 도구에 번들 불가
+3. **문제가 다름** - clidex의 문제는 검색 속도가 아니라 **관련성**과 **커버리지**
 
 ---
 
@@ -404,10 +404,10 @@ for chunk in to_fetch.chunks(concurrency) {
 
 | 쿼리 | 기대 | 실제 | 해석 |
 |---|---|---|---|
-| disk usage analyzer | dust | gdu | 둘 다 disk usage 도구 — **틀린 게 아님** |
-| process monitor | procs | htop | htop이 125K installs로 인기도 압도 — **합리적** |
+| disk usage analyzer | dust | gdu | 둘 다 disk usage 도구 - **틀린 게 아님** |
+| process monitor | procs | htop | htop이 125K installs로 인기도 압도 - **합리적** |
 | fuzzy finder | fzf | **fzf** | stars 반영 후 해결 |
-| http api client tui | curlie | ATAC | 둘 다 API client TUI — **틀린 게 아님** |
+| http api client tui | curlie | ATAC | 둘 다 API client TUI - **틀린 게 아님** |
 
 대부분 "틀린 게 아니라 다른 관련 도구가 나온 것". 실제 LLM 사용에서는 top 5 중 하나로 찾을 수 있다.
 
@@ -485,10 +485,10 @@ Stars 캐싱을 구현할 때 JSON 파일, SQLite 등 새 캐시 포맷을 고�
 
 ## 다음 단계
 
-- **modern-unix awesome-list 파서 수정** — 마크다운 형식이 달라 0개 파싱됨
-- **Homebrew Cask CLI 필터 정밀화** — 625개 중 순수 터미널 앱만 선별
-- **PyPI console_scripts 자동 발견** — shell_gpt 같은 pip 전용 도구 커버
-- **Model2Vec 시맨틱 검색 CI 통합** — 일일 빌드에서 임베딩 자동 생성
+- **modern-unix awesome-list 파서 수정** - 마크다운 형식이 달라 0개 파싱됨
+- **Homebrew Cask CLI 필터 정밀화** - 625개 중 순수 터미널 앱만 선별
+- **PyPI console_scripts 자동 발견** - shell_gpt 같은 pip 전용 도구 커버
+- **Model2Vec 시맨틱 검색 CI 통합** - 일일 빌드에서 임베딩 자동 생성
 
 ---
 

@@ -2,7 +2,7 @@
 
 # syshin0116.dev
 
-A personal tech blog, portfolio, and AI chatbot — built with [Next.js 15](https://nextjs.org/), [Nuartz](https://github.com/syshin0116/nuartz), and [LangGraph](https://github.com/langchain-ai/langgraph).
+A personal tech blog, portfolio, and AI chatbot - built with [Next.js 15](https://nextjs.org/), [Nuartz](https://github.com/syshin0116/nuartz), and [LangGraph](https://github.com/langchain-ai/langgraph).
 
 [![Deploy with Vercel](https://img.shields.io/badge/Deploy-Vercel-black?logo=vercel&logoColor=white)](https://vercel.com/import/project?template=https://github.com/syshin0116/syshin0116.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -58,9 +58,9 @@ A personal tech blog, portfolio, and AI chatbot — built with [Next.js 15](http
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) 1.0+ (or Node.js 18+) — for `web/`
-- [uv](https://github.com/astral-sh/uv) — for `agent/` (Python)
-- Postgres database (Neon, Supabase, or local) and API keys (Anthropic/OpenAI, OAuth providers) — see `.env.example`
+- [Bun](https://bun.sh/) 1.0+ (or Node.js 18+) - for `web/`
+- [uv](https://github.com/astral-sh/uv) - for `agent/` (Python)
+- Postgres database (Neon, Supabase, or local) and API keys (Anthropic/OpenAI, OAuth providers) - see `.env.example`
 
 ### Installation
 
@@ -84,8 +84,8 @@ cp web/.env.example web/.env.local
 cp agent/.env.example agent/.env
 ```
 
-- `web/.env.local` — Auth.js secret, OAuth credentials, `DATABASE_URL`, agent backend URL
-- `agent/.env` — `DATABASE_URL`, model selection, Anthropic/OpenAI keys, optional LangSmith
+- `web/.env.local` - Auth.js secret, OAuth credentials, `DATABASE_URL`, agent backend URL
+- `agent/.env` - `DATABASE_URL`, model selection, Anthropic/OpenAI keys, optional LangSmith
 
 ### Development
 
@@ -119,8 +119,8 @@ syshin0116.dev/          # Monorepo root
 
 | Repo | Description |
 |------|-------------|
-| [nuartz](https://github.com/syshin0116/nuartz) | Headless data layer — Obsidian vault → Next.js |
-| [blog-rag](https://github.com/syshin0116/blog-rag) | RAG backend — FastAPI + LangGraph |
+| [nuartz](https://github.com/syshin0116/nuartz) | Headless data layer - Obsidian vault → Next.js |
+| [blog-rag](https://github.com/syshin0116/blog-rag) | RAG backend - FastAPI + LangGraph |
 
 ## Contributing
 

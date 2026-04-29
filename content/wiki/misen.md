@@ -50,13 +50,13 @@ def chunk(input: dict) -> dict:
 ```python
 from misen import sequential, parallel
 
-# 순차 파이프라인 — 파이프 문법도 동일
+# 순차 파이프라인 - 파이프 문법도 동일
 ingest = parse | chunk | embed | save
 
 # 병렬 실행
 analysis = parallel(extract_metadata, generate_summary)
 
-# 중첩 — 파이프라인도 Block이므로 재사용 가능
+# 중첩 - 파이프라인도 Block이므로 재사용 가능
 qa_pipeline = sequential(
     ingest,
     search,

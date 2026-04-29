@@ -1,6 +1,6 @@
 ---
 name: read-post
-description: Read the full markdown content of a specific blog post. Use when the user wants detailed content from a known post, needs to quote or summarize an article, or asks "show me the full post", "read this article", "what does that post say?". Requires a file path — find it first with search or list_posts.
+description: Read the full markdown content of a specific blog post. Use when the user wants detailed content from a known post, needs to quote or summarize an article, or asks "show me the full post", "read this article", "what does that post say?". Requires a file path - find it first with search or list_posts.
 ---
 
 # Read Post
@@ -36,7 +36,7 @@ Tags: LLM, agent, architecture
 ## Important Notes
 
 - **Path required**: Relative path format (e.g. `AI/2025-06-04-Title.md`). Search first if unknown.
-- **Token cost**: Long posts consume thousands of tokens. Only use when you genuinely need the full content — search result snippets may suffice for quick answers.
+- **Token cost**: Long posts consume thousands of tokens. Only use when you genuinely need the full content - search result snippets may suffice for quick answers.
 - **One at a time**: If multiple posts are needed, start with the most relevant one.
 
 ## Typical Workflow

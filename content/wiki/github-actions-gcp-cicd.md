@@ -74,7 +74,7 @@ jobs:
 
 ## Connections
 
-- [[docker]] — Docker 이미지 빌드와 컨테이너 실행이 파이프라인의 핵심
+- [[docker]] - Docker 이미지 빌드와 컨테이너 실행이 파이프라인의 핵심
 
 ## Footnotes
 

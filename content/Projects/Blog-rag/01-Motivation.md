@@ -49,7 +49,7 @@ RAG를 공부하면서 항상 아쉬웠던 점이 있었다. 튜토리얼은 대
 ---
 
 > [!note] 레포 재편 맥락
-> 이 프로젝트의 위치와 레포 구조는 [[Projects/Nuartz/04-Headless-and-Ecosystem|Nuartz — Headless 설계와 레포 생태계 재편]]에서 다뤘다.
+> 이 프로젝트의 위치와 레포 구조는 [[Projects/Nuartz/04-Headless-and-Ecosystem|Nuartz - Headless 설계와 레포 생태계 재편]]에서 다뤘다.
 
 ---
 
@@ -65,7 +65,7 @@ RAG를 공부하면서 항상 아쉬웠던 점이 있었다. 튜토리얼은 대
 | 구조 | 단순 파일 + 폴더, wikilink로 연결된 그래프 |
 | 길이 | 짧은 메모부터 긴 기술 문서까지 다양 |
 
-한국어 혼용은 특히 중요한 변수다. 시맨틱 검색의 임베딩 품질, 키워드 검색의 토크나이징, 쿼리 언어 불일치 모두 영향을 받는다. Nuartz에서 한국어 검색을 위해 CJK-aware 토크나이저를 따로 구현했던 것처럼, 여기서도 신경 써야 할 부분이다. → [[Projects/Nuartz/03-Vercel-Deployment|Nuartz — 한국어 검색 구현]]
+한국어 혼용은 특히 중요한 변수다. 시맨틱 검색의 임베딩 품질, 키워드 검색의 토크나이징, 쿼리 언어 불일치 모두 영향을 받는다. Nuartz에서 한국어 검색을 위해 CJK-aware 토크나이저를 따로 구현했던 것처럼, 여기서도 신경 써야 할 부분이다. → [[Projects/Nuartz/03-Vercel-Deployment|Nuartz - 한국어 검색 구현]]
 
 ---
 

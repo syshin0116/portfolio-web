@@ -114,7 +114,7 @@ modified: 2025-01-05
 
 ### Overview
 
-In modern AI systems, **memory management** plays a critical role in creating personalized and efficient user experiences. Imagine interacting with an AI that remembers nothing about your previous conversations—it would be frustrating to repeat the same information every time! To address this, memory management systems are designed to handle and organize information effectively.
+In modern AI systems, **memory management** plays a critical role in creating personalized and efficient user experiences. Imagine interacting with an AI that remembers nothing about your previous conversations-it would be frustrating to repeat the same information every time! To address this, memory management systems are designed to handle and organize information effectively.
 
 This guide focuses on managing **Short-term** and **Long-term Memory** for conversational AI, specifically for building personalized chatbots. We will explore two implementation paths:
 

@@ -55,11 +55,11 @@ if name_bonus == 0.0 && (lexical_score < 2.0 || covered == 0) {
 
 **3. intent_coverage가 토큰 경계를 무시했다**
 
-`searchable.contains(&tl)`로 전체 메타데이터를 substring 검색하고 있었다. 짧은 term이 긴 단어 내부에 우연히 매칭되는 문제가 있었다 — 예를 들어 "at"이 "d**at**a"에 걸리고, "no"가 "tech**no**logy"에 걸리는 식이다. 토큰 경계를 무시하면 coverage 계산이 부풀려진다.
+`searchable.contains(&tl)`로 전체 메타데이터를 substring 검색하고 있었다. 짧은 term이 긴 단어 내부에 우연히 매칭되는 문제가 있었다 - 예를 들어 "at"이 "d**at**a"에 걸리고, "no"가 "tech**no**logy"에 걸리는 식이다. 토큰 경계를 무시하면 coverage 계산이 부풀려진다.
 
 ---
 
-## 수정 1: 오타 교정 — Edit Distance 도입
+## 수정 1: 오타 교정 - Edit Distance 도입
 
 ### 문제: nucleo는 전치를 못 잡는다
 
@@ -99,7 +99,7 @@ let is_typo_match = if max_edit > 0 {
 
 ---
 
-## 수정 2: Synonym gate — 확장 term으로 재검증
+## 수정 2: Synonym gate - 확장 term으로 재검증
 
 ```rust
 // 수정: covered == 0이면 synonym 확장 term으로 재검증
@@ -190,7 +190,7 @@ assert_ranks_above(&r, "lazygit", "gitui", "git terminal ui");
 
 ### 해결 3: 실제 인덱스 통합 테스트
 
-`search_real_index_test.rs` — 5,277개 실제 도구에서:
+`search_real_index_test.rs` - 5,277개 실제 도구에서:
 
 | 테스트 | 검증 내용 |
 |---|---|
@@ -205,7 +205,7 @@ assert_ranks_above(&r, "lazygit", "gitui", "git terminal ui");
 
 ### 해결 4: Coverage test
 
-`index_coverage_test.rs` — 데이터 파이프라인 회귀 감지:
+`index_coverage_test.rs` - 데이터 파이프라인 회귀 감지:
 
 ```rust
 const MUST_HAVE_TOOLS: &[(&str, &[&str])] = &[
@@ -229,11 +229,11 @@ const MUST_HAVE_TOOLS: &[(&str, &[&str])] = &[
 
 테스트를 강화하자마자 실제 문제가 드러났다:
 
-1. **"make http requests" → curlie가 httpie를 이김** — curlie의 description에 "curl"과 "httpie" 모두 포함되어 BM25 점수가 높음. 정답이 하나로 고정되기 어려운 쿼리라 강제 순서 대신 둘 다 top 3 확인으로 변경.
+1. **"make http requests" → curlie가 httpie를 이김** - curlie의 description에 "curl"과 "httpie" 모두 포함되어 BM25 점수가 높음. 정답이 하나로 고정되기 어려운 쿼리라 강제 순서 대신 둘 다 top 3 확인으로 변경.
 
-2. **"faster grep" → 실제 인덱스에서 ripgrep이 top 5 밖** — ag, sift, ugrep, vgrep, ripgrep-all이 모두 "grep"과 강하게 매칭. Fixture에서는 안 보이던 문제.
+2. **"faster grep" → 실제 인덱스에서 ripgrep이 top 5 밖** - ag, sift, ugrep, vgrep, ripgrep-all이 모두 "grep"과 강하게 매칭. Fixture에서는 안 보이던 문제.
 
-3. **"smart cd command" → 실제 인덱스에서 zoxide 못 찾음** — "smart"은 무의미, "cd"는 2글자로 약한 시그널. 5,277개 도구 중에서는 노이즈에 묻힘.
+3. **"smart cd command" → 실제 인덱스에서 zoxide 못 찾음** - "smart"은 무의미, "cd"는 2글자로 약한 시그널. 5,277개 도구 중에서는 노이즈에 묻힘.
 
 이런 발견이 테스트 강화의 실질적 가치다.
 
@@ -282,7 +282,7 @@ let seed_tools = [
 
 | 지표 | 이전 | 이번 |
 |---|---|---|
-| **Recall** (fixture) | 30/30 (100%) | **34/34 (100%)** — adversarial fixture 포함 |
+| **Recall** (fixture) | 30/30 (100%) | **34/34 (100%)** - adversarial fixture 포함 |
 | **Typo 교정** | 작동 안 함 | ripgrpe→ripgrep, zoxdie→zoxide, lazigit→lazygit |
 | **Synonym-only 매치** | gate에서 탈락 | grep files→ripgrep, navigate quickly→zoxide |
 | **실제 인덱스 테스트** | 없음 | **10/10** (5,277 도구) |
@@ -349,10 +349,10 @@ Fixture에서 "faster grep" → ripgrep은 당연히 #1이었지만, 5,277개 �
 
 ## 다음 단계
 
-- **실제 인덱스 성능 최적화** — 현재 ~880ms/query (5,277 도구). BM25 엔진 캐싱 또는 incremental index로 개선 가능
-- **crates.io/PyPI discovery 반영 확인** — 코드는 추가됨, 다음 인덱스 빌드 후 실제 coverage 변화 측정
-- **"faster grep" 랭킹 문제** — 실제 인덱스에서 ripgrep이 ag/sift에 밀리는 현상. popularity boost나 "known alias" 가중치 조정 필요
-- **Homebrew threshold tiering** — long-tail CLI 도구의 구조적 유입 경로 확보
+- **실제 인덱스 성능 최적화** - 현재 ~880ms/query (5,277 도구). BM25 엔진 캐싱 또는 incremental index로 개선 가능
+- **crates.io/PyPI discovery 반영 확인** - 코드는 추가됨, 다음 인덱스 빌드 후 실제 coverage 변화 측정
+- **"faster grep" 랭킹 문제** - 실제 인덱스에서 ripgrep이 ag/sift에 밀리는 현상. popularity boost나 "known alias" 가중치 조정 필요
+- **Homebrew threshold tiering** - long-tail CLI 도구의 구조적 유입 경로 확보
 
 ---
 

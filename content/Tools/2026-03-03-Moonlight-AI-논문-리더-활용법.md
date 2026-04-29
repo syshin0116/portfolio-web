@@ -261,9 +261,9 @@ Moonlight의 개발사는 한국 AI B2B SaaS 회사인 **Corca**([corca-ai GitHu
 
 ```
 [브라우저]
-  ├── Content Script  — PDF 페이지 감지, 사이드바 DOM 주입, 텍스트 선택 이벤트 처리
-  ├── Service Worker  — 백엔드 API 프록시, 인증 토큰 관리
-  └── Sidebar UI      — React/Preact 기반 사이드바 렌더링
+  ├── Content Script  - PDF 페이지 감지, 사이드바 DOM 주입, 텍스트 선택 이벤트 처리
+  ├── Service Worker  - 백엔드 API 프록시, 인증 토큰 관리
+  └── Sidebar UI      - React/Preact 기반 사이드바 렌더링
 ```
 
 크롬 확장이 PDF를 열면 기본 PDF 뷰어를 대체하거나 그 위에 오버레이를 씌우는 방식으로 동작한다. Content Script가 PDF 내 텍스트 선택 이벤트를 감지해서 "Explain / Translate" 팝업을 띄우고, Service Worker를 통해 Corca 백엔드로 요청을 보낸다. API 키는 확장 소스코드에 노출되지 않고 서버에서만 관리한다.

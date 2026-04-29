@@ -89,8 +89,8 @@ connection = pymysql.connect(
 
 ## Connections
 
-- [[github-actions-gcp-cicd]] — GitHub Actions CI/CD 파이프라인에서 Docker 이미지 빌드와 배포가 핵심 단계
-- [[ubuntu-server-setup]] — 서버 초기화 스크립트에 Docker CE 설치 포함
+- [[github-actions-gcp-cicd]] - GitHub Actions CI/CD 파이프라인에서 Docker 이미지 빌드와 배포가 핵심 단계
+- [[ubuntu-server-setup]] - 서버 초기화 스크립트에 Docker CE 설치 포함
 
 ## Footnotes
 

@@ -24,7 +24,7 @@ modified: 2026-03-26
 | **npm** | [@llamaindex/liteparse](https://www.npmjs.com/package/@llamaindex/liteparse) |
 | **최신 버전** | v1.3.0 (2026-03-25) |
 | **라이선스** | Apache 2.0 (Python wrapper는 MIT) |
-| **런타임** | Node.js (TypeScript) — Python 아님 |
+| **런타임** | Node.js (TypeScript) - Python 아님 |
 | **GPU 필요** | X |
 | **ML 모델** | 없음 (PDF.js + Tesseract.js) |
 
@@ -278,6 +278,6 @@ LiteParse는 **"텍스트 내용만 빠르게 뽑으면 되는"** 사용 사례�
 
 - [LiteParse GitHub](https://github.com/run-llama/liteparse)
 - [LiteParse npm](https://www.npmjs.com/package/@llamaindex/liteparse)
-- [LlamaIndex 블로그 — LiteParse 소개](https://www.llamaindex.ai/blog/liteparse-local-document-parsing-for-ai-agents)
-- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석]] — PyMuPDF4LLM 분석
-- [[2026-03-23-MinerU-2x-파이프라인-분석]] — MinerU 2.x 분석
+- [LlamaIndex 블로그 - LiteParse 소개](https://www.llamaindex.ai/blog/liteparse-local-document-parsing-for-ai-agents)
+- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석]] - PyMuPDF4LLM 분석
+- [[2026-03-23-MinerU-2x-파이프라인-분석]] - MinerU 2.x 분석

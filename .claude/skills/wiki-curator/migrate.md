@@ -7,7 +7,7 @@ Restructure folders, types, and tag vocabulary to reflect emergent patterns. Rea
 - When `lint` reports significant drift (orphan pages, parallel tag synonyms, mismatched types).
 - After a backfill or large ingest batch (50+ new pages).
 - Periodically (monthly), to consolidate accumulated mess.
-- **Never** in the same routine session as ingest — they have conflicting goals (ingest preserves; migrate restructures).
+- **Never** in the same routine session as ingest - they have conflicting goals (ingest preserves; migrate restructures).
 
 ## What migrate may do
 
@@ -31,7 +31,7 @@ migrate has broad authority over the wiki's shape:
 
 ## Workflow
 
-### 1. Sanity check — no pending source changes
+### 1. Sanity check - no pending source changes
 
 ```bash
 LAST_INGEST=$(git log --grep "^routine: wiki ingest" -1 --format=%H 2>/dev/null)
@@ -39,7 +39,7 @@ LAST_INGEST=$(git log --grep "^routine: wiki ingest" -1 --format=%H 2>/dev/null)
 
 if git diff --name-only "$LAST_INGEST" HEAD -- 'content/*.md' \
      ':(exclude)content/wiki/' ':(exclude)content/Untitled.md' | grep -q .; then
-  echo "Source posts changed since last ingest — run ingest first"
+  echo "Source posts changed since last ingest - run ingest first"
   exit 0
 fi
 ```
@@ -66,7 +66,7 @@ Save to `.wiki-cache/inventory.tsv` for later inspection. This is the input to a
 
 #### a. Folder candidates
 
-Folders are **primary homes**, not exclusive partitions. The aim is "where would a reader first look for this page" — not "this category captures every aspect of this page". Cross-cutting concerns are handled by tags and wikilinks (see [conventions → Page organization](./conventions.md#page-organization)).
+Folders are **primary homes**, not exclusive partitions. The aim is "where would a reader first look for this page" - not "this category captures every aspect of this page". Cross-cutting concerns are handled by tags and wikilinks (see [conventions → Page organization](./conventions.md#page-organization)).
 
 For each candidate folder, ask:
 
@@ -74,14 +74,14 @@ For each candidate folder, ask:
 - Is there a clearly **dominant** theme that one of these pages exemplifies (even if the page also touches other themes)?
 - Does the folder name communicate something specific (better than just restating a `type` value)?
 
-If yes → propose the folder. **Overlap with other potential folders is acceptable** — pick the strongest fit as the home. The fact that a page could plausibly live in two folders is normal and resolved by tags + wikilinks, not by leaving the page at root.
+If yes → propose the folder. **Overlap with other potential folders is acceptable** - pick the strongest fit as the home. The fact that a page could plausibly live in two folders is normal and resolved by tags + wikilinks, not by leaving the page at root.
 
 Page count guidance:
 - 1 page → almost never a folder (no benefit over root).
 - 2–3 pages with a strongly cohesive theme (e.g., a project with multiple sub-pages) → folder OK.
 - 4+ pages with a clear shared theme → folder warranted; absence of one means the file tree is harder to navigate than it needs to be.
 
-Pages that don't fit any cohesive group stay at root. A `misc/` or `other/` folder is forbidden — it's noise.
+Pages that don't fit any cohesive group stay at root. A `misc/` or `other/` folder is forbidden - it's noise.
 
 If a folder exists but its contents have drifted (only 1 page left, or pages of mixed kinds with no dominant theme) → propose dissolving or consolidating.
 
@@ -122,7 +122,7 @@ Pages whose `title:` no longer matches their slug (after edits). Optional rename
 Write the plan to `.wiki-cache/migration-plan.md`:
 
 ```markdown
-# Migration plan — YYYY-MM-DD HH:MM UTC
+# Migration plan - YYYY-MM-DD HH:MM UTC
 
 ## Folder restructuring
 
@@ -161,12 +161,12 @@ None. Slugs unchanged, Nuartz/Obsidian resolve by filename.
 
 Execute the proposals in this order (so partial failure leaves wiki in a consistent state):
 
-1. **Tag consolidation** — rewrite `tags:` lists across all affected pages.
-2. **Type consolidation** — rewrite `type:` field across all affected pages.
-3. **File moves** — `git mv content/wiki/<slug>.md content/wiki/<folder>/<slug>.md` (slugs unchanged so wikilinks still resolve by basename).
-4. **Cleanup** — remove the now-empty old `coverage:` fields, remove empty `## Connections` sections, etc.
-5. **Rebuild `index.md`** — `bun .claude/skills/wiki-curator/scripts/rebuild-index.ts`. The script reads frontmatter and emits the standard format; don't generate the table token-by-token.
-6. **Verify gate** — `bun .claude/skills/wiki-curator/scripts/verify.ts`. See [SKILL.md → Verify gate](./SKILL.md#verify-gate) for retry behavior.
+1. **Tag consolidation** - rewrite `tags:` lists across all affected pages.
+2. **Type consolidation** - rewrite `type:` field across all affected pages.
+3. **File moves** - `git mv content/wiki/<slug>.md content/wiki/<folder>/<slug>.md` (slugs unchanged so wikilinks still resolve by basename).
+4. **Cleanup** - remove the now-empty old `coverage:` fields, remove empty `## Connections` sections, etc.
+5. **Rebuild `index.md`** - `bun .claude/skills/wiki-curator/scripts/rebuild-index.ts`. The script reads frontmatter and emits the standard format; don't generate the table token-by-token.
+6. **Verify gate** - `bun .claude/skills/wiki-curator/scripts/verify.ts`. See [SKILL.md → Verify gate](./SKILL.md#verify-gate) for retry behavior.
 
 If any step fails → halt. Do not commit a half-applied migration.
 
@@ -185,14 +185,14 @@ TS=$(date -u +%Y%m%d-%H%M%S)
 BRANCH="claude/wiki-migrate-$TS"
 git checkout -b "$BRANCH"
 git add content/wiki/
-git commit -m "routine: wiki migrate — <one-line summary>"
+git commit -m "routine: wiki migrate - <one-line summary>"
 git push origin "$BRANCH"
 gh pr create --base main \
-  --title "routine: wiki migrate — <one-line summary>" \
+  --title "routine: wiki migrate - <one-line summary>" \
   --body "$(generate_migrate_pr_body)"
 ```
 
-PR body must include the full migration plan (from step 4) plus actual results (in case anything diverged during application). The reasoning matters more than the diff — humans reviewing should be able to judge whether the structure makes sense, not just whether the moves are correct.
+PR body must include the full migration plan (from step 4) plus actual results (in case anything diverged during application). The reasoning matters more than the diff - humans reviewing should be able to judge whether the structure makes sense, not just whether the moves are correct.
 
 ## Anti-patterns specific to migrate
 
@@ -200,7 +200,7 @@ PR body must include the full migration plan (from step 4) plus actual results (
 - **Refusing folders because of cross-cutting concerns.** Pages live in their *primary home*; tags and wikilinks handle the rest. Don't keep everything at root just because some pages touch multiple themes.
 - **Rewriting bodies.** That's ingest's job; this op touches metadata + location only.
 - **Inventing new types/tags.** Only consolidate existing vocabulary; don't enrich on top.
-- **Piecemeal commits.** One PR per migrate run, all-or-nothing — easier to roll back.
+- **Piecemeal commits.** One PR per migrate run, all-or-nothing - easier to roll back.
 
 ## Gotchas
 

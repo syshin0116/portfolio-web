@@ -35,7 +35,7 @@ modified: 2025-04-21
 
 내가 개발 프로젝트를 진행할 때도 항상 비슷한 트레이드오프 상황에 직면한다. 빠르게 개발하면서도 품질 높은 코드를 작성하려 하지만, 때로는 두 가지를 모두 만족시키기 어려울 때가 있다. 이런 상황에서 프로젝트의 목적과 상황에 맞게 우선순위를 정하고 의사결정을 내리는 것이 중요하다는 점을, 이 간단한 비유가 효과적으로 상기시켜 주었다.
 
-> "MongoDB is a CP data store—it resolves network partitions by maintaining consistency, while compromising on availability."
+> "MongoDB is a CP data store-it resolves network partitions by maintaining consistency, while compromising on availability."
 
 리뷰하는 아티클의 이 문장은 MongoDB가 CAP 이론의 관점에서 CP(일관성과 분할 허용성) 데이터 스토어라는 특성을 명확히 설명하고 있다. MongoDB에서는 네트워크 파티션이 발생했을 때 데이터 일관성을 유지하기 위해 가용성을 희생한다는 사실이 직접적으로 표현되어 있다.
 

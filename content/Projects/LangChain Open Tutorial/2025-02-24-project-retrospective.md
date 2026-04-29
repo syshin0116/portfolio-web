@@ -18,7 +18,7 @@ modified: 2025-02-27
 ---
 ## Background
 
-I recently came across the news that **TeddyNote**, a YouTuber I follow, was recruiting contributors for the **LangChain open-source tutorial** on **Retrieval-Augmented Generation (RAG)**—a topic I was particularly interested in. This was an exciting opportunity, not just as a fan, but as a chance to **actively contribute to a topic I’m passionate about**. Since it was my first time participating in a large-scale open-source project and collaborating with various contributors, I was even more eager to take part.
+I recently came across the news that **TeddyNote**, a YouTuber I follow, was recruiting contributors for the **LangChain open-source tutorial** on **Retrieval-Augmented Generation (RAG)**-a topic I was particularly interested in. This was an exciting opportunity, not just as a fan, but as a chance to **actively contribute to a topic I’m passionate about**. Since it was my first time participating in a large-scale open-source project and collaborating with various contributors, I was even more eager to take part.
 
 The tutorial contribution process lasted about **seven weeks**, during which the project saw **over 2,000 commits**, reflecting its high level of activity. In the first week, all contributors focused on reviewing and translating existing tutorials. Afterward, I dedicated my time to creating **new tutorials**, taking responsibility for structuring content and implementing code.
 

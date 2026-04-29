@@ -1,5 +1,5 @@
 ---
-title: "LangFlow — 시각적 AI 워크플로우 빌더"
+title: "LangFlow - 시각적 AI 워크플로우 빌더"
 type: tool
 tags:
   - ai
@@ -43,7 +43,7 @@ draft: false
 
 ## Connections
 
-- [[misen]] — misen은 Python dict→dict Block 인터페이스로 AI 파이프라인을 구성하는 라이브러리로, LangFlow의 코드 기반 대안
+- [[misen]] - misen은 Python dict→dict Block 인터페이스로 AI 파이프라인을 구성하는 라이브러리로, LangFlow의 코드 기반 대안
 
 ## Footnotes
 

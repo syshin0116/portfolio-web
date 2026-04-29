@@ -11,7 +11,7 @@ tags:
 draft: false
 enableToc: true
 description: Phase 1 구현 내용 정리, 그리고 Vercel 배포 과정에서 만난 workspace 프로토콜, Turbopack, 각종 버그들을 기록한다.
-summary: "monorepo 구조와 3-column 레이아웃을 구현하고 Vercel에 첫 배포를 시도했다. workspace 프로토콜 문제, Turbopack의 worker_threads 충돌로 webpack 전환, D3 graph view 노드 좌표 버그, KaTeX CSS 누락, 한국어 FlexSearch 토크나이저 구현까지 — 배포하면서 만난 것들을 전부 기록했다."
+summary: "monorepo 구조와 3-column 레이아웃을 구현하고 Vercel에 첫 배포를 시도했다. workspace 프로토콜 문제, Turbopack의 worker_threads 충돌로 webpack 전환, D3 graph view 노드 좌표 버그, KaTeX CSS 누락, 한국어 FlexSearch 토크나이저 구현까지 - 배포하면서 만난 것들을 전부 기록했다."
 ---
 > [!info] 이전 글
 > Quartz 플러그인 분석을 통해 어떤 전략을 쓸지 정했다. → [[02-Quartz-Internals|Quartz 플러그인 해부]]
@@ -26,7 +26,7 @@ summary: "monorepo 구조와 3-column 레이아웃을 구현하고 Vercel에 첫
 nuartz/
 ├── packages/nuartz/          ← 마크다운 처리 라이브러리
 │   └── src/
-│       ├── markdown.ts       ← renderMarkdown() — unified 파이프라인
+│       ├── markdown.ts       ← renderMarkdown() - unified 파이프라인
 │       ├── fs.ts             ← getAllMarkdownFiles(), buildFileTree()
 │       ├── search.ts         ← buildSearchIndex()
 │       └── backlinks.ts      ← buildBacklinkIndex(), getBacklinks()
@@ -166,7 +166,7 @@ const updatePositions = () => {
 }
 
 sim.on("tick", updatePositions)
-updatePositions()  // ← 즉시 호출 — 정지된 상태에서도 좌표 적용
+updatePositions()  // ← 즉시 호출 - 정지된 상태에서도 좌표 적용
 ```
 
 pre-run된 시뮬레이션 결과가 노드 객체 (`d.x`, `d.y`)에는 이미 저장되어 있다. DOM에 적용하는 함수를 한 번만 직접 호출하면 됐다.
@@ -187,8 +187,8 @@ Quartz는 플러그인 `externalResources()`에서 KaTeX CSS를 자동으로 주
 ### 헤딩 앵커 - 텍스트가 오른쪽으로 밀리는 문제
 
 ```ts
-// 이전: behavior: "prepend" — 아이콘을 텍스트 앞에 추가
-// 수정: behavior: "append" — 아이콘을 텍스트 뒤에 추가
+// 이전: behavior: "prepend" - 아이콘을 텍스트 앞에 추가
+// 수정: behavior: "append" - 아이콘을 텍스트 뒤에 추가
 rehypeAutolinkHeadings({ behavior: "append" })
 ```
 

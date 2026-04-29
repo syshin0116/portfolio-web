@@ -50,7 +50,7 @@ let is_typo_match = if max_edit > 0 {
 } else { false };
 ```
 
-**synonym gate 수정 — 확장 term으로 재검증 (from source)**
+**synonym gate 수정 - 확장 term으로 재검증 (from source)**
 
 ```rust
 let (syn_intent_bonus, syn_covered) = if covered == 0 {
@@ -94,7 +94,7 @@ struct SearchResultOutput<'a> {
 
 ## Connections
 
-- [[cli-ux-design]] — Clidex에서 실천한 CLI UX 설계 원칙들(TTY 감지, 출력 계약, exit code)을 일반 패턴으로 정리
+- [[cli-ux-design]] - Clidex에서 실천한 CLI UX 설계 원칙들(TTY 감지, 출력 계약, exit code)을 일반 패턴으로 정리
 
 ## Footnotes
 

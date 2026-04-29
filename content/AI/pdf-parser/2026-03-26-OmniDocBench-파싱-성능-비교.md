@@ -23,7 +23,7 @@ modified: 2026-03-26
 
 OmniDocBench(CVPR 2025)는 이 한계를 해결한다:
 - **텍스트**: Normalized Edit Distance
-- **테이블**: TEDS (Tree Edit Distance-based Similarity) — HTML 트리 구조 비교
+- **테이블**: TEDS (Tree Edit Distance-based Similarity) - HTML 트리 구조 비교
 - **수식**: Edit Distance (LaTeX 비교)
 - **읽기 순서**: 요소 순서 Edit Distance
 
@@ -51,9 +51,9 @@ OmniDocBench는 **PDF가 아닌 이미지**를 입력으로 사용한다. 따라
 | 항목 | 스펙 |
 |---|---|
 | **머신** | Apple Silicon Mac |
-| **MinerU** | v2.7.6, pipeline 백엔드, MPS — 70/93 성공 (파일명 충돌로 23개 누락) |
-| **Docling** | v2.81.0, CPU — 91/93 성공 |
-| **Marker** | v1.10.1, CPU — 90/93 성공 (단일 이미지라 토큰 제한 문제 거의 없음) |
+| **MinerU** | v2.7.6, pipeline 백엔드, MPS - 70/93 성공 (파일명 충돌로 23개 누락) |
+| **Docling** | v2.81.0, CPU - 91/93 성공 |
+| **Marker** | v1.10.1, CPU - 90/93 성공 (단일 이미지라 토큰 제한 문제 거의 없음) |
 | **평가** | OmniDocBench 공식 evaluator (quick_match) |
 
 ---
@@ -76,7 +76,7 @@ Edit Distance = Levenshtein Distance(예측, 정답) / max(len(예측), len(정�
 
 직관적으로 `1 - Edit Distance`를 정확도로 생각할 수 있다: 0.073이면 **92.7% 정확**.
 
-### TEDS (Tree Edit Distance-based Similarity) — 테이블
+### TEDS (Tree Edit Distance-based Similarity) - 테이블
 
 테이블의 HTML 트리 구조를 비교한다. 단순 텍스트 비교가 아니라 `<tr>`, `<td>`, `rowspan`, `colspan` 등의 **트리 구조적 유사도**를 측정한다.
 

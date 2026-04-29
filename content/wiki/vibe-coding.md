@@ -45,7 +45,7 @@ Cursor Composer 활용 패턴:
 
 ## Connections
 
-- [[cursor-project-rules]] — Cursor Project Rules로 AI 동작을 프로젝트별로 맞춤화하는 보완적 기법
+- [[cursor-project-rules]] - Cursor Project Rules로 AI 동작을 프로젝트별로 맞춤화하는 보완적 기법
 
 ## Footnotes
 

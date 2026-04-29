@@ -56,7 +56,7 @@ google_analytics: "UA_TOKEN"
 
 ## Connections
 
-- [[quartz-publishing]] — Quartz는 Obsidian 노트를 위한 SSG로, 마크다운 기반 블로그의 대안적 접근
+- [[quartz-publishing]] - Quartz는 Obsidian 노트를 위한 SSG로, 마크다운 기반 블로그의 대안적 접근
 
 ## Footnotes
 

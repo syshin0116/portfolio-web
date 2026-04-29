@@ -1,13 +1,13 @@
 ---
 name: graph-traverse
-description: Discover related blog posts by following [[wikilink]] connections. Use when the user asks "what else is related to this post?", "show me connected topics", "recommend similar articles", or wants to explore the knowledge network from a known starting point. Especially effective after finding a post via search — expand outward to discover related content the author explicitly linked.
+description: Discover related blog posts by following [[wikilink]] connections. Use when the user asks "what else is related to this post?", "show me connected topics", "recommend similar articles", or wants to explore the knowledge network from a known starting point. Especially effective after finding a post via search - expand outward to discover related content the author explicitly linked.
 ---
 
 # Graph Traverse
 
 Builds a bidirectional graph from `[[wikilink]]` references across all blog posts, then performs BFS (breadth-first search) from a starting post to find connected content.
 
-This skill surfaces a different kind of relevance than text search — it follows connections the author explicitly created, revealing the blog's knowledge network structure.
+This skill surfaces a different kind of relevance than text search - it follows connections the author explicitly created, revealing the blog's knowledge network structure.
 
 ## Tool
 
@@ -45,5 +45,5 @@ You need a starting point (slug). If you don't have one, search first.
 ## When NOT to Use
 
 - No starting point known → search first with other skills
-- Not all posts have wikilinks — posts without links return empty results
+- Not all posts have wikilinks - posts without links return empty results
 - Text-based search → `keyword_search` or `semantic_search`

@@ -35,7 +35,7 @@ MCP(Model Context Protocol)의 등장 이후 AI 에이전트와 외부 도구의
 
 1. **검색**: "CSV를 JSON으로 변환하는 도구?" → `jq`, `miller`, `csvkit`
 2. **메타데이터**: 설치 방법, GitHub stars, 문서 링크
-3. **비교**: `jq` vs `dasel` vs `yq` — 뭐가 다른지
+3. **비교**: `jq` vs `dasel` vs `yq` - 뭐가 다른지
 4. **구조화된 출력**: 사람이 읽는 텍스트가 아니라, 파싱 가능한 YAML/JSON
 
 이 네 가지를 해결하는 **LLM/에이전트를 위한 CLI 도구 검색기**를 만들기로 했다.
@@ -99,7 +99,7 @@ Pipeline-native → clidex "jq" | 다른_도구 로 체이닝 가능 (기본 YAM
 - **npm**: 알려진 Node CLI 패키지의 `bin` 필드 확인으로 `npm install -g` 추가 (12개)
 
 ```yaml
-# ripgrep 예시 — 3가지 설치 방법 제공
+# ripgrep 예시 - 3가지 설치 방법 제공
 install:
   brew: brew install ripgrep
   cargo: cargo install ripgrep
@@ -135,7 +135,7 @@ fn is_likely_cli(formula: &BrewFormula) -> bool {
 | 알려진 CLI 도구 10개 (jq, ripgrep, fzf 등) | 9/10 (curl만 미스) |
 | 알려진 라이브러리 6개 (openssl, boost 등) | 3/6 |
 
-라이브러리 분류 정확도가 낮지만, 현재는 수동 리스트(`wanted`)로 확실한 도구만 추가하고 있어 실제 인덱스에는 영향 없다. 향후 **역방향 의존성 수**(다른 패키지가 이 패키지를 얼마나 의존하는지)를 추가하면 정확도를 높일 수 있다 — 의존성이 많으면 라이브러리, 적으면 최종 사용자 도구일 확률이 높다.
+라이브러리 분류 정확도가 낮지만, 현재는 수동 리스트(`wanted`)로 확실한 도구만 추가하고 있어 실제 인덱스에는 영향 없다. 향후 **역방향 의존성 수**(다른 패키지가 이 패키지를 얼마나 의존하는지)를 추가하면 정확도를 높일 수 있다 - 의존성이 많으면 라이브러리, 적으면 최종 사용자 도구일 확률이 높다.
 
 ---
 
@@ -218,7 +218,7 @@ BM25 crate가 필드별 가중치를 지원하지 않아서, 텍스트 반복으
 
 ```rust
 fn build_search_text(tool: &Tool) -> String {
-    // 이름 3x — 가장 중요
+    // 이름 3x - 가장 중요
     // 카테고리 + 태그 2x
     // 설명 1x
 }
@@ -347,7 +347,7 @@ clidex update    # ~/.clidex/index.yaml 다운로드
 
 ## 명령어 가이드
 
-### `clidex <query>` — 검색
+### `clidex <query>` - 검색
 
 가장 핵심 기능. 자연어 쿼리로 CLI 도구를 검색한다.
 
@@ -374,7 +374,7 @@ clidex "file manager" -n 3        # 상위 3개만
 
 에이전트는 이 결과에서 `install.brew` 값을 꺼내 바로 실행하면 된다.
 
-### `clidex info <name>` — 도구 상세 정보
+### `clidex info <name>` - 도구 상세 정보
 
 특정 도구의 전체 메타데이터를 조회한다.
 
@@ -385,7 +385,7 @@ clidex info jq --pretty       # 사람이 읽기 좋은 형태
 
 에이전트가 도구를 선택한 후 설치 방법, 문서 링크, llms.txt URL 등을 확인할 때 사용한다.
 
-### `clidex compare <name1> <name2> [name3...]` — 도구 비교
+### `clidex compare <name1> <name2> [name3...]` - 도구 비교
 
 비슷한 용도의 도구들을 side-by-side로 비교한다. 에이전트가 여러 후보 중 하나를 선택할 때 유용하다.
 
@@ -409,7 +409,7 @@ Repo            https://github.com/stedolan/jq  https://github.com/tomwright/…
 
 존재하지 않는 도구가 포함되면 Warning을 출력하고 있는 것만 비교한다.
 
-### `clidex trending` — 인기 도구
+### `clidex trending` - 인기 도구
 
 GitHub stars 기준으로 인기 도구를 보여준다.
 
@@ -422,7 +422,7 @@ clidex trending --pretty           # 사람용 테이블
 > [!note]
 > stars 데이터가 있어야 동작한다. 인덱스 빌드 시 `GITHUB_TOKEN` 환경변수를 설정하면 전체 도구의 stars를 수집한다.
 
-### `clidex --categories` — 카테고리 목록
+### `clidex --categories` - 카테고리 목록
 
 인덱스에 있는 모든 카테고리와 도구 수를 보여준다.
 
@@ -431,7 +431,7 @@ clidex --categories
 clidex --categories --pretty
 ```
 
-### `clidex --category <name>` — 카테고리 필터
+### `clidex --category <name>` - 카테고리 필터
 
 특정 카테고리의 도구만 필터링한다. stars 기준으로 정렬된다.
 
@@ -442,7 +442,7 @@ clidex --category "file manager" -n 5
 
 검색과 달리 BM25를 거치지 않고 카테고리명에 대한 부분 문자열 매칭을 한다. "file manager"로 검색하면 `Files and Directories > File Managers` 카테고리 전체가 나온다.
 
-### `clidex update` — 인덱스 업데이트
+### `clidex update` - 인덱스 업데이트
 
 GitHub Release에서 최신 인덱스를 다운로드한다.
 
@@ -451,7 +451,7 @@ clidex update
 # Index updated: 440 tools
 ```
 
-### `clidex stats` — 인덱스 통계
+### `clidex stats` - 인덱스 통계
 
 현재 로컬 인덱스의 상태를 확인한다.
 

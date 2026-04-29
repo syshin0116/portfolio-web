@@ -46,9 +46,9 @@ fn get_format(pretty: bool, json: bool, yaml: bool) -> Format {
 
 | 동작 | exit code | 이유 |
 |------|-----------|------|
-| search 빈 결과 | 0 | 탐색형 — "없음"이 정상 응답 |
+| search 빈 결과 | 0 | 탐색형 - "없음"이 정상 응답 |
 | category 빈 결과 | 0 | 탐색형 |
-| info 도구 없음 | 1 | 조회형 — 대상이 있어야 한다 |
+| info 도구 없음 | 1 | 조회형 - 대상이 있어야 한다 |
 | compare 모두 없음 | 1 | 조회형 |
 | 인덱스 파일 없음 | 1 | 시스템 상태 에러 |
 | 인덱스 없음 (대화형) | 0 | 자동 다운로드 후 성공 |
@@ -95,7 +95,7 @@ fn suggest_on_empty(query: &str, tools: &[Tool]) {
 
 ## Connections
 
-- [[clidex]] — 이 패턴들이 실제로 구현된 CLI 도구
+- [[clidex]] - 이 패턴들이 실제로 구현된 CLI 도구
 
 ## Footnotes
 

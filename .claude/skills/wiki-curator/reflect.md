@@ -9,7 +9,7 @@ Reflect runs **after** ingest has already produced isolated wiki pages. Its job:
 - Periodically (weekly or monthly).
 - After a large batch ingest (e.g., backfill).
 - When `lint` reports many orphan pages.
-- Never in the same routine session as ingest — reflect needs a fresh view of all pages.
+- Never in the same routine session as ingest - reflect needs a fresh view of all pages.
 
 ## What reflect does NOT do
 
@@ -104,8 +104,8 @@ Only do this when the surrounding sentence is genuinely discussing the linked co
 ```markdown
 ## Connections
 
-- [[zettelkasten]] — note-linking method that inspired this approach
-- [[obsidian-graph-view]] — visual interface for the same idea
+- [[zettelkasten]] - note-linking method that inspired this approach
+- [[obsidian-graph-view]] - visual interface for the same idea
 ```
 
 Each link gets a one-line explanation. Empty `[[X]]` bullets without context are forbidden.
@@ -135,10 +135,10 @@ TS=$(date -u +%Y%m%d-%H%M%S)
 BRANCH="claude/wiki-reflect-$TS"
 git checkout -b "$BRANCH"
 git add content/wiki/
-git commit -m "routine: wiki reflect — N cross-links added across M pages"
+git commit -m "routine: wiki reflect - N cross-links added across M pages"
 git push origin "$BRANCH"
 gh pr create --base main \
-  --title "routine: wiki reflect — N links added" \
+  --title "routine: wiki reflect - N links added" \
   --body "$(generate_reflect_pr_body)"
 ```
 
@@ -162,6 +162,6 @@ Append to `log.md`:
 |--------------|--------------|---------------------|
 | Add `[[See also: ...]]` blocks of 5+ links | Forced links pollute graph | Only add when natural |
 | Auto-add all medium-confidence links | Garbage links accumulate | Propose to user; don't apply |
-| Modify `## Summary` or `## Key Claims` to "weave in" links | Self-corruption — these sections are source-derived | Only edit `## Connections` and inline body |
+| Modify `## Summary` or `## Key Claims` to "weave in" links | Self-corruption - these sections are source-derived | Only edit `## Connections` and inline body |
 | Add bidirectional links automatically | Sometimes A→B is natural but B→A isn't | Each direction evaluated independently |
 | Re-run reflect on the same page set repeatedly | Drift, link explosion | Run weekly or monthly, not after every ingest |

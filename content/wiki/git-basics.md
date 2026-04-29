@@ -47,7 +47,7 @@ draft: false
 
 ## Connections
 
-- [[github-actions-gcp-cicd]] — GitHub Actions는 Git push 이벤트를 트리거로 하는 CI/CD 자동화 도구
+- [[github-actions-gcp-cicd]] - GitHub Actions는 Git push 이벤트를 트리거로 하는 CI/CD 자동화 도구
 
 ## Footnotes
 

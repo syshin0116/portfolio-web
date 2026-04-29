@@ -11,9 +11,9 @@ tags:
   - API-Design
 draft: false
 enableToc: true
-description: "TTY 감지 기반 출력 전환, score 출력 스키마 설계, exit code 의미 분리, 자동 다운로드의 부작용 관리까지 — CLI에서 사용성은 기능 추가가 아니라 설계 규칙과 계약의 문제다."
+description: "TTY 감지 기반 출력 전환, score 출력 스키마 설계, exit code 의미 분리, 자동 다운로드의 부작용 관리까지 - CLI에서 사용성은 기능 추가가 아니라 설계 규칙과 계약의 문제다."
 summary: |
-  [이전 글](/projects/clidex/03-search-quality-hardening)에서 검색 알고리즘의 구조적 문제를 수정하고, 5,277개 실제 인덱스 기반 테스트를 추가했다. 검색 엔진 자체의 품질은 올라갔지만, 실제로 써보면 다른 종류의 문제가 남아 있었다 — 첫 실행에서 에러로 끊기고, 출력 포맷이 사용자에 맞지 않고, 빈 결과에서 다음 행동을 모르고, 파이프라인에서 의도치 않게 중단된다.
+  [이전 글](/projects/clidex/03-search-quality-hardening)에서 검색 알고리즘의 구조적 문제를 수정하고, 5,277개 실제 인덱스 기반 테스트를 추가했다. 검색 엔진 자체의 품질은 올라갔지만, 실제로 써보면 다른 종류의 문제가 남아 있었다 - 첫 실행에서 에러로 끊기고, 출력 포맷이 사용자에 맞지 않고, 빈 결과에서 다음 행동을 모르고, 파이프라인에서 의도치 않게 중단된다.
   
   이 글은 CLI에서 사용성이 기능 목록이 아니라 **설계 규칙과 출력 계약**의 문제라는 관점에서, 네 가지 설계 판단을 기록한다.
 published: 2026-04-07
@@ -26,13 +26,13 @@ published: 2026-04-07
 
 하지만 검색 품질과 사용자 경험은 다른 축이다. 실제 사용 경로를 점검하면서 발견한 문제들:
 
-1. **첫 실행이 끊긴다** — 설치 후 바로 `clidex "json"`을 치면, 인덱스 파일이 없다며 에러 메시지를 뿌리고 멈춘다. `clidex update`를 먼저 실행해야 한다는 걸 사용자가 알아서 파악해야 한다.
+1. **첫 실행이 끊긴다** - 설치 후 바로 `clidex "json"`을 치면, 인덱스 파일이 없다며 에러 메시지를 뿌리고 멈춘다. `clidex update`를 먼저 실행해야 한다는 걸 사용자가 알아서 파악해야 한다.
 
-2. **사람과 에이전트가 같은 기본 출력을 쓴다** — YAML이 기본인데, 사람에게는 읽기 어렵고, 에이전트에게는 적절하다. 둘 다 만족시킬 수 없는 구조.
+2. **사람과 에이전트가 같은 기본 출력을 쓴다** - YAML이 기본인데, 사람에게는 읽기 어렵고, 에이전트에게는 적절하다. 둘 다 만족시킬 수 없는 구조.
 
-3. **빈 결과에서 멈춘다** — `No tools found for: csv` 한 줄이 끝이다. 다음에 뭘 해야 하는지 알 수 없다.
+3. **빈 결과에서 멈춘다** - `No tools found for: csv` 한 줄이 끝이다. 다음에 뭘 해야 하는지 알 수 없다.
 
-4. **파이프라인에서 예상치 못하게 중단된다** — 빈 결과가 exit code 1이라서, `set -e` 환경에서 스크립트가 깨진다.
+4. **파이프라인에서 예상치 못하게 중단된다** - 빈 결과가 exit code 1이라서, `set -e` 환경에서 스크립트가 깨진다.
 
 이 문제들은 검색 알고리즘을 더 개선해도 해결되지 않는다. **CLI의 동작 규칙과 출력 계약**을 설계해야 한다.
 
@@ -90,13 +90,13 @@ fn get_format(pretty: bool, json: bool, yaml: bool) -> Format {
 ### 결과
 
 ```bash
-# 터미널에서 — 사람이 읽기 좋은 포맷
+# 터미널에서 - 사람이 읽기 좋은 포맷
 $ clidex "json processor"
   jq                ★ 34.0k  Data Manipulation > Processors
   JSON processor
   $ brew install jq
 
-# 파이프로 — 에이전트가 파싱할 수 있는 포맷
+# 파이프로 - 에이전트가 파싱할 수 있는 포맷
 $ clidex "json processor" | head -3
 - name: jq
   desc: JSON processor
@@ -113,7 +113,7 @@ $ clidex "json processor" | head -3
 
 AI 에이전트가 검색 결과를 받으면, "이 결과를 얼마나 신뢰할 수 있는가?"를 판단해야 한다. 10개 결과가 모두 같은 구조로 나오면, 순서만 보고 추측해야 한다. relevance score를 노출하면 이 판단이 정확해진다.
 
-첫 번째 구현은 단순했다 — `--score` 플래그가 있으면 `Tool` 객체에 `score` 필드를 주입:
+첫 번째 구현은 단순했다 - `--score` 플래그가 있으면 `Tool` 객체에 `score` 필드를 주입:
 
 ```rust
 // 첫 번째 구현: Tool 객체에 score 주입
@@ -150,8 +150,8 @@ struct SearchResultOutput<'a> {
 }
 ```
 
-- `--score` 있으면: `{score: 67.8, name: "jq", desc: "...", ...}` — score가 최상위 필드로 먼저 나오고, Tool 필드가 flatten
-- `--score` 없으면: `{name: "jq", desc: "...", ...}` — 순수 `Tool` 스키마, info/compare와 동일
+- `--score` 있으면: `{score: 67.8, name: "jq", desc: "...", ...}` - score가 최상위 필드로 먼저 나오고, Tool 필드가 flatten
+- `--score` 없으면: `{name: "jq", desc: "...", ...}` - 순수 `Tool` 스키마, info/compare와 동일
 
 ```json
 // --score 있을 때
@@ -195,7 +195,7 @@ RESULT=$(clidex "csv to json" --yaml)
 | `search` (빈 결과) | **0** | "검색했는데 없었다"는 정상적 응답 |
 | `--category` (빈 결과) | **0** | 카테고리 브라우징도 마찬가지 |
 | `trending` (빈 결과) | **0** | 조건에 맞는 도구가 없을 뿐 |
-| `info foo` (도구 없음) | **1** | 정확한 조회 — "foo"라는 도구는 **있어야** 한다 |
+| `info foo` (도구 없음) | **1** | 정확한 조회 - "foo"라는 도구는 **있어야** 한다 |
 | `compare foo bar` (둘 다 없음) | **1** | 마찬가지로 정확한 조회 |
 | 인덱스 파일 없음 | **1** | 시스템 상태 에러 |
 
@@ -290,7 +290,7 @@ async fn load_or_download() -> Result<Index, String> {
 **읽기처럼 보이는 명령이 쓰기 부작용을 가진다.** 이게 대화형 터미널에서는 편리하지만, CI나 파이프라인에서는 위험하다:
 
 ```bash
-# CI에서 실행 — 인덱스 파일이 없으면 네트워크 호출 시도
+# CI에서 실행 - 인덱스 파일이 없으면 네트워크 호출 시도
 # 네트워크 차단된 환경이면 타임아웃으로 빌드 지연
 docker run --network=none myapp clidex "json"
 ```
@@ -303,13 +303,13 @@ async fn load_or_download() -> Result<Index, String> {
         Ok(i) => Ok(i),
         Err(_) if !config::index_path().exists() => {
             if atty::is(atty::Stream::Stdin) {
-                // 대화형 터미널 — 자동 다운로드
+                // 대화형 터미널 - 자동 다운로드
                 eprintln!("Index not found. Downloading...");
                 let count = index::update_index().await?;
                 eprintln!("Index downloaded: {count} tools");
                 index::load_index()
             } else {
-                // 비대화형 (CI, 파이프) — 에러 메시지만
+                // 비대화형 (CI, 파이프) - 에러 메시지만
                 Err(format!(
                     "Index not found at {}. Run `clidex update` first.",
                     config::index_path().display()
@@ -330,7 +330,7 @@ async fn load_or_download() -> Result<Index, String> {
 | `echo "json" \| clidex` | false | 에러 메시지 |
 | 스크립트 내 실행 | false | 에러 메시지 |
 
-`git`도 비슷한 판단을 한다 — `git commit`이 에디터를 여는 건 대화형일 때만이고, 비대화형에서는 `-m` 플래그가 없으면 에러다.
+`git`도 비슷한 판단을 한다 - `git commit`이 에디터를 여는 건 대화형일 때만이고, 비대화형에서는 `-m` 플래그가 없으면 에러다.
 
 ---
 
@@ -440,8 +440,8 @@ clidex search "monitor" --category system -n 5
 
 | 조건 | 스키마 |
 |------|--------|
-| `--score` 없이 모든 명령 | `[Tool]` — 동일 |
-| `--score` 있을 때 search | `[{score, ...Tool}]` — 래퍼 |
+| `--score` 없이 모든 명령 | `[Tool]` - 동일 |
+| `--score` 있을 때 search | `[{score, ...Tool}]` - 래퍼 |
 
 ---
 
@@ -471,10 +471,10 @@ category 필터의 leaf segment 매칭은 단위 테스트에서 나올 수 없�
 
 ## 다음 단계
 
-- **build_index.rs 모듈 분리** — 2,464줄 단일 파일이 전체 코드의 61%. 데이터 소스별 모듈로 분리 필요
-- **scoring 함수 분리** — 250줄 단일 함수에 12개 시그널이 혼재. 단위 테스트가 생겼으니 안전하게 분리 가능
-- **`.expect()` 제거** — output.rs의 직렬화 `.expect()` 6개를 `Result` 전파로 교체
-- **인덱스 로딩 성능** — 5,277개 도구 인덱스 YAML 파싱에 ~200ms. memory-mapped file이나 binary format 검토
+- **build_index.rs 모듈 분리** - 2,464줄 단일 파일이 전체 코드의 61%. 데이터 소스별 모듈로 분리 필요
+- **scoring 함수 분리** - 250줄 단일 함수에 12개 시그널이 혼재. 단위 테스트가 생겼으니 안전하게 분리 가능
+- **`.expect()` 제거** - output.rs의 직렬화 `.expect()` 6개를 `Result` 전파로 교체
+- **인덱스 로딩 성능** - 5,277개 도구 인덱스 YAML 파싱에 ~200ms. memory-mapped file이나 binary format 검토
 
 ---
 

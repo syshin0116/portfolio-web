@@ -11,7 +11,7 @@ Use the wiki-curator skill (.claude/skills/wiki-curator/).
 
 Look at the current state of the wiki and recent activity (`git log`, `content/wiki/log.md`). Decide what operation, if any, would be useful right now.
 
-Each operation file has its own "When to run" guidance — read those before deciding. Trust your judgment based on the actual state, not arbitrary thresholds.
+Each operation file has its own "When to run" guidance - read those before deciding. Trust your judgment based on the actual state, not arbitrary thresholds.
 
 Common cases:
 - New source posts since the last routine commit → ingest those specific files (use the "since-last-routine" mode in ingest.md, not "recent N").
@@ -20,7 +20,7 @@ Common cases:
 
 Run the verify gate at the end. See SKILL.md → Verify gate for retry behavior.
 
-Don't mix operations in one session — pick the most useful single one.
+Don't mix operations in one session - pick the most useful single one.
 ```
 
 ---

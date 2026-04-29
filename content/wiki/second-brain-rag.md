@@ -28,8 +28,8 @@ draft: false
 
 ## Connections
 
-- [[zettelkasten]] — Zettelkasten은 Second Brain의 노트 연결 방법론으로, 개인 지식베이스의 구조적 기반
-- [[블로그-검색-실험]] — 한국어 블로그 포스트를 대상으로 한 실제 RAG 검색 성능 비교 실험 시리즈
+- [[zettelkasten]] - Zettelkasten은 Second Brain의 노트 연결 방법론으로, 개인 지식베이스의 구조적 기반
+- [[블로그-검색-실험]] - 한국어 블로그 포스트를 대상으로 한 실제 RAG 검색 성능 비교 실험 시리즈
 
 ## Footnotes
 

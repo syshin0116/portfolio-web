@@ -19,7 +19,7 @@ modified: 2026-03-27
 
 | 항목 | 내용 |
 |---|---|
-| **개발사** | Hancom (한컴) — 한글(HWP) 개발사, 한국 오피스 소프트웨어 1위 |
+| **개발사** | Hancom (한컴) - 한글(HWP) 개발사, 한국 오피스 소프트웨어 1위 |
 | **GitHub** | [opendataloader-project/opendataloader-pdf](https://github.com/opendataloader-project/opendataloader-pdf) |
 | **GitHub Stars** | ~9,600 (2026.03 #1 Trending, 하루 1,394스타) |
 | **최신 버전** | v2.1.1 (2026-03-26) |
@@ -122,7 +122,7 @@ Operations Self-Attention O(n2 · d) O(1) O(1) Recurrent O(n · d2) O(n) O(n)
 Convolutional O(k · n · d2) O(1) O(logk(n)) Self-Attention (restricted) O(r · n · d) O(1) O(n/r)
 ```
 
-**Markdown 테이블 구문 없이 텍스트로만 추출**. 테이블 구조가 완전히 손실됨 — 이 부분이 가장 큰 약점.
+**Markdown 테이블 구문 없이 텍스트로만 추출**. 테이블 구조가 완전히 손실됨 - 이 부분이 가장 큰 약점.
 
 #### 수식
 
@@ -142,7 +142,7 @@ LaTeX 미지원. 텍스트로만 추출.
 Figure 1: The Transformer - model architecture.
 ```
 
-이미지 추출 O — `![image N]()` 형태로 Markdown에 참조. MinerU/Marker와 유사한 방식.
+이미지 추출 O - `![image N]()` 형태로 Markdown에 참조. MinerU/Marker와 유사한 방식.
 
 ---
 
@@ -201,7 +201,7 @@ Figure 1: The Transformer - model architecture.
 - GPU 불필요
 
 ### 단점
-- **테이블 구조 손실** — Markdown 테이블 미생성
+- **테이블 구조 손실** - Markdown 테이블 미생성
 - **수식 LaTeX 미지원**
 - **Java 런타임 필요** (Python/Node.js만으로 안 됨)
 - 일부 문서에서 StackOverflowError
@@ -225,6 +225,6 @@ Figure 1: The Transformer - model architecture.
 - [OpenDataLoader GitHub](https://github.com/opendataloader-project/opendataloader-pdf)
 - [PyPI: opendataloader-pdf](https://pypi.org/project/opendataloader-pdf/)
 - [[2026-03-26-PDF-파서-5종-비교-분석|PDF 파서 5종 비교]]
-- [[2026-03-26-Docling-PDF-파서-분석|Docling 분석]] — 같은 Apache 2.0/MIT 진영
+- [[2026-03-26-Docling-PDF-파서-분석|Docling 분석]] - 같은 Apache 2.0/MIT 진영
 
 > 이 파서의 헤딩/테이블/수식/이미지 처리 결과를 다른 파서와 직접 비교한 글: [[2026-03-26-PDF-파서-5종-비교-분석|PDF 파서 5종 비교 분석]]

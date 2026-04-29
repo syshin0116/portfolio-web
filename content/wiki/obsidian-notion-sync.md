@@ -38,7 +38,7 @@ Notion API Integration 설정 경로:
 
 ## Connections
 
-- [[zettelkasten]] — Obsidian은 Zettelkasten 방법론의 디지털 구현 도구
+- [[zettelkasten]] - Obsidian은 Zettelkasten 방법론의 디지털 구현 도구
 
 ## Footnotes
 

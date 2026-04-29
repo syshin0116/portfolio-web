@@ -22,8 +22,8 @@ import {
   getAllMarkdownFiles,
   buildFileTree,
   buildSearchIndex,
-  renderMarkdown,
 } from "nuartz"
+import { renderMarkdown } from "nuartz/markdown"
 import type { MarkdownFile, RenderResult, Frontmatter, TocEntry } from "nuartz"
 
 const ROOT = path.join(import.meta.dir, "..")

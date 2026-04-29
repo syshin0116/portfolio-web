@@ -16,8 +16,8 @@ tags:
   - context-engineering
 draft: false
 enableToc: true
-description: AI 코딩 도구가 넘쳐나는 시대, 실제로 개발 워크플로우를 바꿀 수 있는 방법론 4가지 — BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done — 를 철학, 워크플로우, 커뮤니티 반응까지 철저하게 비교한다.
-summary: "Claude Code, Cursor 같은 AI 코딩 어시스턴트가 대중화되면서, 이를 더 체계적으로 활용하기 위한 방법론들이 등장하고 있다. 이 글에서는 가장 주목받는 네 가지 — BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done — 를 철학, 워크플로우, 에이전트 시스템, 실사용 경험과 커뮤니티 반응까지 세세하게 비교한다."
+description: AI 코딩 도구가 넘쳐나는 시대, 실제로 개발 워크플로우를 바꿀 수 있는 방법론 4가지 - BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done - 를 철학, 워크플로우, 커뮤니티 반응까지 철저하게 비교한다.
+summary: "Claude Code, Cursor 같은 AI 코딩 어시스턴트가 대중화되면서, 이를 더 체계적으로 활용하기 위한 방법론들이 등장하고 있다. 이 글에서는 가장 주목받는 네 가지 - BMAD Method, MoAI-ADK, GitHub Spec Kit, Get Shit Done - 를 철학, 워크플로우, 에이전트 시스템, 실사용 경험과 커뮤니티 반응까지 세세하게 비교한다."
 published: 2026-02-26
 modified: 2026-03-19
 ---
@@ -64,11 +64,11 @@ BMAD의 핵심 아이디어는 AI에게 **역할(페르소나)** 을 부여하�
 
 BMAD는 단독 도구가 아니라 **모듈 생태계**다:
 
-- **BMad Method (BMM)** — 34+ 핵심 워크플로우
-- **BMad Builder (BMB)** — 커스텀 에이전트 생성
-- **Test Architect (TEA)** — 위험 기반 테스트 전략
-- **Game Dev Studio (BMGD)** — 게임 개발 특화
-- **Creative Intelligence Suite (CIS)** — 디자인 싱킹 도구
+- **BMad Method (BMM)** - 34+ 핵심 워크플로우
+- **BMad Builder (BMB)** - 커스텀 에이전트 생성
+- **Test Architect (TEA)** - 위험 기반 테스트 전략
+- **Game Dev Studio (BMGD)** - 게임 개발 특화
+- **Creative Intelligence Suite (CIS)** - 디자인 싱킹 도구
 
 ```bash
 npx bmad-method install
@@ -95,7 +95,7 @@ Node.js v20+ 기반이며, CI/CD 파이프라인을 위한 비대화형 설치�
 
 ### 탄생 배경: 실패에서 시작된 도구
 
-MoAI-ADK를 만든 Goos Kim([goos.kim](https://goos.kim))은 2024년 초 와디즈에서 "모두의 사주"라는 GPT 기반 서비스를 직접 개발하다 3주 만에 API 비용 약 $500를 태우는 경험을 했다. 스파게티 코드, 문서와 코드의 비동기화, 컨텍스트 윈도우 소진 후 작업 맥락 유실—현재 많은 개발자들이 AI 코딩에서 겪는 문제들이 그대로였다.
+MoAI-ADK를 만든 Goos Kim([goos.kim](https://goos.kim))은 2024년 초 와디즈에서 "모두의 사주"라는 GPT 기반 서비스를 직접 개발하다 3주 만에 API 비용 약 $500를 태우는 경험을 했다. 스파게티 코드, 문서와 코드의 비동기화, 컨텍스트 윈도우 소진 후 작업 맥락 유실-현재 많은 개발자들이 AI 코딩에서 겪는 문제들이 그대로였다.
 
 이 실패 경험을 바탕으로 약 6개월간 TDD, DDD, 스펙 문서 방식 등 다양한 개발 방법론을 AI 에이전트에 직접 적용해보며 탄생한 것이 MoAI-ADK다. 원래는 Python으로 작성된 73,000줄짜리 프레임워크였는데, Go로 완전히 다시 작성해 단일 바이너리로 5ms 안에 시작된다(Python 버전은 ~800ms).
 
@@ -114,9 +114,9 @@ MoAI-ADK를 이해하는 두 가지 열쇠다. 대부분의 AI 코딩 도구들�
 > "얘네들 범위를 정해 주지 않으면 막 중구난방이고 그냥 확률적으로 나오는 거니까. '이거 안 돼, 저거 안 돼' 다 막아 놓고 '요렇게만 해야 돼' 라고 하면 딱 그것만 바라보고 진행한다."
 
 세 가지 근간 원칙:
-1. **SPEC-First** — EARS(Easy Approach to Requirements Syntax) 형식의 명세서 작성이 구현보다 먼저. 재작업을 90% 줄인다고 주장
-2. **TDD/DDD 자동 선택** — 신규 프로젝트는 TDD, 기존 프로젝트(커버리지 10% 미만)는 DDD로 자동 전환
-3. **지능형 오케스트레이션** — 20개 전문 에이전트가 작업 복잡도에 따라 병렬/순차 실행
+1. **SPEC-First** - EARS(Easy Approach to Requirements Syntax) 형식의 명세서 작성이 구현보다 먼저. 재작업을 90% 줄인다고 주장
+2. **TDD/DDD 자동 선택** - 신규 프로젝트는 TDD, 기존 프로젝트(커버리지 10% 미만)는 DDD로 자동 전환
+3. **지능형 오케스트레이션** - 20개 전문 에이전트가 작업 복잡도에 따라 병렬/순차 실행
 
 ### TDD vs DDD: 언제 어느 쪽을?
 
@@ -133,7 +133,7 @@ MoAI-ADK의 독특한 점 중 하나는 **프로젝트 상황에 따라 개발 �
 
 20개 에이전트가 세 계층으로 나뉜다:
 
-**Manager 에이전트 (7개)** — 워크플로우 조율
+**Manager 에이전트 (7개)** - 워크플로우 조율
 - `manager-spec`: EARS 형식 명세서 생성
 - `manager-ddd`: DDD 사이클 실행
 - `manager-docs`: Nextra 통합 문서 생성
@@ -142,10 +142,10 @@ MoAI-ADK의 독특한 점 중 하나는 **프로젝트 상황에 따라 개발 �
 - `manager-project`: 프로젝트 초기화
 - `manager-strategy`: 아키텍처 의사결정
 
-**Expert 에이전트 (9개)** — 도메인 전문성 제공
+**Expert 에이전트 (9개)** - 도메인 전문성 제공
 백엔드, 프론트엔드, 보안, DevOps, 디버깅, 테스팅, 리팩토링, 성능 최적화, UI/UX
 
-**Builder 에이전트 (4개)** — 메타 프로그래밍
+**Builder 에이전트 (4개)** - 메타 프로그래밍
 새 에이전트, 슬래시 커맨드, 스킬, 플러그인 생성
 
 중앙에는 **Alfred SuperAgent**라는 전략적 오케스트레이터가 있어서 요청을 분석하고, 태스크 타입에 따라 라우팅하며, 최대 10개 에이전트를 병렬로 실행한다.
@@ -254,14 +254,14 @@ Spec Kit은 전통적인 개발 워크플로우를 **뒤집는다**. 명세서�
 
 Spec Kit은 GitHub이 직접 만든 만큼 높은 기대를 받았지만, 실사용 후기는 엇갈린다.
 
-**Scott Logic의 리뷰 (Colin Eberhardt)** — KartLog 앱의 회로 관리 기능을 Spec Kit으로 재구현하는 실험:
+**Scott Logic의 리뷰 (Colin Eberhardt)** - KartLog 앱의 회로 관리 기능을 Spec Kit으로 재구현하는 실험:
 - 피처 하나에 33~56분 소요 (기존 방식의 10배)
 - 주기당 2,000줄 이상의 마크다운 생성 (실제 코드보다 문서가 더 많음)
-- 단순한 버그(폼 데이터 미입력)가 여전히 발생 — 상세한 스펙이 있음에도
+- 단순한 버그(폼 데이터 미입력)가 여전히 발생 - 상세한 스펙이 있음에도
 - **결론**: "흥미로운 개념이지만, 순수한 형태로는 비실용적. 애자일의 핵심 장점인 빠른 코드 생성을 낭비하는 재발명된 워터폴"
 
 **긍정적인 측면:**
-- 팀 협업 시 명시적인 검토 포인트를 만들어줌 — 코드 변경이 쌓이기 전에 스펙 단계에서 거부/수정 가능
+- 팀 협업 시 명시적인 검토 포인트를 만들어줌 - 코드 변경이 쌓이기 전에 스펙 단계에서 거부/수정 가능
 - 기술 스택에 무관하게 동작 (Python, JS, Go, Rust 등 어디서나)
 - 그린필드 + 브라운필드 모두 지원
 - Constitution 기반 일관성이 장기 프로젝트에서 빛남
@@ -413,20 +413,20 @@ GSD는 6개 이상의 AI 런타임을 공식 지원한다:
 **성공 사례:**
 
 > "I tried B-MAD Framework and it was like night and day. Can't work without it."
-> — g42gregory, Hacker News
+> - g42gregory, Hacker News
 
 > "I built this MVP in a single day using the BMad Method with GitHub Copilot."
-> — GenericApple, Hacker News (FastAPI + HTMX 앱)
+> - GenericApple, Hacker News (FastAPI + HTMX 앱)
 
 > "Pretty surprised BMAD-method wasn't mentioned. For my money it's by far the best Claude Code compliment... completely transformative."
-> — matt3D, Hacker News
+> - matt3D, Hacker News
 
 **비판:**
 - GitHub에 110개 이상의 오픈 이슈가 있어, 안정성 문제가 존재한다. 설치 시 race condition으로 소스 파일이 삭제되는 버그(#2005), PRD를 건너뛰면 "out-of-context" 실행 오류(#2038) 등이 보고됨
 - AI 도구가 AI 도구가 생성한 YAML/마크다운에서 이슈를 찾는 상황에 대해 "이게 뭐 하는 건가"라는 근본적 회의도:
 
 > "An AI tool finding issues in a set of YAML and Markdown files generated by an AI tool, and humans puzzled by all of it."
-> — imiric, Hacker News
+> - imiric, Hacker News
 
 ### MoAI-ADK
 
@@ -441,24 +441,24 @@ GSD는 6개 이상의 AI 런타임을 공식 지원한다:
 **"워터폴 재발명" 비판:**
 
 > "Really, we are doing _waterfall, but with AI_, now?"
-> — constantcrying, Hacker News
+> - constantcrying, Hacker News
 
 > "I tried SDD, consciously trying to like it, but gave up. I find writing specs much harder than writing code."
-> — zvr, Hacker News
+> - zvr, Hacker News
 
-**Martin Fowler 팀의 분석** — 가장 체계적인 리뷰:
+**Martin Fowler 팀의 분석** - 가장 체계적인 리뷰:
 - 스펙당 **8개의 별도 파일**을 생성하며, 리뷰가 "반복적이고 지루하다"
 - 큰 컨텍스트 윈도우에도 불구하고 에이전트가 **지시를 무시**하는 경우 빈번
 - 기존 코드 설명을 새 스펙으로 오해하여 **중복 클래스를 생성**
-- "small, iterative steps"가 베스트 프랙티스인데 SDD는 대규모 사전 설계를 요구 — 근본적 불일치
+- "small, iterative steps"가 베스트 프랙티스인데 SDD는 대규모 사전 설계를 요구 - 근본적 불일치
 
 **실제 프로젝트 경험:**
 
 > 첫 프로젝트에 10일 소요, "huge gap" 남음, 테스트 실패. AI가 "declares the sprint as done even though tests still fail."
-> — yoaviram, Hacker News
+> - yoaviram, Hacker News
 
 > "Generated steps that were equivalent of Tony Stark building a robot from scratch in a cave when just 'screw this bolt on' would have sufficed."
-> — ctxc, Hacker News
+> - ctxc, Hacker News
 
 **긍정적 경험도 있다.** Den Delimarsky는 카메라 앱을 **2시간 이내**에 아이디어에서 동작하는 앱까지 완성했다고 보고했다.
 
@@ -466,29 +466,29 @@ GSD는 6개 이상의 AI 런타임을 공식 지원한다:
 
 가장 활발하게 논의되는 도구이지만, 호불호가 극명하게 갈린다.
 
-**토큰 소비 — 가장 빈번한 불만:**
+**토큰 소비 - 가장 빈번한 불만:**
 
 > "I burned literally a weeks worth of the $20 Claude subscription and then $20 worth of API credits on GSD v2. To get like 500 LOC... I had better experiences just guiding the thing myself."
-> — sigbottle, Hacker News
+> - sigbottle, Hacker News
 
 > "Plan Mode had a plan and base implementation in twenty minutes. GSD ran for hours to achieve the same thing."
-> — healsdata, Hacker News
+> - healsdata, Hacker News
 
 > "GSD is a highly overengineered piece of software that unfortunately does not get shit done, burns limits and takes ages while doing so."
-> — yolonir, Hacker News
+> - yolonir, Hacker News
 
 **복잡성 비판:**
 
 > "way too much back and forth... 80%+ planning... didn't need this for implementation."
-> — vinnymac, Hacker News
+> - vinnymac, Hacker News
 
 > "way too much of a black box for me as an engineer, not a prompter."
-> — ricardo_lien, Hacker News
+> - ricardo_lien, Hacker News
 
 **성공 사례도 분명히 존재한다:**
 
 > "GSD consistently gets me 95% of the way there on complex tasks... We've used GSD to build and launch a SaaS product."
-> — yoaviram, Hacker News (3개월간 집중 사용, whiteboar.it SaaS 출시)
+> - yoaviram, Hacker News (3개월간 집중 사용, whiteboar.it SaaS 출시)
 
 한 솔로 개발자는 macOS Swift 앱을 GSD로 개발해 App Store 출시를 검토 중이라고 보고했다.
 
@@ -552,34 +552,34 @@ GSD는 6개 이상의 AI 런타임을 공식 지원한다:
 
 ### BMAD Method를 선택해야 할 때
 
-- **팀 단위 개발** — 에이전트 역할이 팀 내 역할 분담을 자연스럽게 반영
-- **엔터프라이즈 / 규제 업종** — 감사 가능한 아티팩트와 거버넌스 필요 시
-- **레거시 시스템 현대화** — 비즈니스 로직 추적이 중요한 경우
-- **애자일 프로세스가 이미 익숙한 팀** — PM-아키텍트-개발자 역할 분리가 자연스러운 환경
+- **팀 단위 개발** - 에이전트 역할이 팀 내 역할 분담을 자연스럽게 반영
+- **엔터프라이즈 / 규제 업종** - 감사 가능한 아티팩트와 거버넌스 필요 시
+- **레거시 시스템 현대화** - 비즈니스 로직 추적이 중요한 경우
+- **애자일 프로세스가 이미 익숙한 팀** - PM-아키텍트-개발자 역할 분리가 자연스러운 환경
 
 ### MoAI-ADK를 선택해야 할 때
 
-- **코드 품질이 최우선인 프로젝트** — 단순 기능 구현이 아니라 프로덕션 수준의 코드 필요
-- **Claude Code를 주 도구로 사용하는 개발자** — 훅 통합과 최적화가 Claude Code에 맞춰져 있음
-- **장기 프로젝트** — Sync의 3방향 동기화 덕분에 수개월 후에도 코드-문서 일관성 유지
-- **기존 프로젝트 리팩토링** — DDD 사이클의 ANALYZE-PRESERVE-IMPROVE가 안전한 점진적 개선에 적합
-- **API 비용 최적화** — 역할별 모델 분리 + CG 모드로 고비용 모델 사용 최소화
-- **한국어 환경** — 다국어 README와 한국 커뮤니티
+- **코드 품질이 최우선인 프로젝트** - 단순 기능 구현이 아니라 프로덕션 수준의 코드 필요
+- **Claude Code를 주 도구로 사용하는 개발자** - 훅 통합과 최적화가 Claude Code에 맞춰져 있음
+- **장기 프로젝트** - Sync의 3방향 동기화 덕분에 수개월 후에도 코드-문서 일관성 유지
+- **기존 프로젝트 리팩토링** - DDD 사이클의 ANALYZE-PRESERVE-IMPROVE가 안전한 점진적 개선에 적합
+- **API 비용 최적화** - 역할별 모델 분리 + CG 모드로 고비용 모델 사용 최소화
+- **한국어 환경** - 다국어 README와 한국 커뮤니티
 
 ### GitHub Spec Kit을 선택해야 할 때
 
-- **특정 AI 도구에 종속되기 싫은 경우** — 17개+ 도구 지원, 기술 스택 무관
-- **문서화가 중요한 팀** — 상세한 스펙, 플랜, 태스크 아티팩트를 체계적으로 관리
-- **그린필드 프로젝트의 초기 설계** — Constitution으로 일관된 거버넌스 원칙 수립
-- **GitHub 생태계 활용** — Copilot과의 통합이 자연스럽고 GitHub 공식 지원
+- **특정 AI 도구에 종속되기 싫은 경우** - 17개+ 도구 지원, 기술 스택 무관
+- **문서화가 중요한 팀** - 상세한 스펙, 플랜, 태스크 아티팩트를 체계적으로 관리
+- **그린필드 프로젝트의 초기 설계** - Constitution으로 일관된 거버넌스 원칙 수립
+- **GitHub 생태계 활용** - Copilot과의 통합이 자연스럽고 GitHub 공식 지원
 
 ### Get Shit Done을 선택해야 할 때
 
-- **솔로 개발자 / 소규모 팀** — 엔터프라이즈 오버헤드 없이 스펙 기반 개발의 이점을 원할 때
-- **컨텍스트 로트가 주요 고민인 경우** — 서브 에이전트 격리로 항상 fresh 컨텍스트 보장
-- **빠른 프로토타이핑 → 프로덕션** — Quick Mode로 ad-hoc 작업, 전체 워크플로우로 정식 개발
-- **여러 AI 도구를 쓰는 경우** — Claude Code, Gemini CLI, Codex 등 6개+ 런타임 지원
-- **비개발자/주니어 개발자** — 복잡성이 시스템에 숨겨져 있어 진입 장벽이 낮음
+- **솔로 개발자 / 소규모 팀** - 엔터프라이즈 오버헤드 없이 스펙 기반 개발의 이점을 원할 때
+- **컨텍스트 로트가 주요 고민인 경우** - 서브 에이전트 격리로 항상 fresh 컨텍스트 보장
+- **빠른 프로토타이핑 → 프로덕션** - Quick Mode로 ad-hoc 작업, 전체 워크플로우로 정식 개발
+- **여러 AI 도구를 쓰는 경우** - Claude Code, Gemini CLI, Codex 등 6개+ 런타임 지원
+- **비개발자/주니어 개발자** - 복잡성이 시스템에 숨겨져 있어 진입 장벽이 낮음
 
 ---
 

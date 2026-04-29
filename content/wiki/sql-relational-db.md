@@ -52,7 +52,7 @@ MySQL Workbench에서 .sql 파일 실행:
 
 ## Connections
 
-- [[llm-text-to-sql]] — LLM Text-to-SQL은 관계형 DB 스키마를 기반으로 자연어 질의를 SQL로 변환하는 패턴
+- [[llm-text-to-sql]] - LLM Text-to-SQL은 관계형 DB 스키마를 기반으로 자연어 질의를 SQL로 변환하는 패턴
 
 ## Footnotes
 

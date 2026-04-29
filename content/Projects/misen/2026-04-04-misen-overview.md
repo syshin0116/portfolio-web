@@ -28,9 +28,9 @@ AI 에이전트 시스템을 여러 프로젝트에서 개발하다 보면, 같�
 
 여기에 세 가지 문제가 더 있다:
 
-1. **플랫폼 종속** — LangGraph에서 만든 파이프라인은 LangGraph에서만 돌아간다. n8n, MCP, FastAPI에서 쓰려면 다시 짜야 한다.
-2. **고정과 유동의 혼합이 어렵다** — "반드시 이 순서대로"(파싱→청킹→임베딩)와 "LLM이 알아서 선택"(문서 유형에 따라 분석 방법 결정)을 하나의 파이프라인에서 자연스럽게 섞는 방법이 없다.
-3. **재사용 단위가 불명확** — Tool(원자적 함수)과 Skill(프롬프트 확장)을 조합해서 더 큰 단위를 만들고, 그걸 다시 다른 곳의 재료로 쓰는 체계가 없다.
+1. **플랫폼 종속** - LangGraph에서 만든 파이프라인은 LangGraph에서만 돌아간다. n8n, MCP, FastAPI에서 쓰려면 다시 짜야 한다.
+2. **고정과 유동의 혼합이 어렵다** - "반드시 이 순서대로"(파싱→청킹→임베딩)와 "LLM이 알아서 선택"(문서 유형에 따라 분석 방법 결정)을 하나의 파이프라인에서 자연스럽게 섞는 방법이 없다.
+3. **재사용 단위가 불명확** - Tool(원자적 함수)과 Skill(프롬프트 확장)을 조합해서 더 큰 단위를 만들고, 그걸 다시 다른 곳의 재료로 쓰는 체계가 없다.
 
 ## 핵심 아이디어
 
@@ -175,7 +175,7 @@ analysis = parallel(extract_keywords, generate_summary)
 # 파이프 문법
 ingest = parse_document | chunk | embed | save_to_db
 
-# 중첩 — 파이프라인도 블록이므로 재사용 가능
+# 중첩 - 파이프라인도 블록이므로 재사용 가능
 qa_pipeline = sequential(
     ingest,           # 이미 정의된 파이프라인
     search,
@@ -235,13 +235,13 @@ pipeline = sequential(parse, chunk, embed)
 두 블록이 같은 키를 출력하면?
 
 ```python
-# "last" (기본) — 나중 블록이 이김
+# "last" (기본) - 나중 블록이 이김
 parallel(block_a, block_b)
 
-# "first" — 먼저 블록이 이김
+# "first" - 먼저 블록이 이김
 parallel(block_a, block_b, conflict="first")
 
-# "error" — 에러 발생
+# "error" - 에러 발생
 parallel(block_a, block_b, conflict="error")
 ```
 

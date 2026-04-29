@@ -42,7 +42,7 @@ draft: false
 |------|------|------|
 | R-CNN | Selective Search → 각 영역마다 CNN | 매우 느림 |
 | Fast R-CNN | 전체 이미지 CNN → RoI Pooling | Selective Search 병목 |
-| Faster R-CNN | RPN으로 Selective Search 대체 | — |
+| Faster R-CNN | RPN으로 Selective Search 대체 | - |
 
 [^3]
 
@@ -88,7 +88,7 @@ pip install selectivesearch
 
 ## Connections
 
-- [[transformer-architecture]] — Transformer의 attention 메커니즘은 이후 Vision Transformer(ViT)를 통해 객체 탐지에도 적용됨
+- [[transformer-architecture]] - Transformer의 attention 메커니즘은 이후 Vision Transformer(ViT)를 통해 객체 탐지에도 적용됨
 
 ## Footnotes
 

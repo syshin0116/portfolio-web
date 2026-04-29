@@ -15,7 +15,7 @@ description: 흩어져 있던 4개 레포를 3개로 재편하고, 블로그와 
 summary: "portfolio-web, portfolio-ai, nuartz, syshin0116.github.io 4개 레포를 syshin0116.dev + blog-rag + nuartz 3개로 재편한다. syshin0116.dev는 Nuartz 기반 블로그 + 포트폴리오 통합 사이트, blog-rag는 Modular RAG 백엔드다. MoAI-ADK의 SPEC-First 방식을 blog-rag 설계에 도입하기로 했다."
 ---
 > [!info] 관련 글
-> 레포 재편 결정 과정은 [[Projects/Nuartz/04-Headless-and-Ecosystem|Nuartz — Headless 설계와 레포 생태계 재편]]에서 먼저 다뤘다.
+> 레포 재편 결정 과정은 [[Projects/Nuartz/04-Headless-and-Ecosystem|Nuartz - Headless 설계와 레포 생태계 재편]]에서 먼저 다뤘다.
 
 ---
 
@@ -121,7 +121,7 @@ MoAI-ADK를 풀로 설치하지 않는 이유:
 - Claude Code로 이미 잘 되고 있다
 
 MoAI-ADK에서 빌려오는 것:
-- **구현 전 SPEC 문서 먼저 작성** — 특히 blog-rag 모듈 인터페이스 정의
+- **구현 전 SPEC 문서 먼저 작성** - 특히 blog-rag 모듈 인터페이스 정의
 
 > [!tip]
 > MoAI-ADK의 핵심 주장: "LLM의 성능은 이미 믿고 맡길 수준. 중요한 건 컨텍스트의 품질이다." SPEC 문서가 먼저 있으면 AI가 범위 밖으로 벗어날 여지가 줄어든다.
@@ -142,7 +142,7 @@ syshin0116.dev는 UI 작업 위주라 SPEC 오버헤드가 필요 없다.
 
 ## 로드맵
 
-### Phase 1 — 기반 정리
+### Phase 1 - 기반 정리
 
 **syshin0116.dev**
 - 레포 rename (portfolio-web → syshin0116.dev)
@@ -158,12 +158,12 @@ syshin0116.dev는 UI 작업 위주라 SPEC 오버헤드가 필요 없다.
 - LangSmith 연동
 - 배포 옵션 리서치
 
-### Phase 2 — 통합
+### Phase 2 - 통합
 
 - blog-rag API 교체 (syshin0116.dev 채팅 연결)
 - Supabase 세션 연동 (채팅 히스토리)
 
-### Phase 3 — 평가 & 포스팅
+### Phase 3 - 평가 & 포스팅
 
 - 평가 데이터셋 구축
 - 모듈 조합 실험 (LangSmith 정량 비교)
@@ -189,5 +189,5 @@ syshin0116.dev는 UI 작업 위주라 SPEC 오버헤드가 필요 없다.
 
 ## 관련 프로젝트
 
-- [[Projects/Nuartz/00-Overview|Nuartz]] — headless 데이터 레이어
-- [[Projects/Blog-rag/00-Overview|blog-rag]] — Modular RAG 백엔드
+- [[Projects/Nuartz/00-Overview|Nuartz]] - headless 데이터 레이어
+- [[Projects/Blog-rag/00-Overview|blog-rag]] - Modular RAG 백엔드

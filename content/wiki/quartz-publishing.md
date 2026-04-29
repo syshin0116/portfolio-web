@@ -52,8 +52,8 @@ analytics: {
 
 ## Connections
 
-- [[blog-seo]] — Quartz 배포 후 Google Search Console 등록과 SEO 최적화 설정 단계
-- [[static-site-generators]] — Quartz는 Obsidian에 특화된 SSG이며, Jekyll/Hugo 등 범용 SSG와 비교 가능
+- [[blog-seo]] - Quartz 배포 후 Google Search Console 등록과 SEO 최적화 설정 단계
+- [[static-site-generators]] - Quartz는 Obsidian에 특화된 SSG이며, Jekyll/Hugo 등 범용 SSG와 비교 가능
 
 ## Footnotes
 

@@ -31,8 +31,8 @@ draft: false
 
 ## Connections
 
-- [[transformer-architecture]] — 연결주의의 발전이 딥러닝을 거쳐 Transformer 아키텍처로 이어짐
-- [[object-detection]] — 연결주의 기반 CNN이 객체 탐지의 핵심 기술
+- [[transformer-architecture]] - 연결주의의 발전이 딥러닝을 거쳐 Transformer 아키텍처로 이어짐
+- [[object-detection]] - 연결주의 기반 CNN이 객체 탐지의 핵심 기술
 
 ## Footnotes
 

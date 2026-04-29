@@ -261,7 +261,7 @@ Marker는 **"성공하면 최고, 하지만 성공을 보장할 수 없는"** �
 
 - [Marker GitHub](https://github.com/datalab-to/marker)
 - [Surya OCR GitHub](https://github.com/datalab-to/surya)
-- [[2026-03-26-Docling-PDF-파서-분석]] — Docling 분석
-- [[2026-03-23-MinerU-2x-파이프라인-분석]] — MinerU 2.x 분석
-- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석]] — PyMuPDF4LLM 분석
-- [[2026-03-26-LiteParse-PDF-파서-분석]] — LiteParse 분석
+- [[2026-03-26-Docling-PDF-파서-분석]] - Docling 분석
+- [[2026-03-23-MinerU-2x-파이프라인-분석]] - MinerU 2.x 분석
+- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석]] - PyMuPDF4LLM 분석
+- [[2026-03-26-LiteParse-PDF-파서-분석]] - LiteParse 분석

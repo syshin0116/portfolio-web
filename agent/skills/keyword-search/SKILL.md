@@ -1,6 +1,6 @@
 ---
 name: keyword-search
-description: Fast keyword and regex search over blog content using ripgrep. Use this skill whenever the user mentions a specific technology name, library, code snippet, error message, or exact phrase — e.g. "LangGraph posts", "FastAPI examples", "import torch", "ChromaDB setup". Faster than BM25 for exact matches. Supports regex patterns like "React|Vue" to match multiple terms.
+description: Fast keyword and regex search over blog content using ripgrep. Use this skill whenever the user mentions a specific technology name, library, code snippet, error message, or exact phrase - e.g. "LangGraph posts", "FastAPI examples", "import torch", "ChromaDB setup". Faster than BM25 for exact matches. Supports regex patterns like "React|Vue" to match multiple terms.
 ---
 
 # Keyword Search
@@ -15,7 +15,7 @@ Searches the blog content directory using ripgrep (`rg`) subprocess for fast, ex
 
 This skill is most effective when the user knows **a specific name or keyword** they're looking for. For broad topic exploration ("tell me about agents"), prefer `semantic_search` (BM25). For exact terms ("LangGraph"), this is faster and more precise.
 
-Combine with `semantic_search` for best coverage — keyword catches exact hits that BM25 might rank lower, while BM25 catches semantically related content that keyword misses.
+Combine with `semantic_search` for best coverage - keyword catches exact hits that BM25 might rank lower, while BM25 catches semantically related content that keyword misses.
 
 ## Examples
 

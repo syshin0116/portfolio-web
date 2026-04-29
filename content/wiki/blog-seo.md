@@ -49,7 +49,7 @@ analytics: {
 
 ## Connections
 
-- [[quartz-publishing]] — Search Console 설정은 Quartz 배포 이후 단계
+- [[quartz-publishing]] - Search Console 설정은 Quartz 배포 이후 단계
 
 ## Footnotes
 

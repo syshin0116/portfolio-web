@@ -12,8 +12,8 @@ description: 주요 PDF 파서 9종을 직접 설치하고, READoc 벤치마크(
 
 주요 PDF 파서들을 직접 설치하고, 두 가지 벤치마크로 성능을 측정하여 비교 분석하는 시리즈다.
 
-- **READoc** — 92개 arXiv 논문 PDF를 파싱하여 GT Markdown과 비교 (전체 텍스트 유사도)
-- **OmniDocBench** — 93개 이미지를 파싱하여 텍스트/테이블/수식/읽기순서를 **요소별** 평가
+- **READoc** - 92개 arXiv 논문 PDF를 파싱하여 GT Markdown과 비교 (전체 텍스트 유사도)
+- **OmniDocBench** - 93개 이미지를 파싱하여 텍스트/테이블/수식/읽기순서를 **요소별** 평가
 
 ## 메트릭 읽는 법
 
@@ -60,20 +60,20 @@ description: 주요 PDF 파서 9종을 직접 설치하고, READoc 벤치마크(
 
 ## 글 목록
 
-### Tier 1 — ML 파이프라인 파서
-- [[MinerU - PDF Parser|MinerU 1.x 소개]] — 초기 분석
-- [[2026-03-23-MinerU-2x-파이프라인-분석|MinerU 2.x 파이프라인 분석]] — YOLOv10 + UniMERNet + SLANET+, CPU vs MPS 성능 비교
-- [[2026-03-26-Docling-PDF-파서-분석|Docling]] — IBM MIT 라이선스, Heron RT-DETRv2 + TableFormer, 가성비 최강
-- [[2026-03-26-Marker-PDF-파서-분석|Marker]] — Surya OCR 기반, 성공시 최고 품질 but 안정성 문제
+### Tier 1 - ML 파이프라인 파서
+- [[MinerU - PDF Parser|MinerU 1.x 소개]] - 초기 분석
+- [[2026-03-23-MinerU-2x-파이프라인-분석|MinerU 2.x 파이프라인 분석]] - YOLOv10 + UniMERNet + SLANET+, CPU vs MPS 성능 비교
+- [[2026-03-26-Docling-PDF-파서-분석|Docling]] - IBM MIT 라이선스, Heron RT-DETRv2 + TableFormer, 가성비 최강
+- [[2026-03-26-Marker-PDF-파서-분석|Marker]] - Surya OCR 기반, 성공시 최고 품질 but 안정성 문제
 
-### Tier 1-2 — Java/규칙 기반 파서
-- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석|PyMuPDF4LLM]] — 경량 GNN + 규칙 기반, GPU 없이 최고 속도
-- [[2026-03-26-LiteParse-PDF-파서-분석|LiteParse]] — LlamaIndex TypeScript 파서, 0.1초/문서
-- [[2026-03-27-OpenDataLoader-PDF-파서-분석|OpenDataLoader PDF v2]] — 한컴 Java 파서, Apache 2.0, 프롬프트 인젝션 감지
+### Tier 1-2 - Java/규칙 기반 파서
+- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석|PyMuPDF4LLM]] - 경량 GNN + 규칙 기반, GPU 없이 최고 속도
+- [[2026-03-26-LiteParse-PDF-파서-분석|LiteParse]] - LlamaIndex TypeScript 파서, 0.1초/문서
+- [[2026-03-27-OpenDataLoader-PDF-파서-분석|OpenDataLoader PDF v2]] - 한컴 Java 파서, Apache 2.0, 프롬프트 인젝션 감지
 
 ### 벤치마크 비교
-- [[2026-03-26-OmniDocBench-파싱-성능-비교|OmniDocBench 요소별 파싱 성능 비교]] — 텍스트/테이블/수식/읽기순서 분리 평가
-- [[2026-03-26-PDF-파서-5종-비교-분석|PDF 파서 5종 비교 분석]] — 같은 문서로 직접 비교 (헤딩/테이블/수식/이미지 예시)
+- [[2026-03-26-OmniDocBench-파싱-성능-비교|OmniDocBench 요소별 파싱 성능 비교]] - 텍스트/테이블/수식/읽기순서 분리 평가
+- [[2026-03-26-PDF-파서-5종-비교-분석|PDF 파서 5종 비교 분석]] - 같은 문서로 직접 비교 (헤딩/테이블/수식/이미지 예시)
 
 ### 향후 추가 예정 (GPU 서버 환경 확보 시)
 - DeepSeek-OCR 2 (3B VLM, API 또는 CUDA)

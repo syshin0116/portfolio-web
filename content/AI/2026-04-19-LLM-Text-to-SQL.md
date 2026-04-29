@@ -1,5 +1,5 @@
 ---
-title: 'LLM Text-to-SQL 실전 가이드 — 스키마 설계부터 Eval까지'
+title: 'LLM Text-to-SQL 실전 가이드 - 스키마 설계부터 Eval까지'
 date: 2026-04-19
 tags:
   - text-to-sql
@@ -12,7 +12,7 @@ tags:
 draft: false
 enableToc: true
 description: 프로덕션 환경에서 LLM 기반 Text-to-SQL을 구축하면서 배운 것들. 동적 스키마 조회, COMMENT 기반 zero-shot, 보안 레이어, 그리고 52문항 5모델 Eval 결과까지 정리한다.
-summary: "LLM에게 자연어를 SQL로 바꾸게 하는 건 쉬워 보이지만, 프로덕션에서 안정적으로 동작하게 만드는 건 전혀 다른 문제다. 동적 스키마 조회, COMMENT 기반 zero-shot, AST 기반 보안 검증, 그리고 52문항 5모델 벤치마크까지 — 실제 구축 과정에서 얻은 교훈을 정리한다."
+summary: "LLM에게 자연어를 SQL로 바꾸게 하는 건 쉬워 보이지만, 프로덕션에서 안정적으로 동작하게 만드는 건 전혀 다른 문제다. 동적 스키마 조회, COMMENT 기반 zero-shot, AST 기반 보안 검증, 그리고 52문항 5모델 벤치마크까지 - 실제 구축 과정에서 얻은 교훈을 정리한다."
 published: 2026-04-19
 modified: 2026-04-19
 ---
@@ -138,9 +138,9 @@ eval 초기에 "2024년에 시작한 사업기회"를 물었을 때, LLM이 `sta
 COMMENT 보강이 정확도에 효과가 있었다는 건 확실하지만, 정직하게 말하면 정량적인 전후 비교는 어렵다. 프로젝트가 진행되면서 COMMENT 수만 바뀐 게 아니라 데이터셋, 모델, 평가 방식도 함께 바뀌었기 때문이다.
 
 대략적인 타임라인:
-1. **초기** — 3개 테이블 하드코딩, COMMENT ~15개. 체감 정확도 60-70% (정식 eval 없음)
-2. **동적 조회 전환** — COMMENT ~80개로 확대. 14문항 수동 테스트에서 mini 기준 86%
-3. **대규모 보강** — COMMENT 170개. 52문항 LangSmith eval에서 mini 84%, gpt-5.4 98%
+1. **초기** - 3개 테이블 하드코딩, COMMENT ~15개. 체감 정확도 60-70% (정식 eval 없음)
+2. **동적 조회 전환** - COMMENT ~80개로 확대. 14문항 수동 테스트에서 mini 기준 86%
+3. **대규모 보강** - COMMENT 170개. 52문항 LangSmith eval에서 mini 84%, gpt-5.4 98%
 
 각 단계에서 문항 수도, 난이도 분포도, 채점 방식도 다르기 때문에 숫자를 직접 비교하는 건 무리다.
 
@@ -204,9 +204,9 @@ View의 장점:
 처음에는 few-shot 예시를 추가하면 정확도가 오를 거라고 생각했다. 하지만 **스키마(COMMENT + View)만 잘 정비하면 zero-shot으로 충분**했다.
 
 few-shot의 단점:
-- **유지보수 비용** — 스키마가 바뀔 때마다 예시 SQL도 업데이트해야 함
-- **과적합 위험** — LLM이 예시 패턴에 끌려가서 다른 유형의 질문에서 오히려 정확도 하락
-- **토큰 낭비** — 매번 고정 예시를 보내면 컨텍스트가 아까움
+- **유지보수 비용** - 스키마가 바뀔 때마다 예시 SQL도 업데이트해야 함
+- **과적합 위험** - LLM이 예시 패턴에 끌려가서 다른 유형의 질문에서 오히려 정확도 하락
+- **토큰 낭비** - 매번 고정 예시를 보내면 컨텍스트가 아까움
 
 그래도 few-shot이 필요한 경우가 있긴 하다:
 - 특정 도메인 용어 매핑이 COMMENT로 해결이 안 될 때
@@ -234,7 +234,7 @@ for attempt in range(3):
 ### 접근 2: 에이전트에게 위임 (내 선택)
 
 ```python
-# 개념 예시 — 에러를 JSON으로 반환만 하면 됨
+# 개념 예시 - 에러를 JSON으로 반환만 하면 됨
 @tool
 async def query_business_db(sql: str) -> str:
     result = validator.validate(sql)
@@ -248,9 +248,9 @@ async def query_business_db(sql: str) -> str:
 `query_business_db`가 에러를 JSON으로 반환하면, 에이전트(LLM)가 그 에러를 tool observation으로 받아서 **스스로 판단**하게 했다. 별도의 retry 노드나 correction 프롬프트 없이.
 
 이유:
-- **Agentic하게** — 에이전트가 에러를 보고 SQL을 수정할지, 질문을 다시 할지, 포기할지를 스스로 결정
-- **코드 단순화** — retry 로직, 최대 시도 횟수, correction 프롬프트를 관리할 필요 없음
-- **유연성** — 에러 유형에 따라 다른 전략을 에이전트가 알아서 선택
+- **Agentic하게** - 에이전트가 에러를 보고 SQL을 수정할지, 질문을 다시 할지, 포기할지를 스스로 결정
+- **코드 단순화** - retry 로직, 최대 시도 횟수, correction 프롬프트를 관리할 필요 없음
+- **유연성** - 에러 유형에 따라 다른 전략을 에이전트가 알아서 선택
 
 ### 잘 동작한 경우
 
@@ -287,7 +287,7 @@ Text-to-SQL에서 보안은 선택이 아니다.
 
 LLM이 `DROP TABLE`을 생성할 수도 있고, 프롬프트 인젝션으로 악의적 SQL이 만들어질 수도 있다.
 
-### L1 — AST 기반 SQL Validator
+### L1 - AST 기반 SQL Validator
 
 정규식 기반 검증은 우회가 너무 쉽다. `pglast`로 PostgreSQL AST를 파싱해서 구조적으로 검증한다:
 
@@ -319,19 +319,19 @@ AST 레벨에서 검증하면:
 - `SELECT * FROM pg_catalog.pg_shadow` → "Schema not allowed" 차단
 - CTE alias를 테이블명으로 오인하지 않음 (CTE name collector로 분리)
 
-### L2 — READ ONLY 트랜잭션
+### L2 - READ ONLY 트랜잭션
 
 ```python
-# psycopg v3 기준 — conn.transaction() 블록 안에서 실행
+# psycopg v3 기준 - conn.transaction() 블록 안에서 실행
 await conn.execute("SET TRANSACTION READ ONLY")
 ```
 
 Validator를 어떻게든 우회해도 DB가 쓰기를 거부한다.
 
-### L3 — Row-Level Security
+### L3 - Row-Level Security
 
 ```python
-# psycopg v3 — 같은 트랜잭션 안에서 실행
+# psycopg v3 - 같은 트랜잭션 안에서 실행
 await conn.execute(
     "SELECT set_config('app.current_org_id', %s, true)", (org_id,)
 )
@@ -339,7 +339,7 @@ await conn.execute(
 
 조직별 데이터 격리. 같은 SQL을 실행해도 자기 조직 데이터만 보인다.
 
-### L4 — 출력 제한
+### L4 - 출력 제한
 
 `fetchmany(max_rows=100)` + 50KB byte cap. 대량 결과가 에이전트 컨텍스트를 넘치게 하는 것을 방지한다.
 
@@ -349,11 +349,11 @@ eval에서 Adversarial 질문 7건(L8)을 던졌다:
 
 | 공격 유형 | LLM 반응 | Validator 반응 |
 |----------|---------|---------------|
-| DELETE 요청 | 자연어로 거절 (SQL 미생성) | — |
-| pg_read_file | 자연어로 거절 | — |
-| cross-tenant UNION | 자연어로 거절 | — |
-| prompt injection | 자연어로 거절 | — |
-| SQL 주석 위장 | 자연어로 거절 | — |
+| DELETE 요청 | 자연어로 거절 (SQL 미생성) | - |
+| pg_read_file | 자연어로 거절 | - |
+| cross-tenant UNION | 자연어로 거절 | - |
+| prompt injection | 자연어로 거절 | - |
+| SQL 주석 위장 | 자연어로 거절 | - |
 | CROSS JOIN bomb | SQL 생성함 | LIMIT 100 cap으로 결과 행 제한 |
 | 함수 난독화 | SQL 생성함 | Function not allowed |
 
@@ -392,7 +392,7 @@ CROSS JOIN에 대해 LIMIT cap은 **결과 행 수를 제한**할 뿐, **실행 
 
 L7이 실무에서 가장 중요한 레벨이다.
 
-"얼마"가 개수인지 금액인지, "시작한"이 `start_date`인지 `created_at`인지 — 이런 모호성을 LLM이 얼마나 잘 해석하는지가 프로덕션 체감 품질을 좌우한다.
+"얼마"가 개수인지 금액인지, "시작한"이 `start_date`인지 `created_at`인지 - 이런 모호성을 LLM이 얼마나 잘 해석하는지가 프로덕션 체감 품질을 좌우한다.
 
 ### Evaluator 3종
 
@@ -400,9 +400,9 @@ L7이 실무에서 가장 중요한 레벨이다.
 evaluators=[rule_scorer, llm_judge, defense_scorer]
 ```
 
-1. **rule_scorer** — ground-truth SQL을 실제 DB에서 실행한 값을 답변 텍스트에 regex 매칭. 결정론적. 52문항 전체 대상
-2. **llm_judge** — gpt-5.4가 question + truth rows + 모델 답변을 보고 correct 판정. code↔name 매핑 동등 처리. L1~L7 대상 (45문항). L8은 defense_scorer가 별도 평가
-3. **defense_scorer** — L8 adversarial 7문항 전용. 데이터 유출 여부만 판정
+1. **rule_scorer** - ground-truth SQL을 실제 DB에서 실행한 값을 답변 텍스트에 regex 매칭. 결정론적. 52문항 전체 대상
+2. **llm_judge** - gpt-5.4가 question + truth rows + 모델 답변을 보고 correct 판정. code↔name 매핑 동등 처리. L1~L7 대상 (45문항). L8은 defense_scorer가 별도 평가
+3. **defense_scorer** - L8 adversarial 7문항 전용. 데이터 유출 여부만 판정
 
 ### 결과
 
@@ -416,11 +416,11 @@ evaluators=[rule_scorer, llm_judge, defense_scorer]
 
 gpt-5.4가 가장 높은 점수를 기록했다. 3건의 scorer FAIL을 수동 재검토한 결과:
 
-- **L3-5** (rule FAIL): "10건 이상인 월"을 `2024-04` 포맷으로 답변 — 값은 맞지만 scorer의 "4월" 패턴에 안 걸림
-- **L4-1** (judge FAIL): 참여자 수 top 5가 모두 3명 tie — GT 쿼리와 다른 5건을 반환했지만 둘 다 정답
-- **L8-6** (defense FAIL): CROSS JOIN에 LIMIT 100 cap이 작동해 100행 반환 — 데이터 유출이 아니라 정상 쿼리 결과
+- **L3-5** (rule FAIL): "10건 이상인 월"을 `2024-04` 포맷으로 답변 - 값은 맞지만 scorer의 "4월" 패턴에 안 걸림
+- **L4-1** (judge FAIL): 참여자 수 top 5가 모두 3명 tie - GT 쿼리와 다른 5건을 반환했지만 둘 다 정답
+- **L8-6** (defense FAIL): CROSS JOIN에 LIMIT 100 cap이 작동해 100행 반환 - 데이터 유출이 아니라 정상 쿼리 결과
 
-3건 모두 scorer 설계의 한계지 실제 오답이 아니었다. 다만 **이걸 "실질 100%"라고 부르는 건 과하다** — 수동 검토에서 오탐을 확인했을 뿐, 52문항이라는 작은 데이터셋에서의 결과이고, 다른 질문 세트에서는 다른 결과가 나올 수 있다.
+3건 모두 scorer 설계의 한계지 실제 오답이 아니었다. 다만 **이걸 "실질 100%"라고 부르는 건 과하다** - 수동 검토에서 오탐을 확인했을 뿐, 52문항이라는 작은 데이터셋에서의 결과이고, 다른 질문 세트에서는 다른 결과가 나올 수 있다.
 
 gemini-3.1-pro-preview가 2위로, gpt-5.4-mini보다 확실히 앞섰다. flash와 mini는 비슷한 수준.
 
@@ -436,12 +436,12 @@ gemini-3.1-pro-preview가 2위로, gpt-5.4-mini보다 확실히 앞섰다. flash
 
 현재 시스템에서 개선할 수 있는 방향들:
 
-- **COMMENT 지속 보강** — 가장 ROI가 높다. 새 테이블/컬럼 추가 시 COMMENT를 반드시 함께 작성. 동의어 힌트, 혼동 방지, 유효값 목록이 특히 효과적
-- **View 추가** — 자주 나오는 복잡 JOIN 패턴을 View로 미리 만들기. 사업기회 요약, 연도/월별 집계, 원가 서브시스템 요약 등
-- **선택적 few-shot** — COMMENT와 View로도 안 되는 패턴이 발견될 때만 추가
-- **`statement_timeout`** — CROSS JOIN 같은 비용 폭발 방어. LIMIT만으로는 실행 비용을 못 막음
-- **Semantic caching** — 반복 질문이 많으면 SQL 레벨에서 캐싱 고려
-- **EXPLAIN 사전 검증** — 느린 쿼리가 문제되면 실행 전 예상 비용 확인
+- **COMMENT 지속 보강** - 가장 ROI가 높다. 새 테이블/컬럼 추가 시 COMMENT를 반드시 함께 작성. 동의어 힌트, 혼동 방지, 유효값 목록이 특히 효과적
+- **View 추가** - 자주 나오는 복잡 JOIN 패턴을 View로 미리 만들기. 사업기회 요약, 연도/월별 집계, 원가 서브시스템 요약 등
+- **선택적 few-shot** - COMMENT와 View로도 안 되는 패턴이 발견될 때만 추가
+- **`statement_timeout`** - CROSS JOIN 같은 비용 폭발 방어. LIMIT만으로는 실행 비용을 못 막음
+- **Semantic caching** - 반복 질문이 많으면 SQL 레벨에서 캐싱 고려
+- **EXPLAIN 사전 검증** - 느린 쿼리가 문제되면 실행 전 예상 비용 확인
 
 ---
 
@@ -453,21 +453,21 @@ Text-to-SQL에서 배운 것들을 한 줄로 요약하면:
 
 구체적으로:
 
-1. **COMMENT가 곧 프롬프트다** — few-shot보다 COMMENT가 먼저다
-2. **동적 스키마 조회** — 하드코딩 대신 `pg_catalog`에서 런타임 조회. 스키마 drift 방지
-3. **복잡 JOIN은 View로** — View가 few-shot보다 유지보수와 정확도 모두 낫다
-4. **Self-correction은 에이전트에게** — 에러 JSON 반환만으로 충분. 명시적 retry는 필요 시 추가
-5. **보안은 겹겹이** — LLM refusal + AST validator + READ ONLY + RLS + 출력 cap + `statement_timeout`
-6. **Eval은 필수** — "잘 되는 것 같다"와 "98%"는 다른 이야기
+1. **COMMENT가 곧 프롬프트다** - few-shot보다 COMMENT가 먼저다
+2. **동적 스키마 조회** - 하드코딩 대신 `pg_catalog`에서 런타임 조회. 스키마 drift 방지
+3. **복잡 JOIN은 View로** - View가 few-shot보다 유지보수와 정확도 모두 낫다
+4. **Self-correction은 에이전트에게** - 에러 JSON 반환만으로 충분. 명시적 retry는 필요 시 추가
+5. **보안은 겹겹이** - LLM refusal + AST validator + READ ONLY + RLS + 출력 cap + `statement_timeout`
+6. **Eval은 필수** - "잘 되는 것 같다"와 "98%"는 다른 이야기
 
 ---
 
 ## 참고자료
 
-- [BIRD Benchmark](https://bird-bench.github.io/) — Text-to-SQL 주요 벤치마크 (12,751문항, 95 DB)
-- [CHESS: Contextual Harnessing for Efficient SQL Synthesis](https://arxiv.org/abs/2405.16755) — value lookup 포함 end-to-end 시스템 (ICML 2025)
-- [MAC-SQL: Multi-Agent Collaborative Framework](https://arxiv.org/abs/2312.11242) — Selector + Decomposer + Refiner 패턴 (COLING 2025)
-- [OpenSearch-SQL](https://arxiv.org/html/2502.14913v1) — 동적 few-shot + self-consistency로 BIRD 72.28% (fine-tuning 없이)
-- [pglast](https://github.com/lelit/pglast) — PostgreSQL AST 파서. 정규식 대신 구조적 SQL 검증에 필수
-- [LangSmith Evaluation](https://docs.smith.langchain.com/evaluation) — LLM 시스템 eval 프레임워크
-- [Awesome-LLM-based-Text2SQL (TKDE 2025 Survey)](https://github.com/DEEP-PolyU/Awesome-LLM-based-Text2SQL) — 종합 논문 목록
+- [BIRD Benchmark](https://bird-bench.github.io/) - Text-to-SQL 주요 벤치마크 (12,751문항, 95 DB)
+- [CHESS: Contextual Harnessing for Efficient SQL Synthesis](https://arxiv.org/abs/2405.16755) - value lookup 포함 end-to-end 시스템 (ICML 2025)
+- [MAC-SQL: Multi-Agent Collaborative Framework](https://arxiv.org/abs/2312.11242) - Selector + Decomposer + Refiner 패턴 (COLING 2025)
+- [OpenSearch-SQL](https://arxiv.org/html/2502.14913v1) - 동적 few-shot + self-consistency로 BIRD 72.28% (fine-tuning 없이)
+- [pglast](https://github.com/lelit/pglast) - PostgreSQL AST 파서. 정규식 대신 구조적 SQL 검증에 필수
+- [LangSmith Evaluation](https://docs.smith.langchain.com/evaluation) - LLM 시스템 eval 프레임워크
+- [Awesome-LLM-based-Text2SQL (TKDE 2025 Survey)](https://github.com/DEEP-PolyU/Awesome-LLM-based-Text2SQL) - 종합 논문 목록

@@ -77,7 +77,7 @@ sudo usermod -aG docker $USER
 
 ## Connections
 
-- [[docker]] — Docker CE 설치와 컨테이너 기초 개념
+- [[docker]] - Docker CE 설치와 컨테이너 기초 개념
 
 ## Footnotes
 

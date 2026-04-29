@@ -1,6 +1,6 @@
 ---
 name: list-posts
-description: Browse blog post listings by date and category. Use when the user asks "what posts are there?", "show me recent posts", "what's in the AI category?", "give me an overview of the blog". Good starting point before detailed search — helps understand what content is available.
+description: Browse blog post listings by date and category. Use when the user asks "what posts are there?", "show me recent posts", "what's in the AI category?", "give me an overview of the blog". Good starting point before detailed search - helps understand what content is available.
 ---
 
 # List Posts

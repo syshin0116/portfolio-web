@@ -104,5 +104,5 @@ syshin0116.dev (Next.js)
 
 ## 관련 프로젝트
 
-- [[Projects/Nuartz/00-Overview|Nuartz]] — 블로그 콘텐츠를 서빙하는 Next.js 라이브러리
-- syshin0116.dev — blog-rag를 연동하는 프론트엔드 *(포스트 예정)*
+- [[Projects/Nuartz/00-Overview|Nuartz]] - 블로그 콘텐츠를 서빙하는 Next.js 라이브러리
+- syshin0116.dev - blog-rag를 연동하는 프론트엔드 *(포스트 예정)*

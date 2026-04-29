@@ -21,7 +21,7 @@ modified: 2026-03-23
 ---
 ## 들어가며
 
-[[MinerU - PDF Parser|MinerU]]를 처음 써봤을 때 PDF 파싱 성능에 감탄했었다. 레이아웃 분석, 표 인식, 수식 변환까지 — 기존 PDF 로더들과는 차원이 달랐다. 하지만 PyMuPDF와 YOLO 의존성 때문에 AGPL-3.0 라이센스가 걸려 있어서 상용 서비스에는 아쉽게도 쓸 수 없었다.
+[[MinerU - PDF Parser|MinerU]]를 처음 써봤을 때 PDF 파싱 성능에 감탄했었다. 레이아웃 분석, 표 인식, 수식 변환까지 - 기존 PDF 로더들과는 차원이 달랐다. 하지만 PyMuPDF와 YOLO 의존성 때문에 AGPL-3.0 라이센스가 걸려 있어서 상용 서비스에는 아쉽게도 쓸 수 없었다.
 
 그러던 중 RAG-Anything이라는 프로젝트를 발견했다. MinerU를 기본 파서로 쓰면서, LightRAG라는 그래프 기반 RAG 엔진 위에 멀티모달 처리를 얹은 구조다. 단순히 텍스트를 벡터로 바꿔 검색하는 naive RAG가 아니라, **문서에서 엔티티와 관계를 추출하여 지식 그래프를 구축**하고, **이미지/표/수식을 VLM으로 분석하여 그래프에 통합**하는 방식이다.
 
@@ -58,11 +58,11 @@ RAG-Anything의 파이프라인은 크게 5단계로 나뉜다:
 
 ```
 RAGAnything (메인 오케스트레이터)
-├── ProcessorMixin    — 문서 처리 파이프라인
-├── QueryMixin        — 쿼리/검색
-├── BatchMixin        — 배치 처리
-├── CallbackManager   — 이벤트 관측성
-└── LightRAG          — 핵심 RAG 엔진 (위임)
+├── ProcessorMixin    - 문서 처리 파이프라인
+├── QueryMixin        - 쿼리/검색
+├── BatchMixin        - 배치 처리
+├── CallbackManager   - 이벤트 관측성
+└── LightRAG          - 핵심 RAG 엔진 (위임)
     ├── 텍스트 청킹 + 임베딩
     ├── 엔티티/관계 추출 (LLM 기반)
     ├── 지식 그래프 구축/병합
@@ -186,7 +186,7 @@ RAG-Anything의 핵심 엔진인 LightRAG를 깊이 들여다본다. [[Knowledge
 
 LightRAG는 홍콩대(HKU)에서 개발한 **LLM 기반 지식 그래프 RAG 시스템**이다. 전통적인 벡터 RAG와 달리, 텍스트에서 엔티티와 관계를 추출하여 지식 그래프를 구축하고, 쿼리 시 **벡터 검색 + 그래프 탐색**을 결합한다.
 
-### 엔티티/관계 추출 — 100% LLM 기반
+### 엔티티/관계 추출 - 100% LLM 기반
 
 > [!important]
 >
@@ -253,13 +253,13 @@ Based on the last extraction task, identify and extract any
 
 ### 지식 그래프 구축 파이프라인
 
-1. **청킹** — 텍스트를 1200 토큰 단위로 분할 (100 토큰 오버랩)
-2. **LLM 추출** — 각 청크에서 LLM으로 엔티티 + 관계를 동시 추출. Gleaning으로 누락분 재추출
-3. **결과 파싱** — `<|#|>` 구분자로 LLM 출력을 엔티티(name, type, description)와 관계(src, tgt, keywords, description)로 분리
-4. **엔티티 병합** — 같은 이름의 엔티티는 설명을 수집하여 Map-Reduce 방식으로 LLM 요약 → Graph DB + Entity VDB에 upsert
-5. **관계 병합** — 같은 (src, tgt) 쌍의 관계는 설명+키워드 병합, 가중치 합산 → Graph DB + Relationship VDB에 upsert
+1. **청킹** - 텍스트를 1200 토큰 단위로 분할 (100 토큰 오버랩)
+2. **LLM 추출** - 각 청크에서 LLM으로 엔티티 + 관계를 동시 추출. Gleaning으로 누락분 재추출
+3. **결과 파싱** - `<|#|>` 구분자로 LLM 출력을 엔티티(name, type, description)와 관계(src, tgt, keywords, description)로 분리
+4. **엔티티 병합** - 같은 이름의 엔티티는 설명을 수집하여 Map-Reduce 방식으로 LLM 요약 → Graph DB + Entity VDB에 upsert
+5. **관계 병합** - 같은 (src, tgt) 쌍의 관계는 설명+키워드 병합, 가중치 합산 → Graph DB + Relationship VDB에 upsert
 
-### 엔티티/관계 병합 — Map-Reduce 요약
+### 엔티티/관계 병합 - Map-Reduce 요약
 
 동일 엔티티가 여러 청크에서 발견되면:
 
@@ -299,7 +299,7 @@ Based on the last extraction task, identify and extract any
 }
 ```
 
-### 스토리지 구조 — 벡터 DB + 그래프 DB 동시 사용
+### 스토리지 구조 - 벡터 DB + 그래프 DB 동시 사용
 
 LightRAG는 **벡터 DB와 그래프 DB를 동시에** 사용한다. 같은 데이터가 양쪽에 저장되어, 검색 시 벡터 유사도 + 그래프 탐색을 결합할 수 있다.
 
@@ -438,7 +438,7 @@ Stage 4: 컨텍스트 조합 + LLM 답변 생성
   → KG 데이터 + 텍스트 청크 + 레퍼런스 → LLM
 ```
 
-### 이미지가 검색되면? — VLM 강화 쿼리
+### 이미지가 검색되면? - VLM 강화 쿼리
 
 이미지는 KG에 **텍스트 설명**으로 저장된다:
 
@@ -637,13 +637,13 @@ MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한�
 
 #### Figure 추출 (7/7 모두 추출)
 
-**Figure 3 — SEISMIC 아키텍처 다이어그램:**
+**Figure 3 - SEISMIC 아키텍처 다이어그램:**
 
 ![추출된 아키텍처 Figure](https://i.imgur.com/AbYmRG5.jpeg)
 
 > 색상, 점선, 텍스트 라벨까지 원본과 동일하게 추출되었다. 복잡한 구조적 다이어그램도 깨끗하게 나온다.
 
-**Figure 1 — L1 mass 차트:**
+**Figure 1 - L1 mass 차트:**
 
 ![추출된 Figure - L1 Mass](https://i.imgur.com/nadR5Vl.jpeg)
 
@@ -651,13 +651,13 @@ MinerU는 레이아웃 분석 결과를 색상으로 구분한 PDF를 생성한�
 
 #### 표 추출 (2/2 모두 추출)
 
-**Table 1 — 대형 성능 비교 표 (4개 데이터셋 × 8개 정확도 수준):**
+**Table 1 - 대형 성능 비교 표 (4개 데이터셋 × 8개 정확도 수준):**
 
 ![추출된 테이블 - Latency](https://i.imgur.com/IH9cLaV.jpeg)
 
 > 이미지로도 추출되었지만, 동시에 **HTML 구조**로도 파싱되었다 (5,507자의 `<table>` HTML). 행/열 구조, 소수점, 괄호 안 speedup 값까지 잘 살아있다.
 
-**Table 2 — 인덱스 크기/빌드 시간:**
+**Table 2 - 인덱스 크기/빌드 시간:**
 
 ![추출된 테이블 - Index Size](https://i.imgur.com/64BCyH6.jpeg)
 
@@ -712,14 +712,14 @@ MinerU 2.7.6은 학술 논문 파싱에서 매우 높은 수준의 결과를 보
 
 RAG-Anything의 핵심 기법들을 정리하면:
 
-1. **그래프 기반 RAG** — 단순 벡터 검색이 아닌 엔티티-관계 지식 그래프 + 벡터 하이브리드 검색
-2. **LLM 기반 KG 구축** — NER이 아닌 LLM 프롬프트로 엔티티/관계를 한 번에 추출
-3. **멀티모달 통합** — VLM/LLM으로 이미지·표·수식을 텍스트 설명으로 변환 후 KG에 통합
-4. **Late Binding 이미지 처리** — 인덱싱 시 경량 저장, 쿼리 시에만 실제 이미지를 VLM에 전달
-5. **Map-Reduce 엔티티 병합** — 여러 청크의 동일 엔티티 설명을 LLM으로 재귀 요약
-6. **belongs_to 관계** — 멀티모달 콘텐츠에서 추출된 엔티티를 부모 엔티티에 연결
-7. **다층 캐싱** — 파싱·임베딩·LLM 응답·쿼리 결과 4단계 캐싱
-8. **컨텍스트 인식 처리** — 멀티모달 아이템에 주변 텍스트 컨텍스트를 함께 제공
+1. **그래프 기반 RAG** - 단순 벡터 검색이 아닌 엔티티-관계 지식 그래프 + 벡터 하이브리드 검색
+2. **LLM 기반 KG 구축** - NER이 아닌 LLM 프롬프트로 엔티티/관계를 한 번에 추출
+3. **멀티모달 통합** - VLM/LLM으로 이미지·표·수식을 텍스트 설명으로 변환 후 KG에 통합
+4. **Late Binding 이미지 처리** - 인덱싱 시 경량 저장, 쿼리 시에만 실제 이미지를 VLM에 전달
+5. **Map-Reduce 엔티티 병합** - 여러 청크의 동일 엔티티 설명을 LLM으로 재귀 요약
+6. **belongs_to 관계** - 멀티모달 콘텐츠에서 추출된 엔티티를 부모 엔티티에 연결
+7. **다층 캐싱** - 파싱·임베딩·LLM 응답·쿼리 결과 4단계 캐싱
+8. **컨텍스트 인식 처리** - 멀티모달 아이템에 주변 텍스트 컨텍스트를 함께 제공
 
 단순히 "문서를 벡터로 바꿔서 검색"하는 naive RAG를 넘어, 문서의 구조와 의미를 **지식 그래프로 표현**하고, 텍스트뿐 아니라 **이미지·표·수식까지 통합**하여 검색하는 접근이 인상적이다. 특히 엔티티 추출부터 관계 병합, 쿼리까지 전 과정에서 LLM을 적극 활용하는 것이 GraphRAG 계열 시스템의 특징이자 장단점이라 할 수 있다. LLM 호출 비용과 지연시간이 트레이드오프가 될 수 있지만, 그만큼 풍부한 컨텍스트를 제공할 수 있다는 점에서 복잡한 문서 처리에 적합한 아키텍처다.
 
@@ -727,11 +727,11 @@ RAG-Anything의 핵심 기법들을 정리하면:
 
 ## 참고자료
 
-- [RAG-Anything GitHub](https://github.com/HKUDS/RAG-Anything) — RAG-Anything 공식 저장소
-- [LightRAG GitHub](https://github.com/HKUDS/LightRAG) — LightRAG 공식 저장소 (홍콩대 HKU-DS)
-- [LightRAG 논문](https://arxiv.org/abs/2410.05779) — "LightRAG: Simple and Fast Retrieval-Augmented Generation"
-- [MinerU GitHub](https://github.com/opendatalab/MinerU) — MinerU 공식 저장소 (OpenDataLab)
-- [PDF-Extract-Kit](https://github.com/opendatalab/PDF-Extract-Kit) — MinerU의 핵심 PDF 추출 엔진
-- [[MinerU - PDF Parser|MinerU - 고품질 PDF 변환 및 데이터 추출 도구]] — MinerU 상세 리뷰
-- [[Knowledge Graphs for RAG]] — 지식 그래프를 활용한 RAG 기초
-- [[RAG용 PDF Loader 비교]] — PDF 로더 비교 분석
+- [RAG-Anything GitHub](https://github.com/HKUDS/RAG-Anything) - RAG-Anything 공식 저장소
+- [LightRAG GitHub](https://github.com/HKUDS/LightRAG) - LightRAG 공식 저장소 (홍콩대 HKU-DS)
+- [LightRAG 논문](https://arxiv.org/abs/2410.05779) - "LightRAG: Simple and Fast Retrieval-Augmented Generation"
+- [MinerU GitHub](https://github.com/opendatalab/MinerU) - MinerU 공식 저장소 (OpenDataLab)
+- [PDF-Extract-Kit](https://github.com/opendatalab/PDF-Extract-Kit) - MinerU의 핵심 PDF 추출 엔진
+- [[MinerU - PDF Parser|MinerU - 고품질 PDF 변환 및 데이터 추출 도구]] - MinerU 상세 리뷰
+- [[Knowledge Graphs for RAG]] - 지식 그래프를 활용한 RAG 기초
+- [[RAG용 PDF Loader 비교]] - PDF 로더 비교 분석

@@ -60,7 +60,7 @@ class PositionalEncoding(tf.keras.layers.Layer):
 
 ## Connections
 
-- [[object-detection]] — Transformer의 attention 개념은 이후 Vision Transformer(ViT) 등 컴퓨터 비전에도 적용됨
+- [[object-detection]] - Transformer의 attention 개념은 이후 Vision Transformer(ViT) 등 컴퓨터 비전에도 적용됨
 
 ## Footnotes
 

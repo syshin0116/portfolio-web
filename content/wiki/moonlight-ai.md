@@ -45,9 +45,9 @@ draft: false
 
 ```
 [Extension]
-  ├── Content Script  — PDF 감지, 사이드바 DOM 주입, 텍스트 선택 이벤트
-  ├── Service Worker  — 백엔드 API 프록시, 인증 토큰
-  └── Sidebar UI      — React/Preact 기반
+  ├── Content Script  - PDF 감지, 사이드바 DOM 주입, 텍스트 선택 이벤트
+  ├── Service Worker  - 백엔드 API 프록시, 인증 토큰
+  └── Sidebar UI      - React/Preact 기반
 
 [Corca 백엔드] → [OpenAI API]
   ↑

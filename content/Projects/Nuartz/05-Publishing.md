@@ -45,7 +45,7 @@ npm publish --access public
 ## [0.1.1] - 2026-03-06
 
 ### Fixed
-- FlexSearch CJK 토크나이저 — 한국어 검색 수정
+- FlexSearch CJK 토크나이저 - 한국어 검색 수정
 - KaTeX CSS 주입
 - Heading anchor 위치 수정
 - defineConfig baseUrl 타입 보장
@@ -55,9 +55,9 @@ npm publish --access public
 Initial release.
 
 ### Added
-- renderMarkdown() — wikilink, callout, highlight, 수식, 코드 하이라이팅
+- renderMarkdown() - wikilink, callout, highlight, 수식, 코드 하이라이팅
 - getAllMarkdownFiles(), buildFileTree()
-- buildSearchIndex() — FlexSearch CJK 지원
+- buildSearchIndex() - FlexSearch CJK 지원
 - buildBacklinkIndex() / getBacklinks()
 - nuartz.config.ts 설정 시스템
 ```
@@ -113,7 +113,7 @@ git push --tags
 
 ## 시리즈
 
-- [[01-Motivation|01. 출발점 — Quartz의 한계에서 시작된 여정]]
+- [[01-Motivation|01. 출발점 - Quartz의 한계에서 시작된 여정]]
 - [[02-Quartz-Internals|02. Quartz 플러그인 해부: 무엇을 재사용할 수 있나]]
 - [[03-Vercel-Deployment|03. 첫 배포: 구현 내용과 Vercel에서 만난 것들]]
 - [[04-Headless-and-Ecosystem|04. Headless 설계와 레포 생태계 재편]]

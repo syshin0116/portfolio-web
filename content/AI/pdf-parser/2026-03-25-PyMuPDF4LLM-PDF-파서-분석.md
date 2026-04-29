@@ -54,14 +54,14 @@ MuPDF (C 라이브러리, Artifex)
 
 PDF 내부 구조를 직접 활용하되, 레이아웃 분석에는 경량 ML을 사용한다:
 
-- **텍스트 추출**: PDF 텍스트 객체에서 직접 추출 — 규칙 기반 (OCR 불필요, 텍스트 PDF인 경우)
-- **레이아웃 분석**: `pymupdf-layout`의 **GNN(Graph Neural Network)** 모델 — 텍스트 박스를 노드, 공간 관계를 엣지로 처리하여 제목/단락/표/그림 패턴 학습. **ONNX Runtime**으로 CPU 추론 (GPU 불필요)
-- **헤딩 감지**: 폰트 크기와 볼드 여부로 판별 — 규칙 기반
-- **테이블 감지**: PDF 내부의 선(line) 객체와 텍스트 좌표로 테이블 구조 추론 — 규칙 기반
-- **이미지 추출**: PDF 내장 이미지 객체 직접 추출 — 규칙 기반
+- **텍스트 추출**: PDF 텍스트 객체에서 직접 추출 - 규칙 기반 (OCR 불필요, 텍스트 PDF인 경우)
+- **레이아웃 분석**: `pymupdf-layout`의 **GNN(Graph Neural Network)** 모델 - 텍스트 박스를 노드, 공간 관계를 엣지로 처리하여 제목/단락/표/그림 패턴 학습. **ONNX Runtime**으로 CPU 추론 (GPU 불필요)
+- **헤딩 감지**: 폰트 크기와 볼드 여부로 판별 - 규칙 기반
+- **테이블 감지**: PDF 내부의 선(line) 객체와 텍스트 좌표로 테이블 구조 추론 - 규칙 기반
+- **이미지 추출**: PDF 내장 이미지 객체 직접 추출 - 규칙 기반
 - **다단 감지**: GNN 레이아웃 분석 + XY-Cut 알고리즘
 
-> "Heuristics do the heavy lifting upfront, so the model doesn't have to" — 휴리스틱이 특성을 먼저 추출하고, GNN은 패턴 분류만 수행하는 구조다.
+> "Heuristics do the heavy lifting upfront, so the model doesn't have to" - 휴리스틱이 특성을 먼저 추출하고, GNN은 패턴 분류만 수행하는 구조다.
 
 ---
 
@@ -288,7 +288,7 @@ divide each by √dk, and apply a softmax function
 
 `write_images=True`로 설정하면 PDF 내장 이미지 객체를 직접 추출한다. OCR이나 레이아웃 감지로 이미지를 찾는 게 아니라 **PDF 내부 이미지 참조를 그대로 가져오므로** 추출 속도가 빠르고 원본 품질이 보존된다.
 
-PPT 슬라이드에서는 92개의 이미지가 추출되었다 — 슬라이드 내 모든 다이어그램, 아이콘이 개별 이미지 객체로 분리되어 있기 때문.
+PPT 슬라이드에서는 92개의 이미지가 추출되었다 - 슬라이드 내 모든 다이어그램, 아이콘이 개별 이미지 객체로 분리되어 있기 때문.
 
 ### 한국어 처리
 
@@ -303,7 +303,7 @@ PPT 슬라이드에서는 92개의 이미지가 추출되었다 — 슬라이드
 
 ### PPT 슬라이드 처리
 
-PPT 스타일 PDF에서 특이한 기능이 있다 — 이미지 내 텍스트를 `picture text`로 추출한다:
+PPT 스타일 PDF에서 특이한 기능이 있다 - 이미지 내 텍스트를 `picture text`로 추출한다:
 
 ```markdown
 **==> picture [849 x 287] intentionally omitted <==**
@@ -414,5 +414,5 @@ PyMuPDF4LLM은 **"충분히 좋은 품질을 미친 속도로"** 제공하는 �
 - [PyMuPDF4LLM GitHub](https://github.com/pymupdf/pymupdf4llm)
 - [PyMuPDF 공식 문서](https://pymupdf.readthedocs.io/)
 - [Artifex Software](https://artifex.com/)
-- [[MinerU - PDF Parser]] — MinerU 1.x 분석
-- [[2026-03-23-MinerU-2x-파이프라인-분석]] — MinerU 2.x 파이프라인 분석
+- [[MinerU - PDF Parser]] - MinerU 1.x 분석
+- [[2026-03-23-MinerU-2x-파이프라인-분석]] - MinerU 2.x 파이프라인 분석

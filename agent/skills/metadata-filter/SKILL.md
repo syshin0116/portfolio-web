@@ -1,17 +1,17 @@
 ---
 name: metadata-filter
-description: Filter blog posts by tags, category, and date range using frontmatter metadata. Use when the user asks for posts by topic tag ("AI tagged posts"), by category ("show me Dev posts"), by time period ("posts from 2024", "recent posts"), or any combination. Powerful when combined with other search skills — e.g. filter by category first, then search within results.
+description: Filter blog posts by tags, category, and date range using frontmatter metadata. Use when the user asks for posts by topic tag ("AI tagged posts"), by category ("show me Dev posts"), by time period ("posts from 2024", "recent posts"), or any combination. Powerful when combined with other search skills - e.g. filter by category first, then search within results.
 ---
 
 # Metadata Filter
 
-Structured filtering over blog post frontmatter (YAML headers). Filters by tags, category folder, and date range — not by text content.
+Structured filtering over blog post frontmatter (YAML headers). Filters by tags, category folder, and date range - not by text content.
 
 ## Tool
 
 `metadata_filter(tags, category, date_from, date_to)`
 
-All parameters are optional — specify only the conditions you need.
+All parameters are optional - specify only the conditions you need.
 
 ## Categories
 

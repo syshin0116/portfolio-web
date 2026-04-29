@@ -19,7 +19,7 @@ summary: "Obsidian으로 노트를 관리하다 웹 퍼블리싱이 필요해졌
 
 ## 목적
 
-노트 관리 도구로 Obsidian을 쓰기 시작하면서 자연스럽게 웹 퍼블리싱이 필요해졌다. wikilink, callout, backlink, graph view — Obsidian의 핵심 기능들이 웹에서도 똑같이 동작해야 했다. 여러 도구를 찾아보다 [Quartz](https://quartz.jzhao.xyz/)를 발견했다. Obsidian 볼트를 그대로 웹사이트로 변환해주는 정적 사이트 생성기로, Obsidian 호환성만큼은 타의 추종을 불허했다.
+노트 관리 도구로 Obsidian을 쓰기 시작하면서 자연스럽게 웹 퍼블리싱이 필요해졌다. wikilink, callout, backlink, graph view - Obsidian의 핵심 기능들이 웹에서도 똑같이 동작해야 했다. 여러 도구를 찾아보다 [Quartz](https://quartz.jzhao.xyz/)를 발견했다. Obsidian 볼트를 그대로 웹사이트로 변환해주는 정적 사이트 생성기로, Obsidian 호환성만큼은 타의 추종을 불허했다.
 
 한동안은 만족스러웠다. 그런데 쓰다 보니 두 가지가 계속 걸렸다.
 

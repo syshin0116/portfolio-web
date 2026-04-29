@@ -18,7 +18,7 @@ Curates the knowledge layer at `content/wiki/`. Treats every `.md` outside `cont
 
 ingest and migrate have conflicting goals (preserve vs. restructure). Don't mix them in one routine session.
 
-For frontmatter, naming, tags, summary, sources/wikilink — see [conventions.md](./conventions.md).
+For frontmatter, naming, tags, summary, sources/wikilink - see [conventions.md](./conventions.md).
 
 ## Hard rules
 
@@ -26,7 +26,7 @@ These are the only rules every operation must enforce. Operation-specific rules 
 
 1. **`raw/` is immutable.** Every `.md` outside `content/wiki/` is read-only. If something looks wrong in a source, surface it to the user.
 2. **Extract, don't invent.** Every claim in a wiki page must trace to a verbatim span in a cited source.
-3. **Preserve and extend.** When updating an existing page, refine — don't rewrite. >30% body change = stop and escalate.
+3. **Preserve and extend.** When updating an existing page, refine - don't rewrite. >30% body change = stop and escalate.
 
 ## Verify gate
 
@@ -37,11 +37,11 @@ bun .claude/skills/wiki-curator/scripts/verify.ts
 ```
 
 **Behavior on exit code:**
-- **0** — all checks pass. Proceed to commit + push + PR.
-- **1** — at least one check failed. Read the per-check failures from stdout, fix them in place (Edit tool), re-run verify. Maximum **3 retry attempts**.
-- After 3 failed retries — abort. Do not commit. Surface the remaining failures to the user in the routine's final message.
+- **0** - all checks pass. Proceed to commit + push + PR.
+- **1** - at least one check failed. Read the per-check failures from stdout, fix them in place (Edit tool), re-run verify. Maximum **3 retry attempts**.
+- After 3 failed retries - abort. Do not commit. Surface the remaining failures to the user in the routine's final message.
 
-The script enforces (deterministically — don't try to verify by eye):
+The script enforces (deterministically - don't try to verify by eye):
 - wikilinks resolve by basename
 - required frontmatter fields present (`title`, `type`, `tags`, `sources`, `summary`, `created`, `updated`, `author`, `draft`)
 - no legacy `coverage:` field
@@ -57,7 +57,7 @@ The script enforces (deterministically — don't try to verify by eye):
 Non-obvious things that bite:
 
 - **Routine pushes are restricted to `claude/*` branches by default.** Open a PR to `main`; don't try to push to `main` directly. Settings → "Allow unrestricted branch pushes" lifts this if needed.
-- **Wikilinks resolve by basename.** `[[zettelkasten]]` finds `concepts/zettelkasten.md` and `zettelkasten.md` equally. Folder moves don't break links; **slug renames do** — backlinks must be migrated atomically.
+- **Wikilinks resolve by basename.** `[[zettelkasten]]` finds `concepts/zettelkasten.md` and `zettelkasten.md` equally. Folder moves don't break links; **slug renames do** - backlinks must be migrated atomically.
 - **Run `verify.ts` after every change, not just at the end.** It catches wikilink hallucinations, missing required frontmatter, leftover legacy fields, and body sections that should have moved. See [Verify gate](#verify-gate) below.
 - **Summary lives in frontmatter, not body.** Web template renders `frontmatter.summary` as a callout. Don't author a `## Summary` section; it would render twice.
 - **`stat -f '%m %N'` is macOS; use `stat -c '%Y %n'` on Linux.** ingest's "recent N" command differs by OS.

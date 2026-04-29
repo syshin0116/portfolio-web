@@ -29,8 +29,8 @@ draft: false
 
 ## Connections
 
-- [[second-brain-rag]] — Second Brain 개념은 Zettelkasten의 디지털 확장으로, RAG 시스템에 개인 지식베이스를 연결하는 아이디어
-- [[obsidian-notion-sync]] — Obsidian은 Zettelkasten의 디지털 구현 도구 중 하나로, wikilink 기반 노트 연결을 지원
+- [[second-brain-rag]] - Second Brain 개념은 Zettelkasten의 디지털 확장으로, RAG 시스템에 개인 지식베이스를 연결하는 아이디어
+- [[obsidian-notion-sync]] - Obsidian은 Zettelkasten의 디지털 구현 도구 중 하나로, wikilink 기반 노트 연결을 지원
 
 ## Footnotes
 

@@ -634,7 +634,7 @@ include_images=False,
 
   
 
-A node in this workflow is a single unit of functionality—such as “plan steps”, “search the web”, “think about results”, or “respond to user”. Splitting the entire chain-of-thought (CoT) approach into nodes makes the system easier to extend and debug.
+A node in this workflow is a single unit of functionality-such as “plan steps”, “search the web”, “think about results”, or “respond to user”. Splitting the entire chain-of-thought (CoT) approach into nodes makes the system easier to extend and debug.
 
   
 
@@ -1467,7 +1467,7 @@ Here, we demonstrate the end-to-end execution:
 
   
 
-Finally, we show how to examine the final state—looking at the produced Markdown answer and references.
+Finally, we show how to examine the final state-looking at the produced Markdown answer and references.
 
   
   

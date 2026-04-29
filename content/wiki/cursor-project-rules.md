@@ -55,7 +55,7 @@ protobuf 파일은 자동 생성되므로 직접 수정하지 말고,
 
 ## Connections
 
-- [[vibe-coding]] — Project Rules는 vibe coding 워크플로우에서 AI 출력 품질을 높이는 보완 도구
+- [[vibe-coding]] - Project Rules는 vibe coding 워크플로우에서 AI 출력 품질을 높이는 보완 도구
 
 ## Footnotes
 

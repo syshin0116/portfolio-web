@@ -59,7 +59,7 @@ By leveraging these components, your conversation agent can maintain **deep cont
 
   
 
-Memory refers to the capability of an AI system to **store**, **retrieve**, and **use** information. In conversational AI, this typically involves recalling the user’s previous statements, preferences, or relevant context—leading to more **personalized** and **adaptive** interactions.
+Memory refers to the capability of an AI system to **store**, **retrieve**, and **use** information. In conversational AI, this typically involves recalling the user’s previous statements, preferences, or relevant context-leading to more **personalized** and **adaptive** interactions.
 
   
 
@@ -561,7 +561,7 @@ return {"model": model, "provider": provider}
 
   
 
-Here, we focus on the `upsert_memory` function. This function is responsible for storing or updating (**upserting**) user-specific data. By preserving user context across conversations—like interests, preferences, or corrections—you can give your application a more **persistent and personalized** feel.
+Here, we focus on the `upsert_memory` function. This function is responsible for storing or updating (**upserting**) user-specific data. By preserving user context across conversations-like interests, preferences, or corrections-you can give your application a more **persistent and personalized** feel.
 
   
   
@@ -659,7 +659,7 @@ Next, we implement two important functions for our conversation flow:
 
 1. `call_model`: Takes the current conversation `State`, retrieves relevant memories, and then sends them along with user messages to the LLM.
 
-2. `store_memory`: Processes the model’s **tool calls**—in this case, requests to store data—and updates the memory store accordingly.
+2. `store_memory`: Processes the model’s **tool calls**-in this case, requests to store data-and updates the memory store accordingly.
 
   
 

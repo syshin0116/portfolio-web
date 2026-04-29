@@ -88,7 +88,7 @@ For technical content (LLM, frameworks, tools) consider 12 months instead.
 
 ### 6. Contradictions (severity: blue, informational)
 
-List every page that has a `## Contradictions` section. These are intentional, not bugs — but worth reviewing periodically.
+List every page that has a `## Contradictions` section. These are intentional, not bugs - but worth reviewing periodically.
 
 ```bash
 grep -l "^## Contradictions" content/wiki/*.md
@@ -96,7 +96,7 @@ grep -l "^## Contradictions" content/wiki/*.md
 
 ### 7. Legacy `coverage` field (severity: yellow)
 
-`coverage:` is deprecated — derived in index.md, not stored. Flag pages that still carry it; migrate removes them.
+`coverage:` is deprecated - derived in index.md, not stored. Flag pages that still carry it; migrate removes them.
 
 ```bash
 grep -l "^coverage:" content/wiki/**/*.md 2>/dev/null
@@ -104,7 +104,7 @@ grep -l "^coverage:" content/wiki/**/*.md 2>/dev/null
 
 ### 8. Tag vocabulary drift (severity: blue)
 
-List all tags in use, sorted by frequency. Surface tags used only once — likely typos or candidates for consolidation.
+List all tags in use, sorted by frequency. Surface tags used only once - likely typos or candidates for consolidation.
 
 ```bash
 grep -h "^  - " content/wiki/*.md \
@@ -142,7 +142,7 @@ done
 Output a single markdown report:
 
 ```markdown
-# Wiki lint report — YYYY-MM-DD HH:MM
+# Wiki lint report - YYYY-MM-DD HH:MM
 
 ## Summary
 
@@ -151,7 +151,7 @@ Output a single markdown report:
 - Yellow issues: Y
 - Blue (informational): Z
 
-## Red — fix before next ingest
+## Red - fix before next ingest
 
 ### Broken wikilinks (N)
 | Page | Broken target |
@@ -167,7 +167,7 @@ Output a single markdown report:
 ### Forbidden raw/ modifications
 - (any output here = serious bug; halt routine)
 
-## Yellow — review when convenient
+## Yellow - review when convenient
 
 ### Orphan pages (N)
 - ...
@@ -181,7 +181,7 @@ Output a single markdown report:
 ### Pages missing mandatory sections
 - ...
 
-## Blue — informational
+## Blue - informational
 
 ### Pages with contradictions
 - ...
@@ -206,5 +206,5 @@ Append a one-liner to `log.md`:
 
 - Does not modify any file.
 - Does not delete pages.
-- Does not auto-fix broken links (a page might genuinely need a new wiki page created — that's an ingest decision, not a lint decision).
+- Does not auto-fix broken links (a page might genuinely need a new wiki page created - that's an ingest decision, not a lint decision).
 - Does not re-ingest stale content (that's a human decision).

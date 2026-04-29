@@ -1,6 +1,6 @@
 ---
 name: bm25-search
-description: BM25 relevance ranking with Korean morphological analysis. Use this as the default search skill for natural language queries, topic exploration, and Korean-language questions. Handles queries like "how to build a RAG system", "agent architecture comparison", "도커 공부한 내용". Especially strong with Korean text thanks to kiwipiepy tokenization. Try this first for any search — it provides ranked results by relevance.
+description: BM25 relevance ranking with Korean morphological analysis. Use this as the default search skill for natural language queries, topic exploration, and Korean-language questions. Handles queries like "how to build a RAG system", "agent architecture comparison", "도커 공부한 내용". Especially strong with Korean text thanks to kiwipiepy tokenization. Try this first for any search - it provides ranked results by relevance.
 ---
 
 # BM25 Search (Semantic Search)
@@ -13,9 +13,9 @@ BM25Okapi ranking algorithm combined with kiwipiepy Korean morphological analyze
 
 ## Why BM25 + Korean Tokenization?
 
-Korean is an agglutinative language — "에이전트를", "에이전트의", "에이전트로" are all variations of "에이전트". Simple keyword matching for "에이전트" would miss documents containing "에이전트를". The kiwipiepy morphological analyzer extracts root forms (nouns, verbs, adjectives, foreign words), dramatically improving Korean search quality.
+Korean is an agglutinative language - "에이전트를", "에이전트의", "에이전트로" are all variations of "에이전트". Simple keyword matching for "에이전트" would miss documents containing "에이전트를". The kiwipiepy morphological analyzer extracts root forms (nouns, verbs, adjectives, foreign words), dramatically improving Korean search quality.
 
-BM25 improves on TF-IDF by accounting for document length and term frequency saturation — a keyword appearing 3 times in a short post scores higher than 3 times in a very long post.
+BM25 improves on TF-IDF by accounting for document length and term frequency saturation - a keyword appearing 3 times in a short post scores higher than 3 times in a very long post.
 
 ## Examples
 

@@ -24,7 +24,7 @@ modified: 2024-07-24
     
     -  [Bob van Luijt](https://www.linkedin.com/in/bobvanluijt/), Co-founder & CEO, Weaviate
         
-- ​**LLMOps에서 AGI까지 — 산업별 2024년 최신 사례**
+- ​**LLMOps에서 AGI까지 - 산업별 2024년 최신 사례**
     
     - ​[안재만](https://www.linkedin.com/in/jaeman-an/), Co-founder & CEO, VESSL AI
         
@@ -152,7 +152,7 @@ modified: 2024-07-24
 
 **A7:** 벡터 데이터베이스의 비용 효율성을 높이기 위해 메모리와 디스크를 혼합하여 사용하는 것이 중요합니다. 메모리 인덱스는 비용이 높기 때문에, 디스크 인덱스를 함께 사용하여 비용을 절감할 수 있습니다. 또한, S3 버킷을 이용해 데이터를 저장하고 관리하는 방법도 비용 효율성을 높이는 데 도움이 됩니다
 
-## LLMOps에서 AGI까지 — 산업별 2024년 최신 사례
+## LLMOps에서 AGI까지 - 산업별 2024년 최신 사례
 - [안재만](https://www.linkedin.com/in/jaeman-an/), Co-founder & CEO, VESSL AI
 - Daglo: https://daglo.ai/share/IlinZMErTUC-Naz0
 

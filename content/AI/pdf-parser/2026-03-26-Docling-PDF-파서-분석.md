@@ -95,7 +95,7 @@ Docling만의 독자적 중간 표현 포맷. 모든 페이지 요소(텍스트,
 
 ### 지원 입력 포맷
 
-Docling의 가장 큰 차별점 중 하나 — PDF만이 아니라 다양한 포맷을 지원한다:
+Docling의 가장 큰 차별점 중 하나 - PDF만이 아니라 다양한 포맷을 지원한다:
 
 - **문서**: PDF, DOCX, PPTX, XLSX
 - **웹**: HTML, XHTML
@@ -314,7 +314,7 @@ docs = reader.load_data(file_path="input.pdf")
 
 ## 정리
 
-Docling은 **"상용 프로젝트에서 쓸 수 있는 최고의 오픈소스 PDF 파서"**다. MIT 라이선스, 74.3% 품질, 4.9초/문서, 100% 안정성, 멀티포맷 지원 — 이 조합을 제공하는 파서는 Docling뿐이다.
+Docling은 **"상용 프로젝트에서 쓸 수 있는 최고의 오픈소스 PDF 파서"**다. MIT 라이선스, 74.3% 품질, 4.9초/문서, 100% 안정성, 멀티포맷 지원 - 이 조합을 제공하는 파서는 Docling뿐이다.
 
 MinerU(AGPL)가 3%p 더 높은 품질을 제공하지만 14배 느리고 상용 제약이 있다. PyMuPDF4LLM(AGPL)은 2.5배 빠르지만 역시 AGPL이다. **라이선스가 중요한 프로젝트라면 Docling이 현재 최선의 선택이다.**
 
@@ -329,6 +329,6 @@ MinerU(AGPL)가 3%p 더 높은 품질을 제공하지만 14배 느리고 상용 
 - [Docling 공식 문서](https://docling.io/)
 - [Granite-Docling-258M (HuggingFace)](https://huggingface.co/ibm-granite/granite-docling-258M)
 - [Heron Layout Model](https://huggingface.co/docling-project/heron)
-- [[2026-03-23-MinerU-2x-파이프라인-분석]] — MinerU 2.x 분석
-- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석]] — PyMuPDF4LLM 분석
-- [[2026-03-26-LiteParse-PDF-파서-분석]] — LiteParse 분석
+- [[2026-03-23-MinerU-2x-파이프라인-분석]] - MinerU 2.x 분석
+- [[2026-03-25-PyMuPDF4LLM-PDF-파서-분석]] - PyMuPDF4LLM 분석
+- [[2026-03-26-LiteParse-PDF-파서-분석]] - LiteParse 분석

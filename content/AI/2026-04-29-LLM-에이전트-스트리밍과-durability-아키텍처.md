@@ -15,18 +15,18 @@ tags:
   - fastapi
 draft: false
 enableToc: true
-description: 챗은 빨라야 하고 long-running 작업은 끊겨도 이어져야 한다. 두 요구를 한 시스템에서 어떻게 reconcile하는가 - 흔한 dual-path 구현의 한계부터 LangGraph Platform / OpenAI Responses / Vercel AI SDK / Cloudflare Agents 의 production 표준까지.
-summary: "LLM 에이전트 플랫폼은 두 가지 상반된 요구를 동시에 만족해야 한다. 짧은 챗은 200ms 안에 첫 토큰이 나와야 하고, 분 단위로 도는 long-running 작업은 사용자가 탭을 닫고 돌아와도 이어 봐야 한다. FastAPI + LangGraph + ARQ + Redis 스택에서 이 둘을 reconcile하는 과정과 production 표준이 도달한 결론을 정리한다."
+description: 챗은 빨라야 하고 long-running 작업은 끊겨도 이어져야 한다. 두 요구를 한 시스템에서 어떻게 reconcile하는가 - 흔한 dual-path 구현의 한계부터 LangGraph Platform / OpenAI Responses / Vercel AI SDK / Cloudflare Agents의 패턴, 그리고 정반대로 가는 OpenAI Realtime까지.
+summary: "LLM 에이전트 플랫폼은 두 가지 상반된 요구를 동시에 만족해야 한다. 짧은 챗은 200ms 안에 첫 토큰이 나와야 하고, 분 단위로 도는 long-running 작업은 사용자가 탭을 닫고 돌아와도 이어 봐야 한다. 업계는 워크로드별로 4개 패턴이 갈려있고, 단일 표준은 없다. FastAPI + LangGraph + ARQ + Redis 스택에서 multi-minute agent 워크로드에 맞는 패턴을 어떻게 고를지 정리한다."
 published: 2026-04-29
-modified: 2026-04-29
+modified: 2026-04-30
 ---
 
 ## TL;DR
 
-- 챗(짧고 빠른 응답)과 long-running 작업(분 단위, 끊겨도 이어 봐야 함)은 표면적으로 다른 요구처럼 보이지만, **production은 단일 경로로 통일**하는 방향으로 수렴했다
-- 흔한 dual-path 구현 - inline SSE 챗 + worker + Redis pub/sub + List buffer - 은 **Redis Streams를 약화된 의미로 재구현한 것**
-- LangGraph Platform, OpenAI Responses API, Vercel AI SDK, Cloudflare Agents가 모두 같은 결론에 도달함: **worker 일원화 + per-run durable 이벤트 버퍼 + cursor-based resume**
-- TTF 페널티는 ~10–30ms (LLM TTF 200–800ms 대비 3–5%), **챗/heavy 큐만 분리하면** 챗 UX는 거의 그대로
+- "단일 업계 표준"은 없다. 워크로드별로 4개 패턴(worker pool / actor-as-handler / inline-stateless / 장기 WebSocket)이 갈려있고, 동시에 OpenAI Realtime처럼 정반대 방향으로 가는 흐름도 있다
+- **multi-minute agent platform 진영**(LangGraph Platform, OpenAI Responses background, Inngest+Mastra, Cloudflare Agents)에선 비슷한 형태로 수렴: **worker 통합 실행 경로 + per-run durable 이벤트 로그 + cursor resume + 큐 분리**
+- 흔한 dual-path 구현(inline SSE 챗 + worker + Redis pub/sub + List buffer)은 이 패턴의 약화된 재구현이며, durable cursor-addressable log를 깔끔하게 만들면 다 풀린다
+- TTF 페널티는 추정 ~10–30ms (LLM TTF 200–800ms 대비 3–5%), **챗/heavy 큐만 분리하면** 챗 UX는 거의 그대로 (실측 benchmark는 별도 필요)
 
 ## 들어가며
 
@@ -297,7 +297,20 @@ GET /threads/{thread_id}/runs/{run_id}/stream?last_event_id=...
      XREAD BLOCK 0 STREAMS run:{run_id} <last_id>
 ```
 
-근데 정말 이게 표준일까? 그래서 다른 곳들이 뭘 하는지 봤다.
+### 잠깐, 일반 챗까지 다 worker로?
+
+이 권고는 "단순한 3초 Q&A"도 ARQ enqueue → BLPOP → worker → XADD → SSE forwarder를 통과한다는 뜻이다. 매 챗마다 +10–30ms 추가. 이게 **정말 필요한지는 product requirement에 달려있다.**
+
+| 챗 resumability 요구 | 적절한 형태 |
+|---|---|
+| ChatGPT/Claude.ai 같은 multi-tab/multi-device 동기화 필요 | **all-worker.** 챗도 큐 통과. TTF +10–30ms는 그 기능의 가격. |
+| 단발성 Q&A, 끊기면 다시 묻는 UX | **hybrid 정당.** inline 챗 + worker(긴 작업). 두 경로 유지. ARQ 경로의 dup race/cursor/MAXLEN만 Streams로 해결. |
+
+**즉 all-worker는 "챗이 resumable해야 한다"가 product requirement일 때만 의미 있다.** 단발성 챗 위주 워크로드면 dual-path도 정당한 선택이고, 두 경로의 drift는 코드 리뷰/공유 helper로 관리할 만한 비용이다.
+
+(이 글의 권고는 챗도 resumable한 케이스를 가정. 그렇지 않으면 hybrid가 맞음.)
+
+근데 정말 all-worker가 표준일까? 그래서 다른 곳들이 뭘 하는지 봤다.
 
 ---
 
@@ -309,21 +322,30 @@ GET /threads/{thread_id}/runs/{run_id}/stream?last_event_id=...
 
 > Streaming runs are now powered by the job queue used for background runs.
 
-**두 경로를 통일했다.** 우리가 지금 가진 split을 그들도 가졌었고, worker 일원화로 갔다.
+**두 경로를 통일했다.** 흔한 dual-path split을 그들도 거쳐갔고, worker 일원화로 갔다.
 
-[neuralware의 분석](https://neuralware.github.io/posts/langgraph-redis/index.html)에 따르면:
+여기서 흥미로운 사실 - **LangGraph Platform은 Redis Streams를 안 쓴다.** [neuralware의 분석](https://neuralware.github.io/posts/langgraph-redis/index.html)이 명시한다:
 
 > Redis Lists act as FIFO queues for agent task scheduling, while Redis String and Pub/Sub are used for bi-directional signaling (output streaming/cancellations).
 
-[공식 streaming docs](https://docs.langchain.com/langgraph-platform/streaming)는 더 흥미롭다.
+즉:
+- **큐**: Redis Lists (`BLPOP tasks:queue 0`)
+- **이벤트 스트림**: Redis Pub/Sub
+- **체크포인트**: Postgres (`langgraph-checkpoint-postgres`)
+- **워커**: async Python task, 워커당 기본 10잡 동시 (`N_JOBS_PER_WORKER`)
+- **큐 라이브러리**: third-party 안 씀. 자체 구현 `langgraph_storage.queue` (closed-source, wheel만 PyPI 공개)
+
+따라서 "production이 Streams로 수렴"은 **틀린 말**. LangGraph 본진도 Pub/Sub + List 조합이다. 진짜로 수렴하는 건 더 추상적인 *"durable cursor-addressable per-run log"* 이고, Streams는 그 한 구현일 뿐. SQLite-in-actor (Cloudflare), NATS JetStream, Postgres outbox + LISTEN/NOTIFY, 그리고 LangGraph의 Pub/Sub+List 모두 같은 추상의 다른 구현체.
+
+[공식 streaming docs](https://docs.langchain.com/langgraph-platform/streaming)에 resume surface도 명시된다.
 
 > When you use `.join_stream`, output is not buffered, so any output produced before joining will not be received.
 
-**run-level join은 best-effort**이라고 명시. 실제 durable resume의 진짜 surface는 thread-level이다.
+**run-level join은 best-effort.** 실제 durable resume의 진짜 surface는 thread-level이다.
 
 > If the connection drops, pass the ID of the last event you received to resume without missing events. Pass `"-"` to replay from the beginning.
 
-**Last-Event-ID 패턴**.
+**Last-Event-ID 패턴** - opaque event ID cursor.
 
 ### OpenAI Responses API
 
@@ -340,7 +362,19 @@ LangGraph의 `Last-Event-ID`와 **동형 패턴**이다.
 
 ### Anthropic Messages API
 
-[Messages streaming spec](https://platform.claude.com/docs/en/api/messages-streaming)에는 reconnect/resume이 **없다.** 끊기면 끝. Anthropic은 durability를 application 레이어로 넘긴다. 즉 *우리가* 버퍼링해야 한다.
+[Messages streaming spec](https://platform.claude.com/docs/en/api/messages-streaming)에는 reconnect/resume이 **없다.** 끊기면 끝. Anthropic은 durability를 application 레이어로 넘긴다. 즉 *호출자가* 버퍼링해야 한다. Modal, Replicate, Baseten, Vercel AI SDK 기본 `streamText`도 같은 입장 - inline only, durability는 caller's problem.
+
+### Counter-trend: OpenAI Realtime / WebSocket
+
+여기까지가 한 방향이라면, 정반대 방향도 동시에 굴러가고 있다. [OpenAI Realtime API](https://openai.com/index/speeding-up-agentic-workflows-with-websockets/)와 2026년 추가된 **Responses API의 WebSocket 모드**는 큐를 *반대로* 치워버린다:
+
+- 영구 WebSocket 연결
+- 서버 메모리에 in-memory state 캐싱
+- *"asynchronously block in the sampling loop"* - sampling loop 안에서 직접 대기
+
+voice/realtime 같은 sub-200ms turn-taking 워크로드에서는 큐 홉 자체가 비싸다. 이쪽은 stateful long-lived connection 패턴으로 간다. ElevenLabs, Cartesia 같은 voice agent도 동일.
+
+**즉 업계는 한 방향으로 수렴 안 한다.** multi-minute agent 워크로드는 worker+log 쪽으로, realtime은 WebSocket 쪽으로, raw inference vendor는 inline 쪽으로 갈라진다.
 
 ### Vercel AI SDK - `resumable-stream`
 
@@ -356,11 +390,13 @@ Redis Pub/Sub + producer 측 in-memory buffer. **Producer-alive 제약**이 있�
 
 ### Cloudflare Agents - RFC #1257
 
-[RFC #1257](https://github.com/cloudflare/agents/issues/1257)이 정확히 우리 문제를 다룬다. Durable Object 안에서 SQLite로 메시지 영속, `ResumableStream`이 청크 buffer.
+[RFC #1257](https://github.com/cloudflare/agents/issues/1257)이 정확히 같은 문제를 다룬다. Durable Object 안에서 SQLite로 메시지 영속:
 
-> ResumableStream buffers streaming chunks durably.
+> Every chunk streamed to the client is also written to SQLite (`cf_ai_chat_stream_chunks`).
 
-미해결로 인정한 부분이 있다. DO 재시작 후 **inference 재호출이 필요**. 이걸 풀려고 AI Gateway를 *durable response buffer*로 만들겠다는 게 RFC의 방향. 즉 **inference 앞에 durable buffer**를 두는 게 미래.
+여기서 중요한 점 - Cloudflare는 **central event bus가 아니라 actor-local SQLite**에 청크를 쓴다. 즉 worker pool + 중앙 로그 패턴이 아니라 **actor-as-handler + co-located persistence** 패턴이다.
+
+미해결로 인정한 부분도 있다. DO 재시작 후 fiber recovery만으로는 부족하고 **inference 재호출이 필요**. 이걸 풀려고 AI Gateway를 *durable response buffer*로 만들겠다는 게 RFC의 방향. 즉 **inference 앞에 durable buffer**를 두는 게 미래.
 
 명시적 구분도 있다 - *client-side resume*(쉬움)과 *server-side resume that doesn't re-bill tokens*(어려움, infra 버퍼 필요).
 
@@ -371,7 +407,7 @@ Redis Pub/Sub + producer 측 in-memory buffer. **Producer-alive 제약**이 있�
 - `step.realtime.publish()` - durable, retry에서 memoize, **state/decision용**
 - `publish()` - non-durable, 저비용, **token/progress용**
 
-같은 이벤트 버스에서 두 모드. Replit Agent는 [성공률 80→96%](https://mastra.ai/blog/replitagent3)로 끌어올린 게 Inngest 도입 덕분이라고 보고한다.
+같은 이벤트 버스에서 두 모드. Replit Agent는 [성공률 80→96%](https://mastra.ai/blog/replitagent3)로 끌어올린 게 *Mastra의 durable execution + Inngest* 도입 덕분이라고 보고한다 (vendor-reported 수치, 독립 벤치마크 아님).
 
 ### Temporal - durability ≠ event streaming
 
@@ -381,39 +417,75 @@ Redis Pub/Sub + producer 측 in-memory buffer. **Producer-alive 제약**이 있�
 
 ---
 
-## 6가지 수렴점
+## 4개 패턴과 워크로드 매핑
 
-위 시스템들을 가로질러 보면 6가지 공통 결론이 보인다.
+업계는 단일 표준이 아니라 **워크로드별로 4개 패턴**으로 갈린다.
+
+| 패턴 | 대표 시스템 | 적합한 워크로드 |
+|---|---|---|
+| **1. Worker pool + central durable log** | LangGraph Platform, OpenAI Responses background, Inngest+Mastra | 분 단위 multi-step agent |
+| **2. Actor-as-handler + co-located persistence** | Cloudflare Agents (DO + SQLite) | edge runtime, 세션 단위 강한 일관성 |
+| **3. Inline stateless + caller-side durability** | Anthropic Messages, Modal, Replicate, Baseten, Vercel AI SDK 기본 | 단발 inference, 짧은 응답 |
+| **4. Stateful long-lived WebSocket** | OpenAI Realtime, OpenAI Responses WebSocket 모드, voice agents | sub-200ms turn-taking realtime |
+
+각 패턴은 자기 영역에서 표준이지, 한 패턴이 다른 패턴을 대체하지 않는다.
+
+## multi-minute agent 진영 안에서의 5가지 공통점
+
+패턴 1에 속하는 시스템들(LangGraph Platform, OpenAI Responses background, Inngest+Mastra, Cloudflare Agents 일부)을 가로지르면 5가지 공통점이 보인다.
 
 ### 1. 단일 실행 경로 (worker queue 통과)
 
-LangGraph Platform 통일, OpenAI Responses background 통일, Cloudflare DO는 본질적으로 단일 actor worker, Inngest/Temporal은 정의상 worker. **inline streaming은 사라지는 추세.**
+LangGraph Platform 통일, OpenAI Responses background 통일, Inngest는 정의상 worker. **이 진영에서** inline streaming은 사라지는 추세. (Cloudflare는 "actor가 곧 worker"라 사실상 같은 자리에 있음 - 단 worker pool이 아니라 actor 패턴이라 분류상 패턴 2.)
 
-### 2. Per-run durable event buffer
+### 2. Per-run durable event log (cursor-addressable)
 
-Streams (XADD/XREAD), List+TTL, SQLite-in-DO, pub/sub + producer 메모리 - 형태는 다양하지만 **per-run buffer**가 있다는 건 공통이다. TTL은 보통 5–15분 (run 종료 후 재합류 가능 시간).
+진짜 추상적 합의는 *"durable cursor-addressable per-run log"*. 구현체는 여러 가지:
+- **Redis Pub/Sub + List/Queue** (LangGraph Platform이 실제로 쓰는 것)
+- **Redis Streams** (XADD/XREAD)
+- **SQLite-in-actor** (Cloudflare DO)
+- **NATS JetStream** - agent runtime 진영에서 채택 사례 늘어나는 중
+- **Postgres outbox + LISTEN/NOTIFY** - Postgres 이미 운영 중인 팀에 유리
+- **Kafka** - 고볼륨 event sourcing
+
+TTL은 보통 5–15분 (run 종료 후 재합류 가능 시간).
 
 ### 3. Two publish modes (durable vs ephemeral)
 
-Inngest가 명시화. 다른 곳들은 암묵적. **state/decision은 durable, token stream은 ephemeral**로 구분.
+Inngest가 명시화 (`step.realtime.publish` vs `publish`). 다른 곳들은 암묵적. **state/decision은 durable, token stream은 ephemeral**로 구분.
 
 ### 4. Resume = run/thread + cursor
 
-SSE Last-Event-ID, OpenAI sequence_number, LangGraph thread last_event_id, Vercel streamId. **전부 isomorphic.**
+SSE Last-Event-ID, OpenAI `sequence_number` (monotonic int), LangGraph thread last_event_id (opaque), Vercel streamId. cursor 형식은 다르지만 **고수준 의미는 isomorphic.**
 
-### 5. TTF queue hop은 더 이상 안 싸움
+### 5. Workflow durability ≠ event streaming
 
-~5–30ms는 모델 TTF(200–800ms) 대비 <5%. 모두 받아들였다.
+ARQ/Temporal/Inngest 같은 워크플로우 primitive에 토큰을 흘리지 않는다. **두 primitive를 분리**해서 각자의 강점에 충실하게 쓴다.
 
-### 6. Workflow durability ≠ event streaming
+### TTF queue hop의 비용
 
-ARQ에 토큰을 흘리지 않는다. 두 primitive를 분리해서 각자의 강점에 충실하게 쓴다.
+worker 일원화의 추가 비용은 추정 **~10–30ms** (LLM TTF 200–800ms 대비 3–5%). 단 이 수치는:
+- 워커가 idle하다는 가정
+- ARQ의 `poll_delay` 적정 튜닝 가정 (기본 ~500ms는 너무 김)
+- DB/Redis가 같은 AZ 가정
+
+**실측 benchmark는 자기 스택에서 측정 권장.** 워커 starvation 시 수초로 튀므로 이 가정이 깨지면 framing 자체가 바뀜.
 
 ---
 
-## 최종 권고
+## 최종 권고 (multi-minute agent 워크로드 기준)
 
-**Collapse to one execution path (always-worker) + Redis Streams as event bus + two-endpoint design.**
+이 글의 권고는 **패턴 1 (worker pool + central durable log)** 이 적합한 경우, 즉 chat + 분 단위 RFP 파싱 같은 multi-minute agent 워크로드에 한정됨. realtime/voice이면 패턴 4, raw inference면 패턴 3을 봐야 함.
+
+**Collapse to one execution path (always-worker) + per-run durable cursor-addressable log + two-endpoint design.**
+
+이벤트 로그 구현체는 선택지 있음:
+- **Redis Pub/Sub + List** (LangGraph Platform이 실제로 쓰는 것 - 가장 검증됨)
+- **Redis Streams** (XADD/XREAD - 단일 primitive, MAXLEN/cursor 무료)
+- **Postgres outbox + LISTEN/NOTIFY** (이미 PG 운영 중이고 Redis 줄이고 싶은 경우)
+- **NATS JetStream** (multi-AZ/durable 강하게 필요한 경우)
+
+아래는 ARQ + Redis Streams 조합 예시 (LangGraph Platform이 자체 closed-source 큐로 하는 것을 OSS로 거의 동일하게 재현하는 조합). LangGraph가 Pub/Sub+List를 쓰는 건 그게 더 검증된 선택지라는 시그널이지만, 새로 짜는 입장에선 Streams가 cursor/MAXLEN/atomic을 무료로 줘서 재구현 부담을 줄임.
 
 ```graphviz
 digraph recommended_architecture {
@@ -512,9 +584,21 @@ Worker:
 
 LangGraph Platform이 priority lane이라 부르는 것과 동일.
 
+### ARQ ↔ LangGraph 관계 (헷갈리기 쉬움)
+
+LangGraph Platform은 ARQ를 안 쓰고 자체 구현 큐(`langgraph_storage.queue`, closed-source wheel만 PyPI 공개)를 쓴다. 다만 그 자체 구현이 하는 일은 **Redis Lists + BLPOP + async Python task** - 즉 ARQ가 OSS로 하는 것과 동일한 패턴이다. 따라서 OSS 스택에서 ARQ 선택은 LangGraph 패턴에서 벗어나는 게 아니라 **closed-source 부분을 OSS로 같은 의미로 대체**하는 것.
+
+| | LangGraph 자체 구현 | ARQ |
+|---|---|---|
+| 큐 primitive | Redis Lists | Redis Lists |
+| Pickup | `BLPOP` | `BLPOP` |
+| 워커 모델 | async Python task | async event loop |
+| 워커당 동시성 | 기본 10 (`N_JOBS_PER_WORKER`) | 설정 가능 |
+| 라이브러리 | closed-source | OSS |
+
 ### TTF 영향
 
-순 추가 비용 ~10–30ms (~3–5%). LLM TTF에 묻혀서 체감 안 됨. **단 챗 큐 분리 + 워커 동시성 적정 설정이 필수 전제.**
+순 추가 비용 추정 ~10–30ms (~3–5%). LLM TTF에 묻혀서 체감 안 됨. **단 챗 큐 분리 + 워커 동시성 적정 설정 + ARQ `poll_delay` 튜닝이 필수 전제.** 실측 benchmark는 자기 스택에서 측정 권장.
 
 ---
 
@@ -522,11 +606,17 @@ LangGraph Platform이 priority lane이라 부르는 것과 동일.
 
 처음 의문은 단순했다 - *"왜 다 create로 안 하지?"*
 
-답을 따라가다 보니 production 시스템들이 모두 같은 결론에 도달했다는 걸 알게 됐다. **(1) worker 일원화 (2) Redis Streams (3) cursor resume (4) 큐 분리.**
+답을 따라가다 보니 두 가지를 알게 됐다.
 
-dual-path + pub/sub + List 구조는 이 표준이 진화 과정에서 폐기한 모양이다. dual-publish로 챗에 영속성을 더하는 땜빵은 이 폐기된 구조를 잠깐 연명시키는 것일 뿐이고, 진짜 답은 **표준에 합류하는 것**이다.
+첫째, **단일 업계 표준은 없다.** 워크로드별로 4개 패턴(worker pool / actor-as-handler / inline-stateless / 장기 WebSocket)이 갈려있고, 각자 자기 영역에서 표준이다. OpenAI 자체도 multi-minute agent에는 worker+log로 가면서 voice/realtime에는 WebSocket으로 정반대 방향을 동시에 밀고 있다.
+
+둘째, 그 안에서 **multi-minute agent platform 진영**(LangGraph Platform, OpenAI Responses background, Inngest+Mastra, Cloudflare Agents)이 도달한 형태는 비교적 명확하다: **(1) worker 통합 실행 경로 (2) per-run durable cursor-addressable 이벤트 로그 (3) cursor resume (4) 큐 분리**. 이 진영의 워크로드를 다룬다면 이 형태가 합리적 시작점이다.
+
+흔한 dual-path + pub/sub + List 구조는 이 진영이 진화 과정에서 일부 폐기한 모양이다 (LangGraph Platform은 여전히 Pub/Sub+List를 쓰지만 worker는 통합했고, dual path는 없앴다). dual-publish로 챗에 영속성을 더하는 땜빵은 이 진화의 중간 단계를 연명시키는 것일 뿐이고, 진짜 답은 **이벤트 로그를 한 번 깔끔하게 깔고 worker로 통합하는 것**이다 - 구현체는 Pub/Sub+List든 Streams든 자유롭게.
 
 PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 굳어진 다음에 통일하는 건 훨씬 비싸다.
+
+다만 모든 챗까지 worker로 보낼 가치가 있는지는 product 단에서 판단할 일이다. **챗 resumability가 PRD에 들어가 있다면 all-worker가 답이고, 그렇지 않다면 dual-path 유지하면서 ARQ 경로만 Streams로 정리하는 게 더 실용적**일 수 있다. 이 글의 권고는 전자 가정 - 후자라면 hybrid 옵션을 채택해도 부끄러울 게 없다.
 
 ---
 
@@ -536,6 +626,7 @@ PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 
 - [LangGraph reliable streaming changelog](https://changelog.langchain.com/announcements/reliable-streaming-and-efficient-state-management-in-langgraph)
 - [How LangGraph Uses Redis for Fault-Tolerant Task Execution](https://neuralware.github.io/posts/langgraph-redis/index.html)
 - [OpenAI Background mode guide](https://platform.openai.com/docs/guides/background)
+- [OpenAI: Speeding up agentic workflows with WebSockets](https://openai.com/index/speeding-up-agentic-workflows-with-websockets/)
 - [Anthropic Messages streaming](https://platform.claude.com/docs/en/api/messages-streaming)
 - [Vercel resumable-stream](https://github.com/vercel/resumable-stream)
 - [AI SDK UI: Chatbot Resume Streams](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-resume-streams)

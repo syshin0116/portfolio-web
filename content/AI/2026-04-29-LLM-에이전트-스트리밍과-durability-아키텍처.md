@@ -18,7 +18,7 @@ enableToc: true
 description: 챗은 빨라야 하고 long-running 작업은 끊겨도 이어져야 한다. 두 요구를 한 시스템에서 어떻게 reconcile하는가 - 흔한 dual-path 구현의 한계부터 LangGraph Platform / OpenAI Responses / Vercel AI SDK / Cloudflare Agents의 패턴, 그리고 정반대로 가는 OpenAI Realtime까지.
 summary: "LLM 에이전트 플랫폼은 두 가지 상반된 요구를 동시에 만족해야 한다. 짧은 챗은 200ms 안에 첫 토큰이 나와야 하고, 분 단위로 도는 long-running 작업은 사용자가 탭을 닫고 돌아와도 이어 봐야 한다. 업계는 워크로드별로 4개 패턴이 갈려있고, 단일 표준은 없다. FastAPI + LangGraph + ARQ + Redis 스택에서 multi-minute agent 워크로드에 맞는 패턴을 어떻게 고를지 정리한다."
 published: 2026-04-29
-modified: 2026-04-30
+modified: 2026-05-08
 ---
 
 ## TL;DR
@@ -314,6 +314,30 @@ GET /threads/{thread_id}/runs/{run_id}/stream?last_event_id=...
 
 ---
 
+## OSS 옵션 — Aegra
+
+이 글의 권고 패턴(worker 통합 + per-run durable cursor log)을 **자체 구현하지 않고** OSS 패키지로 받는 옵션이 있다. [Aegra](https://github.com/ibbybuilds/aegra) (Apache-2.0, 2024–) — LangGraph SDK contract를 OSS로 구현. 2026-05 시점 v0.9.7, 850+ stars, 월 5 release 페이스.
+
+| | LangGraph Platform | Aegra |
+|---|---|---|
+| 라이선스 | Elastic License 2.0 (OSS 비호환) | Apache-2.0 |
+| 큐 모델 | Redis Lists + BLPOP + Pub/Sub | 동일 |
+| Worker 모델 | async task (closed-source `langgraph_storage.queue`) | LocalExecutor (in-memory) / WorkerExecutor (Redis BLPOP) |
+| 배포 | LangSmith managed | self-hosted (PyPI / Docker) |
+| Studio 호환 | yes | yes |
+| 결정적 차이 | 클라우드 의존 | 단일 컨테이너로 시작 |
+
+**자체 구현(ARQ + Redis Streams) vs Aegra 선택은 trade-off**:
+
+- **Aegra**: 빠른 시작. internals owner는 Aegra. cron/MCP/A2A 같은 부재 기능은 upstream issue([#316](https://github.com/ibbybuilds/aegra/issues/316), [#261](https://github.com/ibbybuilds/aegra/issues/261))로 양도.
+- **ARQ + Redis Streams 직접**: 우리가 owner. broker 자유, 도메인 특화 패턴 가능. 코드량 ~1500줄 자체 유지 (lease+reaper+SSE forwarder+streaming buffer).
+
+일반 chat + multi-minute agent 워크로드면 Aegra가 ROI 우위. 2026-04 이전엔 OSS LangGraph Platform 부재(이슈 [langchain-ai/langgraph#6709](https://github.com/langchain-ai/langgraph/issues/6709))로 ARQ 자체 구현이 사실상 유일했지만, Aegra 출시 이후엔 선택지가 둘이 됨. multi-broker(NATS/Kafka) 강제 또는 Aegra 미지원 영역(예: 도메인 특화 cron 정책)이 강하게 필요할 때만 ARQ 쪽으로.
+
+TTF에도 영향: Aegra의 LocalExecutor 모드(in-memory queue)는 Redis 안 거치므로 추가 비용 ~1-3ms. WorkerExecutor 모드(Redis BLPOP, multi-instance용)는 자체 구현 ARQ 수준의 ~10-30ms. 즉 단일 컨테이너 시작 시엔 hop 비용 자체가 없는 것이 Aegra의 부수 이득.
+
+---
+
 ## Production 표준 리서치
 
 ### LangGraph Platform
@@ -333,7 +357,7 @@ GET /threads/{thread_id}/runs/{run_id}/stream?last_event_id=...
 - **이벤트 스트림**: Redis Pub/Sub
 - **체크포인트**: Postgres (`langgraph-checkpoint-postgres`)
 - **워커**: async Python task, 워커당 기본 10잡 동시 (`N_JOBS_PER_WORKER`)
-- **큐 라이브러리**: third-party 안 씀. 자체 구현 `langgraph_storage.queue` (closed-source, wheel만 PyPI 공개)
+- **큐 라이브러리**: third-party 안 씀. 자체 구현 `langgraph_storage.queue`. `langgraph-api` 패키지는 **Elastic License 2.0** (source-available, OSS 호환 X). OSS 진영의 Apache-2.0 대안은 [Aegra](https://github.com/ibbybuilds/aegra) — 같은 LangGraph SDK contract를 구현하면서 PyPI publish (자세한 비교는 위 [OSS 옵션 — Aegra](#oss-옵션--aegra))
 
 따라서 "production이 Streams로 수렴"은 **틀린 말**. LangGraph 본진도 Pub/Sub + List 조합이다. 진짜로 수렴하는 건 더 추상적인 *"durable cursor-addressable per-run log"* 이고, Streams는 그 한 구현일 뿐. SQLite-in-actor (Cloudflare), NATS JetStream, Postgres outbox + LISTEN/NOTIFY, 그리고 LangGraph의 Pub/Sub+List 모두 같은 추상의 다른 구현체.
 
@@ -485,7 +509,12 @@ worker 일원화의 추가 비용은 추정 **~10–30ms** (LLM TTF 200–800ms 
 - **Postgres outbox + LISTEN/NOTIFY** (이미 PG 운영 중이고 Redis 줄이고 싶은 경우)
 - **NATS JetStream** (multi-AZ/durable 강하게 필요한 경우)
 
-아래는 ARQ + Redis Streams 조합 예시 (LangGraph Platform이 자체 closed-source 큐로 하는 것을 OSS로 거의 동일하게 재현하는 조합). LangGraph가 Pub/Sub+List를 쓰는 건 그게 더 검증된 선택지라는 시그널이지만, 새로 짜는 입장에선 Streams가 cursor/MAXLEN/atomic을 무료로 줘서 재구현 부담을 줄임.
+OSS로 이 패턴을 갖추는 두 옵션:
+
+- **(a) [Aegra](https://github.com/ibbybuilds/aegra)** — LangGraph Platform OSS port. 위 패턴을 이미 구현. `pip install aegra-api`, Docker single container, `aegra.json`으로 graphs/http.app/auth 등록. 큐 모델은 LangGraph Platform과 동일(Redis Lists + BLPOP + Pub/Sub). cron만 [Aegra#316](https://github.com/ibbybuilds/aegra/issues/316) PR 진행 중.
+- **(b) ARQ + Redis Streams 직접** — 우리가 owner. broker 자유, 도메인 특화 가능. lease+reaper+SSE forwarder를 직접 구현 (~1500줄).
+
+아래는 (b) 예시. (a)는 Aegra 공식 docs 참조. LangGraph가 Pub/Sub+List를 쓰는 건 더 검증된 선택지라는 시그널이지만, (b)로 새로 짜는 입장에선 Streams가 cursor/MAXLEN/atomic을 무료로 줘서 재구현 부담을 줄임.
 
 ```graphviz
 digraph recommended_architecture {
@@ -625,6 +654,8 @@ PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 
 - [LangGraph Platform Streaming](https://docs.langchain.com/langgraph-platform/streaming)
 - [LangGraph reliable streaming changelog](https://changelog.langchain.com/announcements/reliable-streaming-and-efficient-state-management-in-langgraph)
 - [How LangGraph Uses Redis for Fault-Tolerant Task Execution](https://neuralware.github.io/posts/langgraph-redis/index.html)
+- [Aegra (LangGraph Platform OSS port, Apache-2.0)](https://github.com/ibbybuilds/aegra)
+- [LangGraph #6709 — OSS Postgres runtime issue](https://github.com/langchain-ai/langgraph/issues/6709)
 - [OpenAI Background mode guide](https://platform.openai.com/docs/guides/background)
 - [OpenAI: Speeding up agentic workflows with WebSockets](https://openai.com/index/speeding-up-agentic-workflows-with-websockets/)
 - [Anthropic Messages streaming](https://platform.claude.com/docs/en/api/messages-streaming)

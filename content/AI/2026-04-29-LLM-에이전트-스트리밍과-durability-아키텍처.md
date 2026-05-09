@@ -18,7 +18,7 @@ enableToc: true
 description: 챗은 빨라야 하고 long-running 작업은 끊겨도 이어져야 한다. 두 요구를 한 시스템에서 어떻게 reconcile하는가 - 흔한 dual-path 구현의 한계부터 LangGraph Platform / OpenAI Responses / Vercel AI SDK / Cloudflare Agents의 패턴, 그리고 정반대로 가는 OpenAI Realtime까지.
 summary: "LLM 에이전트 플랫폼은 두 가지 상반된 요구를 동시에 만족해야 한다. 짧은 챗은 200ms 안에 첫 토큰이 나와야 하고, 분 단위로 도는 long-running 작업은 사용자가 탭을 닫고 돌아와도 이어 봐야 한다. 업계는 워크로드별로 4개 패턴이 갈려있고, 단일 표준은 없다. FastAPI + LangGraph + ARQ + Redis 스택에서 multi-minute agent 워크로드에 맞는 패턴을 어떻게 고를지 정리한다."
 published: 2026-04-29
-modified: 2026-05-08
+modified: 2026-05-09
 ---
 
 ## TL;DR
@@ -628,6 +628,99 @@ LangGraph Platform은 ARQ를 안 쓰고 자체 구현 큐(`langgraph_storage.que
 ### TTF 영향
 
 순 추가 비용 추정 ~10–30ms (~3–5%). LLM TTF에 묻혀서 체감 안 됨. **단 챗 큐 분리 + 워커 동시성 적정 설정 + ARQ `poll_delay` 튜닝이 필수 전제.** 실측 benchmark는 자기 스택에서 측정 권장.
+
+---
+
+## 운영 관점 — K8s + KEDA로 패턴 1 구현
+
+위 권고 패턴 1(worker pool + durable log)을 운영 환경에서 구현하려면 컨테이너 분리뿐 아니라 **워커 autoscale, plane 격리, run 상태 전이 표준**이 필요하다. K8s 환경 기준 정리.
+
+### Worker autoscale — KEDA Redis-list trigger
+
+worker 일원화의 핵심 가정은 "큐가 차면 워커가 늘어난다". CPU/메모리 기반 HPA는 LLM I/O-bound 워크로드엔 부적합 — **backlog(pending run 수) 기준이 더 정확**하다.
+
+[KEDA](https://keda.sh/) 2.19+ Redis Lists scaler가 표준 구현:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+spec:
+  scaleTargetRef:
+    name: langgraph-worker
+  pollingInterval: 10          # 10초마다 backlog 측정
+  cooldownPeriod: 120          # scale-in 보수적 (in-flight run 보호)
+  minReplicaCount: 2
+  maxReplicaCount: 50
+  triggers:
+    - type: redis
+      metadata:
+        listName: langgraph:run-queue
+        listLength: "20"        # avg 20 jobs/worker 초과 시 추가
+```
+
+운영 노하우:
+
+- **scale-out 빠르게, scale-in 보수적으로** — `cooldownPeriod` 길게. 장시간 run이 갑자기 죽지 않도록.
+- **maxReplicaCount는 downstream 한도 기준** — Worker만 늘려도 Postgres connection pool 또는 ERP/LLM API rate limit이 먼저 막힘.
+- **`preStop` hook + graceful shutdown** — pod 종료 시 in-flight run을 checkpoint까지 진행 후 종료.
+- **chat_fast vs heavy 큐 분리는 ScaledObject 2개로** — heavy queue worker는 `maxReplicaCount` 낮게.
+
+ARQ도 같은 패턴(KEDA가 `arq:queue:default` 같은 list 모니터). Aegra의 BLPOP queue도 마찬가지 — `listName`만 Aegra 실제 키 prefix로 바꾸면 동일하게 scale 가능.
+
+### Plane 분리 — 장애 격리
+
+운영 관점에서 컴포넌트를 3 plane으로 묶는 게 표준:
+
+| Plane | 포함 | 장애 영향 |
+|---|---|---|
+| **Control Plane** | GitOps(ArgoCD), Helm, Vault, Policy/RBAC, Tool Registry | 신규 배포 지연. 기존 run은 영향 X (이상적) |
+| **Execution Data Plane** | UI, BFF, Agent API, Worker, Redis, Postgres | 사용자 run 생성/실행/streaming 직접 영향 |
+| **Enterprise Integration Plane** | MCP Proxy, Egress Gateway, ERP/MES API, LLM Gateway | 특정 도메인 tool 실패. circuit breaker로 격리 |
+
+**원칙**: Control Plane 장애가 Data Plane 전체 장애로 번지지 않게. ArgoCD가 죽어도 기존 Pod는 계속 실행. Vault 장애 시엔 mount된 secret TTL 내 graceful degradation.
+
+durable cursor log 자체는 Data Plane(Postgres + Redis)에 있으므로 **Control Plane 장애에도 in-flight run의 streaming은 살아남는다.** 이게 plane 분리의 운영적 가치.
+
+### Run 상태 전이 표준
+
+durable cursor-addressable log는 결국 **run lifecycle이 안정 상태 전이를 가져야** 의미 있다. 표준 transition:
+
+```
+queued ─→ running ─┬─→ succeeded
+                   ├─→ waiting_approval ─→ running ─→ ...
+                   │                     └─→ rejected
+                   ├─→ retrying ─→ running OR failed
+                   └─→ cancelling ─→ cancelled
+```
+
+| 상태 | 의미 | 인프라 요구 |
+|---|---|---|
+| `queued` | DB에 run 저장 + Redis wake-up signal | Redis 장애 시 reconcile (DB scan으로 재신호) |
+| `running` | Worker가 graph 실행 중 | preStop graceful, checkpoint 주기 |
+| `waiting_approval` | HITL 승인 대기 | 장기 가능 → DB checkpoint 필수 |
+| `retrying` | transient 에러 재시도 | retry budget, exponential backoff, idempotency key |
+| `cancelling` | 중단 처리 중 | Redis cancellation signal + cooperative cancel |
+| terminal (`succeeded`/`failed`/`rejected`/`cancelled`) | 종료 | terminal transition은 단 한 번만 |
+
+**Terminal exactly-once**: run이 한 번 `succeeded` 되면 `failed`로 못 감. DB row constraint로 강제하고, retry는 새 run 생성으로 처리. 이게 "durable log"의 정합성을 보장.
+
+### 데이터 소유 매트릭스
+
+운영에서 가장 헷갈리는 건 "어느 데이터가 어디의 source of truth인가". 정리:
+
+| 데이터 | Source of truth | Cache / Relay | 원칙 |
+|---|---|---|---|
+| Thread metadata | Postgres | API memory cache | DB 단일 소유 |
+| Run lifecycle | Postgres | Redis wake-up signal | DB가 truth, Redis는 신호 |
+| Checkpoint | Postgres | 없음 | DB만 |
+| Streaming event (live) | Redis Stream | — | replay 요구 강하면 DB event table 추가 |
+| Streaming event (long replay) | Postgres event table OR Object Storage | Redis 일부 | 정책 결정 |
+| Approval decision | Postgres | UI cache | 감사 대상 |
+| Tool call audit | Postgres OR 감사 저장소 | — | 보존 정책 |
+| Artifact / attachment | Object Storage(S3/MinIO) | CDN | DB에는 URI + checksum |
+| Trace / metric / log | LangSmith / OTEL / Loki | — | PII 마스킹 |
+
+**Redis 금지 영역**: 사용자 대화 원문, ERP/tool 결과, 최종 산출물의 source of truth. Redis는 ephemeral 신호 + 캐시 전용. Redis 전체가 날아가도 Postgres만으로 in-flight run을 복구할 수 있어야 함.
 
 ---
 

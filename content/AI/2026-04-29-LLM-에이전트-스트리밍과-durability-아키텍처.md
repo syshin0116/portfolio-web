@@ -27,7 +27,7 @@ modified: 2026-05-10
 ## TL;DR
 
 - "단일 업계 표준"은 없다. 워크로드별로 4개 패턴(worker pool / actor-as-handler / inline-stateless / 장기 WebSocket)이 갈려있고, 동시에 OpenAI Realtime처럼 정반대 방향으로 가는 흐름도 있다
-- **multi-minute agent platform 진영**(LangGraph Platform, OpenAI Responses background, Inngest+Mastra, Cloudflare Agents)에선 비슷한 형태로 수렴: **worker 통합 실행 경로 + per-run durable 이벤트 로그 + cursor resume + 큐 분리**
+- **multi-minute agent platform 진영**에서 LangGraph Platform / OpenAI Responses background / Inngest+Mastra는 **worker 통합 + central durable log + cursor resume**으로 수렴. Cloudflare Agents는 **actor-as-handler + actor-local persistence (DO + SQLite)**로 같은 문제를 다른 방식으로 푼다.
 - 흔한 dual-path 구현(inline SSE 챗 + worker + Redis pub/sub + List buffer)은 이 패턴의 약화된 재구현이며, durable cursor-addressable log를 깔끔하게 만들면 다 풀린다
 - TTF 페널티는 추정 ~10–30ms (LLM TTF 200–800ms 대비 3–5%), **챗/heavy 큐만 분리하면** 챗 UX는 거의 그대로 (실측 benchmark는 별도 필요)
 - OSS 진영은 자체 구현(ARQ + Redis Streams) 외에 **Aegra**(Apache-2.0)가 LangGraph Platform OSS port로 같은 패턴을 이미 구현 — 새로 짜는 입장에선 둘 중 선택
@@ -252,7 +252,7 @@ Chat 토큰 스트림은 수천 청크가 가능한데 List에 trim 정책이 �
 | Late join replay | 수동 (lrange) | `XREAD` from any ID |
 | Cursor | 없음 | entry ID가 native cursor |
 | MAXLEN | 수동 LTRIM | `XADD MAXLEN ~ N` |
-| Crash 견딤 | List는 살지만 ack 없음 | XPENDING으로 복구 |
+| Worker crash 후 미배달 event 복구 | List는 살지만 ack 없음 | consumer group(`XREADGROUP`+`XACK`) 패턴일 때만 `XPENDING`/`XCLAIM`으로 복구. 아래 예시처럼 `XREAD` 단순 사용은 log persistence/replay만 제공 |
 | Atomic publish+persist | 2 ops | 1 op |
 
 [Redis 공식 docs](https://redis.io/docs/latest/develop/data-types/streams/) 기준 우리 패턴 - *"한 producer + 다수의 짧은 consumer + late join with replay"* - 은 **Streams 교과서적 fit**이다.
@@ -321,7 +321,7 @@ GET /threads/{thread_id}/runs/{run_id}/stream?last_event_id=...
 
 ## OSS 옵션 — Aegra
 
-이 글의 권고 패턴(worker 통합 + per-run durable cursor log)을 **자체 구현하지 않고** OSS 패키지로 받는 옵션이 있다. [Aegra](https://github.com/ibbybuilds/aegra) (Apache-2.0, 2024–) — LangGraph SDK contract를 OSS로 구현. 2026-05 시점 v0.9.7, 850+ stars, 월 5 release 페이스.
+이 글의 권고 패턴(worker 통합 + per-run durable cursor log)을 **자체 구현하지 않고** OSS 패키지로 받는 옵션이 있다. [Aegra](https://github.com/ibbybuilds/aegra) (Apache-2.0, 2024–) — LangGraph SDK contract를 OSS로 구현. **2026-05-10 확인 기준 v0.9.14, ~880 stars, 월 5–7 patch release 페이스** (시점에 따라 변동 가능, 도입 직전 PyPI/GitHub 직접 확인 권장).
 
 | | LangGraph Platform | Aegra |
 |---|---|---|
@@ -382,28 +382,29 @@ OpenAI의 진화도 흥미롭다. 기존 Assistants API는 join-stream 엔드포
 
 답이 **Responses API + Background mode**다. [공식 가이드](https://platform.openai.com/docs/guides/background)에 따르면:
 
-- `background: true, stream: true`로 시작
-- 매 이벤트에 `sequence_number`
-- 끊기면 같은 response_id로 재연결 → 서버가 cursor부터 replay
-- caveat: *"you can only resume streaming if the original request included `stream=true`"*
+- `background: true, stream: true` 둘 다 켜야 resume 가능 (caveat: *"you can only resume streaming if the original request included `stream=true`"*)
+- 매 이벤트에 monotonic `sequence_number`
+- 끊기면 같은 `response_id`로 재연결 + `starting_after=<last_sequence_number>` → 서버가 그 cursor부터 replay
+- `store=true` 필수 (Responses background는 stateful)
+- **retention 약 10분** — 그 이상 지나면 replay 불가
 
-LangGraph의 `Last-Event-ID`와 **동형 패턴**이다.
+LangGraph의 `Last-Event-ID`와 **동형 패턴**이지만 OpenAI 쪽이 더 명시적 (정수 cursor + 보관기간 명시). 단 10분 retention은 우리가 자체 구현하면 정책에 따라 더 길게 잡을 수 있는 영역 (Postgres event table TTL).
 
 ### Anthropic Messages API
 
 [Messages streaming spec](https://platform.claude.com/docs/en/api/messages-streaming)에는 reconnect/resume이 **없다.** 끊기면 끝. Anthropic은 durability를 application 레이어로 넘긴다. 즉 *호출자가* 버퍼링해야 한다. Modal, Replicate, Baseten, Vercel AI SDK 기본 `streamText`도 같은 입장 - inline only, durability는 caller's problem.
 
-### Counter-trend: OpenAI Realtime / WebSocket
+### Counter-trend: OpenAI Realtime / Responses WebSocket
 
-여기까지가 한 방향이라면, 정반대 방향도 동시에 굴러가고 있다. [OpenAI Realtime API](https://openai.com/index/speeding-up-agentic-workflows-with-websockets/)와 2026년 추가된 **Responses API의 WebSocket 모드**는 큐를 *반대로* 치워버린다:
+여기까지가 한 방향이라면, 정반대 방향도 동시에 굴러가고 있다. [OpenAI Realtime API](https://openai.com/index/speeding-up-agentic-workflows-with-websockets/)와 [2026-04 공식 발표](https://openai.com/index/speeding-up-agentic-workflows-with-websockets/) 기준 **Responses API의 WebSocket 모드**는 큐를 *반대로* 치워버린다:
 
 - 영구 WebSocket 연결
 - 서버 메모리에 in-memory state 캐싱
-- *"asynchronously block in the sampling loop"* - sampling loop 안에서 직접 대기
+- *"asynchronously block in the sampling loop"* — sampling loop 안에서 직접 대기
 
-voice/realtime 같은 sub-200ms turn-taking 워크로드에서는 큐 홉 자체가 비싸다. 이쪽은 stateful long-lived connection 패턴으로 간다. ElevenLabs, Cartesia 같은 voice agent도 동일.
+처음엔 voice/realtime sub-200ms turn-taking 워크로드 한정으로 시작했지만, **현재는 Codex류 multi-step tool loop의 latency 최적화로도 확장** — provider stream → tool result → 다시 provider stream을 한 WebSocket 안에서 처리해 round-trip 줄임. 즉 patternel 4(stateful long-lived connection)는 voice뿐 아니라 **tool-heavy agent loop**도 포함하는 방향으로 넓어지는 중. ElevenLabs, Cartesia 같은 voice agent + Codex의 일부 흐름이 같은 진영.
 
-**즉 업계는 한 방향으로 수렴 안 한다.** multi-minute agent 워크로드는 worker+log 쪽으로, realtime은 WebSocket 쪽으로, raw inference vendor는 inline 쪽으로 갈라진다.
+**즉 업계는 한 방향으로 수렴 안 한다.** multi-minute agent 워크로드는 worker+log 쪽으로, latency-critical (voice/tight tool loop)은 WebSocket 쪽으로, raw inference vendor는 inline 쪽으로 갈라진다.
 
 ### Vercel AI SDK - `resumable-stream`
 
@@ -417,17 +418,17 @@ Redis Pub/Sub + producer 측 in-memory buffer. **Producer-alive 제약**이 있�
 
 핵심 인사이트: **탭 이동 resume**에는 pub/sub + 메모리 버퍼로 충분. **워커 크래시까지 견디려면 Streams 필요.**
 
-### Cloudflare Agents - RFC #1257
+### Cloudflare Agents — RFC에서 product로
 
-[RFC #1257](https://github.com/cloudflare/agents/issues/1257)이 정확히 같은 문제를 다룬다. Durable Object 안에서 SQLite로 메시지 영속:
+처음엔 [RFC #1257](https://github.com/cloudflare/agents/issues/1257)에서 같은 문제를 다뤘고, 지금은 [`AIChatAgent` 공식 docs](https://developers.cloudflare.com/agents/api-reference/chat-agents/)에 chunk SQLite buffer + reconnect replay가 **product 기능으로 들어왔다**.
 
 > Every chunk streamed to the client is also written to SQLite (`cf_ai_chat_stream_chunks`).
 
-여기서 중요한 점 - Cloudflare는 **central event bus가 아니라 actor-local SQLite**에 청크를 쓴다. 즉 worker pool + 중앙 로그 패턴이 아니라 **actor-as-handler + co-located persistence** 패턴이다.
+여기서 중요한 점 — Cloudflare는 **central event bus가 아니라 actor-local SQLite**에 청크를 쓴다. 즉 worker pool + 중앙 로그 패턴이 아니라 **actor-as-handler + co-located persistence** 패턴이다.
 
-미해결로 인정한 부분도 있다. DO 재시작 후 fiber recovery만으로는 부족하고 **inference 재호출이 필요**. 이걸 풀려고 AI Gateway를 *durable response buffer*로 만들겠다는 게 RFC의 방향. 즉 **inference 앞에 durable buffer**를 두는 게 미래.
+미해결로 인정한 부분도 있다. DO 재시작 후 fiber recovery만으론 부족하고 **inference 재호출이 필요**. 이걸 풀려고 AI Gateway를 *durable response buffer*로 만들겠다는 게 RFC의 방향. 즉 **inference 앞에 durable buffer**를 두는 게 미래.
 
-명시적 구분도 있다 - *client-side resume*(쉬움)과 *server-side resume that doesn't re-bill tokens*(어려움, infra 버퍼 필요).
+이 RFC의 **client-side resume vs server-side resume that doesn't re-bill tokens** 구분이 이 글 전체에서 가장 유용한 framing이다. 위 [durability 레벨 표](#durability-레벨--어느-장애까지-견디는가)도 이 구분 위에서 만들어짐.
 
 ### Inngest - 두 publish 모드
 
@@ -461,7 +462,7 @@ Redis Pub/Sub + producer 측 in-memory buffer. **Producer-alive 제약**이 있�
 
 ## multi-minute agent 진영 안에서의 5가지 공통점
 
-패턴 1에 속하는 시스템들(LangGraph Platform, OpenAI Responses background, Inngest+Mastra, Cloudflare Agents 일부)을 가로지르면 5가지 공통점이 보인다.
+패턴 1에 속하는 시스템들(LangGraph Platform, OpenAI Responses background, Inngest+Mastra)을 가로지르면 5가지 공통점이 보인다. Cloudflare Agents는 패턴 2(actor-as-handler)이지만 *durable per-run log* 추상은 공유하므로 일부 항목에서 같이 인용한다.
 
 ### 1. 단일 실행 경로 (worker queue 통과)
 
@@ -594,7 +595,8 @@ Worker:
 #### 운영/안정성
 
 - **챗 resumability 무료** - 탭 닫고 돌아와도 `last_event_id` 들고 GET stream → 이어붙음
-- **워커 크래시 견딤** - Stream entries는 trim 전까지 살아있음. web 프로세스 죽어도 이미 받은 청크는 client에 도달, ARQ retry로 worker 재시작
+- **이미 publish된 event는 살아있음** — Stream entries는 trim 전까지 영속. web 프로세스 죽어도 이미 XADD된 청크는 다른 SSE 구독자에 도달. ARQ retry로 worker 재시작 자체는 OK
+- **단, "워커 크래시 시 토큰 손실 없음"은 아님** — Cloudflare RFC #1257이 명시한 구분이 중요: *client-side resume* (이미 발행된 event 재합류)은 쉽지만, *server-side resume that doesn't re-bill tokens* (provider stream 중간에 끊긴 inference를 토큰 재과금 없이 이어붙임)은 어려움 → **inference 앞단에 durable buffer (AI Gateway 같은 것) 필요**. log persistence ≠ inference continuation.
 - **bounded memory** - `XADD MAXLEN ~ 5000`으로 토큰 수천 청크 챗에서도 메모리 확정
 - **debugging 무료** - `XRANGE run:{id} - +` 한 줄로 run 이벤트 history 재생
 
@@ -727,6 +729,27 @@ queued ─→ running ─┬─→ succeeded
 
 **Redis 금지 영역**: 사용자 대화 원문, tool/외부 API 결과, 최종 산출물의 source of truth. Redis는 ephemeral 신호 + 캐시 전용. Redis 전체가 날아가도 Postgres만으로 in-flight run을 복구할 수 있어야 함.
 
+### Durability 레벨 — 어느 장애까지 견디는가
+
+"durability"는 한 단어지만 실제 운영에서는 **여러 장애 시나리오로 쪼개진다**. 각 구현체가 어디까지 견디는지 같이 비교하면 트레이드오프가 더 선명해진다.
+
+| 장애 시나리오 | Pub/Sub + memory buffer | Redis Streams (`XREAD`) | Postgres event table | Cloudflare DO + SQLite | OpenAI Responses background |
+|---|---|---|---|---|---|
+| Client reconnect replay | △ (producer 살아있을 때만) | ✅ cursor로 임의 시점 | ✅ row offset | ✅ chunk row | ✅ `sequence_number`/`starting_after` |
+| Web/API pod 재시작 | ❌ (in-memory 휘발) | ✅ Stream 영속 | ✅ DB 영속 | ✅ DO restart 후 SQLite restore | ✅ store=true 시 |
+| Worker crash (mid-run) | ❌ | △ XADD된 event는 살지만 in-flight token 손실 | △ 같음 | △ DO 재시작 후 fiber recovery만으론 부족 (RFC #1257) | △ OpenAI가 retry 결정 |
+| Provider stream disconnect | ❌ | ❌ (inference 재호출 필요) | ❌ | ❌ | △ background mode가 자체 retry |
+| **No re-bill continuation** (토큰 재과금 없이 이어붙임) | ❌ | ❌ | ❌ | ❌ (RFC #1257이 풀려는 미해결 영역) | △ (OpenAI 내부에서 처리, vendor lock-in) |
+| Redis 전체 손실 | ❌ | ❌ | ✅ DB로 복구 | n/a | ✅ |
+| Postgres 손실 | n/a | ✅ Streams는 살음 | ❌ | n/a | n/a |
+| TTL/retention | 즉시 | 명시적 `MAXLEN`/`TTL` | 정책 결정 (수일~수개월) | actor 생애주기 | **~10분 (OpenAI 기본)** |
+
+**핵심 인사이트** (Cloudflare RFC #1257 framing):
+- **Client-side resume** (이미 발행된 event 다시 받기) — Redis Streams / Postgres event table / DO SQLite 모두 풀 수 있음. 어렵지 않음.
+- **Server-side resume that doesn't re-bill** (provider stream 중간에 끊긴 inference를 토큰 재과금 없이 이어붙임) — **아무도 OSS로 완벽히 못 풀고 있음**. Cloudflare가 AI Gateway를 *durable response buffer*로 만들겠다고 RFC에서 선언한 게 바로 이 영역. OpenAI background는 vendor 안에서만 해결.
+
+→ 이 표가 말하는 본질: "**durable**" 한 단어로 묶지 말고 **장애 시나리오별로 가격이 다른 보장**이라고 봐야 함. 우리 워크로드가 어느 칸까지 필요한지 골라야 함.
+
 ### Streaming event 표준
 
 durable log를 다른 시스템에서 안정적으로 소비하려면 event type을 미리 표준화해야 한다. [LangGraph Platform streaming docs](https://docs.langchain.com/langgraph-platform/streaming), [OpenAI Responses streaming](https://platform.openai.com/docs/guides/background), [Inngest realtime](https://www.inngest.com/docs/features/realtime), Cloudflare DO chunk schema를 가로지르면 이름은 달라도 9가지 카테고리로 수렴:
@@ -740,7 +763,7 @@ durable log를 다른 시스템에서 안정적으로 소비하려면 event type
 | `approval.required` / `approval.decided` | Worker / API | HITL gate | DB |
 | `run.completed` / `run.failed` | Worker / API | 종료 | DB |
 
-**재연결 원칙**: UI가 stream을 놓치면 `run_id` + `Last-Event-ID`로 재연결. Redis Pub/Sub만으론 과거 replay 안 됨 — replay 요구가 강하면 최근 event를 Postgres event table 또는 Object Storage log chunk로 보존. LangGraph Platform이 정확히 이 방식이고, Cloudflare Agents도 actor-local SQLite로 같은 패턴.
+**재연결 원칙**: UI가 stream을 놓치면 `run_id` + `Last-Event-ID`로 재연결. Redis Pub/Sub만으론 과거 replay 안 됨 — replay 요구가 강하면 최근 event를 별도 영속 layer(Postgres event table 또는 Object Storage log chunk)로 보존. LangGraph Platform 공식 docs는 **thread stream resume을 `Last-Event-ID`로 공식 지원**한다고 명시하지만 [내부 구현은 비공개](https://docs.langchain.com/langgraph-platform/streaming). OSS로 재현 시 Postgres event table이 가장 흔한 선택지, Cloudflare Agents는 같은 추상을 actor-local SQLite로 푼다 ([Cloudflare AIChatAgent docs](https://developers.cloudflare.com/agents/api-reference/chat-agents/)).
 
 이 9개 카테고리는 vendor마다 이름이 달라도 **고수준 의미는 isomorphic**. 예: OpenAI Responses의 `response.output_text.delta` ≈ `token.delta`, LangGraph의 `messages/partial` + `messages/complete` ≈ `token.delta` + `node.completed`.
 
@@ -754,13 +777,32 @@ durable log를 다른 시스템에서 안정적으로 소비하려면 event type
 
 첫째, **단일 업계 표준은 없다.** 워크로드별로 4개 패턴(worker pool / actor-as-handler / inline-stateless / 장기 WebSocket)이 갈려있고, 각자 자기 영역에서 표준이다. OpenAI 자체도 multi-minute agent에는 worker+log로 가면서 voice/realtime에는 WebSocket으로 정반대 방향을 동시에 밀고 있다.
 
-둘째, 그 안에서 **multi-minute agent platform 진영**(LangGraph Platform, OpenAI Responses background, Inngest+Mastra, Cloudflare Agents)이 도달한 형태는 비교적 명확하다: **(1) worker 통합 실행 경로 (2) per-run durable cursor-addressable 이벤트 로그 (3) cursor resume (4) 큐 분리**. 이 진영의 워크로드를 다룬다면 이 형태가 합리적 시작점이다.
+둘째, 그 안에서 **multi-minute agent platform 진영**에 속하는 시스템들의 답은 비교적 명확하다. LangGraph Platform / OpenAI Responses background / Inngest+Mastra는 **(1) worker 통합 실행 경로 (2) per-run durable cursor-addressable 이벤트 로그 (3) cursor resume (4) 큐 분리**로 수렴. Cloudflare Agents는 actor-as-handler 패턴이라 토폴로지는 다르지만 *durable per-run log* 추상은 공유 — 같은 문제를 다른 구현체로 푼다. 이 진영의 워크로드를 다룬다면 이 형태가 합리적 시작점이다.
 
 흔한 dual-path + pub/sub + List 구조는 이 진영이 진화 과정에서 일부 폐기한 모양이다 (LangGraph Platform은 여전히 Pub/Sub+List를 쓰지만 worker는 통합했고, dual path는 없앴다). dual-publish로 챗에 영속성을 더하는 땜빵은 이 진화의 중간 단계를 연명시키는 것일 뿐이고, 진짜 답은 **이벤트 로그를 한 번 깔끔하게 깔고 worker로 통합하는 것**이다 - 구현체는 Pub/Sub+List든 Streams든 자유롭게.
 
 PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 굳어진 다음에 통일하는 건 훨씬 비싸다.
 
 다만 모든 챗까지 worker로 보낼 가치가 있는지는 product 단에서 판단할 일이다. **챗 resumability가 PRD에 들어가 있다면 all-worker가 답이고, 그렇지 않다면 dual-path 유지하면서 ARQ 경로만 Streams로 정리하는 게 더 실용적**일 수 있다. 이 글의 권고는 전자 가정 - 후자라면 hybrid 옵션을 채택해도 부끄러울 게 없다.
+
+---
+
+## 부록: durability 영역의 미해결 문제 — no-rebill server-side resume
+
+여러 시스템을 가로지르면서 **아직 OSS로 완벽히 풀린 데가 없는 문제**가 하나 있다.
+
+**문제**: 사용자가 long-running inference 중간에 끊겼다가 돌아왔을 때, 이미 LLM provider가 *생성하고 과금한* 토큰을 잃지 않고 이어붙이려면 어떻게 해야 하는가?
+
+| 접근 | 누가 | 한계 |
+|---|---|---|
+| Client-side replay (이미 발행된 event 다시 받기) | LangGraph, OpenAI background, Cloudflare AIChatAgent, Vercel resumable-stream | provider stream 중간 손실은 못 막음 |
+| Provider 내부 retry | OpenAI background mode | vendor lock-in. self-host 시 못 씀 |
+| Inference 앞단 durable buffer | Cloudflare AI Gateway (계획), 자체 proxy | 토큰 단위 buffer + cursor → 구현 비용 큼 |
+| Workflow-level checkpoint + 재호출 | Temporal, ARQ retry | **토큰 재과금 발생** |
+
+→ OSS로 self-host하면서 vendor lock-in 없이 *no-rebill server-side resume*을 풀려면 **LLM provider 앞에 자체 streaming proxy + token-level durable buffer**를 두는 게 사실상 유일한 방향. Cloudflare가 AI Gateway로 이걸 노리고 있고, OSS에선 아직 reference 구현 없음 (2026-05 기준).
+
+이 칸은 **장기적으로 boilerplate 보다 product platform 레벨**에서 풀릴 영역. 일반 application은 client-side replay까지만 풀고, no-rebill은 vendor (OpenAI background) 또는 platform (Cloudflare AI Gateway)에 위임하는 게 현실적.
 
 ---
 
@@ -778,6 +820,7 @@ PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 
 - [AI SDK UI: Chatbot Resume Streams](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-resume-streams)
 - [Resumable AI SDK v5 Streams with Upstash Realtime](https://upstash.com/blog/realtime-ai-sdk)
 - [Cloudflare Agents docs](https://developers.cloudflare.com/agents/)
+- [Cloudflare AIChatAgent (chunk SQLite + reconnect replay)](https://developers.cloudflare.com/agents/api-reference/chat-agents/)
 - [Cloudflare Agents RFC #1257: AI Gateway durable response buffer](https://github.com/cloudflare/agents/issues/1257)
 - [Inngest Realtime docs](https://www.inngest.com/docs/features/realtime)
 - [Replit Agent 3 + Mastra/Inngest](https://mastra.ai/blog/replitagent3)
@@ -787,5 +830,6 @@ PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 
 - [Kubernetes NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
 - [LangSmith self-hosted deployment](https://docs.langchain.com/langsmith/deploy-standalone-server)
 - [Redis Streams 공식 docs](https://redis.io/docs/latest/develop/data-types/streams/)
+- [Redis XADD command (MAXLEN ~ N)](https://redis.io/docs/latest/commands/xadd/)
 - [Redis Streams vs Pub/Sub](https://oneuptime.com/blog/post/2026-01-21-redis-streams-vs-pubsub/view)
 - [HTML Standard: Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html)

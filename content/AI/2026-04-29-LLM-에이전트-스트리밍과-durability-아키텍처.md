@@ -10,15 +10,18 @@ tags:
   - redis
   - redis-streams
   - langgraph
+  - aegra
   - arq
   - durability
   - fastapi
+  - kubernetes
+  - keda
 draft: false
 enableToc: true
 description: 챗은 빨라야 하고 long-running 작업은 끊겨도 이어져야 한다. 두 요구를 한 시스템에서 어떻게 reconcile하는가 - 흔한 dual-path 구현의 한계부터 LangGraph Platform / OpenAI Responses / Vercel AI SDK / Cloudflare Agents의 패턴, 그리고 정반대로 가는 OpenAI Realtime까지.
 summary: "LLM 에이전트 플랫폼은 두 가지 상반된 요구를 동시에 만족해야 한다. 짧은 챗은 200ms 안에 첫 토큰이 나와야 하고, 분 단위로 도는 long-running 작업은 사용자가 탭을 닫고 돌아와도 이어 봐야 한다. 업계는 워크로드별로 4개 패턴이 갈려있고, 단일 표준은 없다. FastAPI + LangGraph + ARQ + Redis 스택에서 multi-minute agent 워크로드에 맞는 패턴을 어떻게 고를지 정리한다."
 published: 2026-04-29
-modified: 2026-05-09
+modified: 2026-05-10
 ---
 
 ## TL;DR
@@ -27,6 +30,8 @@ modified: 2026-05-09
 - **multi-minute agent platform 진영**(LangGraph Platform, OpenAI Responses background, Inngest+Mastra, Cloudflare Agents)에선 비슷한 형태로 수렴: **worker 통합 실행 경로 + per-run durable 이벤트 로그 + cursor resume + 큐 분리**
 - 흔한 dual-path 구현(inline SSE 챗 + worker + Redis pub/sub + List buffer)은 이 패턴의 약화된 재구현이며, durable cursor-addressable log를 깔끔하게 만들면 다 풀린다
 - TTF 페널티는 추정 ~10–30ms (LLM TTF 200–800ms 대비 3–5%), **챗/heavy 큐만 분리하면** 챗 UX는 거의 그대로 (실측 benchmark는 별도 필요)
+- OSS 진영은 자체 구현(ARQ + Redis Streams) 외에 **Aegra**(Apache-2.0)가 LangGraph Platform OSS port로 같은 패턴을 이미 구현 — 새로 짜는 입장에선 둘 중 선택
+- 운영(K8s) 관점에선 **KEDA Redis Lists scaler로 worker backlog 기반 autoscale + Control/Data/Integration plane 격리 + run 상태 전이 표준(terminal exactly-once)**이 필수 보강 사항
 
 ## 들어가며
 
@@ -633,7 +638,7 @@ LangGraph Platform은 ARQ를 안 쓰고 자체 구현 큐(`langgraph_storage.que
 
 ## 운영 관점 — K8s + KEDA로 패턴 1 구현
 
-위 권고 패턴 1(worker pool + durable log)을 운영 환경에서 구현하려면 컨테이너 분리뿐 아니라 **워커 autoscale, plane 격리, run 상태 전이 표준**이 필요하다. K8s 환경 기준 정리.
+위 권고 패턴 1(worker pool + durable log)을 운영 환경에 깔려면 컨테이너 분리만으로 부족하다. 여러 public deployment 사례 — [LangSmith standalone deployment](https://docs.langchain.com/langsmith/deploy-standalone-server), [LangSmith Kubernetes topology](https://docs.langchain.com/langsmith/kubernetes), [Inngest worker docs](https://www.inngest.com/docs/features/realtime), Cloudflare DO 패턴 — 을 가로지르면 공통적으로 다음 셋이 보강된다: **워커 autoscale, plane 격리, run 상태 전이 표준**. K8s 환경 기준 정리.
 
 ### Worker autoscale — KEDA Redis-list trigger
 
@@ -661,7 +666,7 @@ spec:
 운영 노하우:
 
 - **scale-out 빠르게, scale-in 보수적으로** — `cooldownPeriod` 길게. 장시간 run이 갑자기 죽지 않도록.
-- **maxReplicaCount는 downstream 한도 기준** — Worker만 늘려도 Postgres connection pool 또는 ERP/LLM API rate limit이 먼저 막힘.
+- **maxReplicaCount는 downstream 한도 기준** — Worker만 늘려도 Postgres connection pool 또는 외부 API rate limit (LLM provider/검색/내부 시스템) 이 먼저 막힘.
 - **`preStop` hook + graceful shutdown** — pod 종료 시 in-flight run을 checkpoint까지 진행 후 종료.
 - **chat_fast vs heavy 큐 분리는 ScaledObject 2개로** — heavy queue worker는 `maxReplicaCount` 낮게.
 
@@ -669,15 +674,15 @@ ARQ도 같은 패턴(KEDA가 `arq:queue:default` 같은 list 모니터). Aegra�
 
 ### Plane 분리 — 장애 격리
 
-운영 관점에서 컴포넌트를 3 plane으로 묶는 게 표준:
+[LangSmith Deployments topology](https://docs.langchain.com/langsmith/data-plane) 같은 실제 LangGraph 운영 reference를 보면 control/data 분리가 명시적이다. 일반화하면 3 plane:
 
 | Plane | 포함 | 장애 영향 |
 |---|---|---|
 | **Control Plane** | GitOps(ArgoCD), Helm, Vault, Policy/RBAC, Tool Registry | 신규 배포 지연. 기존 run은 영향 X (이상적) |
-| **Execution Data Plane** | UI, BFF, Agent API, Worker, Redis, Postgres | 사용자 run 생성/실행/streaming 직접 영향 |
-| **Enterprise Integration Plane** | MCP Proxy, Egress Gateway, ERP/MES API, LLM Gateway | 특정 도메인 tool 실패. circuit breaker로 격리 |
+| **Data Plane** | UI, BFF, Agent API, Worker, Redis, Postgres | 사용자 run 생성/실행/streaming 직접 영향 |
+| **Integration Plane** | MCP Proxy, Egress Gateway, 외부 API/내부 시스템 어댑터, LLM Gateway | 특정 도메인 tool 실패. circuit breaker로 격리 |
 
-**원칙**: Control Plane 장애가 Data Plane 전체 장애로 번지지 않게. ArgoCD가 죽어도 기존 Pod는 계속 실행. Vault 장애 시엔 mount된 secret TTL 내 graceful degradation.
+**원칙**: Control Plane 장애가 Data Plane 전체 장애로 번지지 않게. ArgoCD가 죽어도 기존 Pod는 계속 실행. Vault 장애 시엔 mount된 secret TTL 내 graceful degradation. LangSmith Deployments가 control plane(LangChain 호스팅) / data plane(고객 cluster) 분리로 같은 원칙을 적용 — control plane이 끊겨도 data plane의 in-flight run은 계속.
 
 durable cursor log 자체는 Data Plane(Postgres + Redis)에 있으므로 **Control Plane 장애에도 in-flight run의 streaming은 살아남는다.** 이게 plane 분리의 운영적 가치.
 
@@ -720,7 +725,24 @@ queued ─→ running ─┬─→ succeeded
 | Artifact / attachment | Object Storage(S3/MinIO) | CDN | DB에는 URI + checksum |
 | Trace / metric / log | LangSmith / OTEL / Loki | — | PII 마스킹 |
 
-**Redis 금지 영역**: 사용자 대화 원문, ERP/tool 결과, 최종 산출물의 source of truth. Redis는 ephemeral 신호 + 캐시 전용. Redis 전체가 날아가도 Postgres만으로 in-flight run을 복구할 수 있어야 함.
+**Redis 금지 영역**: 사용자 대화 원문, tool/외부 API 결과, 최종 산출물의 source of truth. Redis는 ephemeral 신호 + 캐시 전용. Redis 전체가 날아가도 Postgres만으로 in-flight run을 복구할 수 있어야 함.
+
+### Streaming event 표준
+
+durable log를 다른 시스템에서 안정적으로 소비하려면 event type을 미리 표준화해야 한다. [LangGraph Platform streaming docs](https://docs.langchain.com/langgraph-platform/streaming), [OpenAI Responses streaming](https://platform.openai.com/docs/guides/background), [Inngest realtime](https://www.inngest.com/docs/features/realtime), Cloudflare DO chunk schema를 가로지르면 이름은 달라도 9가지 카테고리로 수렴:
+
+| Event | 발생 주체 | UI 의미 | 저장 |
+|---|---|---|---|
+| `run.started` | API | run 시작 | DB |
+| `node.started` / `node.completed` | Worker | graph 진행 단계 | trace + optional DB |
+| `token.delta` | Worker | 답변 streaming | Redis relay |
+| `tool.requested` / `tool.completed` | Worker / MCP | tool 호출 | 감사 DB |
+| `approval.required` / `approval.decided` | Worker / API | HITL gate | DB |
+| `run.completed` / `run.failed` | Worker / API | 종료 | DB |
+
+**재연결 원칙**: UI가 stream을 놓치면 `run_id` + `Last-Event-ID`로 재연결. Redis Pub/Sub만으론 과거 replay 안 됨 — replay 요구가 강하면 최근 event를 Postgres event table 또는 Object Storage log chunk로 보존. LangGraph Platform이 정확히 이 방식이고, Cloudflare Agents도 actor-local SQLite로 같은 패턴.
+
+이 9개 카테고리는 vendor마다 이름이 달라도 **고수준 의미는 isomorphic**. 예: OpenAI Responses의 `response.output_text.delta` ≈ `token.delta`, LangGraph의 `messages/partial` + `messages/complete` ≈ `token.delta` + `node.completed`.
 
 ---
 
@@ -761,6 +783,9 @@ PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 
 - [Replit Agent 3 + Mastra/Inngest](https://mastra.ai/blog/replitagent3)
 - [Temporal: Orchestrating ambient agents](https://temporal.io/blog/orchestrating-ambient-agents-with-temporal)
 - [Durable by Design: Temporal Outside, LangGraph Inside](https://medium.com/@dorangao/durable-by-design-temporal-outside-langgraph-inside-0931478bc033)
+- [KEDA Redis Lists Scaler](https://keda.sh/docs/2.19/scalers/redis-lists/)
+- [Kubernetes NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
+- [LangSmith self-hosted deployment](https://docs.langchain.com/langsmith/deploy-standalone-server)
 - [Redis Streams 공식 docs](https://redis.io/docs/latest/develop/data-types/streams/)
 - [Redis Streams vs Pub/Sub](https://oneuptime.com/blog/post/2026-01-21-redis-streams-vs-pubsub/view)
 - [HTML Standard: Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html)

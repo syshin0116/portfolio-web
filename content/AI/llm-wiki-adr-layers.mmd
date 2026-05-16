@@ -1,0 +1,55 @@
+flowchart TD
+  Human((Human<br/>작성·승인))
+  Agent["LLM Agent<br/>Claude · Codex"]
+
+  subgraph Raw["1. Raw / Source Layer - immutable inputs"]
+    direction LR
+    BlogAI["Source blog posts<br/>content/AI/"]
+    BlogTools["Tool notes<br/>content/Tools/"]
+    External["External docs<br/>papers · arxiv"]
+    Obsidian["Obsidian notes"]
+  end
+
+  subgraph Wiki["2. LLM Wiki Layer - mutable, semantic memory"]
+    direction LR
+    Ingest["Ingest &amp; normalize"]
+    WikiIndex["content/wiki/<br/>index"]
+    Concept["Concept pages<br/>What is X now?"]
+    Links["Wikilink graph<br/>connected nodes"]
+  end
+
+  subgraph ADR["3. ADR Layer - append-only, episodic memory"]
+    direction LR
+    ADRIndex["ADR index"]
+    ADR0001["ADR-0001<br/>decision record"]
+    ADR0002["ADR-0002<br/>decision record"]
+    DecisionQ["Why was X decided?"]
+  end
+
+  Human -->|원문 작성| BlogAI
+  Human -->|결정 승인·작성| ADR0002
+  BlogAI --> Agent
+  BlogTools --> Agent
+  External --> Agent
+  Obsidian --> Agent
+  Agent -->|ingest| Ingest
+  Ingest --> WikiIndex
+  WikiIndex --> Concept
+  Concept --> Links
+  Links -->|decide| ADRIndex
+  ADRIndex --> ADR0001
+  ADRIndex --> ADR0002
+  ADR0002 -->|supersedes| ADR0001
+  ADR0001 --> DecisionQ
+  ADR0002 --> DecisionQ
+  ADR0002 -.->|wikilink 참조 one-way| Concept
+
+  classDef raw fill:#f3f4f6,stroke:#6b7280,color:#111827
+  classDef wiki fill:#dbeafe,stroke:#2563eb,color:#0f172a
+  classDef adr fill:#fef3c7,stroke:#d97706,color:#111827
+  classDef actor fill:#ffffff,stroke:#374151,color:#111827
+
+  class BlogAI,BlogTools,External,Obsidian raw
+  class Ingest,WikiIndex,Concept,Links wiki
+  class ADRIndex,ADR0001,ADR0002,DecisionQ adr
+  class Human,Agent actor

@@ -13,7 +13,7 @@ summary: "Second Brain(개인 지식 데이터베이스)에 RAG를 적용하면 
 sources:
   - content/Tools/2024-08-02-Second-Brain-RAG.md
 created: 2026-04-26
-updated: 2026-04-26
+updated: 2026-05-17
 author: wiki-curator
 draft: false
 ---
@@ -30,6 +30,7 @@ draft: false
 
 - [[zettelkasten]] - Zettelkasten은 Second Brain의 노트 연결 방법론으로, 개인 지식베이스의 구조적 기반
 - [[블로그-검색-실험]] - 한국어 블로그 포스트를 대상으로 한 실제 RAG 검색 성능 비교 실험 시리즈
+- [[llm-wiki]] - Second Brain + RAG에서 검색 중심 접근을 넘어, LLM이 지속적으로 유지하는 Markdown 정제 레이어로 발전시키는 패턴
 
 ## Footnotes
 

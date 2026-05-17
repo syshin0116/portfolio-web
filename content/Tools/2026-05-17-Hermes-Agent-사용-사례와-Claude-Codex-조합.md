@@ -11,8 +11,8 @@ tags:
   - Tools
 draft: false
 enableToc: true
-description: Slack에서 바로 PR을 올리는 Hermes Agent의 사용 사례를 정리하고, Codex를 메인 모델로 쓰면서 Claude Code와 함께 운용하는 실전 조합법을 살펴본다.
-summary: "Hermes Agent는 터미널·Slack·Telegram 등 어디서나 도구를 실행하는 자율 에이전트다. 메모리, 스킬, 크론, MCP, 메시징 게이트웨이를 중심으로 사용 사례를 정리하고, OAuth 문제로 Claude Code를 메인으로 쓰기 어려울 때 Codex 기반 Hermes와 Claude Code를 분업시키는 방법을 정리했다."
+description: Hermes Agent와 Codex CLI, Claude Code의 차이를 정리하고, GPT-5.5와 Claude Opus 4.7 기준으로 어떤 조합이 현실적인지 살펴본다.
+summary: "Hermes Agent는 모델이 아니라 작업 실행 레이어다. Codex를 Hermes의 메인 모델로 연결해도 Slack, 메모리, 스킬, cron, MCP, PR 관리가 붙는다는 점에서 Codex CLI 단독 사용과 다르다. GPT-5.5와 Claude Opus 4.7 기준으로 구현·리뷰·설계·이미지 작업을 어떻게 나누면 좋은지 정리했다."
 published: 2026-05-17
 modified: 2026-05-17
 ---
@@ -25,7 +25,7 @@ modified: 2026-05-17
 
 [Hermes Agent](https://hermes-agent.nousresearch.com/docs/)는 이 지점에 초점을 둔 오픈소스 AI 에이전트 프레임워크다. 단순한 챗봇이나 IDE 플러그인이 아니라, 터미널·메신저·스케줄러·MCP·파일 시스템·브라우저·GitHub 워크플로우를 연결해 "일을 끝내는" 쪽에 가깝다.
 
-이 글에서는 Hermes Agent의 대표 사용 사례를 정리하고, 특히 **Hermes를 Codex 메인 모델로 사용하면서 Claude Code를 보조 에이전트로 함께 쓰는 방법**을 다룬다. Claude Code OAuth나 구독 환경 때문에 Hermes의 메인 모델로 Claude를 바로 쓰기 어렵다면, Codex를 메인으로 두고 Claude Code CLI를 필요할 때 호출하는 조합이 꽤 실용적이다.
+이 글에서는 Hermes Agent의 대표 사용 사례를 정리하고, 특히 **Hermes를 Codex 메인 모델로 연결해서 쓰는 것과 Codex CLI를 그냥 쓰는 것의 차이**를 따로 짚는다. 처음엔 나도 Hermes, Codex, Claude Code를 서로 다른 코딩 도구처럼만 나눠서 생각했는데, 실제로는 층위가 다르다. Hermes는 작업 실행 레이어이고, Codex나 Claude는 그 안에 꽂는 모델 또는 하위 도구에 가깝다.
 
 ---
 
@@ -41,6 +41,27 @@ Hermes Agent는 Nous Research가 만든 **자기 개선형(self-improving) AI �
 4. **모델 독립성**: OpenAI Codex, Anthropic, OpenRouter, Gemini, GitHub Copilot, 로컬 OpenAI 호환 엔드포인트 등 다양한 provider를 선택 가능
 
 즉 Hermes는 "하나의 모델"이라기보다 **여러 모델과 도구를 엮는 작업 운영체제**에 가깝다.
+
+## Hermes에 Codex를 연결한다는 뜻
+
+여기서 헷갈리기 쉬운 부분이 있다.
+
+"Hermes를 Codex로 쓴다"는 말은 보통 **Hermes의 메인 LLM provider를 OpenAI/Codex 계열로 둔다**는 뜻이다. 이 경우 실제 추론은 GPT-5.5나 Codex 계열 모델이 하지만, 작업을 받는 입구와 도구 실행 방식은 Hermes가 관리한다.
+
+반대로 "Codex를 그냥 쓴다"는 말은 보통 Codex CLI를 터미널에서 직접 실행한다는 뜻이다.
+
+| 구분 | Codex CLI 단독 | Hermes + Codex provider |
+|---|---|---|
+| 기본 입구 | 터미널 | 터미널, Slack, Telegram, Discord 등 |
+| 기억 | 세션/레포 컨텍스트 중심 | 장기 memory, skill, session search |
+| 반복 작업 | 직접 스크립트화 필요 | cron job, webhook, gateway delivery |
+| 도구 확장 | Codex CLI가 제공하는 범위 | Hermes toolset, MCP, 브라우저, 파일, 웹, 이미지, 음성 |
+| GitHub 작업 | 가능하지만 직접 흐름 관리 | 브랜치, 커밋, PR, CI 확인을 한 흐름으로 묶기 좋음 |
+| 모델 교체 | Codex 계열 중심 | OpenAI, Anthropic, OpenRouter, Gemini, 로컬 endpoint 등 교체 가능 |
+
+그래서 둘은 경쟁 관계라기보다 계층이 다르다. Codex CLI는 "코딩 실행기"에 가깝고, Hermes는 그 실행기를 포함해 여러 도구를 호출하는 "작업 관리자"에 가깝다.
+
+내가 Slack에서 "블로그 글 만들고 PR 올려줘"라고 시키는 상황을 생각하면 차이가 확실하다. Codex CLI 단독이면 터미널을 열고 레포 안에서 직접 실행해야 한다. Hermes + Codex provider라면 Slack 메시지를 입구로 삼고, 레포 위치 기억, 문서 조사, 파일 수정, 빌드, 커밋, PR 생성까지 한 번에 이어갈 수 있다.
 
 ---
 
@@ -146,92 +167,52 @@ Hermes는 직접 코드를 수정할 수도 있지만, 필요하면 다른 코�
 
 ---
 
-## Codex를 Hermes 메인으로 쓰는 이유
+## GPT-5.5와 Claude Opus 4.7 기준 역할 나누기
 
-Hermes의 provider 문서를 보면 OpenAI Codex는 `hermes model`에서 설정 가능한 provider 중 하나다. 즉 Hermes 자체의 메인 대화 모델을 Codex 계열로 둘 수 있다.
+2026년 기준으로 보면 GPT-5.5와 Claude Opus 4.7은 둘 다 코딩을 잘한다. 다만 성향이 다르다. 공개 페이지 기준으로 GPT-5.5는 OpenRouter에서 1M급 컨텍스트, 텍스트+이미지 입력, 복잡한 전문 작업과 코딩을 강조한다. Anthropic은 Opus 4.7을 발표하면서 고난도 소프트웨어 엔지니어링, 긴 agentic task, 지시 이행, 고해상도 이미지 이해, 문서/슬라이드 같은 전문 산출물 품질을 강조했다.
 
-이 구성이 유용한 상황은 다음과 같다.
+내 기준의 결론은 이렇다.
 
-1. **Claude Code OAuth가 현재 환경에서 잘 안 되는 경우**
-   - 회사 SSO, OAuth 리다이렉트, 브라우저 권한, 원격 서버 환경 때문에 Claude 로그인이 막힐 수 있다.
-2. **ChatGPT/Codex 계정은 이미 잘 동작하는 경우**
-   - Codex CLI는 `codex` 실행 후 ChatGPT 로그인으로 사용할 수 있고, Hermes도 OpenAI Codex provider를 선택할 수 있다.
-3. **Hermes를 메신저/자동화 허브로 쓰고 싶은 경우**
-   - Hermes의 Slack/Gateway, memory, cron, skill, PR workflow는 모델과 독립적으로 동작한다.
+| 작업 | 더 자주 먼저 쓰고 싶은 쪽 | 이유 |
+|---|---|---|
+| 작은 버그 수정, 테스트 추가, 명확한 구현 | GPT-5.5 / Codex | 빠르고 도구 호출 흐름이 안정적이다. 구현 지시가 명확할수록 효율이 좋다. |
+| 큰 리팩토링 전 설계 검토 | Claude Opus 4.7 / Claude Code | 코드 구조를 비판적으로 보고, 놓친 전제나 위험을 짚는 데 강하다. |
+| PR diff 리뷰 | Claude Opus 4.7 / Claude Code | "이 변경이 맞나?"를 따지는 reviewer 역할에 잘 맞는다. |
+| 긴 컨텍스트 문서 정리와 대량 파일 읽기 | GPT-5.5 또는 Opus 4.7 | 둘 다 가능하다. 비용, 속도, 접근성을 보고 고르면 된다. |
+| UI/UX 방향, 문서/슬라이드/기획안 | Claude Opus 4.7 | Opus 쪽이 디자인 의도, 정보 구조, 톤 비평을 잘하는 편이다. |
+| 이미지 생성 | OpenAI 쪽 이미지 모델 | Claude Opus는 이미지를 잘 "이해"하지만, 이미지 생성 모델은 아니다. 실제 생성은 OpenAI 이미지 계열이나 전용 이미지 모델이 낫다. |
+| Slack에서 시키고 PR까지 마무리 | Hermes | 모델 문제가 아니라 orchestration 문제다. |
 
-즉 "Claude를 못 쓰니 Hermes를 못 쓴다"가 아니라, **Hermes의 메인은 Codex로 두고 Claude Code는 별도 CLI 도구처럼 필요할 때 호출**하면 된다.
+즉 "Hermes에서 Codex로 코딩하고 Claude로 리뷰하는 게 가장 좋냐"에 대한 답은 **대체로 좋은 기본값이지만 항상 최선은 아니다**에 가깝다.
 
----
+좋은 기본값인 이유는 간단하다. 구현자와 리뷰어를 분리하면 한 모델이 만든 실수를 다른 모델이 다른 관점에서 볼 가능성이 생긴다. Codex/GPT-5.5가 빠르게 수정하고, Claude Opus 4.7이 설계·리뷰·엣지 케이스를 보는 조합은 실전에서 꽤 안정적이다.
 
-## Claude Code와 Codex의 강점 차이
+다만 다음 경우에는 바꾸는 게 낫다.
 
-둘 다 코딩 에이전트지만 실전에서 느껴지는 역할은 조금 다르다.
-
-### Codex가 좋은 경우
-
-[openai/codex](https://github.com/openai/codex)는 "터미널에서 실행되는 경량 코딩 에이전트"를 표방한다. 설치도 단순하다.
-
-```bash
-npm install -g @openai/codex
-# 또는
-brew install --cask codex
-```
-
-Codex는 다음 작업에 잘 맞는다.
-
-- 작은 버그 수정
-- 테스트 추가
-- 파일 단위 리팩토링
-- 명확한 TODO 처리
-- 여러 worktree에 병렬로 issue 처리
-- Hermes가 만든 계획을 빠르게 구현
-
-Hermes에서 Codex를 호출한다면 보통 이런 식이다.
-
-```bash
-codex exec --full-auto "Fix the failing test and commit the change"
-```
-
-주의할 점은 Codex CLI가 보통 git repository 안에서 실행되어야 하며, Hermes 터미널 도구로 다룰 때는 interactive CLI 특성상 PTY가 필요할 수 있다는 점이다.
-
-### Claude Code가 좋은 경우
-
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)는 코드베이스 전체를 이해하고 기능 구현, 버그 수정, Git 작업, MCP 연결, custom agents, hooks 등을 지원하는 코딩 어시스턴트다.
-
-Claude Code는 다음 작업에 잘 맞는다.
-
-- 큰 리팩토링 전 설계 검토
-- PR diff 리뷰
-- 보안/성능 관점 코드 리뷰
-- 복잡한 코드 경로 추적
-- 테스트 전략 수립
-- `CLAUDE.md` 기반 프로젝트 컨텍스트 활용
-
-특히 Claude Code는 `-p` print mode가 있어서 Hermes에서 자동화하기 좋다.
-
-```bash
-claude -p "Review the current diff for bugs and missing tests" --max-turns 5
-```
-
-`-p` 모드는 한 번 실행하고 종료되므로 Hermes가 결과를 받아 요약하기 쉽다. 반대로 긴 상호작용이 필요하면 `tmux` 세션으로 Claude Code를 띄워두고 capture-pane으로 진행 상황을 확인하는 방식이 안정적이다.
+- 요구사항이 애매하고 설계가 더 중요하면: 먼저 Opus 4.7로 계획/리뷰를 받고, 구현을 GPT-5.5/Codex에 맡긴다.
+- 단순 반복 수정이면: Claude 리뷰까지 돌리지 않고 GPT-5.5/Codex + 테스트로 끝낸다.
+- UI/UX 설계나 글/문서 톤이 중요하면: Opus 4.7을 앞단에 둔다.
+- 이미지 생성이 포함되면: Hermes에서 OpenAI 이미지 도구나 별도 이미지 생성 backend를 호출하고, Opus는 프롬프트/시안 비평에 쓴다.
 
 ---
 
-## 추천 조합: Hermes(Codex main) + Claude Code reviewer + Codex implementer
+## 추천 조합: Hermes는 관리자, Codex는 구현자, Claude는 리뷰어
 
 내가 추천하는 기본 운영 방식은 다음과 같다.
 
 ```text
 사용자(Slack/CLI)
   ↓
-Hermes Agent (Codex provider)
+Hermes Agent (GPT-5.5 또는 Codex provider)
   ├─ 레포/요구사항 파악
   ├─ 작업 계획 수립
-  ├─ Codex CLI에 구현 위임
-  ├─ Claude Code에 리뷰/설계 검토 위임
+  ├─ Codex/GPT-5.5로 구현
+  ├─ Claude Opus 4.7/Claude Code로 리뷰·설계 검토
   ├─ 테스트/빌드 직접 실행
   └─ Git commit / push / PR 생성
 ```
+
+중요한 점은 Hermes가 "또 하나의 코딩 모델"이 아니라는 것이다. Hermes가 Codex provider로 떠 있으면 답변을 만드는 두뇌는 GPT-5.5/Codex지만, 기억·도구·메신저·스케줄러·PR 흐름은 Hermes가 잡고 있다.
 
 ### 1단계. Hermes가 요구사항을 정리한다
 
@@ -251,17 +232,17 @@ git checkout -b fix/some-issue
 
 그리고 필요한 문서를 읽고 작업 범위를 좁힌다.
 
-### 2단계. Codex가 구현한다
+### 2단계. GPT-5.5/Codex가 구현한다
 
-구현 범위가 명확하면 Codex에게 맡긴다.
+구현 범위가 명확하면 Codex 계열 모델에게 맡긴다. Hermes의 메인 모델이 GPT-5.5라면 Hermes가 직접 파일을 수정해도 되고, 별도 Codex CLI를 호출해도 된다.
 
 ```bash
 codex exec --full-auto "Implement the fix described in ISSUE.md. Run tests and commit when done."
 ```
 
-Codex는 빠르게 파일을 고치고 테스트를 돌리는 역할을 맡는다. 단, Codex 결과를 그대로 믿지 말고 Hermes가 `git diff`, 테스트 결과, 변경 파일을 다시 확인해야 한다.
+단, Codex 결과를 그대로 믿으면 안 된다. Hermes가 `git diff`, 테스트 결과, 변경 파일을 다시 확인해야 한다.
 
-### 3단계. Claude Code가 리뷰한다
+### 3단계. Claude Opus 4.7이 리뷰한다
 
 구현 후에는 Claude Code에 diff 리뷰를 맡긴다.
 
@@ -271,7 +252,7 @@ git diff origin/main...HEAD | claude -p \
   --max-turns 1
 ```
 
-Claude Code는 구현 자체보다 "이 변경이 안전한가?"를 보는 reviewer 역할로 두면 좋다. OAuth 문제로 Claude Code를 항상 Hermes 메인 모델로 쓰지 못해도, CLI가 로그인된 환경에서는 필요한 순간에 reviewer로 활용할 수 있다.
+Claude는 구현 자체보다 "이 변경이 안전한가?", "설계가 어색하지 않은가?", "테스트가 빠지지 않았나?"를 보는 reviewer로 두면 좋다.
 
 ### 4단계. Hermes가 최종 검증하고 PR을 만든다
 
@@ -290,15 +271,118 @@ gh pr create --title "docs: add Hermes Agent use cases" --body "..."
 
 ---
 
+## Hermes에 사람들이 많이 붙이는 것들
+
+정확한 사용량 telemetry가 공개되어 있지는 않다. 다만 공식 문서, OpenRouter 연동 문서, 설치 가이드류에서 반복적으로 등장하는 조합은 꽤 뚜렷하다.
+
+| 연결 대상 | 많이 쓰는 이유 |
+|---|---|
+| Slack / Telegram / Discord | 노트북을 열지 않아도 작업을 시킬 수 있다. 개인 자동화는 Telegram, 팀 작업은 Slack/Discord가 자연스럽다. |
+| OpenRouter | 여러 모델을 한 API key로 바꾸기 쉽다. Claude, OpenAI, Gemini, DeepSeek 등을 Hermes에서 라우팅하기 좋다. |
+| Anthropic / OpenAI provider | 고성능 코딩·리뷰 모델을 직접 붙이는 기본 조합이다. |
+| MCP 서버 | GitHub, DB, 파일 시스템, 브라우저, 내부 API 같은 외부 도구를 Hermes tool로 노출할 수 있다. |
+| Web search / Firecrawl / Tavily / Exa | 리서치, 블로그 초안, 문서 조사에 필요하다. |
+| Browser automation | 로그인된 웹앱 확인, UI QA, 폼 입력, 시각 검증에 쓴다. |
+| Cron / webhook | 매일 요약, PR 상태 확인, RSS 감시, 서버 점검 같은 unattended 작업에 쓴다. |
+| Open WebUI / LobeChat / LibreChat | Hermes를 OpenAI-compatible API처럼 열어 다른 chat frontend에서 쓰는 패턴이다. |
+| Voice / TTS | Telegram 같은 메신저에서 음성 메모를 받아 요약하거나 답변하는 용도다. |
+| Home Assistant / 스마트홈 | 개인 서버에 상주시켜 집안 자동화까지 연결하는 사례가 있다. |
+
+내가 보기엔 Hermes의 강점은 "어떤 모델이 제일 똑똑한가"보다 "어디에 붙여두면 귀찮은 일을 실제로 끝내는가"에서 나온다. 그래서 많이 쓰는 연결도 모델 하나가 아니라 메신저, OpenRouter, MCP, cron 쪽으로 몰린다.
+
+---
+
+## 자동 티키타카: 사람은 decision gate에 집중하기
+
+Claude, Codex, 다른 모델을 "티키타카"하게 만드는 핵심은 모델을 많이 부르는 것이 아니라 **역할과 승인 지점을 분리하는 것**이다. Atlassian HULA 사례처럼 좋은 human-in-the-loop 구조는 agent가 Jira/GitHub issue를 읽고 plan, code, PR까지 만들지만, 사람은 plan 승인과 중요한 trade-off 결정에 남는다. GitHub Agentic Workflows도 같은 방향이다. agent는 GitHub Actions 안에서 실행되고, repo owner가 permissions, logs, review boundary를 정한다.
+
+내가 보기에 Hermes 기반으로 최적화하려면 다음 6단계가 좋다.
+
+| 단계 | agent가 하는 일 | 사람이 하는 일 | 추천 모델/도구 |
+|---|---|---|---|
+| 1. Repository scan | README, AGENTS.md, package, test, 기존 ADR/issue를 읽고 repo map 작성 | 목표와 제약만 제공 | Hermes + GPT-5.5 |
+| 2. Research brief | 관련 문서, 경쟁안, 기존 구현 사례 조사 | 빠진 맥락 지적 | Hermes web + GPT-5.5 |
+| 3. Decision brief | 대안 A/B/C, 비용, 위험, 되돌리기 난이도, 추천안 작성 | **선택/보류/수정 결정** | Claude Opus 4.7 리뷰 |
+| 4. ADR + issue 생성 | accepted/proposed ADR, task issue, acceptance criteria 작성 | ADR의 decision outcome 승인 | Hermes + GitHub CLI |
+| 5. Implementation PR | Codex/GPT-5.5가 구현, 테스트, PR 작성 | 큰 방향 변경만 승인 | Codex/GPT-5.5 |
+| 6. Review loop | Claude가 PR 리뷰, Codex가 수정, Hermes가 CI/댓글 반영 | merge 여부 결정 | Claude + Codex + Hermes |
+
+여기서 중요한 건 자동화율을 100%로 올리는 게 아니다. **low-risk loop는 자동화하고, irreversible decision은 사람에게 올리는 것**이 성능 대비 비용이 좋다.
+
+### Decision gate 기준
+
+사람에게 물어봐야 하는 경우를 명확히 정해두면 agent가 쓸데없이 멈추지도 않고, 위험한 결정을 혼자 하지도 않는다.
+
+| 사람 승인 필요 | 자동 진행 가능 |
+|---|---|
+| public API 변경 | 내부 구현 정리 |
+| DB schema / migration | 테스트 추가 |
+| 인증/권한/비용/보안 영향 | 문서 보강 |
+| 되돌리기 어려운 아키텍처 결정 | lint, format, 작은 버그 수정 |
+| 제품 방향/UX trade-off | PR 설명, changelog 초안 |
+| ADR status를 accepted로 바꾸는 순간 | proposed ADR 초안 작성 |
+
+즉 사람은 "어떤 안을 택할지"만 결정하고, agent는 그 결정을 실행 가능한 문서와 PR로 바꾼다.
+
+### 댓글이 달렸을 때의 루프
+
+PR이나 issue에 사람이 comment를 달면 Hermes가 다음 순서로 처리하는 구조가 좋다.
+
+1. 새 comment를 읽고 `question`, `requested-change`, `decision`, `nit`로 분류한다.
+2. `decision`이면 ADR 또는 wiki에 반영할지 판단한다.
+3. `requested-change`이면 Codex/GPT-5.5가 수정한다.
+4. 수정 diff를 Claude Opus 4.7이 리뷰한다.
+5. Hermes가 테스트와 CI를 확인한다.
+6. PR에 "반영한 것 / 반영하지 않은 것 / 사람 결정이 필요한 것"을 댓글로 남긴다.
+
+Hermes cron이나 webhook을 쓰면 이걸 자동화할 수 있다. 예를 들어 10분마다 열려 있는 PR comment를 확인하는 cron job을 만들거나, GitHub webhook을 Hermes webhook endpoint로 보내 comment 이벤트 때만 agent run을 트리거할 수 있다. 다만 처음부터 완전 자동 merge까지 가지 않는 편이 낫다. 자동화의 목표는 merge가 아니라 **사람이 판단할 만큼 정리된 상태로 만드는 것**이다.
+
+### Wiki로 들어가야 지식이 된다
+
+프로젝트가 굴러가며 생긴 decision은 PR 안에만 있으면 금방 사라진다. 진짜 지식으로 남기려면 세 층으로 저장하는 게 좋다.
+
+| 레이어 | 역할 | 저장 예시 |
+|---|---|---|
+| Issue / PR | 작업의 실행 기록 | "이 버그를 고쳤다", 리뷰 댓글, CI 결과 |
+| ADR | 결정의 append-only 기록 | "왜 이 아키텍처를 선택했나", 대안과 trade-off |
+| Wiki | 현재 팀 지식의 정제본 | "현재 우리 시스템은 이렇게 동작한다", 관련 ADR 링크 |
+
+ADR은 Microsoft ADR 가이드처럼 append-only로 두고, 결정이 바뀌면 기존 ADR을 수정하지 말고 새 ADR이 supersede하게 둔다. Wiki는 반대로 최신 상태를 반영하는 mutable 문서다. 그래서 **ADR은 왜를 보존하고, wiki는 지금 무엇인지를 설명한다**고 나누면 된다.
+
+팀 decision을 wiki에 넣을 때도 단순 결론만 쓰면 지식이 아니다. 최소한 다음을 포함해야 한다.
+
+```markdown
+## Decision summary
+무엇을 결정했는가
+
+## Context
+어떤 문제, 제약, 요구사항 때문에 결정이 필요했는가
+
+## Options considered
+검토한 대안과 버린 이유
+
+## Decision drivers
+성능, 비용, 보안, 운영, 개발 속도 중 무엇을 우선했는가
+
+## Consequences
+좋아지는 점, 나빠지는 점, 나중에 다시 볼 조건
+
+## Links
+관련 ADR, issue, PR, 코드 경로
+```
+
+이 구조가 있어야 나중에 agent가 wiki를 읽고 "그때 왜 그렇게 했는지"까지 이해한다. 그냥 최신 결론만 있으면 다음 agent가 같은 논쟁을 반복한다.
+
+---
 ## 작업 유형별 분업표
 
 | 작업 유형 | Hermes | Codex | Claude Code |
 |---|---|---|---|
 | 요구사항 정리 | ◎ | △ | ○ |
-| 빠른 코드 수정 | ○ | ◎ | ○ |
-| 대규모 리팩토링 | ○ | ○ | ◎ |
+| 빠른 코드 수정 | ○ | ◎ | △ |
+| 대규모 리팩토링 | ○ | △ | ◎ |
 | PR 생성/CI 확인 | ◎ | △ | △ |
-| 코드 리뷰 | ○ | ○ | ◎ |
+| 코드 리뷰 | ○ | △ | ◎ |
 | 반복 업무 자동화 | ◎ | △ | △ |
 | Slack/Telegram 작업 | ◎ | × | × |
 | 프로젝트 규칙 기억 | ◎(memory/skill) | ○ | ◎(CLAUDE.md) |
@@ -382,28 +466,43 @@ Hermes는 `AGENTS.md`, `CLAUDE.md`, `.cursorrules` 같은 프로젝트 컨텍스
 
 Hermes Agent의 강점은 단순히 "답변을 잘하는 모델"이 아니라, **여러 도구와 모델을 하나의 작업 흐름으로 묶는 능력**에 있다.
 
-특히 Claude Code OAuth가 매끄럽지 않거나, Codex 계정이 더 안정적인 환경이라면 다음 구성이 현실적이다.
+Hermes를 GPT-5.5/Codex provider로 쓴다고 해서 Codex CLI 단독 사용과 같아지는 것은 아니다. 추론 엔진은 같거나 비슷할 수 있지만, Hermes에는 Slack 입구, 장기 기억, 스킬, cron, MCP, GitHub PR 흐름이 붙는다. 이 차이가 실사용에서는 꽤 크다.
 
-- Hermes 메인 모델: **Codex provider**
-- 구현 보조: **Codex CLI**
-- 리뷰/설계 보조: **Claude Code CLI**
-- 자동화/메신저/PR 관리: **Hermes Agent**
+내 기본값은 이렇다.
 
-이 조합을 쓰면 Slack에서 요청을 던지고, Hermes가 Codex와 Claude Code를 적절히 불러 작업을 나누고, 마지막에는 테스트와 PR까지 마무리하는 흐름을 만들 수 있다.
+- Hermes 메인 모델: **GPT-5.5 또는 Codex provider**
+- 빠른 구현: **Hermes 내부 도구 실행 또는 Codex CLI**
+- 설계/리뷰: **Claude Opus 4.7 / Claude Code**
+- 이미지 생성: **OpenAI 이미지 계열 또는 전용 이미지 모델**
+- 최종 검증/PR 관리: **Hermes Agent**
 
-AI 에이전트를 잘 쓰는 핵심은 "하나의 만능 모델"을 찾는 것이 아니라, **각 도구의 강점을 분업시키고 검증 루프를 만드는 것**이다. Hermes Agent는 그 오케스트레이션 레이어로 꽤 좋은 위치에 있다.
+다만 이건 고정 공식이 아니다. 단순 구현은 GPT-5.5/Codex만으로 충분하고, 설계가 어려운 작업은 Opus 4.7을 먼저 쓰는 편이 낫다. 이미지 생성은 Claude가 아니라 OpenAI 쪽이나 전용 이미지 모델을 붙이는 게 자연스럽다.
+
+AI 에이전트를 잘 쓰는 핵심은 "하나의 만능 모델"을 찾는 것이 아니라, **작업의 성격에 맞춰 모델과 도구를 나누고 검증 루프를 만드는 것**이다. Hermes Agent는 그 오케스트레이션 레이어로 꽤 좋은 위치에 있다.
 
 ---
 
 ## 참고 자료
 
 - [Hermes Agent Documentation](https://hermes-agent.nousresearch.com/docs/)
+- [Hermes Agent - Integrations](https://hermes-agent.nousresearch.com/docs/integrations/)
 - [Hermes Agent - AI Providers](https://hermes-agent.nousresearch.com/docs/integrations/providers/)
 - [Hermes Agent - Messaging Gateway](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/)
 - [Hermes Agent - Persistent Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/)
 - [Hermes Agent - Skills System](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/)
 - [Hermes Agent - Scheduled Tasks](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron/)
 - [Hermes Agent - MCP](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp/)
+- [OpenRouter - Hermes Agent Integration](https://openrouter.ai/docs/cookbook/coding-agents/hermes-integration)
+- [Anthropic - Introducing Claude Opus 4.7](https://www.anthropic.com/news/claude-opus-4-7)
+- [OpenRouter - GPT-5.5 model page](https://openrouter.ai/openai/gpt-5.5/benchmarks)
+- [Atlassian - Human in the Loop Software Development Agents](https://www.atlassian.com/blog/atlassian-engineering/hula-blog-autodev-paper-human-in-the-loop-software-development-agents)
+- [GitHub Blog - Automate repository tasks with GitHub Agentic Workflows](https://github.blog/ai-and-ml/automate-repository-tasks-with-github-agentic-workflows/)
+- [MSR 2026 - How AI Coding Agents Communicate](https://arxiv.org/html/2602.17084)
+- [AWS Architecture Blog - ADR best practices](https://aws.amazon.com/blogs/architecture/master-architecture-decision-records-adrs-best-practices-for-effective-decision-making/)
+- [Microsoft - Maintain an architecture decision record](https://learn.microsoft.com/en-us/azure/well-architected/architect-role/architecture-decision-record)
+- [Architectural Decision Records](https://adr.github.io/)
+- [Claude Code GitHub Actions](https://code.claude.com/docs/en/github-actions)
+- [OpenAI Cookbook - Build Code Review with the Codex SDK](https://developers.openai.com/cookbook/examples/codex/build_code_review_with_codex_sdk)
 - [OpenAI Codex GitHub Repository](https://github.com/openai/codex)
 - [Claude Code Overview](https://docs.anthropic.com/en/docs/claude-code/overview)
 - [Claude Code CLI Reference](https://docs.anthropic.com/en/docs/claude-code/cli-reference)

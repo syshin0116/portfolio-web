@@ -18,7 +18,7 @@ tags:
 draft: false
 enableToc: true
 description: Karpathy의 LLM Wiki 패턴에 ADR(Architecture Decision Records)을 결합해 개인 블로그를 누적 지식베이스로 발전시키는 방법. 패턴의 원전, 실제 사례 3종, 2026 연구 결과, 실패 모드와 스케일 한계까지 정리한다
-summary: "LLM Wiki는 RAG의 대체재가 아니라 그 위에 올라가는 정제 레이어다. 여기에 append-only ADR 레이어를 더하면 mutable wiki가 잃어버리는 결정의 history까지 함께 잡을 수 있다. Karpathy의 원전 패턴, braincrew-lab 3개 위키 사례, 2026년 ADR 자동화 연구를 종합해 개인 블로그(syshin0116.dev)를 누적 지식베이스로 진화시키는 설계를 정리한다."
+summary: "LLM Wiki는 RAG의 대체재가 아니라 그 위에 올라가는 정제 레이어다. 여기에 append-only ADR 레이어를 더하면 mutable wiki가 잃어버리는 결정의 history까지 함께 잡을 수 있다. Karpathy의 원전 패턴, 비공개 팀 위키 운영 사례, 2026년 ADR 자동화 연구를 종합해 개인 블로그(syshin0116.dev)를 누적 지식베이스로 진화시키는 설계를 정리한다."
 published: 2026-05-17
 modified: 2026-05-17
 ---
@@ -208,11 +208,11 @@ informed: []
 
 ## 사례로 보는 LLM Wiki 운영
 
-braincrew-lab 조직이 운영하는 위키 3개가 같은 패턴의 서로 다른 변형이다. 코드를 직접 본 인상 위주로 정리한다.
+비공개 팀 위키 운영 사례들을 보면 같은 LLM Wiki 패턴도 목적에 따라 꽤 다르게 변형된다. 구체적인 조직명과 레포명은 공개하지 않고, 구조와 운영 방식만 추려 적는다.
 
-### 1. braincrew-wiki - 팀 위키의 표준형
+### 1. 팀 위키의 표준형
 
-[braincrew-lab/braincrew-wiki](https://github.com/braincrew-lab/braincrew-wiki)는 LLM Wiki를 팀 단위로 가장 정직하게 구현한 케이스다.
+첫 번째 사례는 LLM Wiki를 팀 단위로 가장 정직하게 구현한 케이스다.
 
 - 사람은 Obsidian 또는 `/bc-wiki-add` 스킬로 `content/raw/`에 메모만 한다
 - GitHub Action과 Anthropic Routine이 raw 변경을 감지해 `content/wiki/` 변경을 담은 PR을 만든다
@@ -220,15 +220,15 @@ braincrew-lab 조직이 운영하는 위키 3개가 같은 패턴의 서로 다�
 
 운영 디테일에서 가장 인상적인 건 **상태 분리**다. `content/`는 웹 배포 경계이고, `.wiki-state/log.md`, `.wiki-state/review.md`, `.wiki-state/hashes`는 공개하지 않는다. 로그·검토 항목·hash ledger가 사이트에 노출되는 사고를 구조적으로 방지하는 장치.
 
-### 2. deep-agent-builder-claw-wiki - 제품/PM 위키
+### 2. 제품/PM 위키
 
-[braincrew-lab/deep-agent-builder-claw-wiki](https://github.com/braincrew-lab/deep-agent-builder-claw-wiki)는 LLM Wiki를 제품 운영에 쓴 예시다. 5개 레포의 architecture, features, scenarios, research, proposals를 한 위키에 모은다. cron 기반 Claw 에이전트가 daily PM sync와 research radar를 자동 수행한다.
+두 번째 사례는 LLM Wiki를 제품 운영에 쓴 예시다. 5개 레포의 architecture, features, scenarios, research, proposals를 한 위키에 모은다. cron 기반 Claw 에이전트가 daily PM sync와 research radar를 자동 수행한다.
 
 지식을 정제하는 것뿐만 아니라 *"어제 어떤 일이 있었나, 무엇이 새로 보이나"* 같은 **시간축 질문**까지 위키 위에서 처리한다는 점이 차별점이다. 여기서는 사실상 ADR 비슷한 `proposals/`가 따로 있다 - mutable wiki만으로는 시간축 질문에 약하다는 걸 운영자들이 이미 체득한 듯.
 
-### 3. sk-hynix-wiki - 컨설팅 지식베이스
+### 3. 컨설팅 지식베이스
 
-[braincrew-lab/sk-hynix-wiki](https://github.com/braincrew-lab/sk-hynix-wiki)는 컨설팅 프로젝트의 지식베이스로 쓴 변형이다. 운영 규칙이 두 단계 루프로 박혀 있다.
+세 번째 사례는 컨설팅 프로젝트의 지식베이스로 쓴 변형이다. 운영 규칙이 두 단계 루프로 박혀 있다.
 
 1. **PROJECT-first** - `PROJECT.md`(프로젝트 헌장)를 항상 먼저 읽는다
 2. **Wiki-first** - 답하기 전에 `wiki-search`로 근거를 찾는다
@@ -248,7 +248,7 @@ LLM이 raw에 없는 내용을 그럴듯하게 위키 페이지에 추가하는 
 
 ### Stale claim
 
-원본 글이 갱신됐는데 그걸 정제한 wiki 페이지는 그대로 남는 경우. raw 파일의 mtime이나 hash를 추적해 변경된 raw를 가리키는 wiki 페이지를 stale로 마킹해야 한다. braincrew-wiki가 `.wiki-state/hashes`를 두는 이유.
+원본 글이 갱신됐는데 그걸 정제한 wiki 페이지는 그대로 남는 경우. raw 파일의 mtime이나 hash를 추적해 변경된 raw를 가리키는 wiki 페이지를 stale로 마킹해야 한다. 팀 위키 사례가 `.wiki-state/hashes`를 두는 이유.
 
 ### Contradiction drift
 
@@ -398,9 +398,7 @@ LLM Wiki는 *"LLM이 Markdown을 읽고 쓰는 루프를 일관되게 돌린다"
 - [Starmorph, "How to Build Karpathy's LLM Wiki"](https://blog.starmorph.com/blog/karpathy-llm-wiki-knowledge-base-guide)
 - [MindStudio, "Where RAG Breaks Down: The Karpathy LLM Wiki Alternative"](https://www.mindstudio.ai/blog/karpathy-llm-wiki-pattern-knowledge-base-without-rag)
 - [Atlan, "LLM Wiki vs RAG: The Karpathy Concept and Enterprise Reality"](https://atlan.com/know/llm-wiki-vs-rag-knowledge-base/)
-- [braincrew-lab/braincrew-wiki](https://github.com/braincrew-lab/braincrew-wiki)
-- [braincrew-lab/deep-agent-builder-claw-wiki](https://github.com/braincrew-lab/deep-agent-builder-claw-wiki)
-- [braincrew-lab/sk-hynix-wiki](https://github.com/braincrew-lab/sk-hynix-wiki)
+- 비공개 팀 위키 운영 사례 A/B/C (조직명과 레포명 비공개)
 
 ### ADR
 

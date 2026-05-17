@@ -6,4 +6,8 @@
 ## [2026-05-17 00:00 KST] ingest | LLM Wiki research → 1 new page, 2 updated pages, index rebuilt
 - Created: content/wiki/llm-wiki.md
 - Updated: content/wiki/second-brain-rag.md, content/wiki/블로그-검색-실험.md, content/wiki/index.md
-- Research sources: Karpathy gist, Starmorph, MindStudio, Atlan, braincrew-lab wiki repos
+- Research sources: Karpathy gist, Starmorph, MindStudio, Atlan, private team wiki repos
+## [2026-05-17 23:30 KST] ingest | Agentic decision workflow research → 1 new page, 1 source post updated, index rebuilt manually
+- Created: content/wiki/agentic-decision-workflow.md
+- Updated: content/Tools/2026-05-17-Hermes-Agent-사용-사례와-Claude-Codex-조합.md, content/wiki/index.md
+- Research sources: Atlassian HULA, GitHub Agentic Workflows, AI coding agent PR communication study, AWS/Microsoft/ADR guidance, Claude Code GitHub Actions, OpenAI Codex SDK review workflow

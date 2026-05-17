@@ -292,6 +292,88 @@ gh pr create --title "docs: add Hermes Agent use cases" --body "..."
 
 ---
 
+## 자동 티키타카: 사람은 decision gate에 집중하기
+
+Claude, Codex, 다른 모델을 "티키타카"하게 만드는 핵심은 모델을 많이 부르는 것이 아니라 **역할과 승인 지점을 분리하는 것**이다. Atlassian HULA 사례처럼 좋은 human-in-the-loop 구조는 agent가 Jira/GitHub issue를 읽고 plan, code, PR까지 만들지만, 사람은 plan 승인과 중요한 trade-off 결정에 남는다. GitHub Agentic Workflows도 같은 방향이다. agent는 GitHub Actions 안에서 실행되고, repo owner가 permissions, logs, review boundary를 정한다.
+
+내가 보기에 Hermes 기반으로 최적화하려면 다음 6단계가 좋다.
+
+| 단계 | agent가 하는 일 | 사람이 하는 일 | 추천 모델/도구 |
+|---|---|---|---|
+| 1. Repository scan | README, AGENTS.md, package, test, 기존 ADR/issue를 읽고 repo map 작성 | 목표와 제약만 제공 | Hermes + GPT-5.5 |
+| 2. Research brief | 관련 문서, 경쟁안, 기존 구현 사례 조사 | 빠진 맥락 지적 | Hermes web + GPT-5.5 |
+| 3. Decision brief | 대안 A/B/C, 비용, 위험, 되돌리기 난이도, 추천안 작성 | **선택/보류/수정 결정** | Claude Opus 4.7 리뷰 |
+| 4. ADR + issue 생성 | accepted/proposed ADR, task issue, acceptance criteria 작성 | ADR의 decision outcome 승인 | Hermes + GitHub CLI |
+| 5. Implementation PR | Codex/GPT-5.5가 구현, 테스트, PR 작성 | 큰 방향 변경만 승인 | Codex/GPT-5.5 |
+| 6. Review loop | Claude가 PR 리뷰, Codex가 수정, Hermes가 CI/댓글 반영 | merge 여부 결정 | Claude + Codex + Hermes |
+
+여기서 중요한 건 자동화율을 100%로 올리는 게 아니다. **low-risk loop는 자동화하고, irreversible decision은 사람에게 올리는 것**이 성능 대비 비용이 좋다.
+
+### Decision gate 기준
+
+사람에게 물어봐야 하는 경우를 명확히 정해두면 agent가 쓸데없이 멈추지도 않고, 위험한 결정을 혼자 하지도 않는다.
+
+| 사람 승인 필요 | 자동 진행 가능 |
+|---|---|
+| public API 변경 | 내부 구현 정리 |
+| DB schema / migration | 테스트 추가 |
+| 인증/권한/비용/보안 영향 | 문서 보강 |
+| 되돌리기 어려운 아키텍처 결정 | lint, format, 작은 버그 수정 |
+| 제품 방향/UX trade-off | PR 설명, changelog 초안 |
+| ADR status를 accepted로 바꾸는 순간 | proposed ADR 초안 작성 |
+
+즉 사람은 "어떤 안을 택할지"만 결정하고, agent는 그 결정을 실행 가능한 문서와 PR로 바꾼다.
+
+### 댓글이 달렸을 때의 루프
+
+PR이나 issue에 사람이 comment를 달면 Hermes가 다음 순서로 처리하는 구조가 좋다.
+
+1. 새 comment를 읽고 `question`, `requested-change`, `decision`, `nit`로 분류한다.
+2. `decision`이면 ADR 또는 wiki에 반영할지 판단한다.
+3. `requested-change`이면 Codex/GPT-5.5가 수정한다.
+4. 수정 diff를 Claude Opus 4.7이 리뷰한다.
+5. Hermes가 테스트와 CI를 확인한다.
+6. PR에 "반영한 것 / 반영하지 않은 것 / 사람 결정이 필요한 것"을 댓글로 남긴다.
+
+Hermes cron이나 webhook을 쓰면 이걸 자동화할 수 있다. 예를 들어 10분마다 열려 있는 PR comment를 확인하는 cron job을 만들거나, GitHub webhook을 Hermes webhook endpoint로 보내 comment 이벤트 때만 agent run을 트리거할 수 있다. 다만 처음부터 완전 자동 merge까지 가지 않는 편이 낫다. 자동화의 목표는 merge가 아니라 **사람이 판단할 만큼 정리된 상태로 만드는 것**이다.
+
+### Wiki로 들어가야 지식이 된다
+
+프로젝트가 굴러가며 생긴 decision은 PR 안에만 있으면 금방 사라진다. 진짜 지식으로 남기려면 세 층으로 저장하는 게 좋다.
+
+| 레이어 | 역할 | 저장 예시 |
+|---|---|---|
+| Issue / PR | 작업의 실행 기록 | "이 버그를 고쳤다", 리뷰 댓글, CI 결과 |
+| ADR | 결정의 append-only 기록 | "왜 이 아키텍처를 선택했나", 대안과 trade-off |
+| Wiki | 현재 팀 지식의 정제본 | "현재 우리 시스템은 이렇게 동작한다", 관련 ADR 링크 |
+
+ADR은 Microsoft ADR 가이드처럼 append-only로 두고, 결정이 바뀌면 기존 ADR을 수정하지 말고 새 ADR이 supersede하게 둔다. Wiki는 반대로 최신 상태를 반영하는 mutable 문서다. 그래서 **ADR은 왜를 보존하고, wiki는 지금 무엇인지를 설명한다**고 나누면 된다.
+
+팀 decision을 wiki에 넣을 때도 단순 결론만 쓰면 지식이 아니다. 최소한 다음을 포함해야 한다.
+
+```markdown
+## Decision summary
+무엇을 결정했는가
+
+## Context
+어떤 문제, 제약, 요구사항 때문에 결정이 필요했는가
+
+## Options considered
+검토한 대안과 버린 이유
+
+## Decision drivers
+성능, 비용, 보안, 운영, 개발 속도 중 무엇을 우선했는가
+
+## Consequences
+좋아지는 점, 나빠지는 점, 나중에 다시 볼 조건
+
+## Links
+관련 ADR, issue, PR, 코드 경로
+```
+
+이 구조가 있어야 나중에 agent가 wiki를 읽고 "그때 왜 그렇게 했는지"까지 이해한다. 그냥 최신 결론만 있으면 다음 agent가 같은 논쟁을 반복한다.
+
+---
 ## 작업 유형별 분업표
 
 | 작업 유형 | Hermes | Codex | Claude Code |
@@ -413,6 +495,14 @@ AI 에이전트를 잘 쓰는 핵심은 "하나의 만능 모델"을 찾는 것�
 - [OpenRouter - Hermes Agent Integration](https://openrouter.ai/docs/cookbook/coding-agents/hermes-integration)
 - [Anthropic - Introducing Claude Opus 4.7](https://www.anthropic.com/news/claude-opus-4-7)
 - [OpenRouter - GPT-5.5 model page](https://openrouter.ai/openai/gpt-5.5/benchmarks)
+- [Atlassian - Human in the Loop Software Development Agents](https://www.atlassian.com/blog/atlassian-engineering/hula-blog-autodev-paper-human-in-the-loop-software-development-agents)
+- [GitHub Blog - Automate repository tasks with GitHub Agentic Workflows](https://github.blog/ai-and-ml/automate-repository-tasks-with-github-agentic-workflows/)
+- [MSR 2026 - How AI Coding Agents Communicate](https://arxiv.org/html/2602.17084)
+- [AWS Architecture Blog - ADR best practices](https://aws.amazon.com/blogs/architecture/master-architecture-decision-records-adrs-best-practices-for-effective-decision-making/)
+- [Microsoft - Maintain an architecture decision record](https://learn.microsoft.com/en-us/azure/well-architected/architect-role/architecture-decision-record)
+- [Architectural Decision Records](https://adr.github.io/)
+- [Claude Code GitHub Actions](https://code.claude.com/docs/en/github-actions)
+- [OpenAI Cookbook - Build Code Review with the Codex SDK](https://developers.openai.com/cookbook/examples/codex/build_code_review_with_codex_sdk)
 - [OpenAI Codex GitHub Repository](https://github.com/openai/codex)
 - [Claude Code Overview](https://docs.anthropic.com/en/docs/claude-code/overview)
 - [Claude Code CLI Reference](https://docs.anthropic.com/en/docs/claude-code/cli-reference)

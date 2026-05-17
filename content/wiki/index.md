@@ -4,6 +4,7 @@
 
 | Page | Summary | Type | Tags | Sources | Updated |
 |------|---------|------|------|---------|---------|
+| [[agentic-decision-workflow]] | Agentic decision workflow는 에이전트가 GitHub issue, 리서치, ADR, PR, 리뷰 댓글 반영을 자동화하되 사람은 되돌리기 어려운 선택과 trade-off 승인에 집중하는 운영 패턴이다. 실행 기록은 issue/PR에, 결정의 이유는 append-only ADR에, 현재 팀 지식은 mutable wiki에 남기는 3층 구조가 핵심이다. | pattern | ai, agent, github, adr, decision-making, knowledge-base, automation, workflow, human-in-the-loop | 8 | 2026-05-17 |
 | [[ai-기초개념]] | AI 접근 방식은 규칙 기반 기호주의(Symbolism)와 뉴럴 네트워크 기반 연결주의(Connectionism)로 나뉜다. 기호주의는 1980년대 쇠락했고, 연결주의(퍼셉트론 → 딥러닝)가 현재 주류다. 데이터 분석 프로세스 표준인 CRISP-DM도 함께 정리한다. | concept | ai, machine-learning, deep-learning, symbolism, connectionism, neural-network, crisp-dm, data-science | 2 | 2026-04-26 |
 | [[blog-seo]] | 블로그를 검색 엔진에 노출시키기 위한 단계별 가이드다. Google Search Console 등록(HTML 파일/메타 태그/Google Analytics 세 가지 소유권 확인 방법), sitemap 제출, robots.txt 설정을 다루며, Quartz 기반 블로그에서의 구체적인 설정 방법을 포함한다. | reference | seo, google-search-console, sitemap, blog, quartz, frontend, search | 1 | 2026-04-26 |
 | [[cli-ux-design]] | CLI 도구의 사용성은 기능 추가가 아니라 출력 계약과 동작 규칙의 설계 문제다. TTY 감지로 사람과 기계의 출력 기본값 충돌을 해결하고, 출력 스키마를 API 계약처럼 안정적으로 유지하고, 명령의 의미에 따라 exit code를 분리하면 인간과 에이전트 모두가 예측 가능하게 사용할 수 있는 도구가 된다. | pattern | cli, rust, backend, agent, ux, api-design, unix, pattern | 1 | 2026-04-26 |
@@ -85,7 +86,15 @@
 | https://atlan.com/know/llm-wiki-vs-rag-knowledge-base/ | [[llm-wiki]] |
 | https://blog.starmorph.com/blog/karpathy-llm-wiki-knowledge-base-guide | [[llm-wiki]] |
 | https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f | [[llm-wiki]] |
-| https://github.com/braincrew-lab/braincrew-wiki | [[llm-wiki]] |
-| https://github.com/braincrew-lab/deep-agent-builder-claw-wiki | [[llm-wiki]] |
-| https://github.com/braincrew-lab/sk-hynix-wiki | [[llm-wiki]] |
+| private repository example A | [[llm-wiki]] |
+| private repository example B | [[llm-wiki]] |
+| private repository example C | [[llm-wiki]] |
 | https://www.mindstudio.ai/blog/karpathy-llm-wiki-pattern-knowledge-base-without-rag | [[llm-wiki]] |
+| https://www.atlassian.com/blog/atlassian-engineering/hula-blog-autodev-paper-human-in-the-loop-software-development-agents | [[agentic-decision-workflow]] |
+| https://github.blog/ai-and-ml/automate-repository-tasks-with-github-agentic-workflows/ | [[agentic-decision-workflow]] |
+| https://arxiv.org/html/2602.17084 | [[agentic-decision-workflow]] |
+| https://aws.amazon.com/blogs/architecture/master-architecture-decision-records-adrs-best-practices-for-effective-decision-making/ | [[agentic-decision-workflow]] |
+| https://learn.microsoft.com/en-us/azure/well-architected/architect-role/architecture-decision-record | [[agentic-decision-workflow]] |
+| https://adr.github.io/ | [[agentic-decision-workflow]] |
+| https://code.claude.com/docs/en/github-actions | [[agentic-decision-workflow]] |
+| https://developers.openai.com/cookbook/examples/codex/build_code_review_with_codex_sdk | [[agentic-decision-workflow]] |

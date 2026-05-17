@@ -15,7 +15,7 @@
 | [[github-actions-gcp-cicd]] | GitHub Actions로 코드 push 시 Docker 이미지를 빌드해 Docker Hub에 올리고, SSH로 GCP Compute Engine에 접속해 컨테이너를 재배포하는 CI/CD 파이프라인 패턴이다. GitHub Secrets로 민감 정보를 관리하며, 비용 없이 소규모 프로젝트에 적용 가능하다. | pattern | github-actions, cicd, gcp, docker, devops, automation, cloud, backend | 2 | 2026-04-26 |
 | [[langflow]] | LangFlow는 드래그 앤 드롭으로 AI 워크플로우를 구성하는 MIT 라이선스 오픈소스 도구다(68.5k GitHub stars). LangChain 기반으로 RAG, 에이전트, 멀티에이전트 시스템을 시각적으로 설계하고 API로 배포할 수 있으나, 실제로는 low-code 수준의 학습 곡선이 존재한다. | tool | ai, llm, workflow, no-code, low-code, open-source, python, rag, agent, pipeline | 1 | 2026-04-26 |
 | [[llm-text-to-sql]] | LLM 기반 Text-to-SQL 시스템을 프로덕션에서 안정적으로 운영하려면 프롬프트 튜닝보다 DB 스키마 품질이 결정적 요소다. 동적 스키마 조회, COMMENT 기반 zero-shot, AST 검증 기반 보안 레이어, 에이전트 위임 방식 self-correction을 조합하면 OLTP 수준 질의에서 높은 정확도를 달성할 수 있다. | pattern | text-to-sql, llm, ai, agent, postgresql, prompt-engineering, evaluation, security | 1 | 2026-04-26 |
-| [[llm-wiki]] | LLM Wiki는 원문을 매번 검색해 답하는 RAG 대신, LLM이 raw 소스를 읽어 지속적으로 갱신되는 Markdown 위키를 컴파일·유지하는 패턴이다. 이 블로그는 이미 원본 글(content/AI, Tools 등)과 정제 레이어(content/wiki)를 분리하고 있으므로, raw→wiki ingest, index/log, lint, wikilink 검증, 자동 PR 루틴을 붙이면 개인 블로그를 누적 지식베이스로 발전시킬 수 있다. | pattern | llm, ai, knowledge-base, pkm, markdown, agent, rag, obsidian, automation | 7 | 2026-05-17 |
+| [[llm-wiki]] | LLM Wiki는 원문을 매번 검색해 답하는 RAG 대신, LLM이 raw 소스를 읽어 지속적으로 갱신되는 Markdown 위키를 컴파일·유지하는 패턴이다. 이 블로그는 이미 원본 글(content/AI, Tools 등)과 정제 레이어(content/wiki)를 분리하고 있으므로, raw→wiki ingest, index/log, lint, wikilink 검증, 자동 PR 루틴을 붙이면 개인 블로그를 누적 지식베이스로 발전시킬 수 있다. | pattern | llm, ai, knowledge-base, pkm, markdown, agent, rag, obsidian, automation | 4 | 2026-05-17 |
 | [[mac-dev-setup]] | 새 맥북을 받을 때 설치할 필수 도구 목록이다. Homebrew를 기반으로 Raycast, uv(Python), fnm(Node.js), Bun, Docker Desktop을 설치하고, App Store → Homebrew → 공식 웹사이트 순서로 설치를 진행한다. | reference | mac, setup, homebrew, devtools, productivity, python, nodejs, docker | 1 | 2026-04-26 |
 | [[misen]] | misen(mise en place)은 AI 워크플로우의 반복 작업을 Block(dict→dict) 단일 인터페이스로 정의하고 연산자로 조합해 어떤 플랫폼에서든 재사용할 수 있게 하는 Python 라이브러리다. 조합의 결과도 Block이므로 중첩이 자유롭고(닫힘 성질), 플랫폼 어댑터가 LangGraph, MCP, FastAPI 변환을 담당한다. | tool | python, ai, llm, pipeline, workflow, open-source, library, agent, operator | 1 | 2026-04-26 |
 | [[moonlight-ai]] | Moonlight는 학술 논문 PDF에 AI를 붙여주는 크롬 확장 프로그램이다. 3줄 요약, 자동 하이라이트(기여점/방법론/결과), 드래그 설명, 스마트 인용, Scholar Deep Search(RAG 기반 관련 논문 추천) 기능을 제공하며, 한국 AI 회사 Corca가 개발했다. | tool | ai, research, paper-reading, chrome-extension, rag, llm, productivity | 1 | 2026-04-26 |
@@ -86,9 +86,6 @@
 | https://atlan.com/know/llm-wiki-vs-rag-knowledge-base/ | [[llm-wiki]] |
 | https://blog.starmorph.com/blog/karpathy-llm-wiki-knowledge-base-guide | [[llm-wiki]] |
 | https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f | [[llm-wiki]] |
-| private repository example A | [[llm-wiki]] |
-| private repository example B | [[llm-wiki]] |
-| private repository example C | [[llm-wiki]] |
 | https://www.mindstudio.ai/blog/karpathy-llm-wiki-pattern-knowledge-base-without-rag | [[llm-wiki]] |
 | https://www.atlassian.com/blog/atlassian-engineering/hula-blog-autodev-paper-human-in-the-loop-software-development-agents | [[agentic-decision-workflow]] |
 | https://github.blog/ai-and-ml/automate-repository-tasks-with-github-agentic-workflows/ | [[agentic-decision-workflow]] |

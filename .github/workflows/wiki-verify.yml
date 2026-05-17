@@ -1,0 +1,27 @@
+name: Wiki verify
+
+on:
+  pull_request:
+    paths:
+      - "content/**/*.md"
+      - "scripts/verify-wiki.py"
+      - ".github/workflows/wiki-verify.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "content/**/*.md"
+      - "scripts/verify-wiki.py"
+      - ".github/workflows/wiki-verify.yml"
+  workflow_dispatch:
+
+jobs:
+  verify-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify wiki content
+        run: python scripts/verify-wiki.py

@@ -36,6 +36,20 @@ draft: false
 - ADR은 decision의 context, alternatives, rationale, consequences를 남기는 lightweight 기록이다. Microsoft는 ADR을 append-only log로 다루고, 결정이 바뀌면 기존 record를 수정하지 말고 새 record가 supersede하도록 권장한다.[^ms-adr]
 - 따라서 실행 기록은 issue/PR, 결정 이유는 ADR, 최신 팀 지식은 wiki에 둔다. 이 3층을 분리해야 agent가 과거 논쟁을 반복하지 않고 현재 지식과 과거 이유를 함께 읽을 수 있다.
 
+## Knowledge capture architecture
+
+PR comments, issue comments, commits, Slack threads, meeting notes, and local agent sessions are all communication artifacts. None of them should be the long-term source of truth by itself. The durable layer should be a central knowledge inbox plus a curated wiki.
+
+| Layer | Purpose | Example trigger |
+|---|---|---|
+| Signal | Something happened | PR merged, issue closed, Slack decision, agent session summary |
+| Inbox | Candidate knowledge waiting for triage | `knowledge-inbox/YYYY-MM-DD/*.md` |
+| Triage | Decide whether the signal is reusable | discard / task log / ADR / wiki update |
+| ADR | Preserve why a decision was made | accepted architecture or policy choice |
+| Wiki | Preserve current reusable knowledge | pattern, concept, playbook, project map |
+
+A good default is to run this outside any single product repository. Hermes cron or webhook can watch multiple repositories, collect candidate signals, and open a PR against the central wiki repo. Individual PR comments can still be useful input, but they should not be the primary workflow.
+
 ## Operating loop
 
 | 단계 | Agent output | Human gate | Persisted artifact |

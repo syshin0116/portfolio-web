@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">Hermes as orchestration layer</title>
+  <desc id="desc">Hermes receives user requests from messaging or CLI, loads memory and skills, calls tools and coding agents, verifies outputs, and opens pull requests.</desc>
+  <defs>
+    <style>
+      .bg{fill:#020617}.grid{stroke:#1e293b;stroke-width:1}.title{fill:#e2e8f0;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:28px;font-weight:800}.label{fill:#e2e8f0;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:18px;font-weight:700}.small{fill:#cbd5e1;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:14px}.tiny{fill:#94a3b8;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:12px}.box{rx:16;stroke-width:2;fill:#0f172a}.cyan{stroke:#22d3ee}.green{stroke:#34d399}.violet{stroke:#a78bfa}.amber{stroke:#fbbf24}.rose{stroke:#fb7185}.slate{stroke:#94a3b8}.arrow{stroke:#64748b;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.dash{stroke-dasharray:8 6}.chip{fill:#111827;stroke:#334155;stroke-width:1;rx:12}
+    </style>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" class="grid"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+  </defs>
+  <rect class="bg" width="1200" height="620"/><rect width="1200" height="620" fill="url(#grid)" opacity="0.5"/>
+  <text x="60" y="58" class="title">Hermes는 모델이 아니라 작업 오케스트레이션 레이어다</text>
+  <text x="60" y="88" class="small">Codex/Claude 같은 모델과 CLI, GitHub, 파일, 웹, Slack, cron을 하나의 검증 루프로 묶는다</text>
+
+  <rect x="60" y="160" width="180" height="250" class="box cyan"/>
+  <text x="94" y="198" class="label">입구</text>
+  <text x="92" y="236" class="small">Slack</text>
+  <text x="92" y="266" class="small">Telegram</text>
+  <text x="92" y="296" class="small">CLI</text>
+  <text x="92" y="326" class="small">Cron</text>
+  <text x="92" y="356" class="small">Webhook</text>
+
+  <path d="M240 285 C286 285 300 285 344 285" class="arrow"/>
+  <rect x="344" y="118" width="260" height="334" class="box green"/>
+  <text x="390" y="158" class="label">Hermes Agent</text>
+  <rect x="390" y="190" width="170" height="34" class="chip"/><text x="414" y="212" class="small">memory</text>
+  <rect x="390" y="236" width="170" height="34" class="chip"/><text x="414" y="258" class="small">skills</text>
+  <rect x="390" y="282" width="170" height="34" class="chip"/><text x="414" y="304" class="small">tool routing</text>
+  <rect x="390" y="328" width="170" height="34" class="chip"/><text x="414" y="350" class="small">verification</text>
+  <rect x="390" y="374" width="170" height="34" class="chip"/><text x="414" y="396" class="small">delivery</text>
+
+  <path d="M604 210 C650 165 682 155 730 155" class="arrow"/>
+  <path d="M604 285 C652 285 682 285 730 285" class="arrow"/>
+  <path d="M604 360 C650 405 682 415 730 415" class="arrow"/>
+
+  <rect x="730" y="100" width="180" height="110" class="box violet"/>
+  <text x="770" y="140" class="label">모델</text>
+  <text x="762" y="172" class="small">GPT / Codex</text>
+  <text x="762" y="196" class="small">Claude 리뷰</text>
+
+  <rect x="730" y="230" width="180" height="110" class="box amber"/>
+  <text x="770" y="270" class="label">도구</text>
+  <text x="762" y="302" class="small">file / terminal</text>
+  <text x="762" y="326" class="small">web / browser / MCP</text>
+
+  <rect x="730" y="360" width="180" height="110" class="box rose"/>
+  <text x="770" y="400" class="label">산출물</text>
+  <text x="762" y="432" class="small">commit / PR</text>
+  <text x="762" y="456" class="small">docs / digest</text>
+
+  <path d="M910 415 C980 415 1000 360 1004 320" class="arrow"/>
+  <rect x="1004" y="250" width="140" height="140" class="box slate"/>
+  <text x="1042" y="292" class="label">검증</text>
+  <text x="1030" y="326" class="small">tests</text>
+  <text x="1030" y="352" class="small">build</text>
+  <text x="1030" y="378" class="small">CI checks</text>
+
+  <path d="M1004 320 C860 540 500 520 474 452" class="arrow dash"/>
+  <text x="520" y="548" class="tiny">하위 에이전트가 완료했다고 말해도 Hermes가 diff, 테스트, CI를 다시 확인한다</text>
+</svg>

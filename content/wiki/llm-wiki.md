@@ -17,8 +17,10 @@ sources:
   - https://blog.starmorph.com/blog/karpathy-llm-wiki-knowledge-base-guide
   - https://www.mindstudio.ai/blog/karpathy-llm-wiki-pattern-knowledge-base-without-rag
   - https://atlan.com/know/llm-wiki-vs-rag-knowledge-base/
+  - https://github.com/prodbartist/cmds-vault
+  - https://github.com/prodbartist/cmds-vault/blob/main/90.%20Settings/91.%20Skills/cmds-llm-wiki/SKILL.md
 created: 2026-05-17
-updated: 2026-05-17
+updated: 2026-05-18
 author: wiki-curator
 draft: false
 ---
@@ -62,6 +64,19 @@ draft: false
 5. **자동 PR 루틴 연결**: source post 또는 raw 자료가 추가되면 GitHub Actions가 루틴을 fire하고, 루틴은 `content/wiki/` 변경만 담은 PR을 만든다. main 직접 push보다 PR diff로 사람이 검토하는 편이 안전하다.
 6. **검색 챗봇과 연결**: 현재 RAG/검색 챗봇은 먼저 `content/wiki/index.md`와 관련 wiki page를 읽고, 부족할 때만 원문 검색으로 내려가게 한다. 이렇게 하면 canonical synthesis를 우선 사용하면서도 누락 회수를 보완할 수 있다.
 
+## CMDS / CommandSpace Notes
+
+구요한/Yohan Koo의 CMDS starter vault는 LLM Wiki를 개인/팀 지식 운영으로 가져올 때 참고할 만한 구현 사례다. CMDS는 Obsidian vault 안에서 `Connect → Merge → Develop → Share`라는 지식 생애주기를 두고, `CLAUDE.md`, `AGENTS.md`, `CMDS.md`, Guide, Head Quarter 같은 system files에 precedence를 부여한다. Agent가 어느 규칙을 먼저 읽고 따라야 하는지 명시한다는 점이 중요하다.
+
+`cmds-llm-wiki` skill은 Karpathy-style LLM Wiki를 CMDS vault 안에 통합한다. 특징은 다음과 같다.
+
+- Raw sources는 `10. Raw Sources/`에 남기고, LLM Wiki 폴더 안에 중복 복사하지 않는다.
+- LLM-maintained 영역은 `LLMWiki/index.md`, `log.md`, `Wiki/`, `Queries/`로 분리한다.
+- `Core Context.md`는 `BRAIN.md`, Head Quarter, CMDS Guide 같은 canonical 파일을 가리키는 pointer 역할을 하며, 내용을 복붙하지 않는다.
+- source가 커지면 standalone wiki로 분리할 수 있는 graduation path를 둔다.
+
+이 구조는 조직 위키에도 유효하다. 프로젝트별 context를 중앙에 복제하지 말고, 중앙 wiki는 project-local docs와 ADR을 가리키는 index와 synthesis 역할을 하는 편이 drift를 줄인다.
+
 ## Implementation Notes for This Repo
 
 이 레포에 우선 붙일 수 있는 최소 자동화는 세 가지다.
@@ -80,6 +95,7 @@ draft: false
 - [[zettelkasten]] - LLM Wiki의 wikilink와 cross-reference는 Zettelkasten의 연결 중심 지식 조직을 LLM 유지보수 루프로 자동화한다.
 - [[블로그-검색-실험]] - 이 블로그의 RAG/검색 실험은 raw/source 검색 계층이고, LLM Wiki는 그 결과를 누적하는 curated synthesis 계층이다.
 - [[obsidian-notion-sync]] - Obsidian을 authoring UI로 쓰면 raw 작성 경험을 유지하면서 Git/웹 배포/LLM 정제를 붙일 수 있다.
+- [[agentic-decision-workflow]] - 프로젝트→팀→조직으로 지식을 승격할 때 LLM Wiki가 최신 semantic layer를 맡고 ADR이 decision history를 맡는다.
 
 ## Footnotes
 
@@ -87,3 +103,4 @@ draft: false
 [^2]: [Starmorph, "How to Build Karpathy's LLM Wiki"](https://blog.starmorph.com/blog/karpathy-llm-wiki-knowledge-base-guide)
 [^3]: [MindStudio, "Where RAG Breaks Down: The Karpathy LLM Wiki Alternative"](https://www.mindstudio.ai/blog/karpathy-llm-wiki-pattern-knowledge-base-without-rag)
 [^4]: [Atlan, "LLM Wiki vs RAG: The Karpathy Concept and Enterprise Reality"](https://atlan.com/know/llm-wiki-vs-rag-knowledge-base/)
+[^5]: [prodbartist/cmds-vault](https://github.com/prodbartist/cmds-vault)

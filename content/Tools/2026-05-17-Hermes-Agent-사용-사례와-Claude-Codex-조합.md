@@ -11,8 +11,8 @@ tags:
   - Tools
 draft: false
 enableToc: true
-description: Hermes Agent와 Codex CLI, Claude Code의 차이를 정리하고, GPT-5.5와 Claude Opus 4.7 기준으로 어떤 조합이 현실적인지 살펴본다.
-summary: "Hermes Agent는 모델이 아니라 작업 실행 레이어다. Codex를 Hermes의 메인 모델로 연결해도 Slack, 메모리, 스킬, cron, MCP, PR 관리가 붙는다는 점에서 Codex CLI 단독 사용과 다르다. GPT-5.5와 Claude Opus 4.7 기준으로 구현·리뷰·설계·이미지 작업을 어떻게 나누면 좋은지 정리했다."
+description: Hermes Agent와 Codex CLI, Claude Code의 차이를 정리하고, 프로젝트·팀·조직 지식을 수집·통합·검색·권한 관리하는 운영 모델까지 살펴본다.
+summary: "Hermes Agent는 모델이 아니라 작업 실행 레이어다. Codex를 Hermes의 메인 모델로 연결해도 Slack, 메모리, 스킬, cron, MCP, PR 관리가 붙는다는 점에서 Codex CLI 단독 사용과 다르다. 여기에 프로젝트→팀→조직으로 지식을 수집·통합하고, 검색 가능한 second brain과 권한 관리까지 붙이는 운영 모델을 정리했다."
 published: 2026-05-17
 modified: 2026-05-17
 ---
@@ -342,6 +342,127 @@ PR이나 issue comment는 좋은 communication 수단이다. 하지만 모든 �
 
 이 레포에는 우선 작은 검증 트리거만 붙였다. PR에서 `content/wiki/**`, `content/**/*.md`, `scripts/verify-wiki.py`, `.github/workflows/wiki-verify.yml`이 바뀌면 GitHub Actions가 `scripts/verify-wiki.py`를 실행한다. 이 검사는 wiki frontmatter, wikilink 해석, index 누락, 비공개 레포명/조직명 같은 금지어 노출을 막는다. 아직 "모든 레포 → 중앙 inbox → 자산 선별 → wiki PR" 자동화까지는 아니다. 그건 이 블로그 레포 안의 PR comment workflow가 아니라, Hermes cron/webhook이 여러 레포를 읽고 중앙 wiki에 PR을 여는 별도 파이프라인으로 가는 편이 맞다.
 
+### 프로젝트 → 팀 → 조직으로 통합하기
+
+지식 운영의 단위는 도구가 아니라 **scope**여야 한다. GitHub Issue/PR, Linear, Jira, Slack, Notion은 모두 surface일 뿐이고, 장기적으로 남길 단위는 `Project`, `Team`, `Organization`, `Decision`, `Requirement`, `Artifact`, `Source` 같은 중립 엔티티다.
+
+| Scope | 무엇을 남기나 | 저장 위치 | 자동화 기본값 |
+|---|---|---|---|
+| 개인 | 작업 중 메모, AI 대화 요약, 임시 판단 | 개인 vault / Hermes memory / session log | 저장은 느슨하게, 공유 전 정제 |
+| 프로젝트 | 요구사항, ADR, runbook, 코드 경로와 연결된 운영 맥락 | repo `docs/`, project wiki, Linear/Jira project | PR/티켓 종료 시 후보 추출 |
+| 팀 | 여러 프로젝트에서 반복되는 workflow, 표준, reusable playbook | team wiki / shared vault | 주간 digest + human triage |
+| 조직 | cross-project policy, 보안·권한 기준, 고객별 공통 맥락 | org knowledge hub | 승인된 요약과 링크만 통합 |
+
+프로젝트 문서는 코드와 가까워야 덜 썩고, 조직 위키는 모든 세부사항을 복붙하지 말고 **요약·링크·정책·공통 패턴**만 가져가야 한다. 즉 source of truth는 프로젝트 가까이에 두고, 조직 단위는 compiled view로 운영한다.
+
+일상 대화에서 트리거는 세 단계가 적당하다.
+
+1. **명시적 트리거**: `@Hermes 이거 decision으로 남겨줘`, `이 스레드 요구사항으로 정리해줘`처럼 사람이 호출한다.
+2. **후보 제안**: "이 방향으로 가자", "고객 요구사항 변경", "다음부터 이렇게 하자" 같은 표현을 감지하면 agent가 저장 후보를 제안한다. 바로 저장하지 않는다.
+3. **주기적 수확**: 매주 Slack thread, 회의록, 닫힌 issue/Linear ticket, merged PR, AI worklog에서 decision/requirement 후보를 모아 triage PR을 만든다.
+
+이렇게 하면 GitHub 중심으로 과적합하지 않는다. GitHub PR은 좋은 실행 로그지만, Linear ticket도 같은 `Task` 엔티티의 provider가 될 수 있고, 회의록이나 고객 문서도 같은 `Source` 엔티티로 들어온다.
+
+### 검색하기 좋은 지식으로 남기는 법
+
+통합된 지식은 "문서가 어딘가에 있다"만으로는 부족하다. 나중에 사람과 agent가 찾기 쉬우려면 **문서 자체가 검색 인덱스처럼 작성**되어야 한다.
+
+최소 frontmatter는 이렇게 잡는 편이 좋다.
+
+```yaml
+---
+title: "프로젝트별 지식과 조직 위키를 하이브리드로 운영한다"
+type: decision              # decision | requirement | pattern | runbook | project-map | customer-context
+scope: project              # personal | project | team | org
+project: syshin0116.dev
+team: content-platform
+status: accepted            # proposed | accepted | superseded | deprecated
+visibility: internal        # public | internal | confidential | restricted
+tags: [ai-agent, knowledge-management, hermes]
+owners: [syshin0116]
+sources:
+  - slack:...
+  - pr:...
+  - linear:...
+related:
+  - adr-2026-05-18-001
+  - llm-wiki
+updated: 2026-05-18
+review_after: 2026-08-18
+---
+```
+
+검색 UX는 네 겹으로 나눈다.
+
+| 검색 방식 | 잘 찾는 것 | 필요한 설계 |
+|---|---|---|
+| 전체 텍스트 / BM25 | 정확한 용어, 에러 메시지, API 이름 | 제목·별칭·키워드를 문서 안에 명시 |
+| 벡터 검색 | 표현이 다른 유사 질문 | 좋은 summary, chunk 경계, embedding |
+| 메타데이터 필터 | 프로젝트/팀/권한/상태별 제한 | `project`, `team`, `visibility`, `status` 필드 |
+| 그래프 / wikilink | 결정-요구사항-코드-고객 문서 연결 | `related`, backlinks, ADR 링크 |
+
+그래서 좋은 위키 페이지는 글처럼만 쓰면 안 된다. 첫 문단에는 정의와 결론을 쓰고, `aliases`, `summary`, `tags`, `sources`, `related`를 채워야 한다. Dataquest의 hybrid search 글이 말하듯 metadata는 JSON blob이 아니라 atomic field로 나눠야 필터링이 된다. Azure AI Search의 document-level access control도 같은 원리다. ingestion 때 문서의 ACL/그룹 정보를 같이 넣어야 query 때 결과를 security trimming할 수 있다.
+
+### 권한 관리는 검색보다 먼저 설계해야 한다
+
+조직 지식베이스에서 가장 위험한 실패는 "검색이 안 됨"보다 **보면 안 되는 문서가 검색됨**이다. 특히 고객 문서, 계약 조건, 보안 이슈, 인사 관련 결정, 비공개 레포명은 요약본에 섞여 나오기 쉽다.
+
+기본 원칙은 다섯 가지다.
+
+1. **source ACL을 보존한다**: Slack private channel, 고객 폴더, repo 권한, Notion page 권한을 ingest 시점에 metadata로 복사한다.
+2. **권한 없는 문서는 retrieval 전에 제외한다**: LLM에게 보여준 뒤 "말하지 마"가 아니라, 검색 결과에서 애초에 빼야 한다.
+3. **요약본은 원본보다 더 공개적이면 안 된다**: confidential 고객 문서를 요약한 wiki page도 최소 confidential이다.
+4. **공개 블로그와 내부 위키를 분리한다**: 이 블로그처럼 공개 `content/`와 내부 `.wiki-cache/`, inbox, ledger를 분리해야 한다.
+5. **승격에는 review gate를 둔다**: private source에서 public artifact로 나가는 순간은 자동화하지 말고 사람이 승인한다.
+
+| 데이터 종류 | 권한 기본값 | 공개 가능성 |
+|---|---|---|
+| 공개 문서, 공개 GitHub 이슈 | public | 바로 인용 가능 |
+| 사내 회의록, 내부 PR | internal | 요약만 내부 공유 |
+| 고객 문서, 계약·가격·보안 논의 | confidential | 고객명/수치 제거 후 별도 승인 |
+| 개인 메모, DM, 인사 관련 대화 | restricted | 원칙적으로 조직 위키 승격 금지 |
+
+따라서 agent pipeline도 `collect → classify sensitivity → redact → draft → review → publish` 순서가 되어야 한다. 검색 아키텍처보다 권한 아키텍처가 앞선다.
+
+### Second Brain 개념은 도움이 되지만 그대로 쓰면 부족하다
+
+Second Brain/PARA는 이 문제를 설명하는 데 꽤 도움이 된다. Tiago Forte의 PARA는 정보를 `Projects`, `Areas`, `Resources`, `Archives`로 나누고, 주제보다 **actionability** 중심으로 정리하라고 말한다. 조직 지식에도 이 원칙은 유효하다.
+
+- `Projects`: 진행 중인 제품/고객/기능 단위 지식
+- `Areas`: 보안, 데이터, 플랫폼, 채용처럼 계속 유지되는 책임 영역
+- `Resources`: 기술 조사, 경쟁사 분석, reusable pattern
+- `Archives`: 종료 프로젝트, superseded ADR, 과거 고객 맥락
+
+하지만 개인용 Second Brain을 조직에 그대로 복사하면 세 가지가 빠진다.
+
+1. **권한**: 개인 노트는 내가 다 볼 수 있지만, 조직 지식은 사람마다 볼 수 있는 범위가 다르다.
+2. **책임자**: 개인 지식은 owner가 하나지만, 조직 지식은 page owner와 review cycle이 필요하다.
+3. **승격 기준**: 개인 메모가 곧 지식이 될 수 있지만, 조직에서는 raw 대화가 곧 canonical knowledge가 되면 안 된다.
+
+그래서 조직형 Second Brain은 PARA 위에 `permission`, `owner`, `source`, `review_after`, `status`를 더한 형태가 되어야 한다. 개인의 second brain은 **capture와 연결**을 돕고, 조직의 second brain은 **검색·권한·감사 가능성**까지 책임져야 한다.
+
+### 구요한님의 CMDS / CommandSpace에서 참고할 만한 점
+
+구요한님의 [cmds-vault](https://github.com/prodbartist/cmds-vault)는 이 주제에 꽤 직접적인 참고 사례다. CMDS는 Obsidian 기반 PKM 시스템이고, `Connect → Merge → Develop → Share`라는 지식 생애주기를 명확히 둔다. starter vault에는 `WELCOME.md`, `CMDS.md`, `CLAUDE.md`, `AGENTS.md`, `🏛 CMDS Guide`, `🏛 CMDS Head Quarter` 같은 시스템 파일이 있고, Claude/Codex 같은 agent가 어떤 순서로 무엇을 읽어야 하는지도 precedence로 정해둔다.
+
+내가 참고하고 싶은 포인트는 네 가지다.
+
+1. **프로세스 이름이 있다**: capture를 그냥 "정리"라고 부르지 않고 Connect, Merge, Develop, Share로 나눈다. 조직 지식도 `Capture → Triage → Synthesize → Publish`처럼 명령어화하는 게 좋다.
+2. **시스템 파일과 사용자 노트를 구분한다**: CMDS는 system file author와 user note author를 분리한다. 조직 위키에서도 platform policy와 프로젝트별 지식을 분리해야 한다.
+3. **Core Context는 복붙하지 않고 pointer로 둔다**: `cmds-llm-wiki`는 `Core Context.md`가 `BRAIN.md`, Head Quarter, CMDS Guide를 가리키게 하여 중복과 drift를 줄인다. 팀 위키도 프로젝트별 context를 중앙에 복붙하지 말고 pointer/index로 연결하는 편이 낫다.
+4. **LLM Wiki를 vault 안에 두되 졸업 경로를 둔다**: `cmds-llm-wiki`는 `10. Raw Sources/`를 원천으로 두고, `LLMWiki/index.md`, `log.md`, `Wiki/`, `Queries/`를 만든다. 소스가 커지면 standalone wiki로 옮기는 graduation path도 있다.
+
+특히 `Connect → Merge → Develop → Share`는 Hermes 운영과 잘 맞는다.
+
+| CMDS | Hermes 조직 지식 운영으로 바꾸면 |
+|---|---|
+| Connect | Slack, 회의록, 고객 문서, PR에서 raw signal 수집 |
+| Merge | 중복 제거, 프로젝트/팀/조직 scope 분류, 관련 문서 연결 |
+| Develop | ADR, requirement, runbook, wiki page로 정제 |
+| Share | 블로그, 팀 digest, 고객 보고서, PR/Linear update로 배포 |
+
+즉 Second Brain은 철학을 주고, CMDS는 프로세스 언어를 주고, LLM Wiki는 agent가 유지할 수 있는 Markdown 구현 방식을 준다. Hermes는 이 셋을 실제 작업 표면(Slack, GitHub, Linear, 로컬 레포, cron)과 연결하는 orchestration layer가 된다.
+
 ### Wiki로 들어가야 지식이 된다
 
 프로젝트가 굴러가며 생긴 decision은 PR 안에만 있으면 금방 사라진다. 진짜 지식으로 남기려면 세 층으로 저장하는 게 좋다.
@@ -508,6 +629,12 @@ AI 에이전트를 잘 쓰는 핵심은 "하나의 만능 모델"을 찾는 것�
 - [Architectural Decision Records](https://adr.github.io/)
 - [Claude Code GitHub Actions](https://code.claude.com/docs/en/github-actions)
 - [OpenAI Cookbook - Build Code Review with the Codex SDK](https://developers.openai.com/cookbook/examples/codex/build_code_review_with_codex_sdk)
+- [Karpathy - LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+- [구요한 / Yohan Koo - CMDS Vault](https://github.com/prodbartist/cmds-vault)
+- [cmds-vault - cmds-llm-wiki skill](https://github.com/prodbartist/cmds-vault/blob/main/90.%20Settings/91.%20Skills/cmds-llm-wiki/SKILL.md)
+- [Forte Labs - PARA Method](https://fortelabs.com/blog/para/)
+- [Azure AI Search - Document-Level Access Control](https://learn.microsoft.com/en-us/azure/search/search-document-level-access-overview)
+- [Dataquest - Metadata Filtering and Hybrid Search](https://www.dataquest.io/blog/metadata-filtering-and-hybrid-search-for-vector-databases/)
 - [OpenAI Codex GitHub Repository](https://github.com/openai/codex)
 - [Claude Code Overview](https://docs.anthropic.com/en/docs/claude-code/overview)
 - [Claude Code CLI Reference](https://docs.anthropic.com/en/docs/claude-code/cli-reference)

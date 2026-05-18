@@ -21,8 +21,11 @@ sources:
   - https://adr.github.io/
   - https://code.claude.com/docs/en/github-actions
   - https://developers.openai.com/cookbook/examples/codex/build_code_review_with_codex_sdk
+  - https://github.com/prodbartist/cmds-vault
+  - https://fortelabs.com/blog/para/
+  - https://learn.microsoft.com/en-us/azure/search/search-document-level-access-overview
 created: 2026-05-17
-updated: 2026-05-17
+updated: 2026-05-18
 author: wiki-curator
 draft: false
 ---
@@ -49,6 +52,36 @@ PR comments, issue comments, commits, Slack threads, meeting notes, and local ag
 | Wiki | Preserve current reusable knowledge | pattern, concept, playbook, project map |
 
 A good default is to run this outside any single product repository. Hermes cron or webhook can watch multiple repositories, collect candidate signals, and open a PR against the central wiki repo. Individual PR comments can still be useful input, but they should not be the primary workflow.
+
+## Scope ladder and search/permission rules
+
+Team knowledge should move through a scope ladder rather than through a tool-specific hierarchy.
+
+| Scope | Canonical artifact | Aggregation rule |
+|---|---|---|
+| Personal | scratch notes, AI work logs | promote only after review |
+| Project | project context, ADR, requirement, runbook | source of truth stays near code/work |
+| Team | playbook, reusable workflow, team decision index | summarize and link to projects |
+| Organization | policy, cross-project pattern, customer-level map | publish only reviewed syntheses |
+
+Searchability requires structured metadata in addition to prose. Durable pages should include `type`, `scope`, `project`, `team`, `status`, `visibility`, `owners`, `sources`, `related`, `updated`, and `review_after` fields. Hybrid retrieval should combine keyword/BM25 for exact identifiers, vector search for paraphrases, metadata filters for scope/status/project, and wikilinks for decision-requirement-code relationships.
+
+Permission is not a presentation concern. Source ACLs from Slack, documents, repositories, or tickets must be carried into metadata at ingest time and enforced before retrieval. A synthesized page cannot be more public than its most restrictive source unless a human explicitly redacts and approves it. Public blog content, internal wiki state, confidential customer material, and restricted personal/HR notes should remain separate collections.
+
+## Second Brain and CMDS mapping
+
+Second Brain/PARA is useful because it organizes information around actionability: active projects, ongoing areas, reusable resources, and archives. For organizations, PARA needs additional fields for permissions, owners, source provenance, review cycle, and promotion status.
+
+구요한/Yohan Koo's CMDS vault offers a stronger process language for agentic knowledge operations. The `Connect → Merge → Develop → Share` lifecycle maps naturally to Hermes workflows:
+
+| CMDS stage | Agentic knowledge operation |
+|---|---|
+| Connect | collect raw signals from Slack, meetings, customer docs, PRs, tickets, and agent sessions |
+| Merge | dedupe, classify scope, link related project/team/org artifacts |
+| Develop | promote candidates into ADRs, requirements, runbooks, wiki pages, or project briefs |
+| Share | publish reviewed outputs as blog posts, team digests, customer reports, PR updates, or wiki indexes |
+
+The `cmds-llm-wiki` example is especially relevant: raw sources stay in `10. Raw Sources/`, the LLM-maintained wiki has `index.md`, `log.md`, `Wiki/`, and `Queries/`, and `Core Context.md` acts as a pointer to canonical context files instead of duplicating them. For team and organization knowledge, this pointer-first design reduces drift between project-local facts and central summaries.
 
 ## Operating loop
 
@@ -111,6 +144,7 @@ Without context and rejected alternatives, the wiki becomes a conclusion dump. F
 - [[github-actions-gcp-cicd]] - deterministic CI/CD remains the verification layer; agentic workflows should complement it, not replace it.
 - [[vibe-coding]] - agentic development is safer when vibe coding is constrained by decision gates, tests, and ADRs.
 - [[second-brain-rag]] - decision-aware wiki pages make retrieval more useful because they encode rationale, not just facts.
+- [[llm-wiki]] - CMDS-style raw/source separation, index/log discipline, and query filing are useful implementation details for this workflow.
 
 ## Footnotes
 
@@ -120,3 +154,6 @@ Without context and rejected alternatives, the wiki becomes a conclusion dump. F
 [^ms-adr]: [Microsoft, "Maintain an architecture decision record"](https://learn.microsoft.com/en-us/azure/well-architected/architect-role/architecture-decision-record)
 [^codex-review]: [OpenAI Cookbook, "Build Code Review with the Codex SDK"](https://developers.openai.com/cookbook/examples/codex/build_code_review_with_codex_sdk)
 [^claude-actions]: [Claude Code GitHub Actions](https://code.claude.com/docs/en/github-actions)
+[^cmds]: [prodbartist/cmds-vault](https://github.com/prodbartist/cmds-vault)
+[^para]: [Forte Labs, "The PARA Method"](https://fortelabs.com/blog/para/)
+[^acl]: [Azure AI Search, "Document-Level Access Control"](https://learn.microsoft.com/en-us/azure/search/search-document-level-access-overview)

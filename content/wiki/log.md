@@ -15,3 +15,7 @@
 - Added: scripts/verify-wiki.py, .github/workflows/wiki-verify.yml
 - Checks: required wiki frontmatter, wikilink resolution, index coverage, forbidden private/internal terms
 - Updated: removed private/internal example references from public blog/wiki content
+## [2026-05-18 08:55 KST] update | Search, permissions, Second Brain, and CMDS references added
+- Updated: content/Tools/2026-05-17-Hermes-Agent-사용-사례와-Claude-Codex-조합.md
+- Updated: content/wiki/agentic-decision-workflow.md, content/wiki/llm-wiki.md, content/wiki/index.md
+- Research sources: prodbartist/cmds-vault, cmds-llm-wiki skill, Forte Labs PARA, Azure AI Search document-level ACL, Dataquest metadata/hybrid search

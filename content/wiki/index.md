@@ -4,7 +4,7 @@
 
 | Page | Summary | Type | Tags | Sources | Updated |
 |------|---------|------|------|---------|---------|
-| [[agentic-decision-workflow]] | Agentic decision workflow는 에이전트가 GitHub issue, 리서치, ADR, PR, 리뷰 댓글 반영을 자동화하되 사람은 되돌리기 어려운 선택과 trade-off 승인에 집중하는 운영 패턴이다. 실행 기록은 issue/PR에, 결정의 이유는 append-only ADR에, 현재 팀 지식은 mutable wiki에 남기는 3층 구조가 핵심이다. | pattern | ai, agent, github, adr, decision-making, knowledge-base, automation, workflow, human-in-the-loop | 8 | 2026-05-17 |
+| [[agentic-decision-workflow]] | Agentic decision workflow는 에이전트가 GitHub issue, 리서치, ADR, PR, 리뷰 댓글 반영을 자동화하되 사람은 되돌리기 어려운 선택과 trade-off 승인에 집중하는 운영 패턴이다. 프로젝트→팀→조직으로 지식을 승격할 때 검색 가능한 metadata, source ACL 기반 권한, Second Brain/PARA와 CMDS의 process language를 함께 써야 한다. | pattern | ai, agent, github, adr, decision-making, knowledge-base, automation, workflow, human-in-the-loop | 11 | 2026-05-18 |
 | [[ai-기초개념]] | AI 접근 방식은 규칙 기반 기호주의(Symbolism)와 뉴럴 네트워크 기반 연결주의(Connectionism)로 나뉜다. 기호주의는 1980년대 쇠락했고, 연결주의(퍼셉트론 → 딥러닝)가 현재 주류다. 데이터 분석 프로세스 표준인 CRISP-DM도 함께 정리한다. | concept | ai, machine-learning, deep-learning, symbolism, connectionism, neural-network, crisp-dm, data-science | 2 | 2026-04-26 |
 | [[blog-seo]] | 블로그를 검색 엔진에 노출시키기 위한 단계별 가이드다. Google Search Console 등록(HTML 파일/메타 태그/Google Analytics 세 가지 소유권 확인 방법), sitemap 제출, robots.txt 설정을 다루며, Quartz 기반 블로그에서의 구체적인 설정 방법을 포함한다. | reference | seo, google-search-console, sitemap, blog, quartz, frontend, search | 1 | 2026-04-26 |
 | [[cli-ux-design]] | CLI 도구의 사용성은 기능 추가가 아니라 출력 계약과 동작 규칙의 설계 문제다. TTY 감지로 사람과 기계의 출력 기본값 충돌을 해결하고, 출력 스키마를 API 계약처럼 안정적으로 유지하고, 명령의 의미에 따라 exit code를 분리하면 인간과 에이전트 모두가 예측 가능하게 사용할 수 있는 도구가 된다. | pattern | cli, rust, backend, agent, ux, api-design, unix, pattern | 1 | 2026-04-26 |
@@ -15,7 +15,7 @@
 | [[github-actions-gcp-cicd]] | GitHub Actions로 코드 push 시 Docker 이미지를 빌드해 Docker Hub에 올리고, SSH로 GCP Compute Engine에 접속해 컨테이너를 재배포하는 CI/CD 파이프라인 패턴이다. GitHub Secrets로 민감 정보를 관리하며, 비용 없이 소규모 프로젝트에 적용 가능하다. | pattern | github-actions, cicd, gcp, docker, devops, automation, cloud, backend | 2 | 2026-04-26 |
 | [[langflow]] | LangFlow는 드래그 앤 드롭으로 AI 워크플로우를 구성하는 MIT 라이선스 오픈소스 도구다(68.5k GitHub stars). LangChain 기반으로 RAG, 에이전트, 멀티에이전트 시스템을 시각적으로 설계하고 API로 배포할 수 있으나, 실제로는 low-code 수준의 학습 곡선이 존재한다. | tool | ai, llm, workflow, no-code, low-code, open-source, python, rag, agent, pipeline | 1 | 2026-04-26 |
 | [[llm-text-to-sql]] | LLM 기반 Text-to-SQL 시스템을 프로덕션에서 안정적으로 운영하려면 프롬프트 튜닝보다 DB 스키마 품질이 결정적 요소다. 동적 스키마 조회, COMMENT 기반 zero-shot, AST 검증 기반 보안 레이어, 에이전트 위임 방식 self-correction을 조합하면 OLTP 수준 질의에서 높은 정확도를 달성할 수 있다. | pattern | text-to-sql, llm, ai, agent, postgresql, prompt-engineering, evaluation, security | 1 | 2026-04-26 |
-| [[llm-wiki]] | LLM Wiki는 원문을 매번 검색해 답하는 RAG 대신, LLM이 raw 소스를 읽어 지속적으로 갱신되는 Markdown 위키를 컴파일·유지하는 패턴이다. 이 블로그는 이미 원본 글(content/AI, Tools 등)과 정제 레이어(content/wiki)를 분리하고 있으므로, raw→wiki ingest, index/log, lint, wikilink 검증, 자동 PR 루틴을 붙이면 개인 블로그를 누적 지식베이스로 발전시킬 수 있다. | pattern | llm, ai, knowledge-base, pkm, markdown, agent, rag, obsidian, automation | 4 | 2026-05-17 |
+| [[llm-wiki]] | LLM Wiki는 원문을 매번 검색해 답하는 RAG 대신, LLM이 raw 소스를 읽어 지속적으로 갱신되는 Markdown 위키를 컴파일·유지하는 패턴이다. CMDS/cmds-llm-wiki 사례처럼 raw source, index/log, Core Context pointer, Queries를 분리하면 프로젝트 지식을 중앙 위키와 연결하면서도 drift를 줄일 수 있다. | pattern | llm, ai, knowledge-base, pkm, markdown, agent, rag, obsidian, automation | 6 | 2026-05-18 |
 | [[mac-dev-setup]] | 새 맥북을 받을 때 설치할 필수 도구 목록이다. Homebrew를 기반으로 Raycast, uv(Python), fnm(Node.js), Bun, Docker Desktop을 설치하고, App Store → Homebrew → 공식 웹사이트 순서로 설치를 진행한다. | reference | mac, setup, homebrew, devtools, productivity, python, nodejs, docker | 1 | 2026-04-26 |
 | [[misen]] | misen(mise en place)은 AI 워크플로우의 반복 작업을 Block(dict→dict) 단일 인터페이스로 정의하고 연산자로 조합해 어떤 플랫폼에서든 재사용할 수 있게 하는 Python 라이브러리다. 조합의 결과도 Block이므로 중첩이 자유롭고(닫힘 성질), 플랫폼 어댑터가 LangGraph, MCP, FastAPI 변환을 담당한다. | tool | python, ai, llm, pipeline, workflow, open-source, library, agent, operator | 1 | 2026-04-26 |
 | [[moonlight-ai]] | Moonlight는 학술 논문 PDF에 AI를 붙여주는 크롬 확장 프로그램이다. 3줄 요약, 자동 하이라이트(기여점/방법론/결과), 드래그 설명, 스마트 인용, Scholar Deep Search(RAG 기반 관련 논문 추천) 기능을 제공하며, 한국 AI 회사 Corca가 개발했다. | tool | ai, research, paper-reading, chrome-extension, rag, llm, productivity | 1 | 2026-04-26 |
@@ -95,3 +95,8 @@
 | https://adr.github.io/ | [[agentic-decision-workflow]] |
 | https://code.claude.com/docs/en/github-actions | [[agentic-decision-workflow]] |
 | https://developers.openai.com/cookbook/examples/codex/build_code_review_with_codex_sdk | [[agentic-decision-workflow]] |
+| https://github.com/prodbartist/cmds-vault | [[agentic-decision-workflow]], [[llm-wiki]] |
+| https://github.com/prodbartist/cmds-vault/blob/main/90.%20Settings/91.%20Skills/cmds-llm-wiki/SKILL.md | [[llm-wiki]] |
+| https://fortelabs.com/blog/para/ | [[agentic-decision-workflow]] |
+| https://learn.microsoft.com/en-us/azure/search/search-document-level-access-overview | [[agentic-decision-workflow]] |
+| https://www.dataquest.io/blog/metadata-filtering-and-hybrid-search-for-vector-databases/ | [[agentic-decision-workflow]] |

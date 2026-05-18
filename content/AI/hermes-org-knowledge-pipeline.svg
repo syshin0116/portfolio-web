@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+  <title id="title">Hermes organization knowledge pipeline</title>
+  <desc id="desc">Signals from daily work are captured, triaged, promoted into ADR and LLM Wiki layers, then synthesized into project, team, and organization views.</desc>
+  <defs>
+    <style>
+      .bg{fill:#020617}.grid{stroke:#1e293b;stroke-width:1}.label{fill:#e2e8f0;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:20px;font-weight:700}.small{fill:#cbd5e1;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:14px}.tiny{fill:#94a3b8;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:12px}.box{rx:18;stroke-width:2}.source{fill:#0f172a;stroke:#38bdf8}.capture{fill:#0f172a;stroke:#34d399}.decision{fill:#0f172a;stroke:#fbbf24}.wiki{fill:#0f172a;stroke:#a78bfa}.org{fill:#0f172a;stroke:#fb7185}.arrow{stroke:#64748b;stroke-width:2.6;fill:none;marker-end:url(#arrow)}.dash{stroke-dasharray:7 6}.pill{fill:#111827;stroke:#334155;stroke-width:1}
+    </style>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" class="grid"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+  </defs>
+  <rect class="bg" width="1200" height="640"/><rect width="1200" height="640" fill="url(#grid)" opacity="0.5"/>
+  <text x="60" y="56" class="label" font-size="28">Hermes Agent 조직 지식 파이프라인</text>
+  <text x="60" y="84" class="small">Raw signal을 바로 지식으로 저장하지 않고, 후보화 → triage → ADR/Wiki → 조직 뷰로 승격한다</text>
+
+  <rect x="52" y="128" width="210" height="300" class="box source"/>
+  <text x="78" y="165" class="label">Raw Sources</text>
+  <text x="78" y="198" class="small">Slack thread</text>
+  <text x="78" y="226" class="small">회의록</text>
+  <text x="78" y="254" class="small">고객 문서</text>
+  <text x="78" y="282" class="small">PR / Issue</text>
+  <text x="78" y="310" class="small">Linear / Jira</text>
+  <text x="78" y="338" class="small">AI coding session</text>
+  <rect x="78" y="366" width="140" height="32" class="pill"/><text x="96" y="388" class="tiny">원본은 보존</text>
+
+  <path d="M262 278 C310 278 322 278 370 278" class="arrow"/>
+  <rect x="370" y="128" width="210" height="300" class="box capture"/>
+  <text x="398" y="165" class="label">Hermes Capture</text>
+  <text x="398" y="198" class="small">명시적 트리거</text>
+  <text x="398" y="226" class="small">후보 제안</text>
+  <text x="398" y="254" class="small">주간 수확</text>
+  <text x="398" y="282" class="small">source link 수집</text>
+  <text x="398" y="310" class="small">sensitivity 분류</text>
+  <rect x="398" y="366" width="150" height="32" class="pill"/><text x="415" y="388" class="tiny">바로 publish 금지</text>
+
+  <path d="M580 278 C625 278 640 278 684 278" class="arrow"/>
+  <rect x="684" y="128" width="210" height="300" class="box decision"/>
+  <text x="710" y="165" class="label">Human Triage</text>
+  <text x="710" y="198" class="small">discard</text>
+  <text x="710" y="226" class="small">task log</text>
+  <text x="710" y="254" class="small">requirement</text>
+  <text x="710" y="282" class="small">ADR draft</text>
+  <text x="710" y="310" class="small">wiki update</text>
+  <rect x="710" y="366" width="150" height="32" class="pill"/><text x="725" y="388" class="tiny">승인 지점</text>
+
+  <path d="M894 210 C935 182 956 170 1000 170" class="arrow"/>
+  <path d="M894 346 C935 376 956 390 1000 390" class="arrow"/>
+  <rect x="1000" y="110" width="150" height="120" class="box wiki"/>
+  <text x="1030" y="150" class="label">ADR</text>
+  <text x="1020" y="180" class="small">append-only</text>
+  <text x="1020" y="205" class="small">왜 결정했나?</text>
+  <rect x="1000" y="330" width="150" height="120" class="box wiki"/>
+  <text x="1022" y="370" class="label">LLM Wiki</text>
+  <text x="1020" y="400" class="small">mutable</text>
+  <text x="1020" y="425" class="small">지금 무엇인가?</text>
+
+  <path d="M1075 230 C1075 270 1075 290 1075 330" class="arrow dash"/>
+  <path d="M1075 450 C1075 510 750 520 690 520" class="arrow"/>
+  <path d="M1000 170 C835 90 590 92 474 128" class="arrow dash" opacity="0.55"/>
+
+  <rect x="316" y="488" width="460" height="96" class="box org"/>
+  <text x="348" y="525" class="label">Compiled Views</text>
+  <text x="348" y="556" class="small">Project context → Team playbook → Org policy / index</text>
+  <text x="348" y="579" class="tiny">조직 위키는 원본 복붙이 아니라 요약, 링크, 공통 패턴의 허브</text>
+
+  <path d="M474 428 C500 462 512 476 540 488" class="arrow"/>
+  <path d="M790 428 C750 462 724 478 690 488" class="arrow"/>
+</svg>

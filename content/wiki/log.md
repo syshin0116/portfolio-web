@@ -29,6 +29,12 @@
 - Updated: content/wiki/repo-intelligence-radar.md, content/wiki/repo-intelligence-radar-architecture.svg, content/wiki/index.md
 - Clarified: repo radar is a separate user-facing intelligence feed/source, not the knowledge base itself; only selected insights are promoted to knowledge when useful.
 ## [2026-05-18 13:20 KST] update | Repo intelligence radar split into source post and wiki note
-- Created: content/AI/2026-05-18-Repo-Intelligence-Radar.md
+- Created: content/AI/2026-05-18-Tech-Intelligence-Radar.md
 - Updated: content/wiki/repo-intelligence-radar.md, content/wiki/index.md
 - Clarified: the blog post is the user-facing article; the wiki page remains a linked knowledge note for reusable pattern synthesis.
+## [2026-05-18 14:05 KST] update | Technical intelligence framing, SQLite rationale, and image embeds fixed
+- Created: content/AI/2026-05-18-Tech-Intelligence-Radar.md
+- Removed: content/AI/2026-05-18-Repo-Intelligence-Radar.md
+- Added local article assets: content/AI/tech-intelligence-radar-architecture.svg, content/AI/tech-intelligence-radar-scoring.svg, content/AI/tech-intelligence-radar-digest.svg
+- Updated: content/wiki/repo-intelligence-radar.md, content/wiki/index.md
+- Clarified: this is not repo-only; it tracks papers, news, blogs, social signals, changelogs, and stale knowledge updates. Replaced confusing YAML-first schema with SQLite rationale and schema explanation.

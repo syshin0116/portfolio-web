@@ -14,7 +14,7 @@ tags:
   - trend-tracking
 summary: "Repo intelligence radar는 지식 위키 그 자체가 아니라 사용자에게 제공할 외부 정보 소스/인텔리전스 피드다. 새로 뜨는 레포와 기존 watchlist 레포의 release note, changelog, commit, issue/PR, 문서 변화를 추적해 digest와 action queue로 제공하고, 필요할 때만 검증된 insight를 지식 위키로 승격한다."
 sources:
-  - content/AI/2026-05-18-Repo-Intelligence-Radar.md
+  - content/AI/2026-05-18-Tech-Intelligence-Radar.md
   - https://docs.github.com/en/rest/repos
   - https://docs.github.com/en/rest/releases
   - https://docs.github.com/en/rest/activity
@@ -32,7 +32,7 @@ draft: false
 
 ## Key claims
 
-- Public-facing article: [Repo Intelligence Radar 글](../AI/2026-05-18-Repo-Intelligence-Radar.md)이 사용자에게 보여줄 설명 글이고, 이 위키 페이지는 그 글에서 재사용 가능한 운영 패턴만 정리하는 knowledge layer다.
+- Public-facing article: [기술 정보 레이더 글](../AI/2026-05-18-Tech-Intelligence-Radar.md)이 사용자에게 보여줄 설명 글이고, 이 위키 페이지는 그 글에서 재사용 가능한 운영 패턴만 정리하는 knowledge layer다.
 - 정보 과부하의 원인은 “새로운 레포가 너무 많다”만이 아니다. 이미 알고 있는 레포가 release, changelog, examples, benchmark, docs를 통해 계속 변하는데 그 변화를 놓치기 때문이다.
 - 그래서 watchlist는 `repo` 단위가 아니라 `repo + changelog + release + docs + community signal` 단위로 관리해야 한다.
 - GitHub star 수는 발견용 신호일 뿐이다. 실제 활용 판단에는 release cadence, changelog 품질, issue/PR 반응성, docs/example 변화, 라이선스, 내부 적용 가능성이 더 중요하다.
@@ -54,7 +54,7 @@ AI, agent, RAG, eval, inference, frontend, devtool 분야는 변화 속도가 �
 
 ## Radar architecture
 
-![Repo Intelligence Radar architecture](repo-intelligence-radar-architecture.svg)
+_시각화는 public-facing article [기술 정보 레이더 글](../AI/2026-05-18-Tech-Intelligence-Radar.md)에 포함했다._
 
 
 ## Separate source, optional knowledge promotion
@@ -200,7 +200,7 @@ next_action:
 
 점수는 정확한 예측 모델보다 “비교 가능한 언어”를 만드는 데 목적이 있다.
 
-![Repo Radar scoring model](repo-intelligence-radar-scoring.svg)
+_Scoring 시각화는 public-facing article [기술 정보 레이더 글](../AI/2026-05-18-Tech-Intelligence-Radar.md)에 포함했다._
 
 권장 가중치:
 
@@ -216,7 +216,7 @@ next_action:
 
 ## Digest rhythm
 
-![Repo Radar digest rhythm](repo-intelligence-radar-digest.svg)
+_Digest rhythm 시각화는 public-facing article [기술 정보 레이더 글](../AI/2026-05-18-Tech-Intelligence-Radar.md)에 포함했다._
 
 ### Daily alert
 

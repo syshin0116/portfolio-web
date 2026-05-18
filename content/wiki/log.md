@@ -28,3 +28,7 @@
 ## [2026-05-18 13:05 KST] update | Repo intelligence radar source/feed boundary clarified
 - Updated: content/wiki/repo-intelligence-radar.md, content/wiki/repo-intelligence-radar-architecture.svg, content/wiki/index.md
 - Clarified: repo radar is a separate user-facing intelligence feed/source, not the knowledge base itself; only selected insights are promoted to knowledge when useful.
+## [2026-05-18 13:20 KST] update | Repo intelligence radar split into source post and wiki note
+- Created: content/AI/2026-05-18-Repo-Intelligence-Radar.md
+- Updated: content/wiki/repo-intelligence-radar.md, content/wiki/index.md
+- Clarified: the blog post is the user-facing article; the wiki page remains a linked knowledge note for reusable pattern synthesis.

@@ -22,7 +22,7 @@
 | [[object-detection]] | 객체 탐지는 Region Proposal → Feature Extraction → NMS 세 단계 파이프라인으로 구성된다. R-CNN에서 시작해 Fast R-CNN, Faster R-CNN(RPN), SSD, YOLO로 발전하며 속도와 정확도를 개선했다. 성능 지표는 mAP(클래스별 AP의 평균)를 사용한다. | concept | object-detection, deep-learning, computer-vision, ai, cnn, rcnn, yolo, ssd, python | 4 | 2026-04-26 |
 | [[obsidian-notion-sync]] | Obsidian은 개인 지식 관리에, Notion은 협업에 각각 강점이 있다. 두 도구 모두 Markdown 기반이므로 'Share to Notion' 플러그인과 Notion API Integration을 사용해 Obsidian 노트를 Notion으로 자동 동기화할 수 있다. | pattern | obsidian, notion, automation, pkm, markdown, workflow, productivity | 1 | 2026-04-26 |
 | [[quartz-publishing]] | Quartz는 Obsidian 마크다운 노트를 정적 웹사이트로 변환해 GitHub Pages에 배포하는 오픈소스 SSG다. jackyzha0/quartz를 클론하고, GitHub Actions 워크플로우로 자동 배포를 설정하며, 커스텀 도메인 연결도 지원한다. | pattern | obsidian, quartz, github-pages, blog, publishing, ssg, markdown | 1 | 2026-04-26 |
-| [[repo-intelligence-radar]] | Repo intelligence radar는 지식 위키 자체가 아니라 사용자에게 줄 수 있는 별도 외부 정보 소스/인텔리전스 피드다. 새 레포와 watchlist 레포의 release note, changelog, docs/examples, issue/PR 변화를 추적해 digest와 action queue로 제공하고, 반복·검증·적용 가치가 생긴 항목만 필요 시 knowledge base로 승격한다. | pattern | github, open-source, changelog, research, automation, monitoring, pkm, workflow, ai, trend-tracking | 9 | 2026-05-18 |
+| [[repo-intelligence-radar]] | Repo intelligence radar는 지식 위키 자체가 아니라 사용자에게 줄 수 있는 별도 외부 정보 소스/인텔리전스 피드다. Public-facing article [[2026-05-18-Repo-Intelligence-Radar]]와 연결되며, 새 레포와 watchlist 레포의 release note, changelog, docs/examples, issue/PR 변화를 digest와 action queue로 제공하고, 필요한 항목만 knowledge base로 승격한다. | pattern | github, open-source, changelog, research, automation, monitoring, pkm, workflow, ai, trend-tracking | 10 | 2026-05-18 |
 | [[second-brain-rag]] | Second Brain(개인 지식 데이터베이스)에 RAG를 적용하면 컨텍스트 기반 정보 검색과 AI 응답 품질이 동시에 향상된다. 지식이 충분히 축적되면 개인 경험을 가진 Multi-Agent 구현도 가능하다는 아이디어다. | concept | second-brain, rag, llm, pkm, ai, agent, retrieval | 1 | 2026-05-17 |
 | [[sql-relational-db]] | 관계형 DB는 1970년 Edgar Codd가 제안한 테이블 기반 데이터 모델로 현재 가장 널리 사용된다. 계층형 DB와 달리 복잡한 관계를 지원하며 데이터 독립성을 보장한다. MySQL 설치 및 기본 사용법도 포함한다. | concept | sql, database, relational-db, mysql, data, backend, data-science | 1 | 2026-04-26 |
 | [[static-site-generators]] | GitHub Pages 배포용 SSG 중 Jekyll(Ruby), Hugo(Go), Hexo(Node.js), Gatsby(React)를 비교한 가이드다. Jekyll은 GitHub Pages 기본 지원으로 초보자에 적합하고, Hugo는 빌드 속도가 가장 빠르며 대규모에 적합하다. Hyde 테마 기반 Jekyll 포트폴리오 블로그 설정 방법도 포함한다. | reference | ssg, blog, jekyll, hugo, gatsby, frontend, github-pages, comparison | 4 | 2026-04-26 |
@@ -38,6 +38,7 @@
 
 | Source | Wiki pages |
 |--------|------------|
+| content/AI/2026-05-18-Repo-Intelligence-Radar.md | [[repo-intelligence-radar]] |
 | content/AI/2026-04-04-블로그-검색-실험-1-실험설계.md | [[블로그-검색-실험]] |
 | content/AI/2026-04-19-LLM-Text-to-SQL-실전-가이드.md | [[llm-text-to-sql]] |
 | content/Projects/Clidex/03-Search-Quality-Hardening.md | [[clidex]] |

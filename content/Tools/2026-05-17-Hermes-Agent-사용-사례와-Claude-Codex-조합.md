@@ -214,6 +214,10 @@ Hermes Agent (GPT-5.5 또는 Codex provider)
 
 중요한 점은 Hermes가 "또 하나의 코딩 모델"이 아니라는 것이다. Hermes가 Codex provider로 떠 있으면 답변을 만드는 두뇌는 GPT-5.5/Codex지만, 기억·도구·메신저·스케줄러·PR 흐름은 Hermes가 잡고 있다.
 
+![[hermes-orchestration-layer.svg]]
+
+> Codex나 Claude는 중요한 하위 실행기/리뷰어가 될 수 있지만, Slack 입구부터 memory, skill, tool routing, 검증, PR 생성까지 묶는 레이어는 Hermes다.
+
 ### 1단계. Hermes가 요구사항을 정리한다
 
 사용자는 Slack에서 자연어로 요청한다.

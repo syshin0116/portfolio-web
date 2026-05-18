@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Search and permission architecture for organization knowledge</title>
+  <desc id="desc">Knowledge documents are indexed with text, vector, metadata, graph links, and ACL filters. Authorization is applied before retrieval results are sent to an LLM.</desc>
+  <defs>
+    <style>
+      .bg{fill:#020617}.grid{stroke:#1e293b;stroke-width:1}.title{fill:#e2e8f0;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:28px;font-weight:800}.label{fill:#e2e8f0;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:18px;font-weight:700}.small{fill:#cbd5e1;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:14px}.tiny{fill:#94a3b8;font-family:Inter,Apple SD Gothic Neo,Malgun Gothic,sans-serif;font-size:12px}.box{rx:16;stroke-width:2;fill:#0f172a}.blue{stroke:#38bdf8}.green{stroke:#34d399}.violet{stroke:#a78bfa}.amber{stroke:#fbbf24}.rose{stroke:#fb7185}.slate{stroke:#94a3b8}.arrow{stroke:#64748b;stroke-width:2.4;fill:none;marker-end:url(#arrow)}.danger{stroke:#fb7185;stroke-dasharray:8 6}.chip{fill:#111827;stroke:#334155;stroke-width:1;rx:12}.acl{fill:#1f1020;stroke:#fb7185;stroke-width:1.5;rx:12}
+    </style>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" class="grid"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+  </defs>
+  <rect class="bg" width="1200" height="680"/><rect width="1200" height="680" fill="url(#grid)" opacity="0.5"/>
+  <text x="60" y="58" class="title">검색 가능한 조직 Second Brain: 인덱스보다 권한이 먼저다</text>
+  <text x="60" y="88" class="small">LLM에게 보여준 뒤 숨기는 것이 아니라, retrieval 전에 ACL로 결과를 잘라낸다</text>
+
+  <rect x="58" y="140" width="220" height="350" class="box blue"/>
+  <text x="86" y="176" class="label">Knowledge Pages</text>
+  <rect x="86" y="205" width="164" height="34" class="chip"/><text x="103" y="227" class="small">title / aliases</text>
+  <rect x="86" y="252" width="164" height="34" class="chip"/><text x="103" y="274" class="small">summary / body</text>
+  <rect x="86" y="299" width="164" height="34" class="chip"/><text x="103" y="321" class="small">tags / type</text>
+  <rect x="86" y="346" width="164" height="34" class="chip"/><text x="103" y="368" class="small">sources / links</text>
+  <rect x="86" y="393" width="164" height="34" class="acl"/><text x="103" y="415" class="small">visibility / ACL</text>
+  <text x="86" y="458" class="tiny">요약본은 원본보다 더 공개적이면 안 됨</text>
+
+  <path d="M278 315 C326 315 338 315 386 315" class="arrow"/>
+  <rect x="386" y="116" width="250" height="398" class="box green"/>
+  <text x="420" y="154" class="label">Index Builder</text>
+  <rect x="420" y="186" width="182" height="42" class="chip"/><text x="438" y="212" class="small">BM25 / full-text</text>
+  <rect x="420" y="246" width="182" height="42" class="chip"/><text x="438" y="272" class="small">Vector embedding</text>
+  <rect x="420" y="306" width="182" height="42" class="chip"/><text x="438" y="332" class="small">Metadata filters</text>
+  <rect x="420" y="366" width="182" height="42" class="chip"/><text x="438" y="392" class="small">Wikilink graph</text>
+  <rect x="420" y="426" width="182" height="42" class="acl"/><text x="438" y="452" class="small">ACL snapshot</text>
+
+  <path d="M636 315 C690 315 700 315 748 315" class="arrow"/>
+  <rect x="748" y="116" width="190" height="398" class="box rose"/>
+  <text x="780" y="154" class="label">Query Gate</text>
+  <text x="778" y="194" class="small">1. caller identity</text>
+  <text x="778" y="226" class="small">2. team/group</text>
+  <text x="778" y="258" class="small">3. project scope</text>
+  <text x="778" y="290" class="small">4. source ACL</text>
+  <text x="778" y="322" class="small">5. sensitivity</text>
+  <path d="M780 360 L906 360" class="danger"/>
+  <text x="778" y="396" class="small">권한 없는 결과는</text>
+  <text x="778" y="422" class="small">여기서 제거</text>
+  <text x="778" y="466" class="tiny">security trimming before LLM</text>
+
+  <path d="M938 315 C990 315 1000 315 1048 315" class="arrow"/>
+  <rect x="1048" y="186" width="106" height="258" class="box violet"/>
+  <text x="1075" y="226" class="label">LLM</text>
+  <text x="1070" y="265" class="small">answer</text>
+  <text x="1070" y="292" class="small">with</text>
+  <text x="1070" y="319" class="small">citations</text>
+  <text x="1070" y="365" class="tiny">only authorized</text>
+  <text x="1070" y="385" class="tiny">documents enter</text>
+  <text x="1070" y="405" class="tiny">context</text>
+
+  <rect x="110" y="560" width="980" height="62" class="box amber"/>
+  <text x="140" y="594" class="label">Design rule</text>
+  <text x="280" y="594" class="small">검색 품질은 BM25+vector+metadata+graph로 올리고, 정보 유출은 source ACL 보존과 query-time filtering으로 막는다.</text>
+</svg>

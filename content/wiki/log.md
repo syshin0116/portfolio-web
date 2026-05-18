@@ -19,3 +19,9 @@
 - Updated: content/Tools/2026-05-17-Hermes-Agent-사용-사례와-Claude-Codex-조합.md
 - Updated: content/wiki/agentic-decision-workflow.md, content/wiki/llm-wiki.md, content/wiki/index.md
 - Research sources: prodbartist/cmds-vault, cmds-llm-wiki skill, Forte Labs PARA, Azure AI Search document-level ACL, Dataquest metadata/hybrid search
+## [2026-05-18 11:24 KST] ingest | Repo intelligence radar → 1 new page, index rebuilt manually
+- Created: content/wiki/repo-intelligence-radar.md
+- Updated: content/wiki/index.md
+- Focus: watchlist에 repo뿐 아니라 changelog/release/docs 변화를 포함하고, GeekNews/GitHub Trending/HN/arXiv/Hugging Face Papers/social signals를 action queue로 압축하는 workflow 시각화
+- Added SVG assets: repo-intelligence-radar-architecture.svg, repo-intelligence-radar-scoring.svg, repo-intelligence-radar-digest.svg
+- Research sources: GitHub REST API repos/releases/activity, GitHub Trending, GeekNews, Hacker News API/Algolia, arXiv API, Hugging Face Papers

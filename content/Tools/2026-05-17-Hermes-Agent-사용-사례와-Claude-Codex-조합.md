@@ -324,18 +324,23 @@ Claude, Codex, 다른 모델을 "티키타카"하게 만드는 핵심은 모델�
 
 즉 사람은 "어떤 안을 택할지"만 결정하고, agent는 그 결정을 실행 가능한 문서와 PR로 바꾼다.
 
-### 댓글이 달렸을 때의 루프
+### PR comment는 트리거일 뿐, 지식 저장소는 아니다
 
-PR이나 issue에 사람이 comment를 달면 Hermes가 다음 순서로 처리하는 구조가 좋다.
+PR이나 issue comment는 좋은 communication 수단이다. 하지만 모든 레포에서 생긴 decision과 insight를 장기 자산으로 쌓고 싶다면, PR comment를 지식의 source of truth로 두면 안 된다. 댓글은 맥락이 흩어지고, 레포마다 포맷이 다르고, merge 이후에는 다시 찾기 어렵다.
 
-1. 새 comment를 읽고 `question`, `requested-change`, `decision`, `nit`로 분류한다.
-2. `decision`이면 ADR 또는 wiki에 반영할지 판단한다.
-3. `requested-change`이면 Codex/GPT-5.5가 수정한다.
-4. 수정 diff를 Claude Opus 4.7이 리뷰한다.
-5. Hermes가 테스트와 CI를 확인한다.
-6. PR에 "반영한 것 / 반영하지 않은 것 / 사람 결정이 필요한 것"을 댓글로 남긴다.
+더 나은 구조는 **중앙 knowledge inbox**를 두는 것이다.
 
-Hermes cron이나 webhook을 쓰면 이걸 자동화할 수 있다. 예를 들어 10분마다 열려 있는 PR comment를 확인하는 cron job을 만들거나, GitHub webhook을 Hermes webhook endpoint로 보내 comment 이벤트 때만 agent run을 트리거할 수 있다. 다만 처음부터 완전 자동 merge까지 가지 않는 편이 낫다. 자동화의 목표는 merge가 아니라 **사람이 판단할 만큼 정리된 상태로 만드는 것**이다.
+| 단계 | 역할 | 저장 위치 |
+|---|---|---|
+| 1. Signal capture | PR, issue, commit, Slack, 회의 메모, 로컬 작업 로그에서 후보 이벤트 수집 | 각 레포 / Slack / Hermes session |
+| 2. Asset triage | "다시 쓸 지식인가?", "decision인가?", "단순 작업 로그인가?" 분류 | 중앙 inbox |
+| 3. Decision record | 되돌리기 어렵거나 팀 합의가 필요한 선택은 ADR로 기록 | 중앙 wiki 또는 각 레포 `docs/adr/` |
+| 4. Wiki synthesis | 여러 이벤트에서 반복되는 패턴과 현재 결론을 정제 | 중앙 wiki |
+| 5. Backlink | 원래 PR/issue/commit/Slack thread로 근거 연결 | wiki footnote / source list |
+
+이렇게 하면 PR comment는 여러 입력 중 하나가 된다. 중요한 건 comment 자체가 아니라, comment에서 나온 결정과 이유가 **ADR 또는 wiki로 승격되는 기준**이다.
+
+이 레포에는 우선 작은 검증 트리거만 붙였다. PR에서 `content/wiki/**`, `content/**/*.md`, `scripts/verify-wiki.py`, `.github/workflows/wiki-verify.yml`이 바뀌면 GitHub Actions가 `scripts/verify-wiki.py`를 실행한다. 이 검사는 wiki frontmatter, wikilink 해석, index 누락, 비공개 레포명/조직명 같은 금지어 노출을 막는다. 아직 "모든 레포 → 중앙 inbox → 자산 선별 → wiki PR" 자동화까지는 아니다. 그건 이 블로그 레포 안의 PR comment workflow가 아니라, Hermes cron/webhook이 여러 레포를 읽고 중앙 wiki에 PR을 여는 별도 파이프라인으로 가는 편이 맞다.
 
 ### Wiki로 들어가야 지식이 된다
 

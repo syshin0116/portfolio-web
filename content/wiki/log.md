@@ -25,3 +25,6 @@
 - Focus: watchlist에 repo뿐 아니라 changelog/release/docs 변화를 포함하고, GeekNews/GitHub Trending/HN/arXiv/Hugging Face Papers/social signals를 action queue로 압축하는 workflow 시각화
 - Added SVG assets: repo-intelligence-radar-architecture.svg, repo-intelligence-radar-scoring.svg, repo-intelligence-radar-digest.svg
 - Research sources: GitHub REST API repos/releases/activity, GitHub Trending, GeekNews, Hacker News API/Algolia, arXiv API, Hugging Face Papers
+## [2026-05-18 13:05 KST] update | Repo intelligence radar source/feed boundary clarified
+- Updated: content/wiki/repo-intelligence-radar.md, content/wiki/repo-intelligence-radar-architecture.svg, content/wiki/index.md
+- Clarified: repo radar is a separate user-facing intelligence feed/source, not the knowledge base itself; only selected insights are promoted to knowledge when useful.

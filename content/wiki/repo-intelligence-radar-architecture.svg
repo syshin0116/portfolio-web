@@ -44,5 +44,5 @@
   <path class="line" d="M290 352 C318 352 322 213 378 213"/><path class="line" d="M550 213 L668 195"/><path class="line" d="M550 313 L668 270"/><path class="line" d="M550 413 L668 420"/><path class="line" d="M860 420 C905 420 918 201 982 201"/>
   <path class="line" d="M1095 227 L1095 253"/><path class="line" d="M1095 227 C930 640 465 640 465 444" stroke="#64748b" opacity=".9"/>
 
-  <rect x="180" y="620" width="920" height="54" class="badge"/><text x="205" y="643" class="small">Design rule: “더 많이 보기”가 아니라, 의미 있는 변화만 골라 adopt / spike / reference / ignore로 압축한다.</text><text x="205" y="663" class="tiny">Primary signal for watchlist repos = changelog quality + release cadence + docs/examples delta</text>
+  <rect x="160" y="610" width="960" height="72" class="badge"/><text x="185" y="633" class="small">Design rule: repo radar는 지식 위키가 아니라 user-facing intelligence feed다.</text><text x="185" y="653" class="tiny">대부분의 signal은 digest에서 소비되고, 반복·검증·적용 가치가 생긴 항목만 knowledge base로 승격한다.</text><text x="185" y="671" class="tiny">Primary signal for watchlist repos = changelog quality + release cadence + docs/examples delta</text>
 </svg>

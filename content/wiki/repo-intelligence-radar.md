@@ -12,7 +12,7 @@ tags:
   - workflow
   - ai
   - trend-tracking
-summary: "Repo intelligence radar는 새로 뜨는 레포만 찾는 시스템이 아니라, 이미 watchlist에 들어온 레포의 release note, changelog, commit, issue/PR, 문서 변화를 함께 추적해 활용 후보를 선별하는 정보 운영 패턴이다. GitHub Trending, GeekNews, Hacker News, arXiv, Hugging Face Papers, Threads/LinkedIn 같은 외부 신호를 수집하되 최종 산출물은 adopt/spike/reference/ignore 의사결정으로 압축해야 한다."
+summary: "Repo intelligence radar는 지식 위키 그 자체가 아니라 사용자에게 제공할 외부 정보 소스/인텔리전스 피드다. 새로 뜨는 레포와 기존 watchlist 레포의 release note, changelog, commit, issue/PR, 문서 변화를 추적해 digest와 action queue로 제공하고, 필요할 때만 검증된 insight를 지식 위키로 승격한다."
 sources:
   - https://docs.github.com/en/rest/repos
   - https://docs.github.com/en/rest/releases
@@ -35,6 +35,7 @@ draft: false
 - 그래서 watchlist는 `repo` 단위가 아니라 `repo + changelog + release + docs + community signal` 단위로 관리해야 한다.
 - GitHub star 수는 발견용 신호일 뿐이다. 실제 활용 판단에는 release cadence, changelog 품질, issue/PR 반응성, docs/example 변화, 라이선스, 내부 적용 가능성이 더 중요하다.
 - GeekNews, GitHub Trending, Hacker News, 최신 논문, Hugging Face Papers, Threads, LinkedIn은 모두 “입구”일 뿐이다. 최종 시스템은 정보를 더 많이 보여주는 것이 아니라 `adopt / spike / reference / ignore`로 압축해야 한다.
+- Repo radar는 지식 위키와 연결되지만 같은 것이 아니다. 기본 산출물은 사용자에게 줄 수 있는 public-facing intelligence feed이고, 검증·반복·내부 적용 가치가 생긴 항목만 knowledge base로 승격한다.
 - 좋은 repo radar는 매일 모든 것을 읽게 하지 않는다. 매일은 alert, 매주는 digest, 매월은 watchlist 정리로 리듬을 나눈다.
 
 ## Problem
@@ -52,6 +53,27 @@ AI, agent, RAG, eval, inference, frontend, devtool 분야는 변화 속도가 �
 ## Radar architecture
 
 ![Repo Intelligence Radar architecture](repo-intelligence-radar-architecture.svg)
+
+
+## Separate source, optional knowledge promotion
+
+이 시스템은 최종적으로 지식 위키에 일부 내용이 들어갈 수 있지만, 출발점은 **지식 그 자체가 아니라 별도의 외부 정보 소스**다. Repo radar는 사용자에게 직접 줄 수 있는 트렌드/레포/논문/커뮤니티 인텔리전스 feed이고, 지식 위키는 그중 오래 남을 만한 것만 정제해서 보관하는 downstream layer다.
+
+| Layer | Purpose | Audience | Persistence |
+|---|---|---|---|
+| Raw signals | GitHub, changelog, GeekNews, HN, 논문, Threads/LinkedIn 링크 수집 | 시스템/수집기 | 짧게 보관, 중복 제거 |
+| Intelligence feed | “이번 주 볼 것”, “변화가 큰 레포”, “실험 후보” 제공 | 사용자/구독자 | daily/weekly digest로 발행 |
+| Action queue | spike/adopt/reference/ignore 결정 | 나 또는 팀 | 처리될 때까지 유지 |
+| Knowledge promotion | 반복적으로 중요하거나 내 프로젝트에 적용된 insight만 위키화 | 나중에 검색할 나/팀 | 장기 보관 |
+
+따라서 모든 수집 항목을 지식에 넣으면 안 된다. 대부분은 digest에서 소비되고 사라져야 한다. 지식으로 승격하는 기준은 아래처럼 좁게 잡는다.
+
+- 같은 레포/기술이 여러 주 반복해서 등장한다.
+- 실제 spike/adopt/reference 결과가 생겼다.
+- 내부 프로젝트의 설계, 도구 선택, 운영 방식에 영향을 줬다.
+- 나중에 다시 설명하거나 의사결정 근거로 써야 한다.
+- 단순 뉴스가 아니라 reusable pattern, comparison, playbook이 됐다.
+
 
 ## What to track
 

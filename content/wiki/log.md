@@ -19,3 +19,22 @@
 - Updated: content/Tools/2026-05-17-Hermes-Agent-사용-사례와-Claude-Codex-조합.md
 - Updated: content/wiki/agentic-decision-workflow.md, content/wiki/llm-wiki.md, content/wiki/index.md
 - Research sources: prodbartist/cmds-vault, cmds-llm-wiki skill, Forte Labs PARA, Azure AI Search document-level ACL, Dataquest metadata/hybrid search
+## [2026-05-18 11:24 KST] ingest | Repo intelligence radar → 1 new page, index rebuilt manually
+- Created: content/wiki/repo-intelligence-radar.md
+- Updated: content/wiki/index.md
+- Focus: watchlist에 repo뿐 아니라 changelog/release/docs 변화를 포함하고, GeekNews/GitHub Trending/HN/arXiv/Hugging Face Papers/social signals를 action queue로 압축하는 workflow 시각화
+- Added SVG assets: repo-intelligence-radar-architecture.svg, repo-intelligence-radar-scoring.svg, repo-intelligence-radar-digest.svg
+- Research sources: GitHub REST API repos/releases/activity, GitHub Trending, GeekNews, Hacker News API/Algolia, arXiv API, Hugging Face Papers
+## [2026-05-18 13:05 KST] update | Repo intelligence radar source/feed boundary clarified
+- Updated: content/wiki/repo-intelligence-radar.md, content/wiki/repo-intelligence-radar-architecture.svg, content/wiki/index.md
+- Clarified: repo radar is a separate user-facing intelligence feed/source, not the knowledge base itself; only selected insights are promoted to knowledge when useful.
+## [2026-05-18 13:20 KST] update | Repo intelligence radar split into source post and wiki note
+- Created: content/AI/2026-05-18-Tech-Intelligence-Radar.md
+- Updated: content/wiki/repo-intelligence-radar.md, content/wiki/index.md
+- Clarified: the blog post is the user-facing article; the wiki page remains a linked knowledge note for reusable pattern synthesis.
+## [2026-05-18 14:05 KST] update | Technical intelligence framing, SQLite rationale, and image embeds fixed
+- Created: content/AI/2026-05-18-Tech-Intelligence-Radar.md
+- Removed: content/AI/2026-05-18-Repo-Intelligence-Radar.md
+- Added local article assets: content/AI/tech-intelligence-radar-architecture.svg, content/AI/tech-intelligence-radar-scoring.svg, content/AI/tech-intelligence-radar-digest.svg
+- Updated: content/wiki/repo-intelligence-radar.md, content/wiki/index.md
+- Clarified: this is not repo-only; it tracks papers, news, blogs, social signals, changelogs, and stale knowledge updates. Replaced confusing YAML-first schema with SQLite rationale and schema explanation.

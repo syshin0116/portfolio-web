@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Technical Radar Digest Rhythm</title>
+  <desc id="desc">Daily snapshots and changelog diffs flow into a weekly digest, where a human chooses spike, adopt, reference, or ignore, then the action queue updates the watchlist state.</desc>
+  <defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 L0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.6"/></pattern><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#94a3b8"/></marker><style>.bg{fill:#020617}.title{font:700 28px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#e2e8f0}.sub{font:14px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#94a3b8}.lane{fill:rgba(15,23,42,.65);stroke:#334155;stroke-width:1.2;rx:18}.head{font:700 15px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#f8fafc}.small{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#cbd5e1}.tiny{font:10px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#94a3b8}.event{fill:rgba(8,51,68,.65);stroke:#22d3ee;stroke-width:1.4;rx:10}.digest{fill:rgba(76,29,149,.55);stroke:#a78bfa;stroke-width:1.4;rx:10}.human{fill:rgba(120,53,15,.45);stroke:#fbbf24;stroke-width:1.4;rx:10}.queue{fill:rgba(6,78,59,.62);stroke:#34d399;stroke-width:1.4;rx:10}.line{stroke:#94a3b8;stroke-width:2.2;fill:none;marker-end:url(#arrow)}.dash{stroke-dasharray:7 6}</style></defs>
+  <rect class="bg" width="1280" height="720"/><rect width="1280" height="720" fill="url(#grid)" opacity=".8"/>
+  <text x="50" y="58" class="title">Digest Rhythm: 매일은 짧게, 매주는 의사결정 중심으로</text><text x="50" y="84" class="sub">collector → repo DB → LLM summarizer → human decision → action queue</text>
+  <rect x="55" y="125" width="210" height="470" class="lane"/><text x="94" y="155" class="head">Collector</text>
+  <rect x="315" y="125" width="210" height="470" class="lane"/><text x="382" y="155" class="head">Repo DB</text>
+  <rect x="575" y="125" width="210" height="470" class="lane"/><text x="617" y="155" class="head">LLM Summarizer</text>
+  <rect x="835" y="125" width="210" height="470" class="lane"/><text x="895" y="155" class="head">Human</text>
+  <rect x="1095" y="125" width="135" height="470" class="lane"/><text x="1118" y="155" class="head">Queue</text>
+
+  <rect x="80" y="205" width="160" height="54" class="event"/><text x="103" y="227" class="small">daily snapshots</text><text x="111" y="247" class="tiny">stars, release, docs</text>
+  <rect x="80" y="320" width="160" height="54" class="event"/><text x="93" y="342" class="small">changelog diff</text><text x="105" y="362" class="tiny">breaking/security</text>
+
+  <rect x="340" y="260" width="160" height="70" class="event"/><text x="378" y="285" class="small">state store</text><text x="361" y="306" class="tiny">previous vs current</text>
+
+  <rect x="600" y="205" width="160" height="54" class="digest"/><text x="624" y="227" class="small">deduplicate</text><text x="624" y="247" class="tiny">repo/link/paper</text>
+  <rect x="600" y="315" width="160" height="54" class="digest"/><text x="623" y="337" class="small">summarize</text><text x="613" y="357" class="tiny">meaning/risk/action</text>
+  <rect x="600" y="425" width="160" height="54" class="digest"/><text x="618" y="447" class="small">weekly digest</text><text x="615" y="467" class="tiny">top changes only</text>
+
+  <rect x="860" y="280" width="160" height="58" class="human"/><text x="888" y="304" class="small">choose action</text><text x="877" y="324" class="tiny">adopt/spike/ref/ignore</text>
+  <rect x="1112" y="250" width="100" height="45" class="queue"/><text x="1131" y="278" class="small">Spike</text>
+  <rect x="1112" y="315" width="100" height="45" class="queue"/><text x="1131" y="343" class="small">Adopt</text>
+  <rect x="1112" y="380" width="100" height="45" class="queue"/><text x="1121" y="408" class="small">Reference</text>
+  <rect x="1112" y="445" width="100" height="45" class="queue"/><text x="1129" y="473" class="small">Ignore</text>
+
+  <path class="line" d="M240 232 L338 282"/><path class="line" d="M240 347 L338 306"/><path class="line" d="M500 294 L598 232"/><path class="line" d="M500 294 L598 342"/><path class="line" d="M680 259 L680 313"/><path class="line" d="M680 369 L680 423"/><path class="line" d="M760 452 C820 452 810 309 858 309"/><path class="line" d="M1020 309 L1110 272"/><path class="line" d="M1020 309 L1110 337"/><path class="line" d="M1020 309 L1110 402"/><path class="line" d="M1020 309 L1110 467"/>
+  <path class="line dash" d="M1162 490 C1162 650 420 650 420 332" stroke="#64748b" opacity=".9"/>
+  <rect x="110" y="620" width="1060" height="55" class="lane"/><text x="137" y="643" class="small">Daily alert: security/breaking 같은 긴급 변화만. Weekly digest: watchlist 변화 Top N + 새 후보 Top N + 이번 주 action 1~3개.</text><text x="137" y="663" class="tiny">선택 결과는 다시 watchlist status와 next_action으로 저장되어 다음 주 scoring에 반영된다.</text>
+</svg>

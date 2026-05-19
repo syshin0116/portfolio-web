@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Technical Intelligence Radar Architecture</title>
+  <desc id="desc">A four-stage pipeline that collects repository, changelog, news, paper, and social signals, normalizes them into snapshots, summarizes meaningful changes, and turns them into action decisions.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.6"/></pattern>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#94a3b8"/></marker>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <style>
+      .bg{fill:#020617}.title{font:700 28px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#e2e8f0}.subtitle{font:14px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#94a3b8}.stage{fill:#0f172a;stroke:#334155;stroke-width:1.5;rx:18}.stageTitle{font:700 16px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#f8fafc}.small{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#cbd5e1}.tiny{font:10px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#94a3b8}.source{fill:rgba(30,41,59,.68);stroke:#94a3b8;stroke-width:1.3;rx:10}.collect{fill:rgba(8,51,68,.65);stroke:#22d3ee;stroke-width:1.5;rx:10}.sense{fill:rgba(76,29,149,.56);stroke:#a78bfa;stroke-width:1.5;rx:10}.action{fill:rgba(6,78,59,.62);stroke:#34d399;stroke-width:1.5;rx:10}.risk{fill:rgba(136,19,55,.55);stroke:#fb7185;stroke-width:1.3;rx:10}.line{stroke:#94a3b8;stroke-width:2.2;fill:none;marker-end:url(#arrow)}.dash{stroke-dasharray:6 5}.badge{fill:#020617;stroke:#475569;stroke-width:1;rx:9}.num{font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#67e8f9}
+    </style>
+  </defs>
+  <rect class="bg" width="1280" height="720"/><rect width="1280" height="720" fill="url(#grid)" opacity=".8"/>
+  <circle cx="40" cy="42" r="7" fill="#34d399" filter="url(#glow)"/><text x="60" y="50" class="title">Technical Intelligence Radar</text>
+  <text x="60" y="76" class="subtitle">논문·뉴스·레포·changelog 변화를 수집하고 지식 업데이트 후보까지 압축</text>
+
+  <rect x="40" y="115" width="250" height="475" class="stage"/><text x="62" y="145" class="stageTitle">1. Signal sources</text>
+  <rect x="62" y="170" width="205" height="42" class="source"/><text x="82" y="196" class="small">GitHub watchlist</text>
+  <rect x="62" y="225" width="205" height="42" class="source"/><text x="82" y="251" class="small">Releases / changelog</text>
+  <rect x="62" y="280" width="205" height="42" class="source"/><text x="82" y="306" class="small">GitHub Trending</text>
+  <rect x="62" y="335" width="205" height="42" class="source"/><text x="82" y="361" class="small">GeekNews / HN</text>
+  <rect x="62" y="390" width="205" height="42" class="source"/><text x="82" y="416" class="small">arXiv / HF Papers</text>
+  <rect x="62" y="445" width="205" height="42" class="source"/><text x="82" y="471" class="small">Threads / LinkedIn</text>
+  <rect x="62" y="500" width="205" height="42" class="source"/><text x="82" y="526" class="small">Blogs / RSS</text>
+
+  <rect x="350" y="115" width="230" height="475" class="stage"/><text x="372" y="145" class="stageTitle">2. Collect</text>
+  <rect x="380" y="185" width="170" height="56" class="collect"/><text x="416" y="210" class="small">Fetcher</text><text x="404" y="228" class="tiny">API · RSS · links</text>
+  <rect x="380" y="285" width="170" height="56" class="collect"/><text x="404" y="310" class="small">Normalize</text><text x="395" y="328" class="tiny">repo/link/paper shape</text>
+  <rect x="380" y="385" width="170" height="56" class="collect"/><text x="397" y="410" class="small">Daily snapshot</text><text x="407" y="428" class="tiny">state over time</text>
+
+  <rect x="640" y="115" width="250" height="475" class="stage"/><text x="662" y="145" class="stageTitle">3. Sense-making</text>
+  <rect x="670" y="170" width="190" height="50" class="sense"/><text x="716" y="200" class="small">Diff state</text>
+  <rect x="670" y="245" width="190" height="50" class="sense"/><text x="703" y="275" class="small">Score signals</text>
+  <rect x="670" y="320" width="190" height="50" class="sense"/><text x="698" y="350" class="small">Cluster topics</text>
+  <rect x="670" y="395" width="190" height="50" class="sense"/><text x="685" y="425" class="small">Summarize changes</text>
+  <rect x="670" y="480" width="190" height="50" class="risk"/><text x="697" y="510" class="small">Risk flags</text>
+
+  <rect x="950" y="115" width="290" height="475" class="stage"/><text x="972" y="145" class="stageTitle">4. Action layer</text>
+  <rect x="985" y="175" width="220" height="52" class="action"/><text x="1028" y="205" class="small">Weekly digest</text>
+  <rect x="985" y="255" width="220" height="52" class="action"/><text x="1045" y="285" class="small">Spike</text>
+  <rect x="985" y="325" width="220" height="52" class="action"/><text x="1032" y="355" class="small">Adopt</text>
+  <rect x="985" y="395" width="220" height="52" class="action"/><text x="1020" y="425" class="small">Reference</text>
+  <rect x="985" y="465" width="220" height="52" class="action"/><text x="1029" y="495" class="small">Ignore / archive</text>
+
+  <path class="line" d="M290 352 C318 352 322 213 378 213"/><path class="line" d="M550 213 L668 195"/><path class="line" d="M550 313 L668 270"/><path class="line" d="M550 413 L668 420"/><path class="line" d="M860 420 C905 420 918 201 982 201"/>
+  <path class="line" d="M1095 227 L1095 253"/><path class="line" d="M1095 227 C930 640 465 640 465 444" stroke="#64748b" opacity=".9"/>
+
+  <rect x="160" y="610" width="960" height="72" class="badge"/><text x="185" y="633" class="small">Design rule: technical radar는 지식 위키가 아니라 user-facing intelligence feed다.</text><text x="185" y="653" class="tiny">대부분의 signal은 digest에서 소비되고, 반복·검증·적용 가치가 생긴 항목만 knowledge base로 승격한다.</text><text x="185" y="671" class="tiny">Signals = papers, news, repos, changelog, social mentions, and stale knowledge updates</text>
+</svg>

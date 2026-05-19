@@ -17,7 +17,7 @@ enableToc: true
 description: 레포, 논문, 뉴스, 블로그, 소셜 신호와 공모전/해커톤/설명회 같은 기회 정보를 자동으로 수집하고 계속 업데이트되는 지식으로 관리하기 위한 기술 정보 레이더 설계안.
 summary: "기술 변화가 가속화되면서 사람이 모든 레포, 논문, 뉴스, changelog와 기회성 이벤트를 직접 따라가기는 어렵다. 이 글은 GitHub, 논문, 뉴스, 블로그, 소셜 신호, 공모전/해커톤/설명회를 별도 intelligence feed로 수집하고, 변화 감지와 재평가를 통해 필요한 내용만 지식으로 승격하는 구조를 설명한다."
 published: 2026-05-18
-modified: 2026-05-19
+modified: 2026-05-20
 ---
 
 ## 문제: 정보가 많아진 게 아니라, 변화 속도가 빨라졌다
@@ -121,19 +121,36 @@ modified: 2026-05-19
 
 ## 무엇을 수집할 것인가
 
-Source별로 수집 방식과 의미가 다르다.
+Source별로 수집 방식과 의미가 다르다. 여기서 중요한 원칙은 **링크를 항상 원본 신호와 함께 저장한다**는 점이다. 요약만 남기면 나중에 왜 그렇게 판단했는지 되짚을 수 없고, 사용자가 “이건 왜 중요하다고 봤어?”라고 피드백할 때 근거를 확인하기 어렵다.
 
 | Source | 수집할 것 | 의미 |
 |---|---|---|
-| GitHub repo | stars, forks, commit, issue/PR, license, topics | 프로젝트의 현재 상태 |
-| GitHub release/changelog | release body, breaking change, migration guide, security fix | 기존 도구의 변화 방향 |
-| GitHub Trending | language/topic별 급상승 레포 | 새 후보 발견 |
-| arXiv / HF Papers | 논문 제목, abstract, authors, topic, implementation link | 새로운 아이디어와 benchmark 흐름 |
-| GeekNews / HN | 링크, 댓글 수, upvote, 토론 맥락 | 실무자 관심과 adoption signal |
-| Blogs/RSS | maintainer/company posts | roadmap, 의도, 사례 |
-| Events/Opportunities | 공모전, 해커톤, 설명회, 웨비나, 지원사업 | deadline이 있는 실행 기회와 시장 수요 신호 |
-| Threads/LinkedIn/X | 짧은 사용 후기, 논쟁, 확산 | 빠른 신호. 단, noise 큼 |
-| 내부 기록 | spike result, PR, ADR, 회고 | 내 맥락에서 검증된 지식 |
+| GitHub repo | repo URL, stars, forks, commit, issue/PR, license, topics | 프로젝트의 현재 상태 |
+| GitHub release/changelog | release/changelog URL, release body, breaking change, migration guide, security fix | 기존 도구의 변화 방향 |
+| GitHub Trending | repo URL, language/topic, star delta | 새 후보 발견 |
+| arXiv / HF Papers | paper URL, 제목, abstract, authors, topic, implementation link | 새로운 아이디어와 benchmark 흐름 |
+| GeekNews / HN | 원문 URL, discussion URL, 댓글 수, upvote, 토론 맥락 | 실무자 관심과 adoption signal |
+| Blogs/RSS | post URL, maintainer/company posts | roadmap, 의도, 사례 |
+| Events/Opportunities | event URL, deadline, organizer, eligibility, benefit | deadline이 있는 실행 기회와 시장 수요 신호 |
+| Threads/LinkedIn/X | post URL, author, 짧은 사용 후기, 논쟁, 확산 | 빠른 신호. 단, noise 큼 |
+| 내부 기록 | PR/ADR/spike note URL, 결론, 후속 액션 | 내 맥락에서 검증된 지식 |
+
+수집 데이터에는 최소한 `title`, `url`, `source`, `first_seen_at`, `last_seen_at`, `raw_excerpt`, `summary`, `why_it_matters`, `next_action`이 있어야 한다. `summary`는 최종 산출물이 아니라 피드백을 받기 위한 압축 표현이다. 그래서 digest에서는 모든 항목을 똑같이 나열하지 말고, 중요한 항목과 나머지 항목을 나눠 보여줘야 한다.
+
+```markdown
+## 중요하게 볼 것
+1. owner/repo — release에 migration guide와 breaking change가 같이 포함됨
+   - 링크: https://github.com/owner/repo/releases/tag/v1.0.0
+   - 왜 중요함: 기존 사용자는 업그레이드 리스크가 있고, 새 사용자는 API 안정화 신호로 볼 수 있음
+   - 추천: 1시간 spike
+
+## 나머지 수집 항목
+- Paper A — 새 benchmark 제안. 구현체는 아직 없음. 링크: ...
+- Blog B — maintainer roadmap 언급. 당장 액션은 없음. 링크: ...
+- Event C — 접수 마감 D-14. 관심 낮음. 링크: ...
+```
+
+이렇게 해야 사용자가 “이건 중요하지 않다”, “이 source는 계속 봐야 한다”, “이런 건 spike 후보로 올려달라”처럼 지속적으로 피드백할 수 있다. 피드백은 다음 digest의 scoring과 source 우선순위에 반영한다.
 
 GitHub REST API는 repository, release, activity/events를 가져오는 공식 endpoint를 제공한다. arXiv도 API를 통해 논문 metadata를 가져올 수 있고, Hacker News는 공식 API와 Algolia Search API가 있다. SQLite는 이런 snapshot과 diff를 저장하기 위한 작은 로컬 DB로 적합하다.
 
@@ -370,40 +387,72 @@ CREATE TABLE assessments (
 
 ---
 
-## 4주짜리 시작 로드맵
+## 시작 로드맵
 
-### Week 1: Source와 관심 범위 정의
+처음부터 4주짜리 프로젝트처럼 크게 설계하면 오히려 손이 안 간다. 이 레이더는 “완성된 시스템을 한 번에 만든다”보다 **작게 수집하고, 실제로 읽어보고, 피드백으로 필터를 고치는 방식**으로 시작하는 편이 낫다.
 
-- GitHub repo watchlist 30~100개
-- arXiv/HF Papers topic query
-- GeekNews/HN/RSS source
-- 수동으로 저장할 Threads/LinkedIn link inbox
-- 공모전/해커톤/설명회/웨비나 source와 D-day 알림 기준
-- 관심 category: agent, RAG, eval, inference, devtool, UX, data, infra 등
+### 1. 먼저 링크 inbox를 만든다
 
-### Week 2: SQLite snapshot 저장
+처음 할 일은 자동화가 아니라 저장 위치를 정하는 것이다.
 
-- `sources`, `items`, `observations` 테이블 생성
-- GitHub repo metadata와 release 수집
-- arXiv/HN/GeekNews 링크 수집
-- 공모전/해커톤/설명회 항목의 deadline, organizer, eligibility, benefit 수집
-- 중복 제거 기준 정하기: URL, repo full name, arXiv id 등
+- GitHub repo, release, changelog, paper, blog, HN/GeekNews 글, 이벤트 페이지 URL을 모두 같은 inbox에 넣는다.
+- 링크만 넣지 말고 `왜 저장했는지`를 한 줄로 적는다.
+- 처음에는 “좋은 정보”만 넣으려고 하지 않는다. 나중에 버릴 수 있어야 필터가 좋아진다.
 
-### Week 3: Change event와 assessment 추가
+예시:
 
-- release/changelog 요약
-- 논문 구현체 여부 확인
-- 뉴스/커뮤니티 언급 수집
-- 이벤트성 항목은 `apply`, `attend`, `monitor`, `ignore`로 분류
-- `change_events`, `assessments` 테이블 추가
+```yaml
+- title: "owner/repo v1.0 release"
+  url: "https://github.com/owner/repo/releases/tag/v1.0.0"
+  source: github_release
+  note: "migration guide가 생겨서 adoption risk 재평가 필요"
+  first_seen_at: 2026-05-18
+```
 
-### Week 4: Digest와 knowledge promotion 연결
+### 2. 하루에 한 번 중요한 것만 따로 뽑는다
 
-- daily alert 생성
-- weekly digest 생성
-- 기회성 이벤트는 D-7/D-3/D-1처럼 deadline 기반으로 alert에 포함
-- `promote_to_knowledge` 후보만 wiki note로 승격
-- stale/superseded 후보를 따로 표시
+수집된 링크를 전부 읽게 만들면 실패한다. 매일 볼 화면은 짧아야 한다.
+
+```markdown
+## 오늘 중요하게 볼 것
+1. owner/repo
+   - 링크: ...
+   - 이유: security fix + breaking change
+   - 추천: 기존 사용 여부 확인
+
+## 나머지 수집 항목
+- Paper A — 구현체 없음. 일단 monitor. 링크: ...
+- Blog B — roadmap 참고용. 링크: ...
+- Event C — D-21. 관심 낮음. 링크: ...
+```
+
+핵심은 “나머지”도 완전히 숨기지 않는 것이다. 그래야 사용자가 중요도 판단을 고쳐줄 수 있다. 계속 피드백을 받으면 어떤 source를 더 믿을지, 어떤 키워드를 낮출지, 어떤 항목을 spike 후보로 올릴지 점점 좋아진다.
+
+### 3. SQLite는 링크가 쌓이기 시작하면 붙인다
+
+링크가 20~30개를 넘어가면 Markdown/YAML만으로는 이전 상태와 비교하기 어려워진다. 그때 SQLite로 옮긴다.
+
+- `sources`: 어디서 왔는가
+- `items`: 무엇에 대한 정보인가
+- `observations`: 특정 시점에 본 값은 무엇인가
+- `change_events`: release, changelog, 새 논문, 이벤트 공지 같은 변화
+- `assessments`: 그래서 지금 무엇을 할 것인가
+
+이 순서가 자연스럽다. DB를 먼저 설계하는 것이 아니라, 실제 inbox에서 반복되는 필드가 보이면 테이블로 굳힌다.
+
+### 4. Digest를 action queue와 연결한다
+
+마지막으로 digest가 단순 요약에서 끝나지 않게 만든다. 각 중요 항목은 다음 중 하나로 끝나야 한다.
+
+- `spike`: 직접 1~3시간 써본다.
+- `adopt`: 도입 계획이나 ADR로 넘긴다.
+- `reference`: 구조나 아이디어만 저장한다.
+- `monitor`: 다음 release나 논문 구현체를 기다린다.
+- `apply/attend`: 공모전, 해커톤, 설명회처럼 일정이 있는 항목을 처리한다.
+- `ignore`: 왜 버리는지 짧게 남긴다.
+- `promote_to_knowledge`: 반복적으로 중요해진 항목만 위키로 승격한다.
+
+처음 버전의 목표는 “자동화된 완벽한 레이더”가 아니다. 목표는 **링크와 근거를 잃지 않으면서, 중요한 것과 나머지를 구분해 보여주고, 사용자의 피드백으로 다음 digest가 더 좋아지는 루프**를 만드는 것이다.
 
 ---
 

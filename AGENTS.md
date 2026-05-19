@@ -4,7 +4,7 @@ Auto-loaded by Codex (and Anthropic Routines) when operating in this repo.
 
 ## What this repo is
 
-Personal blog at https://syshin0116.vercel.app, currently used as a **testbed for the LLM Wiki pattern**:
+Personal blog for syshin0116 at https://syshin0116.dev (also deployed at https://syshin0116.vercel.app), currently used as a **testbed for the LLM Wiki pattern**:
 
 - Existing posts under `content/AI/`, `content/Dev/`, `content/Tools/`, etc. are **immutable source material**.
 - A curated knowledge layer is built at `content/wiki/`.

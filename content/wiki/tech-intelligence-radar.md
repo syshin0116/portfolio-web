@@ -1,5 +1,5 @@
 ---
-title: "Repo intelligence radar"
+title: "Tech intelligence radar"
 type: pattern
 tags:
   - github
@@ -12,7 +12,7 @@ tags:
   - workflow
   - ai
   - trend-tracking
-summary: "Repo intelligence radar는 지식 위키 그 자체가 아니라 사용자에게 제공할 외부 정보 소스/인텔리전스 피드다. 새로 뜨는 레포와 기존 watchlist 레포의 release note, changelog, commit, issue/PR, 문서 변화를 추적해 digest와 action queue로 제공하고, 필요할 때만 검증된 insight를 지식 위키로 승격한다."
+summary: "Tech intelligence radar는 지식 위키 그 자체가 아니라 사용자에게 제공할 외부 정보 소스/인텔리전스 피드다. 새로 뜨는 레포와 기존 watchlist 레포의 release note, changelog, commit, issue/PR, 문서 변화를 추적해 digest와 action queue로 제공하고, 필요할 때만 검증된 insight를 지식 위키로 승격한다."
 sources:
   - content/AI/2026-05-18-Tech-Intelligence-Radar.md
   - https://docs.github.com/en/rest/repos
@@ -25,7 +25,7 @@ sources:
   - https://info.arxiv.org/help/api/user-manual.html
   - https://huggingface.co/papers/trending
 created: 2026-05-18
-updated: 2026-05-18
+updated: 2026-05-24
 author: wiki-curator
 draft: false
 ---
@@ -37,7 +37,7 @@ draft: false
 - 그래서 watchlist는 `repo` 단위가 아니라 `repo + changelog + release + docs + community signal` 단위로 관리해야 한다.
 - GitHub star 수는 발견용 신호일 뿐이다. 실제 활용 판단에는 release cadence, changelog 품질, issue/PR 반응성, docs/example 변화, 라이선스, 내부 적용 가능성이 더 중요하다.
 - GeekNews, GitHub Trending, Hacker News, 최신 논문, Hugging Face Papers, Threads, LinkedIn은 모두 “입구”일 뿐이다. 최종 시스템은 정보를 더 많이 보여주는 것이 아니라 `adopt / spike / reference / ignore`로 압축해야 한다.
-- Repo radar는 지식 위키와 연결되지만 같은 것이 아니다. 기본 산출물은 사용자에게 줄 수 있는 public-facing intelligence feed이고, 검증·반복·내부 적용 가치가 생긴 항목만 knowledge base로 승격한다.
+- Tech radar는 지식 위키와 연결되지만 같은 것이 아니다. 기본 산출물은 사용자에게 줄 수 있는 public-facing intelligence feed이고, 검증·반복·내부 적용 가치가 생긴 항목만 knowledge base로 승격한다.
 - 좋은 repo radar는 매일 모든 것을 읽게 하지 않는다. 매일은 alert, 매주는 digest, 매월은 watchlist 정리로 리듬을 나눈다.
 
 ## Problem
@@ -59,7 +59,7 @@ _시각화는 public-facing article [기술 정보 레이더 글](../AI/2026-05-
 
 ## Separate source, optional knowledge promotion
 
-이 시스템은 최종적으로 지식 위키에 일부 내용이 들어갈 수 있지만, 출발점은 **지식 그 자체가 아니라 별도의 외부 정보 소스**다. Repo radar는 사용자에게 직접 줄 수 있는 트렌드/레포/논문/커뮤니티 인텔리전스 feed이고, 지식 위키는 그중 오래 남을 만한 것만 정제해서 보관하는 downstream layer다.
+이 시스템은 최종적으로 지식 위키에 일부 내용이 들어갈 수 있지만, 출발점은 **지식 그 자체가 아니라 별도의 외부 정보 소스**다. Tech radar는 사용자에게 직접 줄 수 있는 트렌드/레포/논문/커뮤니티 인텔리전스 feed이고, 지식 위키는 그중 오래 남을 만한 것만 정제해서 보관하는 downstream layer다.
 
 | Layer | Purpose | Audience | Persistence |
 |---|---|---|---|
@@ -320,7 +320,7 @@ Spike 결과는 짧아야 다음 의사결정으로 이어진다.
 
 ## Design principle
 
-Repo intelligence radar의 목적은 더 많은 탭을 열게 만드는 것이 아니다. 목적은 다음 네 가지 질문에 빨리 답하게 만드는 것이다.
+Tech intelligence radar의 목적은 더 많은 탭을 열게 만드는 것이 아니다. 목적은 다음 네 가지 질문에 빨리 답하게 만드는 것이다.
 
 1. 지금 새로 봐야 할 것은 무엇인가?
 2. 이미 보고 있던 것 중 의미 있게 변한 것은 무엇인가?

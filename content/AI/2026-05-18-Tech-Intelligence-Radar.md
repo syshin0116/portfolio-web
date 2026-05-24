@@ -39,7 +39,7 @@ modified: 2026-05-20
 
 나는 이 구조를 **기술 정보 레이더(Technical Intelligence Radar)**라고 부르고 싶다.
 
-> 관련 위키 노트: [[repo-intelligence-radar]]
+> 관련 위키 노트: [[tech-intelligence-radar]]
 
 ---
 

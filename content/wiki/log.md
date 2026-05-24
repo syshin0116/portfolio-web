@@ -38,3 +38,7 @@
 - Added local article assets: content/AI/tech-intelligence-radar-architecture.svg, content/AI/tech-intelligence-radar-scoring.svg, content/AI/tech-intelligence-radar-digest.svg
 - Updated: content/wiki/repo-intelligence-radar.md, content/wiki/index.md
 - Clarified: this is not repo-only; it tracks papers, news, blogs, social signals, changelogs, and stale knowledge updates. Replaced confusing YAML-first schema with SQLite rationale and schema explanation.
+## [2026-05-24 14:30 KST] migrate | Renamed slug repo-intelligence-radar → tech-intelligence-radar
+- Renamed: content/wiki/repo-intelligence-radar.md → tech-intelligence-radar.md (+ architecture/scoring/digest SVGs)
+- Updated backlinks: content/wiki/index.md (rebuilt), content/AI/2026-05-18-Tech-Intelligence-Radar.md
+- Updated frontmatter title/summary and in-body self-name labels (Repo radar → Tech radar) to align with the broadened scope and the source article's "Technical Intelligence Radar" terminology. Claims unchanged.

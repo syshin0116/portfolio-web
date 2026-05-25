@@ -10,6 +10,9 @@ tags:
   - Devin
   - Cline
   - SWE-agent
+  - Vibe-Kanban
+  - Claude-Squad
+  - Conductor
   - GitHub
   - Automation
 draft: false
@@ -17,7 +20,7 @@ enableToc: true
 description: Multica의 커뮤니티 반응, 기능, 멀티 디바이스/팀 협업 활용법을 정리하고 OpenHands, Devin, Claude Code GitHub Actions, Cline, Cursor Cloud Agents, Codex, Aider, SWE-agent와 비교한다.
 summary: "Multica는 Claude Code, Codex, Cursor, Hermes 같은 코딩 에이전트를 사람처럼 이슈에 배정하고 진행 상황을 추적하는 협업 레이어다. 이 글은 Multica의 장단점과 멀티 디바이스/팀 협업 모델을 살펴보고, OpenHands, Devin, Claude Code GitHub Actions, Cline, Cursor Cloud Agents, Codex, Aider, SWE-agent 같은 대안과 비교한다."
 published: 2026-05-22
-modified: 2026-05-22
+modified: 2026-05-25
 ---
 
 ## 왜 Multica가 눈에 들어왔나
@@ -280,6 +283,42 @@ SWE-agent와 mini-SWE-agent는 연구/benchmark 지향이 강하다. GitHub issu
 
 ---
 
+## agent-first kanban과 멀티에이전트 오케스트레이터 (직접 동급)
+
+위 비교는 대부분 “에이전트 자체”나 “단일 agent platform”이었다. 그런데 Multica와 정확히 같은 층위, 즉 **여러 코딩 에이전트를 보드나 큐로 묶어 병렬로 돌리고 관리하는 오케스트레이터**는 2026년 들어 빠르게 늘었다. 사실 이쪽이 Multica의 진짜 경쟁군이다. 대부분 git worktree로 작업을 격리하고, 여러 CLI 에이전트(Claude Code, Codex 등)를 동시에 굴리며, 공통적으로 self-host가 된다.
+
+| 도구 | 형태 | 지원 에이전트 | 한 줄 |
+|---|---|---|---|
+| Vibe Kanban | 칸반 + MCP | ~10종(Claude Code, Codex, Gemini, Copilot, Amp, Cursor, OpenCode) | OSS 동급 1순위. Bloop 폐업 후 커뮤니티 유지 |
+| Claude Squad | TUI | Claude Code, Codex, Aider, Gemini, OpenCode, Amp | tmux + git worktree로 병렬 세션 관리 |
+| Conductor (계열) | macOS 앱 / YAML 워크플로 | 계열마다 다름 | 같은 이름의 프로젝트가 여럿이라 주의 |
+| Crystal / Nimbalyst | 칸반 | 이종 에이전트 혼합 | worktree 세션 칸반 + 인라인 diff 리뷰 |
+| Emdash | 데스크톱(Electron) | ~22종(Hermes 포함) | 지원 프로바이더 수가 압도적 |
+| Composio Agent Orchestrator | 웹 | Claude Code, Codex, Aider, OpenCode | worktree 다중 실행 + 자동 PR |
+| Baton | CLI | Claude Code, Codex, OpenCode, Gemini | GitHub Issue 폴링 → worktree (poll-dispatch-reconcile) |
+| Bernstein | CLI/웹 | Claude Code, Codex, Gemini | planning→merge, 결정론적 스케줄링 + pre-merge 검증 |
+| Agent Kanban | VS Code 확장 | Copilot 위주 | AGENTS.md sentinel로 세션 맥락 유지 |
+
+### Vibe Kanban
+
+가장 유력한 오픈소스 동급이다. 칸반 보드에 작업을 올리면 MCP로 task를 분해해 여러 에이전트에 병렬로 맡긴다. 지원 에이전트 폭이 약 10종으로 넓고, 초기 개발사 Bloop이 2026년 초 문을 닫은 뒤에도 커뮤니티가 유지하고 있다. “보드로 여러 에이전트를 굴린다”는 점이 Multica와 가장 직접적으로 겹친다. 차이는 Multica가 멀티 디바이스 daemon/runtime, Squad 라우팅, workspace skill 같은 팀 운영 추상화를 더 갖췄다는 점이다.
+
+### Claude Squad
+
+보드보다는 터미널(TUI) 중심이다. tmux 세션과 git worktree로 여러 에이전트를 병렬로 띄워 한 화면에서 전환한다. 가볍고 로컬 친화적이라 개인이 에이전트 여러 개를 동시에 굴리기 좋다. 반대로 팀 단위 issue/assignee/role 같은 운영 표면은 Multica 쪽이 강하다.
+
+### Conductor
+
+주의할 점은 “Conductor”라는 이름의 프로젝트가 여럿이라는 것이다. 여러 Claude Code 세션을 병렬로 돌리는 macOS 앱 계열도 있고, YAML로 정의한 멀티에이전트 워크플로와 웹 대시보드를 제공하는 Microsoft Conductor처럼 결이 다른 것도 있다. 도입을 검토한다면 어느 Conductor인지부터 확정해야 한다.
+
+### Orkas / Slock / LobeHub
+
+조금 다른 갈래로, “agent collaboration platform”을 표방하는 신생 도구들이 있다. 한 비교 글(CodePick)은 Slock, Multica, LobeHub, Orkas를 같은 범주로 묶으며 차별점을 이렇게 정리한다. Multica는 skill sharing, Slock은 MEMORY.md 기반 공유 기억, Orkas는 self-evolution(에이전트가 같은 일을 다시 배우지 않게 하는 것)이다. 특히 Orkas의 self-evolution은 변화가 빠른 기술 정보를 스스로 재평가하는 시스템을 고민할 때 참고할 만한 문제의식이다. 다만 이 세 도구는 아직 공개 자료가 적고 빠르게 바뀌므로, 도입 전 공식 문서로 직접 확인하는 편이 안전하다.
+
+정리하면, Multica를 진지하게 비교하려면 OpenHands나 Devin 같은 agent platform보다 **Vibe Kanban, Conductor, Claude Squad** 같은 오케스트레이터를 먼저 나란히 놓는 편이 맞다. Multica의 차별점은 에이전트 성능이 아니라 멀티 디바이스 runtime과 Squad/skill 같은 팀 운영 레이어다.
+
+---
+
 ## 선택 기준
 
 내 기준으로는 이렇게 고를 것 같다.
@@ -374,3 +413,8 @@ Multica는 그 표면을 먼저 만들려는 프로젝트다. 아직 조심해�
 - [Cognition: Introducing Devin](https://www.cognition.ai/blog/introducing-devin)
 - [Cursor Cloud Agents docs](https://cursor.com/docs/cloud-agent)
 - [GitHub Blog: Copilot coding agent](https://github.blog/news-insights/product-news/github-copilot-meet-the-new-coding-agent/)
+- [Vibe Kanban](https://vibekanban.com/)
+- [awesome-agent-orchestrators (GitHub)](https://github.com/andyrewlee/awesome-agent-orchestrators)
+- [9 Open-Source Agent Orchestrators for AI Coding (Augment Code)](https://www.augmentcode.com/tools/open-source-agent-orchestrators)
+- [Best Multi-Agent Coding Tools for Claude Code and Codex (Nimbalyst)](https://nimbalyst.com/blog/best-multi-agent-coding-tools-2026/)
+- [2026 Agent Collaboration Platform Guide: Slock, Multica, LobeHub, Orkas (CodePick)](https://codepick.dev/en/guides/agent-collaboration-platforms-2026)

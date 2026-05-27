@@ -14,7 +14,7 @@ enableToc: true
 description: Hermes Agent와 Codex CLI, Claude Code의 차이를 정리하고, GPT-5.5와 Claude Opus 4.7 기준으로 어떤 조합이 현실적인지 살펴본다.
 summary: "Hermes Agent는 모델이 아니라 작업 실행 레이어다. Codex를 Hermes의 메인 모델로 연결해도 Slack, 메모리, 스킬, cron, MCP, PR 관리가 붙는다는 점에서 Codex CLI 단독 사용과 다르다. GPT-5.5와 Claude Opus 4.7 기준으로 구현·리뷰·설계·이미지 작업을 어떻게 나누면 좋은지 정리했다."
 published: 2026-05-17
-modified: 2026-05-17
+modified: 2026-05-27
 ---
 
 ## 들어가며
@@ -62,6 +62,28 @@ Hermes Agent는 Nous Research가 만든 **자기 개선형(self-improving) AI �
 그래서 둘은 경쟁 관계라기보다 계층이 다르다. Codex CLI는 "코딩 실행기"에 가깝고, Hermes는 그 실행기를 포함해 여러 도구를 호출하는 "작업 관리자"에 가깝다.
 
 내가 Slack에서 "블로그 글 만들고 PR 올려줘"라고 시키는 상황을 생각하면 차이가 확실하다. Codex CLI 단독이면 터미널을 열고 레포 안에서 직접 실행해야 한다. Hermes + Codex provider라면 Slack 메시지를 입구로 삼고, 레포 위치 기억, 문서 조사, 파일 수정, 빌드, 커밋, PR 생성까지 한 번에 이어갈 수 있다.
+
+### 어떻게 연결되는가: 3가지 API mode와 인증 경로
+
+"Hermes를 Codex로 쓴다"의 실제 메커니즘은 Hermes가 내부적으로 세 가지 API mode 중 하나를 골라 호출한다는 데 있다.
+
+| API mode | 사용 provider 예 | 인증 방식 |
+|---|---|---|
+| `chat_completions` | OpenRouter, z.ai, Kimi, MiniMax, DeepSeek 등 대부분의 OpenAI 호환 서버 | `.env`의 API key |
+| `codex_responses` | OpenAI Codex (ChatGPT OAuth) | `hermes model`로 device code OAuth |
+| `anthropic_messages` | Anthropic API / OAuth | `ANTHROPIC_API_KEY` 또는 OAuth |
+
+인증 경로도 세 갈래로 정리된다. 첫째는 `.env`의 API key, 둘째는 `hermes model`로 등록하는 OAuth device code(자격증명은 `auth.json`에 저장), 셋째는 `config.yaml`의 Custom endpoint다. Custom endpoint는 OpenAI 호환이라면 무엇이든 받기 때문에 로컬 LLM 연결도 여기로 들어온다.
+
+세션 중간에 모델을 바꾸고 싶으면 대화 기록을 유지한 채 전환할 수 있다.
+
+```text
+/model zai:glm-5
+/model openrouter:anthropic/claude-sonnet-4
+/model custom:local:qwen-2.5
+```
+
+즉 "Hermes의 메인 모델이 Codex냐 Claude냐"는 고정 선택이 아니라 세션 안에서 갈아 끼우는 슬롯에 가깝다. 이 점이 Codex CLI 단독과의 운영상 차이를 가장 크게 만든다.
 
 ---
 
@@ -273,6 +295,21 @@ gh pr create --title "docs: add Hermes Agent use cases" --body "..."
 
 여기서 중요한 원칙은 **최종 책임자는 Hermes**라는 점이다. Codex나 Claude Code가 "완료"라고 말해도, Hermes가 실제 파일과 테스트 결과, Git 상태를 확인한 뒤 PR을 올려야 한다.
 
+### Multi-Agent Kanban: v0.13.0의 협업 보드
+
+위 4단계는 한 사람이 Slack에서 시키는 단일 흐름이다. 여러 agent가 동시에 작업하고 결과를 주고받아야 하면 v0.13.0+의 Multi-Agent Kanban 보드가 같은 패턴을 영속적으로 만들어준다. 핵심 메커니즘은 네 가지다.
+
+| 메커니즘 | 역할 |
+|---|---|
+| Heartbeats | worker가 살아 있다는 신호를 주기적으로 전송 |
+| Reclaim | worker가 죽으면 다른 worker가 작업을 이어받음 |
+| Zombie detection | 죽은 worker가 작업을 점유한 채 막히는 상황을 차단 |
+| Hallucination gate | 검증에 실패하면 작업 카드가 보드로 되돌아옴 |
+
+특히 hallucination gate는 위 4단계의 구현자/리뷰어 분리를 보드 차원에서 강제한다. Codex가 만든 결과가 Claude 리뷰의 검증을 통과하지 못하면 카드가 그대로 보드로 돌아가고, 다음 worker나 사람이 재처리한다. 단일 흐름이라면 사람이 한 번 검토하고 끝나지만, 보드 위에서는 검증 실패가 자연스러운 재진입 신호가 된다.
+
+이 보드 위에서 "Hermes가 관리자, Codex가 구현자, Claude가 리뷰어"라는 분담이 일회성 명령이 아니라 지속 가능한 워크플로우가 된다.
+
 ---
 
 ## Hermes에 사람들이 많이 붙이는 것들
@@ -471,6 +508,65 @@ Hermes는 `AGENTS.md`, `CLAUDE.md`, `.cursorrules` 같은 프로젝트 컨텍스
 
 ---
 
+## Self-host 운영에서 자주 깨지는 지점들
+
+Hermes를 본격적으로 자기 환경에 띄우면 모델 선택보다 인프라 쪽에서 막히는 경우가 잦다. docs와 실무자 가이드에서 반복적으로 등장하는 함정을 묶어두면 디버깅 시간이 크게 줄어든다.
+
+### 1. Local LLM의 기본 context length
+
+Ollama나 llama.cpp 같은 로컬 서버는 기본 context length가 4K 수준으로 낮은 경우가 많다. 그대로 띄우면 "Context limit: 2048 tokens" 같은 에러를 본다.
+
+```bash
+# Ollama: 서버 기동 시 환경변수
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve
+
+# 또는 Hermes config.yaml에서 명시
+model:
+  context_length: 32768
+```
+
+vLLM은 `--max-model-len 65536`, llama.cpp는 `-c 32768`을 명시한다.
+
+### 2. Tool call이 그냥 텍스트로 출력되는 경우
+
+로컬 서버가 tool calling을 활성화하지 않으면 agent가 호출했어야 할 도구 이름이 일반 텍스트로 흘러나온다. 서버별로 켜는 옵션이 다르다.
+
+| 서버 | 필요한 옵션 |
+|---|---|
+| llama.cpp | `--jinja` 필수 |
+| vLLM | `--enable-auto-tool-choice --tool-call-parser hermes` |
+| SGLang | `--tool-call-parser qwen` |
+| LM Studio | 0.3.6+ 업데이트 + 네이티브 tool 모델 사용 |
+
+### 3. Auxiliary model이 조용히 실패하는 경우
+
+Hermes는 vision, web extract, compression 같은 보조 작업에 별도 모델을 쓴다. Anthropic API key만 설정해두면 이 보조 모델들이 기본 fallback 체인을 따라가다 조용히 실패한다. 메인 모델로 흡수하려면 `config.yaml`에 한 줄을 추가한다.
+
+```yaml
+auxiliary:
+  vision: { provider: "main" }
+  web_extract: { provider: "main" }
+```
+
+### 4. WSL2에서 Windows 호스트 모델 접근
+
+WSL2는 기본적으로 Windows와 다른 서브넷에 있어서 `127.0.0.1`로 호스트 모델 서버를 부르면 "Connection refused"가 난다. Windows 11 22H2+에서는 `%USERPROFILE%\.wslconfig`에 `[wsl2] networkingMode=mirrored`를 켜는 게 가장 간단하다. 구형 Windows라면 default gateway IP를 알아내 모델 서버를 `0.0.0.0`에 바인딩해야 한다.
+
+### 5. "지금 설정이 어디서 오는 거지?"
+
+자주 막히는 순간은 "이 모델/도구/auth가 어디서 읽혀 오는지 모르겠다"이다. 진단 명령 네 개를 외워두면 대부분 즉시 풀린다.
+
+```bash
+hermes doctor          # 설정과 의존성 문제 진단
+hermes status          # 현재 설정 + auth 상태
+hermes dump            # 복붙용 setup 요약(secret 마스킹)
+hermes logs list       # 모든 로그 파일 경로
+```
+
+이 다섯 가지가 self-host 도입 첫 주에 가장 많은 시간을 빼앗는 함정이다.
+
+---
+
 ## 결론
 
 Hermes Agent의 강점은 단순히 "답변을 잘하는 모델"이 아니라, **여러 도구와 모델을 하나의 작업 흐름으로 묶는 능력**에 있다.
@@ -516,3 +612,4 @@ AI 에이전트를 잘 쓰는 핵심은 "하나의 만능 모델"을 찾는 것�
 - [Claude Code Overview](https://docs.anthropic.com/en/docs/claude-code/overview)
 - [Claude Code CLI Reference](https://docs.anthropic.com/en/docs/claude-code/cli-reference)
 - [Claude Code Settings](https://docs.anthropic.com/en/docs/claude-code/settings)
+- [Hermes Agent 실무자 레퍼런스 종합 정리 (Blake Crosley)](https://blakecrosley.com/ko/guides/hermes)

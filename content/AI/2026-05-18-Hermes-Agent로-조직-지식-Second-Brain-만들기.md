@@ -17,7 +17,7 @@ enableToc: true
 description: Slack, 회의록, 고객 문서, PR, Linear/Jira, AI 코딩 대화에서 생기는 의사결정을 Hermes Agent로 수집하고 프로젝트·팀·조직 단위 지식으로 통합하는 운영 모델을 정리한다.
 summary: "조직 지식은 회의록 하나에 있지 않고 Slack, 고객 문서, PR, Linear/Jira, 코드, AI 대화 사이에 흩어진다. Hermes Agent를 수집·정리·PR 생성 레이어로 두고, 프로젝트→팀→조직으로 지식을 승격하며, LLM Wiki·ADR·Second Brain·권한 관리·검색 메타데이터를 결합하는 운영 모델을 제안한다."
 published: 2026-05-18
-modified: 2026-05-18
+modified: 2026-05-28
 ---
 
 ## 들어가며
@@ -283,6 +283,40 @@ AI session → worklog summary
 
 ---
 
+## Hermes의 메모리 레이어와 조직 scope 매핑
+
+위에서 정리한 raw → event → decision → knowledge → synthesis 5층은 추상 모델이다. Hermes에서 이것을 실제로 굴리려면 어떤 파일에 무엇이 들어가는지의 매핑이 필요하다. Hermes는 system prompt에 주입되는 메모리를 네 개의 파일로 나눠 둔다.
+
+| 파일 | 역할 | 어디까지 따라가나 | 글자 제한 |
+|---|---|---|---|
+| `SOUL.md` | agent identity, 어조, 커뮤니케이션 스타일 | 모든 profile | 느슨 |
+| `MEMORY.md` | 환경 정보, 규칙, 학습한 내용 | profile 단위 | 약 2,200자 |
+| `USER.md` | 사용자 선호, 페어링된 커뮤니케이션 패턴 | profile 단위 | 약 1,375자 |
+| `AGENTS.md` | 프로젝트별 컨텍스트(아키텍처, 코딩 규칙, tool 선호) | 프로젝트 디렉터리 | 느슨 |
+
+원칙은 단순하다. **어디든 따라가야 하는 정체성은 SOUL.md, 프로젝트별 지식은 AGENTS.md**다. MEMORY와 USER는 그 사이에 끼는 사용자와 환경 레이어다. 위 4파일을 앞서 정의한 scope에 매핑하면 다음과 같이 정리된다.
+
+| 조직 scope | 주로 들어가는 Hermes 파일 | 비고 |
+|---|---|---|
+| 개인 | `USER.md` + 개인 vault | 사용자 선호와 일회성 메모 |
+| 프로젝트 | `AGENTS.md` + repo `docs/` | 코드와 가까이, 코드 리뷰와 함께 갱신 |
+| 팀 | 공유 `AGENTS.md` 템플릿 + team wiki | 여러 repo가 따르는 기본값 |
+| 조직 | `SOUL.md`의 에이전트 정체성 + org knowledge hub | 글자 제한 안에 들어가는 핵심 원칙만 |
+
+운영상 가장 중요한 제약 두 가지를 같이 기억해야 한다. 첫째, MEMORY와 USER는 **세션 시작 시 한 번 캡처되는 고정 스냅샷**으로 system prompt에 주입된다. 세션 중간에 메모를 추가해도 그 변화는 다음 세션에서야 반영된다. 이 제약 덕분에 prefix cache가 보존되지만, "방금 알려준 걸 왜 다음 답에 못 쓰지?"의 원인이기도 하다. 둘째, **글자 제한이 작다**(MEMORY 약 2.2K, USER 약 1.4K). 조직 단위 지식을 여기에 모두 넣으려고 하면 안 된다. 메모리는 인덱스나 포인터 역할만 하고, 본문은 wiki나 외부 store에 둬야 한다.
+
+agent가 메모리를 갱신할 때 쓰는 도구도 명시적이다.
+
+```python
+memory.add("이 서버는 Debian 12, PostgreSQL 16")
+memory.replace("Docker group", "Docker: no sudo needed, group active")
+memory.remove("outdated-rule")
+```
+
+이 호출이 로그에 보이면 "지금 무엇이 장기 기억으로 승격됐는가"가 그대로 드러난다. raw에서 decision으로 가는 승격을 사람이 명시 트리거로 다루듯, 메모리 승격도 같은 원리로 다룬다.
+
+---
+
 ## 검색하기 좋은 지식으로 남기는 법
 
 통합된 지식은 “문서가 어딘가에 있다”만으로 부족하다. 나중에 사람과 agent가 찾기 쉬우려면 문서 자체가 검색 인덱스처럼 작성되어야 한다.
@@ -322,6 +356,10 @@ review_after: 2026-08-18
 | 그래프 / wikilink | 결정-요구사항-코드-고객 문서 연결 | `related`, backlinks, ADR 링크 |
 
 그래서 좋은 위키 페이지는 글처럼만 쓰면 안 된다. 첫 문단에는 정의와 결론을 쓰고, `aliases`, `summary`, `tags`, `sources`, `related`를 채워야 한다. Dataquest의 hybrid search 글이 말하듯 metadata는 JSON blob이 아니라 atomic field로 나눠야 필터링이 된다. Azure AI Search의 document-level access control도 같은 원리다. ingestion 때 문서의 ACL/그룹 정보를 같이 넣어야 query 때 결과를 security trimming할 수 있다.
+
+### Hermes의 기본 인덱스: Session DB + FTS5
+
+위 네 겹은 위키 본문에 대한 검색이다. Hermes는 그보다 한 단계 앞에서 모든 CLI/메시징 세션을 SQLite와 FTS5에 자동 보존한다. agent는 `session_search` 도구로 과거 세션을 전체 텍스트 검색해 "전에 이 문제를 어떻게 풀었는지"를 끌어올 수 있다. 즉 위키로 승격되지 않은 raw 대화도 사라지지 않고 검색 가능한 상태로 남는다. 다만 이건 개인 또는 profile 단위 보존이지 **조직 검색의 대상은 아니다**. raw 세션은 source ACL을 보존한 채 그대로 두고, 위키 승격 단계에서만 검색·권한 인덱스에 들어간다는 분리가 필요하다.
 
 ---
 
@@ -384,6 +422,24 @@ Tiago Forte의 PARA는 정보를 `Projects`, `Areas`, `Resources`, `Archives`로
 | 검색 실패는 개인 불편이다 | 검색/권한 실패는 정보 유출이나 잘못된 의사결정이 된다 |
 
 그래서 조직형 Second Brain은 PARA 위에 `permission`, `owner`, `source`, `review_after`, `status`를 더한 형태가 되어야 한다. 개인의 second brain은 capture와 연결을 돕고, 조직의 second brain은 검색·권한·감사 가능성까지 책임져야 한다.
+
+### 내장 메모리 한계를 넘는 External Memory Providers
+
+앞서 본 SOUL/MEMORY/USER/AGENTS는 빠르고 단순하지만 글자 제한이 작아 조직 규모의 second brain을 그 안에 다 담을 수 없다. Hermes는 이 한계를 풀려고 외부 메모리 provider를 플러그 형태로 받는다. 2026년 기준 8종이 연동된다(Honcho, OpenViking, Mem0, Hindsight, Holographic, RetainDB, ByteRover, Supermemory).
+
+```bash
+hermes memory setup      # provider 선택
+hermes memory status     # 현재 활성 provider 확인
+```
+
+선택의 의미는 분명하다. 메모리를 파일 두 개에 가둘지, 별도 메모리 store에 누적할지의 trade-off다. 별도 store를 쓰면 "팀 메모리"를 만드는 첫걸음이 되지만, 그 store의 권한과 audit이 추가로 필요해진다. 도입 순서는 다음이 자연스럽다.
+
+1. 개인은 내장 MEMORY/USER로 시작한다.
+2. 프로젝트 지식은 `AGENTS.md`와 repo `docs/`로 코드와 가까이 둔다.
+3. 팀이나 조직 단위 누적이 필요해지면 그때 external provider를 도입한다.
+4. provider도 source ACL을 보존해야 위 권한 원칙과 충돌하지 않는다.
+
+즉 external memory는 "개인 second brain을 그대로 늘리는 도구"가 아니라 **scope 승격의 운영 옵션**이다. 어떤 provider를 고를지는 권한·감사·검색 요구가 결정한다.
 
 ---
 
@@ -522,3 +578,4 @@ Hermes Agent는 이 구조에서 모든 지식을 혼자 판단하는 두뇌가 
 - [Dataquest - Metadata Filtering and Hybrid Search](https://www.dataquest.io/blog/metadata-filtering-and-hybrid-search-for-vector-databases/)
 - [Microsoft - Maintain an architecture decision record](https://learn.microsoft.com/en-us/azure/well-architected/architect-role/architecture-decision-record)
 - [Architectural Decision Records](https://adr.github.io/)
+- [Hermes Agent 실무자 레퍼런스 종합 정리 (Blake Crosley)](https://blakecrosley.com/ko/guides/hermes)

@@ -105,13 +105,13 @@ opportunities 테이블:
 
 ---
 
-## 핵심 교훈: 스키마가 왕이다
+## 핵심 교훈: 정확도는 스키마 정비에서 나온다
 
 Text-to-SQL 정확도를 올리는 가장 효과적인 방법은 few-shot 예시 추가도, 프롬프트 튜닝도 아니었다.
 
 **테이블과 컬럼 이름을 명확하게 짓고, COMMENT를 빈틈없이 다는 것**이 압도적으로 효과가 좋았다.
 
-### COMMENT가 곧 프롬프트다
+### COMMENT가 사실상 프롬프트 역할을 한다
 
 PostgreSQL의 `COMMENT ON` 구문이 LLM의 유일한 스키마 정보원이다:
 
@@ -283,9 +283,7 @@ LLM이 에러 메시지를 보고 "이 함수가 허용 안 되는구나"를 이
 
 ## 보안: Defense in Depth
 
-Text-to-SQL에서 보안은 선택이 아니다.
-
-LLM이 `DROP TABLE`을 생성할 수도 있고, 프롬프트 인젝션으로 악의적 SQL이 만들어질 수도 있다.
+Text-to-SQL에서 보안은 빼놓을 수 없는 요소다. LLM이 `DROP TABLE`을 생성할 수도 있고, 프롬프트 인젝션으로 악의적 SQL이 만들어질 수도 있기 때문이다.
 
 ### L1 - AST 기반 SQL Validator
 

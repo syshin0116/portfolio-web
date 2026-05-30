@@ -30,7 +30,7 @@ modified: 2026-03-25
 | **설치 크기** | ~84KB (pymupdf4llm) + PyMuPDF + pymupdf-layout |
 | **상용 라이선스** | Artifex에서 별도 구매 가능 (AGPL 회피) |
 []()
-PyMuPDF4LLM은 [[MinerU - PDF Parser|MinerU]]나 Docling 같은 대형 ML 파서와 다른 접근을 취한다. YOLO, Transformer 같은 무거운 모델 대신 PDF 내부의 텍스트 객체, 폰트 정보, 좌표 데이터를 직접 읽고, 레이아웃 분석에만 **경량 GNN 모델**(ONNX Runtime, CPU 추론)을 사용한다. 그래서 **빠르다**. 압도적으로 빠르다.
+PyMuPDF4LLM은 [[MinerU - PDF Parser|MinerU]]나 Docling 같은 대형 ML 파서와 다른 접근을 취한다. YOLO, Transformer 같은 무거운 모델 대신 PDF 내부의 텍스트 객체, 폰트 정보, 좌표 데이터를 직접 읽고, 레이아웃 분석에만 **경량 GNN 모델**(ONNX Runtime, CPU 추론)을 사용한다. 무거운 추론 단계가 없는 만큼 처리 속도가 다른 ML 파서들과 차원이 다르다.
 
 ---
 
@@ -400,7 +400,7 @@ docs = loader.load()
 
 ## 정리
 
-PyMuPDF4LLM은 **"충분히 좋은 품질을 미친 속도로"** 제공하는 파서다. 수식 변환이나 복잡한 테이블 구조가 필요 없는 일반 문서 처리에서는 ML 파서를 쓸 이유가 없을 정도로 빠르고 간편하다. 대량 PDF 배치 처리, CI/CD 파이프라인 내 문서 인덱싱, 서버 리소스가 제한된 환경에서 특히 강력하다.
+PyMuPDF4LLM은 품질과 속도의 균형이 잘 잡힌 파서다. 출력 품질이 ML 파서만큼 정밀하진 않지만, 일반 문서 수준에서는 충분하면서 속도는 비교가 안 될 만큼 빠르다. 수식 변환이나 복잡한 테이블 구조가 필요 없는 문서라면 굳이 무거운 ML 파서를 쓸 이유가 없다. 대량 PDF 배치 처리, CI/CD 파이프라인 내 문서 인덱싱, 서버 리소스가 제한된 환경에서 특히 유리하다.
 
 다만 학술 논문의 수식, 복잡한 테이블 병합, 스캔 문서 OCR이 중요하다면 [[2026-03-23-MinerU-2x-파이프라인-분석|MinerU]]나 Docling 같은 ML 기반 파서가 필요하다.
 

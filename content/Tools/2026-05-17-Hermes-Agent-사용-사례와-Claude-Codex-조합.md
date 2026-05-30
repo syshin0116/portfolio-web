@@ -25,7 +25,7 @@ modified: 2026-05-27
 
 [Hermes Agent](https://hermes-agent.nousresearch.com/docs/)는 이 지점에 초점을 둔 오픈소스 AI 에이전트 프레임워크다. 단순한 챗봇이나 IDE 플러그인이 아니라, 터미널·메신저·스케줄러·MCP·파일 시스템·브라우저·GitHub 워크플로우를 연결해 "일을 끝내는" 쪽에 가깝다.
 
-이 글에서는 Hermes Agent의 대표 사용 사례를 정리하고, 특히 **Hermes를 Codex 메인 모델로 연결해서 쓰는 것과 Codex CLI를 그냥 쓰는 것의 차이**를 따로 짚는다. 처음엔 나도 Hermes, Codex, Claude Code를 서로 다른 코딩 도구처럼만 나눠서 생각했는데, 실제로는 층위가 다르다. Hermes는 작업 실행 레이어이고, Codex나 Claude는 그 안에 꽂는 모델 또는 하위 도구에 가깝다.
+이 글에서는 Hermes Agent의 대표 사용 사례를 정리하고, 특히 **Hermes를 Codex 메인 모델로 연결해서 쓰는 것과 Codex CLI를 그냥 쓰는 것의 차이**를 따로 짚는다. 처음엔 나도 Hermes, Codex, Claude Code를 서로 다른 코딩 도구처럼만 나눠서 생각했는데, 실제로는 층위가 다르다. Hermes가 작업 실행 레이어를 맡고, Codex나 Claude는 그 안에 꽂아 쓰는 모델 또는 하위 도구 역할을 한다.
 
 ---
 
@@ -40,7 +40,7 @@ Hermes Agent는 Nous Research가 만든 **자기 개선형(self-improving) AI �
 3. **지속 기억**: 사용자 선호, 프로젝트 구조, 반복되는 워크플로우를 메모리와 스킬로 보존
 4. **모델 독립성**: OpenAI Codex, Anthropic, OpenRouter, Gemini, GitHub Copilot, 로컬 OpenAI 호환 엔드포인트 등 다양한 provider를 선택 가능
 
-즉 Hermes는 "하나의 모델"이라기보다 **여러 모델과 도구를 엮는 작업 운영체제**에 가깝다.
+즉 Hermes는 하나의 모델이 아니라 **여러 모델과 도구를 엮어 작업을 운영하는 층**이다.
 
 ## Hermes에 Codex를 연결한다는 뜻
 
@@ -59,7 +59,7 @@ Hermes Agent는 Nous Research가 만든 **자기 개선형(self-improving) AI �
 | GitHub 작업 | 가능하지만 직접 흐름 관리 | 브랜치, 커밋, PR, CI 확인을 한 흐름으로 묶기 좋음 |
 | 모델 교체 | Codex 계열 중심 | OpenAI, Anthropic, OpenRouter, Gemini, 로컬 endpoint 등 교체 가능 |
 
-그래서 둘은 경쟁 관계라기보다 계층이 다르다. Codex CLI는 "코딩 실행기"에 가깝고, Hermes는 그 실행기를 포함해 여러 도구를 호출하는 "작업 관리자"에 가깝다.
+그래서 둘은 서로 경쟁한다기보다 계층이 다르다. Codex CLI가 코딩을 실행하는 도구라면, Hermes는 그 실행기를 포함해 여러 도구를 호출하면서 작업 전체를 관리한다.
 
 내가 Slack에서 "블로그 글 만들고 PR 올려줘"라고 시키는 상황을 생각하면 차이가 확실하다. Codex CLI 단독이면 터미널을 열고 레포 안에서 직접 실행해야 한다. Hermes + Codex provider라면 Slack 메시지를 입구로 삼고, 레포 위치 기억, 문서 조사, 파일 수정, 빌드, 커밋, PR 생성까지 한 번에 이어갈 수 있다.
 
@@ -185,7 +185,7 @@ Hermes는 직접 코드를 수정할 수도 있지만, 필요하면 다른 코�
 | 깊은 코드 리뷰/설계 검토 | Claude Code | 코드베이스 이해, 리뷰, 계획 수립, 복잡한 리팩토링에 강점 |
 | 장기/정기 작업 | Hermes Cron | 주기 실행, 결과 전달, 스크립트+LLM 조합 |
 
-이때 Hermes는 "모든 일을 직접 하는 에이전트"라기보다, **어떤 하위 에이전트에게 어떤 일을 맡길지 결정하고 결과를 검증하는 관리자**로 동작한다.
+이때 Hermes는 모든 일을 직접 처리하지 않는다. **어떤 하위 에이전트에게 어떤 일을 맡길지 결정하고 그 결과를 검증하는 관리자** 역할을 맡는다.
 
 ---
 
@@ -583,7 +583,7 @@ Hermes를 GPT-5.5/Codex provider로 쓴다고 해서 Codex CLI 단독 사용과 
 
 다만 이건 고정 공식이 아니다. 단순 구현은 GPT-5.5/Codex만으로 충분하고, 설계가 어려운 작업은 Opus 4.7을 먼저 쓰는 편이 낫다. 이미지 생성은 Claude가 아니라 OpenAI 쪽이나 전용 이미지 모델을 붙이는 게 자연스럽다.
 
-AI 에이전트를 잘 쓰는 핵심은 "하나의 만능 모델"을 찾는 것이 아니라, **작업의 성격에 맞춰 모델과 도구를 나누고 검증 루프를 만드는 것**이다. Hermes Agent는 그 오케스트레이션 레이어로 꽤 좋은 위치에 있다.
+그동안 써 보니 AI 에이전트는 하나의 만능 모델을 찾기보다 작업의 성격에 맞춰 모델과 도구를 나누고 검증 루프를 만들 때 더 잘 굴러갔다. Hermes Agent는 그 오케스트레이션 레이어로 꽤 좋은 위치에 있다.
 
 ---
 

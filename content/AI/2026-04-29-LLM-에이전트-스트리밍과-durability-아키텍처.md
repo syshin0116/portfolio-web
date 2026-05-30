@@ -30,7 +30,7 @@ modified: 2026-05-10
 - **multi-minute agent platform 진영**에서 LangGraph Platform / OpenAI Responses background / Inngest+Mastra는 **worker 통합 + central durable log + cursor resume**으로 수렴. Cloudflare Agents는 **actor-as-handler + actor-local persistence (DO + SQLite)**로 같은 문제를 다른 방식으로 푼다.
 - 흔한 dual-path 구현(inline SSE 챗 + worker + Redis pub/sub + List buffer)은 이 패턴의 약화된 재구현이며, durable cursor-addressable log를 깔끔하게 만들면 다 풀린다
 - TTF 페널티는 추정 ~10–30ms (LLM TTF 200–800ms 대비 3–5%), **챗/heavy 큐만 분리하면** 챗 UX는 거의 그대로 (실측 benchmark는 별도 필요)
-- OSS 진영은 자체 구현(ARQ + Redis Streams) 외에 **Aegra**(Apache-2.0)가 LangGraph Platform OSS port로 같은 패턴을 이미 구현 — 새로 짜는 입장에선 둘 중 선택
+- OSS 진영은 자체 구현(ARQ + Redis Streams) 외에 **Aegra**(Apache-2.0)가 LangGraph Platform OSS port로 같은 패턴을 이미 구현했다. 새로 짜는 입장에선 둘 중 선택
 - 운영(K8s) 관점에선 **KEDA Redis Lists scaler로 worker backlog 기반 autoscale + Control/Data/Integration plane 격리 + run 상태 전이 표준(terminal exactly-once)**이 필수 보강 사항
 
 ## 들어가며
@@ -319,9 +319,9 @@ GET /threads/{thread_id}/runs/{run_id}/stream?last_event_id=...
 
 ---
 
-## OSS 옵션 — Aegra
+## OSS 옵션: Aegra
 
-이 글의 권고 패턴(worker 통합 + per-run durable cursor log)을 **자체 구현하지 않고** OSS 패키지로 받는 옵션이 있다. [Aegra](https://github.com/ibbybuilds/aegra) (Apache-2.0, 2024–) — LangGraph SDK contract를 OSS로 구현. **2026-05-10 확인 기준 v0.9.14, ~880 stars, 월 5–7 patch release 페이스** (시점에 따라 변동 가능, 도입 직전 PyPI/GitHub 직접 확인 권장).
+이 글의 권고 패턴(worker 통합 + per-run durable cursor log)을 **자체 구현하지 않고** OSS 패키지로 받는 옵션이 있다. [Aegra](https://github.com/ibbybuilds/aegra) (Apache-2.0, 2024~)는 LangGraph SDK contract를 OSS로 구현한다. **2026-05-10 확인 기준 v0.9.14, ~880 stars, 월 5~7 patch release 페이스** (시점에 따라 변동 가능, 도입 직전 PyPI/GitHub 직접 확인 권장).
 
 | | LangGraph Platform | Aegra |
 |---|---|---|
@@ -362,7 +362,7 @@ TTF에도 영향: Aegra의 LocalExecutor 모드(in-memory queue)는 Redis 안 �
 - **이벤트 스트림**: Redis Pub/Sub
 - **체크포인트**: Postgres (`langgraph-checkpoint-postgres`)
 - **워커**: async Python task, 워커당 기본 10잡 동시 (`N_JOBS_PER_WORKER`)
-- **큐 라이브러리**: third-party 안 씀. 자체 구현 `langgraph_storage.queue`. `langgraph-api` 패키지는 **Elastic License 2.0** (source-available, OSS 호환 X). OSS 진영의 Apache-2.0 대안은 [Aegra](https://github.com/ibbybuilds/aegra) — 같은 LangGraph SDK contract를 구현하면서 PyPI publish (자세한 비교는 위 [OSS 옵션 — Aegra](#oss-옵션--aegra))
+- **큐 라이브러리**: third-party 안 씀. 자체 구현 `langgraph_storage.queue`. `langgraph-api` 패키지는 **Elastic License 2.0** (source-available, OSS 호환 X). OSS 진영의 Apache-2.0 대안은 [Aegra](https://github.com/ibbybuilds/aegra)로, 같은 LangGraph SDK contract를 구현하면서 PyPI publish (자세한 비교는 위 [OSS 옵션: Aegra](#oss-옵션-aegra))
 
 따라서 "production이 Streams로 수렴"은 **틀린 말**. LangGraph 본진도 Pub/Sub + List 조합이다. 진짜로 수렴하는 건 더 추상적인 *"durable cursor-addressable per-run log"* 이고, Streams는 그 한 구현일 뿐. SQLite-in-actor (Cloudflare), NATS JetStream, Postgres outbox + LISTEN/NOTIFY, 그리고 LangGraph의 Pub/Sub+List 모두 같은 추상의 다른 구현체.
 
@@ -386,7 +386,7 @@ OpenAI의 진화도 흥미롭다. 기존 Assistants API는 join-stream 엔드포
 - 매 이벤트에 monotonic `sequence_number`
 - 끊기면 같은 `response_id`로 재연결 + `starting_after=<last_sequence_number>` → 서버가 그 cursor부터 replay
 - `store=true` 필수 (Responses background는 stateful)
-- **retention 약 10분** — 그 이상 지나면 replay 불가
+- **retention 약 10분**, 그 이상 지나면 replay 불가
 
 LangGraph의 `Last-Event-ID`와 **동형 패턴**이지만 OpenAI 쪽이 더 명시적 (정수 cursor + 보관기간 명시). 단 10분 retention은 우리가 자체 구현하면 정책에 따라 더 길게 잡을 수 있는 영역 (Postgres event table TTL).
 
@@ -400,9 +400,9 @@ LangGraph의 `Last-Event-ID`와 **동형 패턴**이지만 OpenAI 쪽이 더 명
 
 - 영구 WebSocket 연결
 - 서버 메모리에 in-memory state 캐싱
-- *"asynchronously block in the sampling loop"* — sampling loop 안에서 직접 대기
+- *"asynchronously block in the sampling loop"*, 즉 sampling loop 안에서 직접 대기
 
-처음엔 voice/realtime sub-200ms turn-taking 워크로드 한정으로 시작했지만, **현재는 Codex류 multi-step tool loop의 latency 최적화로도 확장** — provider stream → tool result → 다시 provider stream을 한 WebSocket 안에서 처리해 round-trip 줄임. 즉 patternel 4(stateful long-lived connection)는 voice뿐 아니라 **tool-heavy agent loop**도 포함하는 방향으로 넓어지는 중. ElevenLabs, Cartesia 같은 voice agent + Codex의 일부 흐름이 같은 진영.
+처음엔 voice/realtime sub-200ms turn-taking 워크로드 한정으로 시작했지만, **현재는 Codex류 multi-step tool loop의 latency 최적화로도 확장**됐다. provider stream → tool result → 다시 provider stream을 한 WebSocket 안에서 처리해 round-trip 줄임. 즉 패턴 4(stateful long-lived connection)는 voice뿐 아니라 **tool-heavy agent loop**도 포함하는 방향으로 넓어지는 중. ElevenLabs, Cartesia 같은 voice agent + Codex의 일부 흐름이 같은 진영.
 
 **즉 업계는 한 방향으로 수렴 안 한다.** multi-minute agent 워크로드는 worker+log 쪽으로, latency-critical (voice/tight tool loop)은 WebSocket 쪽으로, raw inference vendor는 inline 쪽으로 갈라진다.
 
@@ -418,17 +418,17 @@ Redis Pub/Sub + producer 측 in-memory buffer. **Producer-alive 제약**이 있�
 
 핵심 인사이트: **탭 이동 resume**에는 pub/sub + 메모리 버퍼로 충분. **워커 크래시까지 견디려면 Streams 필요.**
 
-### Cloudflare Agents — RFC에서 product로
+### Cloudflare Agents: RFC에서 product로
 
 처음엔 [RFC #1257](https://github.com/cloudflare/agents/issues/1257)에서 같은 문제를 다뤘고, 지금은 [`AIChatAgent` 공식 docs](https://developers.cloudflare.com/agents/api-reference/chat-agents/)에 chunk SQLite buffer + reconnect replay가 **product 기능으로 들어왔다**.
 
 > Every chunk streamed to the client is also written to SQLite (`cf_ai_chat_stream_chunks`).
 
-여기서 중요한 점 — Cloudflare는 **central event bus가 아니라 actor-local SQLite**에 청크를 쓴다. 즉 worker pool + 중앙 로그 패턴이 아니라 **actor-as-handler + co-located persistence** 패턴이다.
+여기서 중요한 점은, Cloudflare가 **central event bus가 아니라 actor-local SQLite**에 청크를 쓴다는 것이다. 즉 worker pool + 중앙 로그 패턴이 아니라 **actor-as-handler + co-located persistence** 패턴이다.
 
 미해결로 인정한 부분도 있다. DO 재시작 후 fiber recovery만으론 부족하고 **inference 재호출이 필요**. 이걸 풀려고 AI Gateway를 *durable response buffer*로 만들겠다는 게 RFC의 방향. 즉 **inference 앞에 durable buffer**를 두는 게 미래.
 
-이 RFC의 **client-side resume vs server-side resume that doesn't re-bill tokens** 구분이 이 글 전체에서 가장 유용한 framing이다. 위 [durability 레벨 표](#durability-레벨--어느-장애까지-견디는가)도 이 구분 위에서 만들어짐.
+이 RFC의 **client-side resume vs server-side resume that doesn't re-bill tokens** 구분이 이 글 전체에서 가장 유용한 framing이다. 위 [durability 레벨 표](#durability-레벨-어느-장애까지-견디는가)도 이 구분 위에서 만들어짐.
 
 ### Inngest - 두 publish 모드
 
@@ -517,8 +517,8 @@ worker 일원화의 추가 비용은 추정 **~10–30ms** (LLM TTF 200–800ms 
 
 OSS로 이 패턴을 갖추는 두 옵션:
 
-- **(a) [Aegra](https://github.com/ibbybuilds/aegra)** — LangGraph Platform OSS port. 위 패턴을 이미 구현. `pip install aegra-api`, Docker single container, `aegra.json`으로 graphs/http.app/auth 등록. 큐 모델은 LangGraph Platform과 동일(Redis Lists + BLPOP + Pub/Sub). cron만 [Aegra#316](https://github.com/ibbybuilds/aegra/issues/316) PR 진행 중.
-- **(b) ARQ + Redis Streams 직접** — 우리가 owner. broker 자유, 도메인 특화 가능. lease+reaper+SSE forwarder를 직접 구현 (~1500줄).
+- **(a) [Aegra](https://github.com/ibbybuilds/aegra)**: LangGraph Platform OSS port. 위 패턴을 이미 구현. `pip install aegra-api`, Docker single container, `aegra.json`으로 graphs/http.app/auth 등록. 큐 모델은 LangGraph Platform과 동일(Redis Lists + BLPOP + Pub/Sub). cron만 [Aegra#316](https://github.com/ibbybuilds/aegra/issues/316) PR 진행 중.
+- **(b) ARQ + Redis Streams 직접**: 우리가 owner. broker 자유, 도메인 특화 가능. lease+reaper+SSE forwarder를 직접 구현 (~1500줄).
 
 아래는 (b) 예시. (a)는 Aegra 공식 docs 참조. LangGraph가 Pub/Sub+List를 쓰는 건 더 검증된 선택지라는 시그널이지만, (b)로 새로 짜는 입장에선 Streams가 cursor/MAXLEN/atomic을 무료로 줘서 재구현 부담을 줄임.
 
@@ -595,8 +595,8 @@ Worker:
 #### 운영/안정성
 
 - **챗 resumability 무료** - 탭 닫고 돌아와도 `last_event_id` 들고 GET stream → 이어붙음
-- **이미 publish된 event는 살아있음** — Stream entries는 trim 전까지 영속. web 프로세스 죽어도 이미 XADD된 청크는 다른 SSE 구독자에 도달. ARQ retry로 worker 재시작 자체는 OK
-- **단, "워커 크래시 시 토큰 손실 없음"은 아님** — Cloudflare RFC #1257이 명시한 구분이 중요: *client-side resume* (이미 발행된 event 재합류)은 쉽지만, *server-side resume that doesn't re-bill tokens* (provider stream 중간에 끊긴 inference를 토큰 재과금 없이 이어붙임)은 어려움 → **inference 앞단에 durable buffer (AI Gateway 같은 것) 필요**. log persistence ≠ inference continuation.
+- **이미 publish된 event는 살아있음**: Stream entries는 trim 전까지 영속. web 프로세스 죽어도 이미 XADD된 청크는 다른 SSE 구독자에 도달. ARQ retry로 worker 재시작 자체는 OK
+- **단, "워커 크래시 시 토큰 손실 없음"은 아님**: Cloudflare RFC #1257이 명시한 구분이 중요하다. *client-side resume* (이미 발행된 event 재합류)은 쉽지만, *server-side resume that doesn't re-bill tokens* (provider stream 중간에 끊긴 inference를 토큰 재과금 없이 이어붙임)은 어려움 → **inference 앞단에 durable buffer (AI Gateway 같은 것) 필요**. log persistence ≠ inference continuation.
 - **bounded memory** - `XADD MAXLEN ~ 5000`으로 토큰 수천 청크 챗에서도 메모리 확정
 - **debugging 무료** - `XRANGE run:{id} - +` 한 줄로 run 이벤트 history 재생
 
@@ -638,13 +638,13 @@ LangGraph Platform은 ARQ를 안 쓰고 자체 구현 큐(`langgraph_storage.que
 
 ---
 
-## 운영 관점 — K8s + KEDA로 패턴 1 구현
+## 운영 관점: K8s + KEDA로 패턴 1 구현
 
-위 권고 패턴 1(worker pool + durable log)을 운영 환경에 깔려면 컨테이너 분리만으로 부족하다. 여러 public deployment 사례 — [LangSmith standalone deployment](https://docs.langchain.com/langsmith/deploy-standalone-server), [LangSmith Kubernetes topology](https://docs.langchain.com/langsmith/kubernetes), [Inngest worker docs](https://www.inngest.com/docs/features/realtime), Cloudflare DO 패턴 — 을 가로지르면 공통적으로 다음 셋이 보강된다: **워커 autoscale, plane 격리, run 상태 전이 표준**. K8s 환경 기준 정리.
+위 권고 패턴 1(worker pool + durable log)을 운영 환경에 깔려면 컨테이너 분리만으로 부족하다. 여러 public deployment 사례([LangSmith standalone deployment](https://docs.langchain.com/langsmith/deploy-standalone-server), [LangSmith Kubernetes topology](https://docs.langchain.com/langsmith/kubernetes), [Inngest worker docs](https://www.inngest.com/docs/features/realtime), Cloudflare DO 패턴)를 가로지르면 공통적으로 다음 셋이 보강된다: **워커 autoscale, plane 격리, run 상태 전이 표준**. K8s 환경 기준 정리.
 
-### Worker autoscale — KEDA Redis-list trigger
+### Worker autoscale: KEDA Redis-list trigger
 
-worker 일원화의 핵심 가정은 "큐가 차면 워커가 늘어난다". CPU/메모리 기반 HPA는 LLM I/O-bound 워크로드엔 부적합 — **backlog(pending run 수) 기준이 더 정확**하다.
+worker 일원화의 핵심 가정은 "큐가 차면 워커가 늘어난다". CPU/메모리 기반 HPA는 LLM I/O-bound 워크로드엔 부적합하고, **backlog(pending run 수) 기준이 더 정확**하다.
 
 [KEDA](https://keda.sh/) 2.19+ Redis Lists scaler가 표준 구현:
 
@@ -667,14 +667,14 @@ spec:
 
 운영 노하우:
 
-- **scale-out 빠르게, scale-in 보수적으로** — `cooldownPeriod` 길게. 장시간 run이 갑자기 죽지 않도록.
-- **maxReplicaCount는 downstream 한도 기준** — Worker만 늘려도 Postgres connection pool 또는 외부 API rate limit (LLM provider/검색/내부 시스템) 이 먼저 막힘.
-- **`preStop` hook + graceful shutdown** — pod 종료 시 in-flight run을 checkpoint까지 진행 후 종료.
-- **chat_fast vs heavy 큐 분리는 ScaledObject 2개로** — heavy queue worker는 `maxReplicaCount` 낮게.
+- **scale-out 빠르게, scale-in 보수적으로**: `cooldownPeriod` 길게. 장시간 run이 갑자기 죽지 않도록.
+- **maxReplicaCount는 downstream 한도 기준**: Worker만 늘려도 Postgres connection pool 또는 외부 API rate limit (LLM provider/검색/내부 시스템) 이 먼저 막힘.
+- **`preStop` hook + graceful shutdown**: pod 종료 시 in-flight run을 checkpoint까지 진행 후 종료.
+- **chat_fast vs heavy 큐 분리는 ScaledObject 2개로**: heavy queue worker는 `maxReplicaCount` 낮게.
 
-ARQ도 같은 패턴(KEDA가 `arq:queue:default` 같은 list 모니터). Aegra의 BLPOP queue도 마찬가지 — `listName`만 Aegra 실제 키 prefix로 바꾸면 동일하게 scale 가능.
+ARQ도 같은 패턴(KEDA가 `arq:queue:default` 같은 list 모니터). Aegra의 BLPOP queue도 마찬가지로, `listName`만 Aegra 실제 키 prefix로 바꾸면 동일하게 scale 가능.
 
-### Plane 분리 — 장애 격리
+### Plane 분리: 장애 격리
 
 [LangSmith Deployments topology](https://docs.langchain.com/langsmith/data-plane) 같은 실제 LangGraph 운영 reference를 보면 control/data 분리가 명시적이다. 일반화하면 3 plane:
 
@@ -684,7 +684,7 @@ ARQ도 같은 패턴(KEDA가 `arq:queue:default` 같은 list 모니터). Aegra�
 | **Data Plane** | UI, BFF, Agent API, Worker, Redis, Postgres | 사용자 run 생성/실행/streaming 직접 영향 |
 | **Integration Plane** | MCP Proxy, Egress Gateway, 외부 API/내부 시스템 어댑터, LLM Gateway | 특정 도메인 tool 실패. circuit breaker로 격리 |
 
-**원칙**: Control Plane 장애가 Data Plane 전체 장애로 번지지 않게. ArgoCD가 죽어도 기존 Pod는 계속 실행. Vault 장애 시엔 mount된 secret TTL 내 graceful degradation. LangSmith Deployments가 control plane(LangChain 호스팅) / data plane(고객 cluster) 분리로 같은 원칙을 적용 — control plane이 끊겨도 data plane의 in-flight run은 계속.
+**원칙**: Control Plane 장애가 Data Plane 전체 장애로 번지지 않게. ArgoCD가 죽어도 기존 Pod는 계속 실행. Vault 장애 시엔 mount된 secret TTL 내 graceful degradation. LangSmith Deployments가 control plane(LangChain 호스팅) / data plane(고객 cluster) 분리로 같은 원칙을 적용한다. control plane이 끊겨도 data plane의 in-flight run은 계속.
 
 durable cursor log 자체는 Data Plane(Postgres + Redis)에 있으므로 **Control Plane 장애에도 in-flight run의 streaming은 살아남는다.** 이게 plane 분리의 운영적 가치.
 
@@ -729,7 +729,7 @@ queued ─→ running ─┬─→ succeeded
 
 **Redis 금지 영역**: 사용자 대화 원문, tool/외부 API 결과, 최종 산출물의 source of truth. Redis는 ephemeral 신호 + 캐시 전용. Redis 전체가 날아가도 Postgres만으로 in-flight run을 복구할 수 있어야 함.
 
-### Durability 레벨 — 어느 장애까지 견디는가
+### Durability 레벨: 어느 장애까지 견디는가
 
 "durability"는 한 단어지만 실제 운영에서는 **여러 장애 시나리오로 쪼개진다**. 각 구현체가 어디까지 견디는지 같이 비교하면 트레이드오프가 더 선명해진다.
 
@@ -745,8 +745,8 @@ queued ─→ running ─┬─→ succeeded
 | TTL/retention | 즉시 | 명시적 `MAXLEN`/`TTL` | 정책 결정 (수일~수개월) | actor 생애주기 | **~10분 (OpenAI 기본)** |
 
 **핵심 인사이트** (Cloudflare RFC #1257 framing):
-- **Client-side resume** (이미 발행된 event 다시 받기) — Redis Streams / Postgres event table / DO SQLite 모두 풀 수 있음. 어렵지 않음.
-- **Server-side resume that doesn't re-bill** (provider stream 중간에 끊긴 inference를 토큰 재과금 없이 이어붙임) — **아무도 OSS로 완벽히 못 풀고 있음**. Cloudflare가 AI Gateway를 *durable response buffer*로 만들겠다고 RFC에서 선언한 게 바로 이 영역. OpenAI background는 vendor 안에서만 해결.
+- **Client-side resume** (이미 발행된 event 다시 받기): Redis Streams / Postgres event table / DO SQLite 모두 풀 수 있음. 어렵지 않음.
+- **Server-side resume that doesn't re-bill** (provider stream 중간에 끊긴 inference를 토큰 재과금 없이 이어붙임): **아무도 OSS로 완벽히 못 풀고 있음**. Cloudflare가 AI Gateway를 *durable response buffer*로 만들겠다고 RFC에서 선언한 게 바로 이 영역. OpenAI background는 vendor 안에서만 해결.
 
 → 이 표가 말하는 본질: "**durable**" 한 단어로 묶지 말고 **장애 시나리오별로 가격이 다른 보장**이라고 봐야 함. 우리 워크로드가 어느 칸까지 필요한지 골라야 함.
 
@@ -763,7 +763,7 @@ durable log를 다른 시스템에서 안정적으로 소비하려면 event type
 | `approval.required` / `approval.decided` | Worker / API | HITL gate | DB |
 | `run.completed` / `run.failed` | Worker / API | 종료 | DB |
 
-**재연결 원칙**: UI가 stream을 놓치면 `run_id` + `Last-Event-ID`로 재연결. Redis Pub/Sub만으론 과거 replay 안 됨 — replay 요구가 강하면 최근 event를 별도 영속 layer(Postgres event table 또는 Object Storage log chunk)로 보존. LangGraph Platform 공식 docs는 **thread stream resume을 `Last-Event-ID`로 공식 지원**한다고 명시하지만 [내부 구현은 비공개](https://docs.langchain.com/langgraph-platform/streaming). OSS로 재현 시 Postgres event table이 가장 흔한 선택지, Cloudflare Agents는 같은 추상을 actor-local SQLite로 푼다 ([Cloudflare AIChatAgent docs](https://developers.cloudflare.com/agents/api-reference/chat-agents/)).
+**재연결 원칙**: UI가 stream을 놓치면 `run_id` + `Last-Event-ID`로 재연결. Redis Pub/Sub만으론 과거 replay 안 됨. replay 요구가 강하면 최근 event를 별도 영속 layer(Postgres event table 또는 Object Storage log chunk)로 보존. LangGraph Platform 공식 docs는 **thread stream resume을 `Last-Event-ID`로 공식 지원**한다고 명시하지만 [내부 구현은 비공개](https://docs.langchain.com/langgraph-platform/streaming). OSS로 재현 시 Postgres event table이 가장 흔한 선택지, Cloudflare Agents는 같은 추상을 actor-local SQLite로 푼다 ([Cloudflare AIChatAgent docs](https://developers.cloudflare.com/agents/api-reference/chat-agents/)).
 
 이 9개 카테고리는 vendor마다 이름이 달라도 **고수준 의미는 isomorphic**. 예: OpenAI Responses의 `response.output_text.delta` ≈ `token.delta`, LangGraph의 `messages/partial` + `messages/complete` ≈ `token.delta` + `node.completed`.
 
@@ -777,7 +777,7 @@ durable log를 다른 시스템에서 안정적으로 소비하려면 event type
 
 첫째, **단일 업계 표준은 없다.** 워크로드별로 4개 패턴(worker pool / actor-as-handler / inline-stateless / 장기 WebSocket)이 갈려있고, 각자 자기 영역에서 표준이다. OpenAI 자체도 multi-minute agent에는 worker+log로 가면서 voice/realtime에는 WebSocket으로 정반대 방향을 동시에 밀고 있다.
 
-둘째, 그 안에서 **multi-minute agent platform 진영**에 속하는 시스템들의 답은 비교적 명확하다. LangGraph Platform / OpenAI Responses background / Inngest+Mastra는 **(1) worker 통합 실행 경로 (2) per-run durable cursor-addressable 이벤트 로그 (3) cursor resume (4) 큐 분리**로 수렴. Cloudflare Agents는 actor-as-handler 패턴이라 토폴로지는 다르지만 *durable per-run log* 추상은 공유 — 같은 문제를 다른 구현체로 푼다. 이 진영의 워크로드를 다룬다면 이 형태가 합리적 시작점이다.
+둘째, 그 안에서 **multi-minute agent platform 진영**에 속하는 시스템들의 답은 비교적 명확하다. LangGraph Platform / OpenAI Responses background / Inngest+Mastra는 **(1) worker 통합 실행 경로 (2) per-run durable cursor-addressable 이벤트 로그 (3) cursor resume (4) 큐 분리**로 수렴. Cloudflare Agents는 actor-as-handler 패턴이라 토폴로지는 다르지만 *durable per-run log* 추상은 공유한다. 같은 문제를 다른 구현체로 푼다. 이 진영의 워크로드를 다룬다면 이 형태가 합리적 시작점이다.
 
 흔한 dual-path + pub/sub + List 구조는 이 진영이 진화 과정에서 일부 폐기한 모양이다 (LangGraph Platform은 여전히 Pub/Sub+List를 쓰지만 worker는 통합했고, dual path는 없앴다). dual-publish로 챗에 영속성을 더하는 땜빵은 이 진화의 중간 단계를 연명시키는 것일 뿐이고, 진짜 답은 **이벤트 로그를 한 번 깔끔하게 깔고 worker로 통합하는 것**이다 - 구현체는 Pub/Sub+List든 Streams든 자유롭게.
 
@@ -787,7 +787,7 @@ PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 
 
 ---
 
-## 부록: durability 영역의 미해결 문제 — no-rebill server-side resume
+## 부록: durability 영역의 미해결 문제, no-rebill server-side resume
 
 여러 시스템을 가로지르면서 **아직 OSS로 완벽히 풀린 데가 없는 문제**가 하나 있다.
 
@@ -812,7 +812,7 @@ PoC 단계에서 이 결정을 내리는 게 낫다. 실행 경로가 코드에 
 - [LangGraph reliable streaming changelog](https://changelog.langchain.com/announcements/reliable-streaming-and-efficient-state-management-in-langgraph)
 - [How LangGraph Uses Redis for Fault-Tolerant Task Execution](https://neuralware.github.io/posts/langgraph-redis/index.html)
 - [Aegra (LangGraph Platform OSS port, Apache-2.0)](https://github.com/ibbybuilds/aegra)
-- [LangGraph #6709 — OSS Postgres runtime issue](https://github.com/langchain-ai/langgraph/issues/6709)
+- [LangGraph #6709: OSS Postgres runtime issue](https://github.com/langchain-ai/langgraph/issues/6709)
 - [OpenAI Background mode guide](https://platform.openai.com/docs/guides/background)
 - [OpenAI: Speeding up agentic workflows with WebSockets](https://openai.com/index/speeding-up-agentic-workflows-with-websockets/)
 - [Anthropic Messages streaming](https://platform.claude.com/docs/en/api/messages-streaming)

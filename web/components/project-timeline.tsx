@@ -16,7 +16,7 @@ interface ProjectTimelineComponentProps {
 
 // Company logo mapping — put logo files in /public/logos/
 const companyLogos: Record<string, { logo?: string; color: string }> = {
-  BrainCrew: { logo: "/logos/braincrew.png", color: "bg-blue-500" },
+  BrainCrew: { logo: "/logos/braincrew.png", color: "bg-emerald-500" },
   LabQ: { logo: "/logos/labq.png", color: "bg-violet-500" },
 };
 

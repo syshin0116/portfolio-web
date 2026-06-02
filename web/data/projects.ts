@@ -74,6 +74,60 @@ export interface ProjectDetail {
 // Timeline data for the main projects page
 export const projectsTimeline: ProjectTimeline[] = [
   // 진행 중인 프로젝트 (최신순)
+  // --- BrainCrew (테디노트랩 Team RAG), 2026.03 ~ 현재 ---
+  {
+    id: "skt-welfare-agent",
+    title: "사내 복지 AI Agent + 레거시 ERP 연동 PoC",
+    period: "2026.05 ~ 진행 중",
+    year: 2026,
+    periodType: "H",
+    periodNumber: 1,
+    isCompleted: false,
+    description: "대기업 사내 복지 플랫폼을 위한 사용자향 AI 에이전트. FastAPI + LangGraph + deepagents 백엔드를 스캐폴딩부터 주도 개발하고 사내 API·레거시 ERP(SAP RFC) HTTP 래퍼 연동 및 Next.js 챗 UI까지 구현.",
+    tags: ["AI/ML", "LangGraph", "FastAPI", "Next.js 16", "SAP RFC"],
+    category: "company",
+    company: "BrainCrew"
+  },
+  {
+    id: "skax-aipmo",
+    title: "AI PMO 자동화 PoC - 멀티 에이전트 원가 생성",
+    period: "2026.04 ~ 진행 중",
+    year: 2026,
+    periodType: "H",
+    periodNumber: 1,
+    isCompleted: false,
+    description: "대기업 SI 고객사의 PM 업무(원가 산정·RFP 분석·유사사업 추천)를 자동화하는 멀티 에이전트 PoC. Self-Correction·Self-Learning·Glass Box를 갖춘 자가진화형 시스템을 검증.",
+    tags: ["AI/ML", "LangGraph", "deepagents", "Azure", "Text-to-SQL"],
+    category: "company",
+    company: "BrainCrew"
+  },
+  {
+    id: "braincrew-wiki",
+    title: "BrainCrew Wiki - LLM 팀 지식 자동화 시스템",
+    period: "2026.04 ~ 진행 중",
+    year: 2026,
+    periodType: "H",
+    periodNumber: 1,
+    isCompleted: false,
+    description: "팀원이 쌓은 자유 형식 메모를 AI 루틴이 cross-link된 위키 문서로 자동 정제·발행하는 Git-native 파이프라인. 사람(원본)과 AI(정제본)의 쓰기 권한을 단방향으로 분리하고 pre-commit hook + CI로 이중 강제. 레포 100커밋 중 95커밋 단독.",
+    tags: ["AI Agent", "Next.js 16", "GitHub Actions", "LLM", "자동화"],
+    category: "company",
+    company: "BrainCrew"
+  },
+  {
+    id: "langgraph-fastapi-boilerplate",
+    title: "LangGraph FastAPI Boilerplate",
+    period: "2026.03 ~ 진행 중",
+    year: 2026,
+    periodType: "Q",
+    periodNumber: 1,
+    isCompleted: false,
+    description: "LangGraph Platform API를 벤더 종속 없이 재구현한 풀스택 보일러플레이트. SSE 재연결·이벤트 시퀀싱·lease 기반 크래시 복구, HITL·time travel·checkpoint branching, DB 기반 모델 레지스트리를 단독 구현.",
+    tags: ["오픈소스", "LangGraph", "FastAPI", "deepagents", "SSE"],
+    category: "personal",
+    github: "https://github.com/syshin0116/langgraph-fastapi-boilerplate"
+  },
+  // --- 개인 오픈소스 ---
   {
     id: "clidex",
     title: "Clidex - AI 에이전트를 위한 CLI 도구 검색",
@@ -82,7 +136,7 @@ export const projectsTimeline: ProjectTimeline[] = [
     periodType: "Q",
     periodNumber: 1,
     isCompleted: false,
-    description: "AI 에이전트가 CLI 도구를 검색·비교·설치할 수 있는 인덱스. BM25 + 시노님 확장으로 21개 쿼리 기준 100% recall 달성. Rust로 구현.",
+    description: "AI 에이전트가 CLI 도구를 검색·비교·설치할 수 있는 인덱스. 5,000+ CLI 도구를 인덱싱하고 캐시된 BM25 엔진으로 쿼리당 약 3ms 검색. Rust로 구현 (crates.io v0.4.0).",
     tags: ["오픈소스", "Rust", "CLI", "AI Agent", "BM25"],
     category: "personal",
     github: "https://github.com/syshin0116/clidex"
@@ -275,6 +329,251 @@ export const projectsTimeline: ProjectTimeline[] = [
 
 // Detailed project data for individual project pages
 export const projectsDetail: { [key: string]: ProjectDetail } = {
+  // ===== BrainCrew (테디노트랩 Team RAG), 2026.03 ~ 현재 =====
+  // 고객 PoC(SK AX / SKT)는 고객사명·내부 시스템명·수치를 제거한 공개용 서술입니다.
+  "skax-aipmo": {
+    id: "skax-aipmo",
+    title: "AI PMO 자동화 PoC - 멀티 에이전트 원가 생성",
+    subtitle: "대기업 SI 고객사 PM 업무 자동화 PoC",
+    period: "2026.04 ~ 진행 중",
+    duration: "약 2개월",
+    role: "AI Engineer (기술 PoC 리드급)",
+    team: "Team RAG (AI 기술 PoC 담당)",
+    description: "대기업 SI 고객사의 PM(프로젝트 관리) 업무 자동화를 위한 AI 에이전트 PoC. LangGraph/deepagents 기반 멀티 에이전트로 사업 원가 산정·제안요청서 분석·유사 프로젝트 추천·리스크 평가를 자동화하고, Self-Correction(생성→감사 루프)·Self-Learning(피드백 기반 스킬 개선)·Glass Box(실행 과정 투명 노출)를 검증했다. 에이전트 코어부터 데이터 모델·인프라·프론트엔드까지 풀스택 영역을 담당했다.",
+    techStack: {
+      languages: ["Python 3.12", "TypeScript", "SQL", "HCL (Terraform)"],
+      aiFrameworks: ["LangGraph", "LangChain", "deepagents", "AsyncPostgresSaver"],
+      llm: ["Claude", "GPT (Azure OpenAI)", "Gemini"],
+      backend: ["FastAPI", "ARQ (Redis worker)", "alembic", "pglast (AST 검증)"],
+      data: ["PostgreSQL", "pgvector", "PostgreSQL RLS", "Kiwi BM25 + 벡터 RRF", "Redis"],
+      frontend: ["React 19", "Vite 7", "TailwindCSS v4", "shadcn", "zustand"],
+      observability: ["Langfuse (self-host on AKS)", "LangSmith"],
+      infra: ["Azure AKS", "Azure PostgreSQL", "Azure Blob", "Terraform", "Helm", "GitHub Actions"]
+    },
+    keyResponsibilities: [
+      {
+        title: "에이전트 코어 설계",
+        details: [
+          "deepagents 기반 단일 통합 DeepAgent + tools + subagents 통합",
+          "이후 단일 main agent + audit_output tool 구조로 리팩토링",
+          "Glassbox emit을 LangGraph 표준(astream/subgraphs=True)으로 전면 전환",
+          "uv monorepo(core/api/worker/web) 구조 전환"
+        ]
+      },
+      {
+        title: "Self-Correction / Self-Evolving",
+        details: [
+          "Self-Correction 루프(researcher→generator→auditor) 구현",
+          "Skill overlay + auditor auto-feedback → skill_proposals → HITL → skill_overrides 적용",
+          "evaluator StateGraph + admin trigger + ARQ task로 평가 파이프라인 구축"
+        ]
+      },
+      {
+        title: "Text-to-SQL 및 멀티테넌시",
+        details: [
+          "Text-to-SQL 검증기를 정규식에서 pglast AST 기반으로 교체",
+          "2단계 계층 조회 + pg_catalog introspection 추가",
+          "LangSmith 기반 멀티모델 회귀 평가 하네스 구축",
+          "PostgreSQL RLS 기반 조직(tenant) 격리 + read-only TX 구현"
+        ]
+      },
+      {
+        title: "검색·관찰가능성·인프라·프론트",
+        details: [
+          "hybrid_search(벡터 + Kiwi BM25 RRF) 검색 도구 및 RAG 파이프라인 구축",
+          "Langfuse 트레이스를 단일 root span으로 묶고 user/team/org metadata 자동 주입",
+          "Azure AKS에 Langfuse self-host(Helm), Dynamic Sessions, Blob 등 인프라 구성",
+          "React 19 + Vite + Tailwind v4 기반 채팅·Glassbox·Inbox·유사사업 비교 UI 구현"
+        ]
+      }
+    ],
+    achievements: [
+      "기술 PoC 기간 단일 레포에 본인 커밋 317개로 데이터 모델·에이전트·인프라·프론트 전반을 구축하며 사실상 기술 리드급으로 기여",
+      "Self-Correction + Self-Evolving + Glass Box를 갖춘 자가진화형 AI PMO 컨셉을 동작 가능한 PoC로 검증",
+      "Text-to-SQL 안전성을 정규식에서 AST 검증 + RLS read-only TX로 강화하고 멀티모델 회귀 평가로 품질 정량 측정",
+      "기술 PoC 종료 후 영업 PoC와 차기 재설계까지 연속 참여하며 production 아키텍처 전환 로드맵 수립"
+    ],
+    learnings: [
+      "멀티 에이전트 설계: subagents 분리에서 단일 agent + tool로의 단순화 트레이드오프",
+      "에이전트 안전성: Text-to-SQL의 AST 검증과 RLS read-only 경계",
+      "관찰가능성: trace 파편화 해소와 메타데이터 기반 디버깅",
+      "클라우드 운영: Azure AKS 기반 self-host 관찰가능성 스택 구성"
+    ]
+  },
+  "skt-welfare-agent": {
+    id: "skt-welfare-agent",
+    title: "사내 복지 AI Agent + 레거시 ERP 연동 PoC",
+    subtitle: "대기업 사내 복지 플랫폼 사용자향 AI 에이전트",
+    period: "2026.05 ~ 진행 중",
+    duration: "약 1개월",
+    role: "AI Engineer (백엔드 주도 + 프론트/SAP 연동)",
+    team: "Team RAG (사용자향 에이전트 단일 최다 기여)",
+    description: "대기업 사내 복지 플랫폼을 위한 사용자향 AI 에이전트 PoC. FastAPI + LangGraph + deepagents 기반 백엔드를 스캐폴딩부터 주도 개발하고, 사내 LLM gateway(OpenAI 호환) 연동, SSE 스트리밍, 사내 API 비동기 클라이언트, 카드형 도구(skill) 설계, 레거시 ERP(SAP RFC) HTTP 래퍼 연동까지 구현했다. Next.js 16/React 19 기반 챗·신청 위저드 프론트엔드도 함께 구축했다.",
+    techStack: {
+      languages: ["Python 3.12", "TypeScript"],
+      backend: ["FastAPI", "LangGraph", "LangChain", "deepagents", "httpx (async)", "cryptography (AES-128-CBC)"],
+      frontend: ["Next.js 16 (App Router)", "React 19", "Tailwind CSS v4", "Framer Motion"],
+      llm: ["사내 LLM gateway (OpenAI 호환)", "LangSmith", "Langfuse"],
+      integration: ["사내 복지 API", "레거시 ERP(SAP RFC) via HTTP 래퍼", "사내 메일 Gateway"],
+      infra: ["Docker / docker-compose", "uv", "pnpm 10", "GitLab CI"],
+      tooling: ["ruff", "mypy (strict)", "pytest / pytest-asyncio"]
+    },
+    keyResponsibilities: [
+      {
+        title: "에이전트 백엔드 주도 개발",
+        details: [
+          "에이전트를 scaffold부터 데모까지 단일 최다 기여자로 주도 (FastAPI + LangGraph deepagent)",
+          "사내 API 4종 래핑 비동기 클라이언트(httpx) 구현 및 user 식별자를 RunnableConfig로 주입",
+          "LLM 노출 표면을 raw tool에서 카드 wrapper skill(show/start/submit) + blocks envelope로 재설계",
+          "SSE /stream + 단발 /invoke·/entry 등 엔드포인트 구현"
+        ]
+      },
+      {
+        title: "사내 게이트웨이 / 메일 연동",
+        details: [
+          "사내 LLM gateway OpenAI-호환 endpoint로 전환 (SSL 토글, 강제 streaming)",
+          "사내 메일 Gateway 연동: AES-128-CBC + PKCS5Padding 암호화 메일 클라이언트 구현",
+          "fail-fast 타임아웃 + PII-guard 로깅 토글로 운영 견고성 확보"
+        ]
+      },
+      {
+        title: "레거시 ERP(SAP RFC) 연동",
+        details: [
+          "SAP RFC를 사내 rfc-wrapper HTTP endpoint 경유로 붙이는 클라이언트 구현",
+          "조회(R) 구현, 신청/취소(W)는 Spec 대기 stub로 분리",
+          "read-only Protocol로 쓰기 호출이 새지 않도록 타입 경계 분리"
+        ]
+      },
+      {
+        title: "프론트엔드 구현",
+        details: [
+          "Next.js 16/React 19/Tailwind v4 기반 챗 UI 구현",
+          "4단계 신청 위저드 + 마이페이지",
+          "e-HR URL params 자동 폼 채움, 사번 오버라이드"
+        ]
+      }
+    ],
+    achievements: [
+      "에이전트의 단일 최다 기여자로 약 3주만에 scaffold→데모 가능 상태까지 완성",
+      "데모를 목표로 사용자향 에이전트 + 공용 UI를 실데이터 연동 가능 상태로 정비",
+      "레거시 ERP를 HTTP 래퍼 + read-only Protocol로 안전하게 연동"
+    ],
+    learnings: [
+      "사용자향 에이전트 도구 설계: raw API보다 카드형 skill의 시나리오 커버리지",
+      "레거시 시스템 통합: SAP RFC를 HTTP로 추상화하고 타입으로 쓰기 경계 강제",
+      "데모 안정화: 실데이터 연동 시 발생하는 엣지케이스 방어 픽스",
+      "보안: 사내 메일 암호화와 PII 가드 로깅"
+    ]
+  },
+  "braincrew-wiki": {
+    id: "braincrew-wiki",
+    title: "BrainCrew Wiki - LLM 팀 지식 자동화 시스템",
+    subtitle: "AI 루틴 기반 Git-native 팀 위키 파이프라인",
+    period: "2026.04 ~ 진행 중",
+    duration: "약 1개월",
+    role: "1인 설계·구현 (Team RAG)",
+    team: "사내 팀 (레포 100커밋 중 95커밋 단독)",
+    description: "LLM 기반 팀 지식 자동화 시스템을 단독 설계·구현. 팀원이 자유 형식으로 쌓은 메모를 AI 루틴이 cross-link된 위키 문서로 자동 정제·발행하는 Git-native 파이프라인으로, 사람(원본)과 AI(정제본)의 쓰기 권한을 단방향으로 분리하고 pre-commit hook + CI로 이중 강제했다. ingest/lint/reflect/migrate 4단계를 단일 실행으로 묶는 dispatcher와 결정론적 검증 게이트, auto-merge CI, Next.js 검색 웹까지 포함한다. 별도로 Team RAG 활동으로 에이전트 메모리 논문(AgeMem)의 noRL 변형을 LangGraph로 재현해 약한 LLM 백본에서만 유의미한 성능 향상이 나타나는 비용 대비 효과를 정량 분석했다.",
+    techStack: {
+      languages: ["Python", "TypeScript"],
+      frameworks: ["Next.js 16", "React 19", "LangGraph", "LangChain"],
+      tooling: ["Bun", "uv (inline script deps)", "GitHub Actions", "Anthropic Routine", "Claude Code skills", "pre-commit githooks", "pagefind", "d3", "Vercel"],
+      llm: ["Anthropic Claude (wiki-curator routine)"],
+      patterns: ["Karpathy LLM-wiki pattern", "single-fire dispatcher", "deterministic verify gate", "raw/wiki one-way ownership"]
+    },
+    keyResponsibilities: [
+      {
+        title: "wiki-curator 파이프라인",
+        details: [
+          "ingest→lint→reflect→migrate 4-op을 한 fire에서 순차 실행하는 single-fire dispatcher 설계",
+          "migrate 트리거를 LLM 판단에서 결정론적 조건(태그/타입 클러스터, 1-page 폴더 해체 등)으로 전환",
+          "2-fire를 single-fire로 collapse하여 migrate-starvation·workflow_run 체인 제거"
+        ]
+      },
+      {
+        title: "검증 게이트 및 소유 강제",
+        details: [
+          "결정론적 검증 게이트 verify-wiki.py 구현 (wikilink·frontmatter·필수 섹션 등 9종 체크, 실패 시 self-fix 후 abort)",
+          "lint·rebuild-index 스크립트를 TS→Python(uv inline-deps)로 전환",
+          "raw/wiki 단방향 소유를 pre-commit hook + path-guard CI로 이중 강제",
+          "Routine bot을 plus-addressing git author로 식별해 봇/사람 커밋 분리"
+        ]
+      },
+      {
+        title: "CI / 온보딩 / 웹 / 연구",
+        details: [
+          "routine/* PR auto-merge(squash-loop) + raw-verify CI 구성",
+          "팀 공용 Claude Code skill(추가/검색) 분리 및 6단계 온보딩 스크립트 작성",
+          "Next.js 16 + Bun 위키 웹 구현·운영 (folder-index, backlink, pagefind 검색, d3 graph view, Vercel 자동 배포)",
+          "AgeMem(arXiv 2601.01885) noRL 변형을 LangGraph tool-calling 루프로 재현하고 백본 강도별 성능을 정량 평가"
+        ]
+      }
+    ],
+    achievements: [
+      "레포 전체 100커밋 중 95커밋을 단독 작성하며 시스템 설계부터 CI·웹 배포까지 end-to-end 구축",
+      "단일 routine fire에서 5개 신규 위키 페이지 + 2개 cross-link 자동 생성으로 파이프라인 동작 검증",
+      "AgeMem 논문 noRL 변형을 LangGraph로 재현해 약한 LLM 백본에서만 유의미한 성능 향상(+8.7pp)을 정량 분석"
+    ],
+    learnings: [
+      "에이전트 자동화 설계: LLM 판단 vs 결정론적 트리거의 신뢰성 트레이드오프",
+      "쓰기 권한 격리: 사람과 AI의 단방향 소유를 hook + CI로 강제하는 패턴",
+      "논문 재현 연구: 메모리 구조의 효과를 백본 강도별로 정량 비교"
+    ]
+  },
+  "langgraph-fastapi-boilerplate": {
+    id: "langgraph-fastapi-boilerplate",
+    title: "LangGraph FastAPI Boilerplate",
+    subtitle: "벤더 종속 없는 LangGraph Platform API 재구현",
+    period: "2026.03 ~ 진행 중",
+    duration: "약 1개월",
+    role: "1인 개발 / 오픈소스",
+    team: "개인 오픈소스 프로젝트",
+    description: "LangGraph Platform API를 벤더 종속 없이 재구현한 풀스택 보일러플레이트. SSE 재연결·이벤트 시퀀싱·lease 기반 크래시 복구, 선택적 Redis + ARQ 백그라운드 워커, DB 기반 모델 레지스트리, HITL·time travel·checkpoint branching을 단독으로 구현했다.",
+    github: "https://github.com/syshin0116/langgraph-fastapi-boilerplate",
+    techStack: {
+      backend: ["FastAPI", "LangGraph >= 1.0", "LangChain", "deepagents", "langgraph-checkpoint-postgres", "sse-starlette"],
+      llm: ["langchain-anthropic", "langchain-openai"],
+      database: ["PostgreSQL (pgvector)", "psycopg", "선택적 Redis + ARQ"],
+      frontend: ["React", "Vite", "TypeScript"],
+      infra: ["Docker Compose", "uv workspaces"]
+    },
+    keyFeatures: [
+      {
+        title: "스트리밍 및 복구",
+        details: [
+          "SSE 재연결 + 이벤트 시퀀싱",
+          "lease 기반 크래시 복구",
+          "선택적 Redis + ARQ 워커로 백그라운드 run 실행"
+        ]
+      },
+      {
+        title: "에이전트 운영 기능",
+        details: [
+          "HITL + time travel + checkpoint branching",
+          "DB 기반 모델 레지스트리로 모델 선택",
+          "deep agent(deepagents) 마이그레이션"
+        ]
+      },
+      {
+        title: "프로젝트 구조",
+        details: [
+          "monorepo backend/ + frontend/ 재구조화",
+          "uv workspaces 기반 의존성 관리",
+          "Docker Compose 로컬 실행 환경"
+        ]
+      }
+    ],
+    achievements: [
+      "LangGraph Platform 핵심 기능을 벤더 종속 없이 재구현",
+      "본인 단독 17커밋으로 풀스택 보일러플레이트 구축",
+      "SSE 복구·HITL·time travel 등 프로덕션 운영 기능 포함"
+    ],
+    learnings: [
+      "LangGraph 내부 동작 이해: Platform API를 직접 재구현하며 체크포인트/스트리밍 구조 학습",
+      "장애 복구 설계: lease 기반 크래시 복구와 이벤트 시퀀싱",
+      "보일러플레이트 설계: 재사용 가능한 풀스택 템플릿 구조화"
+    ]
+  },
   "sk-pharmaaix": {
     id: "sk-pharmaaix",
     title: "MR Assistant - 제약 영업 지원 AI 챗봇",
@@ -885,10 +1184,10 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
       }
     ],
     achievements: [
-      "30개 쿼리 테스트 스위트에서 높은 recall 달성",
+      "5,000+ CLI 도구 인덱싱 (Homebrew, awesome-cli-apps, toolleeo, npm, crates.io 등 소스 통합)",
       "70+ CLI 도메인 시노님 매핑 구축",
       "최소 바이너리 사이즈 최적화 (LTO + strip)",
-      "20+ 실제 CLI 도구 인덱싱 (jq, ripgrep, fd, bat, fzf 등)"
+      "캐시된 BM25 엔진으로 전체 인덱스에서 쿼리당 약 3ms 검색 (crates.io v0.4.0)"
     ],
     challenges: [
       {

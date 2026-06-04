@@ -90,13 +90,13 @@ export const projectsTimeline: ProjectTimeline[] = [
   },
   {
     id: "skax-aipmo",
-    title: "AI PMO 자동화 PoC - 멀티 에이전트 원가 생성",
+    title: "AI PMO 자동화 - 멀티 에이전트 원가 생성",
     period: "2026.04 ~ 진행 중",
     year: 2026,
     periodType: "H",
     periodNumber: 1,
     isCompleted: false,
-    description: "대기업 SI 고객사의 PM 업무(원가 산정·RFP 분석·유사사업 추천)를 자동화하는 멀티 에이전트 PoC. Self-Correction·Self-Learning·Glass Box를 갖춘 자가진화형 시스템을 검증.",
+    description: "대기업 SI 고객사의 PM 업무(원가 산정·RFP 분석·유사사업 추천)를 자동화하는 멀티 에이전트 시스템. Self-Correction·Self-Learning·Glass Box를 갖춘 자가진화형 구조를 기술 PoC(2026.04 완료)로 검증하고, 후속 단계(CBT·재설계 1.5)를 거쳐 2.0(~2026.10 예정)으로 이어지고 있다.",
     tags: ["AI/ML", "LangGraph", "deepagents", "Azure", "Text-to-SQL"],
     category: "company",
     company: "BrainCrew"
@@ -333,13 +333,13 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
   // 고객 PoC(SK AX / SKT)는 고객사명·내부 시스템명·수치를 제거한 공개용 서술입니다.
   "skax-aipmo": {
     id: "skax-aipmo",
-    title: "AI PMO 자동화 PoC - 멀티 에이전트 원가 생성",
-    subtitle: "대기업 SI 고객사 PM 업무 자동화 PoC",
+    title: "AI PMO 자동화 - 멀티 에이전트 원가 생성",
+    subtitle: "대기업 SI 고객사 PM 업무 자동화",
     period: "2026.04 ~ 진행 중",
-    duration: "약 2개월",
+    duration: "기술 PoC 약 1개월(2026.04 완료) 포함, 이후 후속 버전 진행 중",
     role: "AI Engineer (기술 PoC 리드급)",
     team: "Team RAG (AI 기술 PoC 담당)",
-    description: "대기업 SI 고객사의 PM(프로젝트 관리) 업무 자동화를 위한 AI 에이전트 PoC. LangGraph/deepagents 기반 멀티 에이전트로 사업 원가 산정·제안요청서 분석·유사 프로젝트 추천·리스크 평가를 자동화하고, Self-Correction(생성→감사 루프)·Self-Learning(피드백 기반 스킬 개선)·Glass Box(실행 과정 투명 노출)를 검증했다. 에이전트 코어부터 데이터 모델·인프라·프론트엔드까지 풀스택 영역을 담당했다.",
+    description: "대기업 SI 고객사의 PM(프로젝트 관리) 업무 자동화를 위한 AI 에이전트. LangGraph/deepagents 기반 멀티 에이전트로 사업 원가 산정·제안요청서 분석·유사 프로젝트 추천·리스크 평가를 자동화하고, Self-Correction(생성→감사 루프)·Self-Learning(피드백 기반 스킬 개선)·Glass Box(실행 과정 투명 노출)를 검증했다. 기술 PoC를 2026.04에 완료한 뒤 CBT·재설계(1.5)를 거쳐 2.0(~2026.10 예정)으로 이어지고 있으며, 에이전트 코어부터 데이터 모델·인프라·프론트엔드까지 풀스택 영역을 담당했다.",
     techStack: {
       languages: ["Python 3.12", "TypeScript", "SQL", "HCL (Terraform)"],
       aiFrameworks: ["LangGraph", "LangChain", "deepagents", "AsyncPostgresSaver"],

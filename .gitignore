@@ -54,3 +54,6 @@ __pycache__/
 # agent
 agent/.langgraph_api/
 agent/supabase/.temp/
+
+# in-flight series research (author working files, not for commit)
+.series-research/

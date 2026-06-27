@@ -19,7 +19,6 @@ summary: "When registering a website on Google Search Console, users can choose 
 published: 2025-03-22
 modified: 2025-03-22
 ---
----
 
 
 구글 서치 콘솔(Google Search Console)에 웹사이트를 등록할 때 선택할 수 있는 두 가지 주요 속성 유형인 도메인(Domain)과 URL 접두어(URL Prefix)의 차이점은 다음과 같다.

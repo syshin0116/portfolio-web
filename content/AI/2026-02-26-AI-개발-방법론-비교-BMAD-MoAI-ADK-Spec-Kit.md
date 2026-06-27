@@ -21,7 +21,6 @@ summary: "Claude Code, Cursor 같은 AI 코딩 어시스턴트가 대중화되�
 published: 2026-02-26
 modified: 2026-03-19
 ---
----
 
 ## 왜 지금 이 비교인가
 

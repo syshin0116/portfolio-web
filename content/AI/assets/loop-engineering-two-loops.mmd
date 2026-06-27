@@ -1,0 +1,27 @@
+flowchart TB
+  subgraph OUTER["harness loop · 세션 재시작 · 컨텍스트 교체 · 에스컬레이트 · 라우팅"]
+    direction LR
+    D["Discovery"] --> H["Handoff"]
+    H --> V["Verification"]
+    V --> P["Persistence"]
+    P --> S["Scheduling"]
+    S -. 재트리거 .-> D
+    subgraph INNER["agent loop · 한 세션 내부"]
+      direction LR
+      T["Thought"] --> A["Action"]
+      A --> O["Observation"]
+      O -.-> T
+    end
+    H --> INNER
+    INNER --> V
+  end
+  HC["hill-climbing loop<br/>프로덕션 trace로 프롬프트 · 도구 · rubric 재작성"]
+  EV["event-driven loop<br/>webhook / 스케줄 / CI"]
+  HC -. 안쪽 루프를 직접 갱신 .-> INNER
+  EV -. 트리거 .-> D
+  classDef outer fill:#eef2ff,stroke:#4f46e5,stroke-width:2px;
+  classDef inner fill:#f7fee7,stroke:#65a30d,stroke-width:2px;
+  classDef feed fill:#fff7ed,stroke:#ea580c,color:#9a3412;
+  class OUTER outer;
+  class INNER inner;
+  class HC,EV feed;

@@ -1,0 +1,18 @@
+flowchart LR
+  D["Discovery<br/>일거리 발견"] --> H["Handoff<br/>범위 한정 + 격리 작업공간"]
+  H --> AG["agent loop<br/>실행"]
+  AG --> V["Verification<br/>maker와 분리된 독립 checker"]
+  V --> P["Persistence<br/>PR / 이슈 / 상태파일"]
+  P --> S["Scheduling<br/>재트리거"]
+  S -. 다음 사이클 .-> D
+  SG["보안 게이트<br/>Rule of Two · 3 중 2 · sandbox"] -. 입력 검사 .-> H
+  CG["비용 게이트<br/>tool-call ceiling · session cap<br/>cost-velocity circuit breaker"] -. 실행 통제 .-> AG
+  HG["human gate<br/>고위험 merge / deploy / 파괴적 액션"] ==> P
+  classDef stage fill:#eff6ff,stroke:#2563eb;
+  classDef cost fill:#ecfeff,stroke:#0891b2,color:#155e75;
+  classDef sec fill:#f5f3ff,stroke:#7c3aed,color:#5b21b6;
+  classDef human fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#991b1b;
+  class D,H,AG,V,P,S stage;
+  class CG cost;
+  class SG sec;
+  class HG human;

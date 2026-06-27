@@ -1,0 +1,28 @@
+flowchart TB
+  subgraph L4["Loop engineering · 2026 중 · 자율 순환 cadence"]
+    direction TB
+    trig["트리거: 스케줄 / 이벤트 / CI  +  검증 가능한 목표"]
+    subgraph L3["Harness engineering · 2026 초 · 에이전트 1개의 실행 환경"]
+      direction TB
+      h["도구 · 제약 · 검증 · 관측 scaffold"]
+      subgraph L2["Context engineering · 2025 · 컨텍스트 윈도우"]
+        direction TB
+        c["추론 시점에 모델이 보는 토큰 큐레이팅"]
+        subgraph L1["Prompt engineering · 2022-2024 · 한 번의 턴"]
+          p["좋은 지시문 쓰기"]
+        end
+      end
+    end
+  end
+  note["바깥 층일수록 작업 단위가 커진다. 각 층은 앞 층을 대체하지 않고 그 위에서 동작한다."]
+  L4 -.-> note
+  classDef outer fill:#eef2ff,stroke:#4f46e5,stroke-width:2px;
+  classDef mid fill:#f0f9ff,stroke:#0284c7;
+  classDef inner fill:#f7fee7,stroke:#65a30d;
+  classDef base fill:#fffbeb,stroke:#d97706;
+  classDef cap fill:#ffffff,stroke:#94a3b8,color:#475569;
+  class L4 outer;
+  class L3 mid;
+  class L2 inner;
+  class L1 base;
+  class note cap;

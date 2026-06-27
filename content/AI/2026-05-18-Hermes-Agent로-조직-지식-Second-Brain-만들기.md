@@ -39,7 +39,7 @@ AI 에이전트를 팀에서 쓰기 시작하면 금방 다음 질문에 부딪�
 
 먼저 전체 흐름을 그림으로 보면 이렇다.
 
-![[hermes-org-knowledge-pipeline.svg]]
+![[assets/hermes-org-knowledge-pipeline.svg]]
 
 > 핵심은 raw signal을 바로 조직 지식으로 저장하지 않는 것이다. Hermes는 후보를 만들고, 사람은 승격 여부를 결정하며, ADR과 LLM Wiki가 서로 다른 시간 모델을 맡는다.
 
@@ -395,7 +395,7 @@ collect
 
 검색/권한 구조는 다음처럼 분리해서 보는 편이 안전하다.
 
-![[hermes-knowledge-search-permission.svg]]
+![[assets/hermes-knowledge-search-permission.svg]]
 
 > 좋은 검색은 BM25, 벡터, 메타데이터, 그래프를 조합해서 만든다. 안전한 검색은 그 전에 source ACL을 보존하고 query-time filtering을 강제해서 만든다.
 

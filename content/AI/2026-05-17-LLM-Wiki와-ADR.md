@@ -122,9 +122,9 @@ LLM 에이전트 메모리 연구는 working/semantic/episodic 3계열을 표준
 
 ### 3-layer 아키텍처 다이어그램
 
-![[llm-wiki-adr-layers.svg]]
+![[assets/llm-wiki-adr-layers.svg]]
 
-> Codex가 만든 Mermaid 정의를 SVG로 미리 렌더해 저장했다. 편집용 소스는 [llm-wiki-adr-layers.mmd](llm-wiki-adr-layers.mmd) (Mermaid)와 [llm-wiki-adr-layers.excalidraw](llm-wiki-adr-layers.excalidraw) (Excalidraw)에 같이 보관한다.
+> Codex가 만든 Mermaid 정의를 SVG로 미리 렌더해 저장했다. 편집용 소스는 [llm-wiki-adr-layers.mmd](assets/llm-wiki-adr-layers.mmd) (Mermaid)와 [llm-wiki-adr-layers.excalidraw](assets/llm-wiki-adr-layers.excalidraw) (Excalidraw)에 같이 보관한다.
 
 ---
 

@@ -26,7 +26,7 @@ summary: "Modular RAG 아키텍처로 검색 전략을 갈아끼울 수 있게 �
 
 두 번째는 **평가**다. 모듈 조합 간 결과를 체감이 아닌 수치로 비교하려면 평가 기준과 데이터셋이 먼저 있어야 한다. LangSmith로 파이프라인 전 과정을 추적하고, 평가 지표를 설계해 조합별 품질을 정량 비교한다.
 
-![[rag-pipeline.png]]
+![[assets/rag-pipeline.png]]
 
 - GitHub: [syshin0116/blog-rag](https://github.com/syshin0116/blog-rag)
 

@@ -71,7 +71,7 @@ modified: 2026-05-20
 3. 이전 상태와 비교해 의미 있는 변화와 stale 정보를 찾는다.
 4. 사용자에게 digest와 action queue로 제공하고, 필요한 항목만 지식으로 승격한다.
 
-![[tech-intelligence-radar-architecture.svg]]
+![[assets/tech-intelligence-radar-architecture.svg]]
 
 핵심은 “더 많이 보여주기”가 아니다. 사람이 직접 모든 정보를 찾아내기 어려워졌기 때문에, 시스템이 먼저 넓게 보고 의미 있는 변화만 좁혀줘야 한다.
 
@@ -295,7 +295,7 @@ CREATE TABLE assessments (
 
 점수화는 “무엇이 최고인가”를 정하려는 목적이 아니다. 더 중요한 목적은 **무엇을 다시 봐야 하는가**를 고르는 것이다.
 
-![[tech-intelligence-radar-scoring.svg]]
+![[assets/tech-intelligence-radar-scoring.svg]]
 
 추천하는 판단 축은 다음과 같다.
 
@@ -317,7 +317,7 @@ CREATE TABLE assessments (
 
 매일 긴 리포트를 보내면 실패한다. 매일은 긴급 변화만, 매주는 의사결정만 보여주는 것이 좋다.
 
-![[tech-intelligence-radar-digest.svg]]
+![[assets/tech-intelligence-radar-digest.svg]]
 
 ### Daily alert
 

@@ -31,7 +31,7 @@ Phase 1 배포를 마치고 나서 다음 단계를 준비하다 보니 두 가�
 **Nuartz를 사용하는 앱이 둘이다.**
 
 
-![[nuartz-architecture.png]]
+![[assets/nuartz-architecture.png]]
 
 두 앱이 원하는 UI는 완전히 다르다. 공식 데모 사이트는 Nuartz 기능을 보여주는 게 목적이고, 개인 사이트는 포트폴리오 느낌이 나야 한다. 사이드바 구조도, 내비게이션 스타일도, 전체 레이아웃도 달라야 한다.
 

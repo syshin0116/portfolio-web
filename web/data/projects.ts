@@ -114,20 +114,20 @@ export const projectsTimeline: ProjectTimeline[] = [
     category: "company",
     company: "BrainCrew"
   },
+  // --- 개인 오픈소스 ---
   {
-    id: "langgraph-fastapi-boilerplate",
-    title: "LangGraph FastAPI Boilerplate",
-    period: "2026.03 ~ 진행 중",
+    id: "autodev",
+    title: "AutoDev - 자율 소프트웨어 딜리버리 시스템 설계",
+    period: "2026.06 ~ 진행 중",
     year: 2026,
     periodType: "Q",
-    periodNumber: 1,
+    periodNumber: 2,
     isCompleted: false,
-    description: "LangGraph Platform API를 벤더 종속 없이 재구현한 풀스택 보일러플레이트. SSE 재연결·이벤트 시퀀싱·lease 기반 크래시 복구, HITL·time travel·checkpoint branching, DB 기반 모델 레지스트리를 단독 구현.",
-    tags: ["오픈소스", "LangGraph", "FastAPI", "deepagents", "SSE"],
+    description: "에이전트가 구현·리뷰·머지까지 수행하고 사람은 되돌리기 어려운 '진짜 결정'만 내리는 도구 비종속 자율 개발 시스템의 설계·스펙. 멀티모델 리뷰 건틀릿, 리스크 티어 auto-merge, 결정을 ADR로 축적하는 Evergreen Decision Graph를 문서·ADR로 정의.",
+    tags: ["오픈소스", "AI Agent", "멀티 에이전트", "자동화", "ADR"],
     category: "personal",
-    github: "https://github.com/syshin0116/langgraph-fastapi-boilerplate"
+    github: "https://github.com/syshin0116/autodev"
   },
-  // --- 개인 오픈소스 ---
   {
     id: "clidex",
     title: "Clidex - AI 에이전트를 위한 CLI 도구 검색",
@@ -136,7 +136,7 @@ export const projectsTimeline: ProjectTimeline[] = [
     periodType: "Q",
     periodNumber: 1,
     isCompleted: false,
-    description: "AI 에이전트가 CLI 도구를 검색·비교·설치할 수 있는 인덱스. 5,000+ CLI 도구를 인덱싱하고 캐시된 BM25 엔진으로 쿼리당 약 3ms 검색. Rust로 구현 (crates.io v0.4.0).",
+    description: "AI 에이전트가 CLI 도구를 검색·비교·설치할 수 있는 인덱스. 5,000+ CLI 도구를 인덱싱하고 캐시된 BM25 엔진으로 쿼리당 약 3ms 검색. Rust로 구현 (v0.4.0).",
     tags: ["오픈소스", "Rust", "CLI", "AI Agent", "BM25"],
     category: "personal",
     github: "https://github.com/syshin0116/clidex"
@@ -150,7 +150,7 @@ export const projectsTimeline: ProjectTimeline[] = [
     periodNumber: 1,
     isCompleted: false,
     description: "Nuartz 기반 블로그와 포트폴리오를 하나의 사이트로 통합. 4개 레포를 3개로 재편하고 blog-rag(Modular RAG) 백엔드와 연동 계획.",
-    tags: ["Full Stack", "Next.js 15", "Nuartz", "포트폴리오"],
+    tags: ["Full Stack", "Next.js 16", "Nuartz", "포트폴리오"],
     category: "personal",
     github: "https://github.com/syshin0116/syshin0116.dev",
     demo: "https://syshin0116.vercel.app"
@@ -164,7 +164,7 @@ export const projectsTimeline: ProjectTimeline[] = [
     periodNumber: 1,
     isCompleted: false,
     description: "Obsidian 볼트를 Next.js 웹사이트로 퍼블리싱하는 headless 라이브러리. 위키링크, 백링크, 그래프뷰, 검색 등 Obsidian 기능을 Next.js에서 구현. npm 패키지로 배포.",
-    tags: ["오픈소스", "Next.js 15", "TypeScript", "Obsidian", "npm"],
+    tags: ["오픈소스", "Next.js 16", "TypeScript", "Obsidian", "npm"],
     category: "personal",
     github: "https://github.com/syshin0116/nuartz",
     demo: "https://nuartz.vercel.app"
@@ -520,58 +520,77 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
       "논문 재현 연구: 메모리 구조의 효과를 백본 강도별로 정량 비교"
     ]
   },
-  "langgraph-fastapi-boilerplate": {
-    id: "langgraph-fastapi-boilerplate",
-    title: "LangGraph FastAPI Boilerplate",
-    subtitle: "벤더 종속 없는 LangGraph Platform API 재구현",
-    period: "2026.03 ~ 진행 중",
-    duration: "약 1개월",
-    role: "1인 개발 / 오픈소스",
+  "autodev": {
+    id: "autodev",
+    title: "AutoDev - 자율 소프트웨어 딜리버리 시스템 설계",
+    subtitle: "도구 비종속 자율 개발 시스템 설계·스펙 (design-first)",
+    period: "2026.06 ~ 진행 중",
+    duration: "진행 중 (설계·스펙 단계)",
+    role: "1인 설계 / 오픈소스",
     team: "개인 오픈소스 프로젝트",
-    description: "LangGraph Platform API를 벤더 종속 없이 재구현한 풀스택 보일러플레이트. SSE 재연결·이벤트 시퀀싱·lease 기반 크래시 복구, 선택적 Redis + ARQ 백그라운드 워커, DB 기반 모델 레지스트리, HITL·time travel·checkpoint branching을 단독으로 구현했다.",
-    github: "https://github.com/syshin0116/langgraph-fastapi-boilerplate",
+    description: "에이전트가 이슈부터 구현·리뷰·머지까지 자율 수행하고, 사람은 되돌리기 어려운 '진짜 결정'만 내리는 자율 소프트웨어 딜리버리 시스템. 특정 오케스트레이터에 종속되지 않도록 Orchestrator/Runtime/Agent/Gate 추상으로 설계하고, 멀티모델 리뷰 건틀릿·리스크 티어 auto-merge·결정을 ADR로 축적하는 Evergreen Decision Graph를 문서와 ADR로 정의한 design-first 리포지토리.",
+    github: "https://github.com/syshin0116/autodev",
     techStack: {
-      backend: ["FastAPI", "LangGraph >= 1.0", "LangChain", "deepagents", "langgraph-checkpoint-postgres", "sse-starlette"],
-      llm: ["langchain-anthropic", "langchain-openai"],
-      database: ["PostgreSQL (pgvector)", "psycopg", "선택적 Redis + ARQ"],
-      frontend: ["React", "Vite", "TypeScript"],
-      infra: ["Docker Compose", "uv workspaces"]
+      architecture: ["Orchestrator/Runtime/Agent/Gate 추상", "Evergreen Decision Graph", "멀티레포 단일 docs SoT"],
+      agents: ["Claude Code (구현·1차 리뷰)", "Codex (2차 리뷰)", "CI 게이트"],
+      escalation: ["Slack DM", "모바일 push/Telegram", "decision card"],
+      knowledge: ["ADR (proposed→accepted)", "Git + Markdown 지식 그래프"],
+      docs: ["Markdown docs-as-SoT", "roadmap", "MIT"]
     },
     keyFeatures: [
       {
-        title: "스트리밍 및 복구",
+        title: "멀티모델 리뷰 건틀릿",
         details: [
-          "SSE 재연결 + 이벤트 시퀀싱",
-          "lease 기반 크래시 복구",
-          "선택적 Redis + ARQ 워커로 백그라운드 run 실행"
+          "구현 → 1차 리뷰 루프 → 2차 리뷰 루프 → CI 게이트 → 머지",
+          "서로 다른 모델(Claude·Codex)로 교차 검증해 단일 모델 편향 완화",
+          "게이트를 통과한 변경만 머지 대상으로 승격"
         ]
       },
       {
-        title: "에이전트 운영 기능",
+        title: "리스크 티어 auto-merge",
         details: [
-          "HITL + time travel + checkpoint branching",
-          "DB 기반 모델 레지스트리로 모델 선택",
-          "deep agent(deepagents) 마이그레이션"
+          "안전 레인(패치·문서·포맷·테스트 전용, CI 통과)은 자동 머지",
+          "위험 레인(공개 API·마이그레이션·auth·.github)은 사람에게 에스컬레이션",
+          "GitHub-native auto-merge + 룰셋으로 main 직접 push 차단"
         ]
       },
       {
-        title: "프로젝트 구조",
+        title: "에스컬레이션 = 지식 축적 (하나의 메커니즘)",
         details: [
-          "monorepo backend/ + frontend/ 재구조화",
-          "uv workspaces 기반 의존성 관리",
-          "Docker Compose 로컬 실행 환경"
+          "에스컬레이션 페이로드는 decision card(맥락·1줄 결정·2-4개 옵션·트레이드오프·추천·되돌림 가능성·링크)",
+          "사람이 결정하면 AI가 ADR을 proposed로 작성, 사람이 accepted로 승인",
+          "결정이 쌓여 Evergreen Decision Graph(살아있는 결정 그래프)로 축적"
+        ]
+      },
+      {
+        title: "도구 비종속 설계",
+        details: [
+          "특정 플랫폼 종속을 없애기 위해 런타임 매핑을 별도 문서로 격리",
+          "멀티레포는 단일 docs SoT를 N개 레포가 참조 (충돌 시 docs 우선)",
+          "레포 레지스트리 + 온보딩(문서 스켈레톤 + CI 게이트 + 등록)"
         ]
       }
     ],
     achievements: [
-      "LangGraph Platform 핵심 기능을 벤더 종속 없이 재구현",
-      "본인 단독 17커밋으로 풀스택 보일러플레이트 구축",
-      "SSE 복구·HITL·time travel 등 프로덕션 운영 기능 포함"
+      "설계 문서 20여 편 + 자기 적용한 ADR 30여 건으로 시스템 스펙을 design-first로 정립",
+      "특정 오케스트레이터에 종속되지 않는 추상 계층으로 런타임 교체 가능성 확보",
+      "에스컬레이션과 지식 축적을 ADR 하나의 메커니즘으로 통합하는 Evergreen Decision Graph 개념 정의"
+    ],
+    challenges: [
+      {
+        title: "완전 자동화와 안전성의 균형",
+        description: "전면 auto-merge는 위험하다. 변경 유형을 안전/위험 레인으로 티어링하고 위험 레인만 사람에게 올리는 리스크 티어 게이트로 해결"
+      },
+      {
+        title: "사람 개입은 최소화하되 지식은 남기기",
+        description: "결정을 물어보는 행위 자체를 지식 자산으로 전환. decision card → ADR proposed → accepted 루프로 에스컬레이션과 지식화를 하나로 묶음"
+      }
     ],
     learnings: [
-      "LangGraph 내부 동작 이해: Platform API를 직접 재구현하며 체크포인트/스트리밍 구조 학습",
-      "장애 복구 설계: lease 기반 크래시 복구와 이벤트 시퀀싱",
-      "보일러플레이트 설계: 재사용 가능한 풀스택 템플릿 구조화"
+      "자율 시스템에서 사람의 역할을 '결정자'로 좁히는 경계 설정",
+      "멀티모델 교차 리뷰로 단일 모델 편향을 줄이는 리뷰 건틀릿 설계",
+      "에스컬레이션을 지식 자산으로 전환하는 ADR 기반 결정 루프",
+      "design-first: 코드보다 문서·ADR를 SoT로 두는 멀티레포 운영"
     ]
   },
   "sk-pharmaaix": {
@@ -1054,7 +1073,7 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
     techStack: {
       core: ["TypeScript", "unified (remark/rehype)"],
       features: ["remark-math", "rehype-katex", "rehype-pretty-code", "FlexSearch", "D3.js"],
-      webapp: ["Next.js 15", "Tailwind CSS v4", "shadcn/ui", "next-themes"],
+      webapp: ["Next.js 16", "Tailwind CSS v4", "shadcn/ui", "next-themes"],
       build: ["Bun", "tsc"],
       deployment: ["npm registry", "Vercel", "GitHub Pages"]
     },
@@ -1098,11 +1117,11 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
       }
     ],
     achievements: [
-      "npm 패키지 배포 (nuartz@0.1.7)",
+      "npm 패키지 배포 (nuartz@0.2.0)",
       "Quartz 핵심 기능을 Next.js 생태계로 포팅",
       "CJK(한국어/일본어/중국어) 검색 지원",
       "Vercel + GitHub Pages 양쪽 배포 지원",
-      "개인 블로그로 실사용 중 (syshin0116.github.io)"
+      "개인 블로그로 실사용 중 (syshin0116.dev)"
     ],
     challenges: [
       {
@@ -1187,7 +1206,7 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
       "5,000+ CLI 도구 인덱싱 (Homebrew, awesome-cli-apps, toolleeo, npm, crates.io 등 소스 통합)",
       "70+ CLI 도메인 시노님 매핑 구축",
       "최소 바이너리 사이즈 최적화 (LTO + strip)",
-      "캐시된 BM25 엔진으로 전체 인덱스에서 쿼리당 약 3ms 검색 (crates.io v0.4.0)"
+      "캐시된 BM25 엔진으로 전체 인덱스에서 쿼리당 약 3ms 검색 (v0.4.0)"
     ],
     challenges: [
       {
@@ -1214,12 +1233,12 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
     duration: "약 2주",
     role: "1인 풀스택 개발",
     team: "개인 프로젝트",
-    description: "개인 기술 블로그, 프로젝트 포트폴리오, RAG 기반 AI 챗봇을 하나의 도메인으로 통합. Nuartz를 데이터 레이어로 사용하고 Next.js 15 + shadcn/ui로 모던 UI 구현. LangGraph SDK로 blog-rag 백엔드와 연동하여 블로그 콘텐츠 기반 질의응답 제공.",
+    description: "개인 기술 블로그, 프로젝트 포트폴리오, RAG 기반 AI 챗봇을 하나의 도메인으로 통합. Nuartz를 데이터 레이어로 사용하고 Next.js 16 + shadcn/ui로 모던 UI 구현. LangGraph SDK로 blog-rag 백엔드와 연동하여 블로그 콘텐츠 기반 질의응답 제공.",
     techStack: {
-      frontend: ["Next.js 15 (App Router)", "React 19", "Tailwind CSS v4", "shadcn/ui", "Framer Motion"],
+      frontend: ["Next.js 16 (App Router)", "React 19", "Tailwind CSS v4", "shadcn/ui", "Framer Motion"],
       content: ["Nuartz (headless markdown)", "FlexSearch (CJK 검색)", "D3.js (그래프뷰)", "Mermaid"],
       ai: ["LangGraph SDK", "LangChain Core", "blog-rag 백엔드 (FastAPI)"],
-      auth: ["Supabase (Google OAuth)"],
+      auth: ["NextAuth v5 (GitHub·Google OAuth)", "Neon Postgres (adapter)"],
       rendering: ["KaTeX (수식)", "Shiki (코드 하이라이팅)", "remark/rehype"],
       deployment: ["Vercel", "Bun"]
     },
@@ -1278,8 +1297,8 @@ export const projectsDetail: { [key: string]: ProjectDetail } = {
     ],
     learnings: [
       "프로덕션 사용이 최고의 라이브러리 테스트",
-      "Next.js 15 App Router + React 19의 서버 컴포넌트 활용",
-      "Supabase Auth 통합 경험",
+      "Next.js 16 App Router + React 19의 서버 컴포넌트 활용",
+      "NextAuth v5 + Neon Postgres 어댑터 통합 경험",
       "통합 사이트의 UX 설계: 블로그, 포트폴리오, 챗봇의 조화"
     ]
   },

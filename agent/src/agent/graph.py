@@ -1,16 +1,17 @@
 """Deep Agent — LangGraph standard agent with built-in middleware."""
 
+import hashlib
 import os
 from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends import (
     CompositeBackend,
-    FilesystemBackend,
     StateBackend,
     StoreBackend,
 )
 
+from agent.lib.read_only_backend import ReadOnlyFilesystemBackend
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import TOOLS
 
@@ -19,10 +20,19 @@ DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
 # Resolve content path relative to agent/ directory
 AGENT_DIR = Path(__file__).resolve().parent.parent.parent  # agent/
 CONTENT_DIR = str(
-    Path(os.environ.get("BLOG_CONTENT_PATH", str(AGENT_DIR / ".." / "content")))
-    .resolve()
+    Path(
+        os.environ.get("BLOG_CONTENT_PATH", str(AGENT_DIR / ".." / "content"))
+    ).resolve()
 )
 SKILLS_DIR = str(AGENT_DIR / "skills")
+
+
+def _memory_namespace(context) -> tuple[str, str, str]:
+    config = getattr(context.runtime, "config", {})
+    user_id = config.get("configurable", {}).get("user_id")
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError("authenticated user_id is required for persistent memory")
+    return ("users", hashlib.sha256(user_id.encode()).hexdigest(), "filesystem")
 
 
 def _build_backend(store=None):
@@ -35,11 +45,13 @@ def _build_backend(store=None):
 
     def factory(rt):
         routes = {
-            "/blog/": FilesystemBackend(root_dir=CONTENT_DIR, virtual_mode=True),
+            "/blog/": ReadOnlyFilesystemBackend(
+                root_dir=CONTENT_DIR, virtual_mode=True
+            ),
         }
         # Only add StoreBackend if store is available
         if store is not None:
-            routes["/memories/"] = StoreBackend(rt)
+            routes["/memories/"] = StoreBackend(rt, namespace=_memory_namespace)
 
         return CompositeBackend(
             default=StateBackend(rt),

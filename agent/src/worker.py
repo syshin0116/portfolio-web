@@ -8,24 +8,31 @@ Events are published to Redis pub/sub so any web process can serve SSE.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 
 import redis.asyncio as aioredis
+from arq import Retry
 from arq.connections import RedisSettings
 from dotenv import load_dotenv
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool
 
 from agent.graph import create_graph
+from api.arq_run_queue import prune_stale_heads
+from api.legacy_migration import migrate_legacy_data
 from api.logging_config import setup_logging
+from api.resource_scope import scoped_checkpoint_thread_id
 from api.run_manager_base import (
     DEFAULT_BG_STREAM_MODES,
+    build_graph_config,
     format_stream_event,
     normalize_stream_modes,
     resolve_input,
 )
+from api.run_queue import RedisRunTurn
 from db import DB
 
 load_dotenv()
@@ -44,11 +51,34 @@ def _key(template: str, run_id: str) -> str:
     return template.format(run_id=run_id)
 
 
+async def _wait_for_fifo_turn(
+    db: DB,
+    redis: aioredis.Redis,
+    *,
+    thread_id: str,
+    thread_key: str,
+    run_id: str,
+    user_id: str,
+) -> None:
+    """Defer non-head jobs and discard queue heads whose executor disappeared."""
+    is_head = await prune_stale_heads(
+        db,
+        redis,
+        thread_id=thread_id,
+        thread_key=thread_key,
+        run_id=run_id,
+        user_id=user_id,
+    )
+    if not is_head:
+        raise Retry(defer=1)
+
+
 async def execute_run(
     ctx: dict,
     run_id: str,
     thread_id: str,
     *,
+    user_id: str,
     graph_id: str = "agent",
     run_input: dict | None = None,
     command: dict | None = None,
@@ -61,26 +91,16 @@ async def execute_run(
     db: DB = ctx["db"]
     graphs = ctx["graphs"]
     redis: aioredis.Redis = ctx["redis"]
+    thread_key = scoped_checkpoint_thread_id(user_id, thread_id)
 
-    graph = graphs.get(graph_id)
-    if not graph:
-        logger.error("Unknown graph_id: %s", graph_id)
-        return
-
-    # Build LangGraph config
-    configurable: dict = {"thread_id": thread_id}
-    if assistant_config:
-        configurable.update(assistant_config.get("configurable", {}))
-    if config:
-        configurable.update(config.get("configurable", {}))
-    if checkpoint_id:
-        configurable["checkpoint_id"] = checkpoint_id
-    lg_config = {"configurable": configurable}
-
-    graph_input = resolve_input(run_input, command)
-
-    raw_modes = stream_mode or DEFAULT_BG_STREAM_MODES
-    modes = normalize_stream_modes(raw_modes)
+    await _wait_for_fifo_turn(
+        db,
+        redis,
+        thread_id=thread_id,
+        thread_key=thread_key,
+        run_id=run_id,
+        user_id=user_id,
+    )
 
     evt_channel = _key(_EVT_CHANNEL, run_id)
     buf_key = _key(_EVT_BUFFER, run_id)
@@ -103,10 +123,33 @@ async def execute_run(
                 break
 
     cancel_task = asyncio.create_task(_cancel_listener())
+    turn = RedisRunTurn(redis, thread_key, run_id)
 
     try:
-        await db.update_run_status(run_id, "running")
-        await db.set_thread_status(thread_id, "busy")
+        await turn.acquire()
+        graph = graphs.get(graph_id)
+        if not graph:
+            raise ValueError(f"Unknown graph_id: {graph_id}")
+
+        run_record = await db.get_run(thread_id, run_id, user_id)
+        if run_record is None:
+            raise PermissionError(f"Run {run_id} is no longer owned by {user_id}")
+        if cancelled.is_set() or run_record.get("status") == "interrupted":
+            raise asyncio.CancelledError()
+
+        lg_config = build_graph_config(
+            thread_id,
+            user_id=user_id,
+            assistant_config=assistant_config,
+            run_config=config,
+            checkpoint_id=checkpoint_id,
+        )
+        graph_input = resolve_input(run_input, command)
+        raw_modes = stream_mode or DEFAULT_BG_STREAM_MODES
+        modes = normalize_stream_modes(raw_modes)
+
+        await db.update_run_status(run_id, "running", user_id)
+        await db.set_thread_status(thread_id, "busy", user_id)
 
         # Metadata event
         await publish(
@@ -128,28 +171,32 @@ async def execute_run(
                     raise asyncio.CancelledError()
                 await publish(format_stream_event(mode, chunk))
 
-        await db.update_run_status(run_id, "success")
-        await db.set_thread_status(thread_id, "idle")
+        await db.update_run_status(run_id, "success", user_id)
+        await db.set_thread_status(thread_id, "idle", user_id)
 
     except asyncio.CancelledError:
-        await db.update_run_status(run_id, "interrupted")
-        await db.set_thread_status(thread_id, "interrupted")
+        await db.update_run_status(run_id, "interrupted", user_id)
+        await db.set_thread_status(thread_id, "interrupted", user_id)
 
     except Exception as e:
         logger.exception("Run %s failed: %s", run_id, e)
-        await db.update_run_status(run_id, "error")
-        await db.set_thread_status(thread_id, "error")
+        await db.update_run_status(run_id, "error", user_id)
+        await db.set_thread_status(thread_id, "error", user_id)
         await publish({"event": "error", "data": json.dumps({"error": str(e)})})
 
     finally:
-        # Sentinel — end of stream
-        await publish(None)
-        # Set TTL on buffer so Redis self-cleans
-        await redis.expire(buf_key, _BUFFER_TTL)
-        # Cleanup cancel listener
-        cancel_task.cancel()
-        await pubsub.unsubscribe(ctl_channel)
-        await pubsub.aclose()
+        try:
+            # Sentinel — end of stream
+            await publish(None)
+            # Set TTL on buffer so Redis self-cleans
+            await redis.expire(buf_key, _BUFFER_TTL)
+        finally:
+            await turn.release()
+            cancel_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancel_task
+            await pubsub.unsubscribe(ctl_channel)
+            await pubsub.aclose()
 
 
 async def startup(ctx: dict) -> None:
@@ -171,6 +218,7 @@ async def startup(ctx: dict) -> None:
 
     db = DB(pool)
     await db.setup()
+    await migrate_legacy_data(pool, os.environ.get("AGENT_LEGACY_OWNER_ID"))
 
     compiled_graphs = {
         "agent": create_graph(checkpointer=checkpointer),
@@ -208,4 +256,5 @@ class WorkerSettings:
         os.environ.get("REDIS_URL", "redis://localhost:6379")
     )
     max_jobs = 10
+    max_tries = 2_147_483_647
     job_timeout = 600  # 10 minutes

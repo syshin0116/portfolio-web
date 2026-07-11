@@ -4,13 +4,14 @@ import { BlogTreeProvider } from "@/components/blog/blog-tree-provider"
 import { CommandPaletteDynamic } from "@/components/blog/command-palette-dynamic"
 import { Navbar } from "@/components/navbar"
 import fileTree from "@/.generated/file-tree.json"
+import type { FileTreeNode } from "nuartz"
 
 export default function BlogLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const tree = fileTree as any
+  const tree = fileTree as unknown as FileTreeNode[]
 
   return (
     <BlogTreeProvider tree={tree}>

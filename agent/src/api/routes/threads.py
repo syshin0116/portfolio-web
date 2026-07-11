@@ -4,9 +4,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from langchain_core.messages import BaseMessage
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.state import CompiledStateGraph
 
-from api.deps import get_db, resolve_graph
+from api.deps import get_checkpointer, get_db, get_user_id, resolve_graph
+from api.resource_scope import scoped_checkpoint_thread_id
+from api.run_manager_base import build_graph_config
 from db import DB
 from schemas import (
     ThreadCreate,
@@ -35,12 +38,16 @@ def _to_response(row: dict) -> ThreadResponse:
 async def create_thread(
     body: ThreadCreate,
     db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     row = await db.create_thread(
+        owner_id=user_id,
         thread_id=body.thread_id,
         metadata=body.metadata,
         if_exists=body.if_exists,
     )
+    if not row:
+        raise HTTPException(status_code=409, detail="Thread ID already exists")
     return _to_response(row)
 
 
@@ -48,8 +55,9 @@ async def create_thread(
 async def get_thread(
     thread_id: str,
     db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    row = await db.get_thread(thread_id)
+    row = await db.get_thread(thread_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Thread not found")
     return _to_response(row)
@@ -60,8 +68,9 @@ async def update_thread(
     thread_id: str,
     body: ThreadUpdate,
     db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    row = await db.update_thread(thread_id, metadata=body.metadata)
+    row = await db.update_thread(thread_id, user_id, metadata=body.metadata)
     if not row:
         raise HTTPException(status_code=404, detail="Thread not found")
     return _to_response(row)
@@ -71,8 +80,14 @@ async def update_thread(
 async def delete_thread(
     thread_id: str,
     db: Annotated[DB, Depends(get_db)],
+    checkpointer: Annotated[AsyncPostgresSaver, Depends(get_checkpointer)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    await db.delete_thread(thread_id)
+    if not await db.get_thread(thread_id, user_id):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    await checkpointer.adelete_thread(scoped_checkpoint_thread_id(user_id, thread_id))
+    if not await db.delete_thread(thread_id, user_id):
+        raise HTTPException(status_code=404, detail="Thread not found")
     return {"ok": True}
 
 
@@ -80,8 +95,10 @@ async def delete_thread(
 async def search_threads(
     body: ThreadSearch,
     db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     rows = await db.search_threads(
+        owner_id=user_id,
         metadata=body.metadata,
         status=body.status,
         limit=body.limit,
@@ -95,12 +112,13 @@ async def get_thread_state(
     thread_id: str,
     db: Annotated[DB, Depends(get_db)],
     graph: Annotated[CompiledStateGraph, Depends(resolve_graph)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    row = await db.get_thread(thread_id)
+    row = await db.get_thread(thread_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    config = {"configurable": {"thread_id": thread_id}}
+    config = build_graph_config(thread_id, user_id=user_id)
     snapshot = await graph.aget_state(config)
 
     if not snapshot or not snapshot.config:
@@ -168,14 +186,15 @@ async def update_thread_state(
     body: ThreadStateUpdate,
     db: Annotated[DB, Depends(get_db)],
     graph: Annotated[CompiledStateGraph, Depends(resolve_graph)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    row = await db.get_thread(thread_id)
+    row = await db.get_thread(thread_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
-    if body.checkpoint_id:
-        config["configurable"]["checkpoint_id"] = body.checkpoint_id
+    config = build_graph_config(
+        thread_id, user_id=user_id, checkpoint_id=body.checkpoint_id
+    )
 
     result = await graph.aupdate_state(config, body.values, as_node=body.as_node)
     return {"checkpoint": result}
@@ -186,13 +205,14 @@ async def get_thread_history(
     thread_id: str,
     db: Annotated[DB, Depends(get_db)],
     graph: Annotated[CompiledStateGraph, Depends(resolve_graph)],
+    user_id: Annotated[str, Depends(get_user_id)],
     limit: int = 10,
 ):
-    row = await db.get_thread(thread_id)
+    row = await db.get_thread(thread_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    config = {"configurable": {"thread_id": thread_id}}
+    config = build_graph_config(thread_id, user_id=user_id)
     history = []
 
     async for snapshot in graph.aget_state_history(config):

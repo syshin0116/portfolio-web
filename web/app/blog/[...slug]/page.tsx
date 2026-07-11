@@ -1,4 +1,4 @@
-import { notFound, redirect } from "next/navigation"
+import { notFound } from "next/navigation"
 import fs from "node:fs/promises"
 import path from "node:path"
 import type { Metadata } from "next"
@@ -17,6 +17,7 @@ import { CopyCode } from "@/components/blog/copy-code"
 import { ImageZoom } from "@/components/blog/image-zoom"
 import { GiscusComments } from "@/components/blog/giscus-comments"
 import allSlugsData from "@/.generated/all-slugs.json"
+import { tagPath } from "@/lib/tag"
 
 export const revalidate = false
 
@@ -44,17 +45,6 @@ async function loadFolderData(slugStr: string) {
   } catch {
     return null
   }
-}
-
-function findAlias(slugStr: string): string | null {
-  // Check all page data for aliases — we stored aliases in all-slugs.json
-  // But to resolve alias → canonical slug, we need to check pages
-  // For now, we can check if this slug matches any alias in allSlugsData
-  // The prebuild script generates alias entries in all-slugs.json
-  // We need the mapping from alias → canonical slug
-  // Since we don't store that mapping directly, check page files
-  // This is a simplified approach — alias redirects happen rarely
-  return null
 }
 
 export function generateStaticParams() {
@@ -269,13 +259,17 @@ export default async function BlogPostPage({
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {Array.from(new Set(tags as string[])).map((tag) => (
-                  <Badge
+                  <Link
                     key={tag}
-                    variant="secondary"
-                    className="text-xs font-normal hover:bg-muted"
+                    href={`/blog/tags/${tagPath(tag)}`}
                   >
-                    #{tag}
-                  </Badge>
+                    <Badge
+                      variant="secondary"
+                      className="text-xs font-normal hover:bg-muted"
+                    >
+                      #{tag}
+                    </Badge>
+                  </Link>
                 ))}
               </div>
             )}

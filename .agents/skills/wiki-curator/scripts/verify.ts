@@ -9,7 +9,7 @@
  *   4. body has no `## Summary` (lives in frontmatter)
  *   5. body has no `> [!summary]` callout (legacy)
  *   6. body has mandatory sections (`## Key Claims`, `## Footnotes`)
- *   7. every source path under `sources:` exists on disk
+ *   7. every source is either a valid HTTPS URL or an existing repo-local file
  *   8. summary length sane (1–500 chars)
  *   9. tags non-empty
  *
@@ -132,6 +132,47 @@ function fmHasNonEmptyTags(fm: string): boolean {
   return false
 }
 
+function validateHttpsSource(source: string): string | null {
+  try {
+    if (!/^https:\/\/[^/?#]+(?:[/?#]|$)/i.test(source) || /[\s\\]/.test(source)) {
+      return "is not a valid HTTPS URL"
+    }
+
+    const url = new URL(source)
+    if (url.protocol !== "https:" || url.hostname === "") {
+      return "must be an absolute HTTPS URL"
+    }
+
+    if (!url.hostname.includes(":")) {
+      const hostname = url.hostname.replace(/\.$/, "")
+      const validHostname = hostname.length > 0 && hostname.length <= 253 && hostname
+        .split(".")
+        .every((label) => /^[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/i.test(label))
+      if (!validHostname) return "is not a valid HTTPS URL"
+    }
+    return null
+  } catch {
+    return "is not a valid HTTPS URL"
+  }
+}
+
+async function validateLocalSource(source: string): Promise<string | null> {
+  if (path.isAbsolute(source)) return "must be a repository-relative path"
+
+  const resolved = path.resolve(ROOT, source)
+  const relative = path.relative(ROOT, resolved)
+  if (relative === "" || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    return "must stay inside the repository"
+  }
+
+  try {
+    const stat = await fs.stat(resolved)
+    return stat.isFile() ? null : "does not point to a file"
+  } catch {
+    return "does not exist"
+  }
+}
+
 async function collectSlugs(): Promise<Set<string>> {
   const slugs = new Set<string>()
   for await (const file of walk(WIKI_ROOT)) {
@@ -193,18 +234,25 @@ async function main() {
       }
     }
 
-    // 7. sources paths exist
+    // 7. sources are valid HTTPS URLs or existing repo-local files
     const sources = fmGetSources(fm)
     if (sources.length === 0) {
       failures.push({ check: "sources-empty", file: rel, detail: "sources frontmatter is empty" })
     }
     for (const src of sources) {
-      const abs = path.join(ROOT, src)
-      try {
-        await fs.access(abs)
-      } catch {
-        failures.push({ check: "source-missing", file: rel, detail: `source path does not exist: ${src}` })
+      if (/^https:\/\//i.test(src)) {
+        const detail = validateHttpsSource(src)
+        if (detail) failures.push({ check: "source-invalid", file: rel, detail: `${src} ${detail}` })
+        continue
       }
+
+      if (/^[a-z][a-z\d+.-]*:/i.test(src)) {
+        failures.push({ check: "source-invalid", file: rel, detail: `${src} uses an unsupported URL scheme; only HTTPS is allowed` })
+        continue
+      }
+
+      const detail = await validateLocalSource(src)
+      if (detail) failures.push({ check: "source-invalid", file: rel, detail: `${src} ${detail}` })
     }
 
     // 8. summary length

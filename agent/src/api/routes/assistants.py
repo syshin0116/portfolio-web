@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.deps import get_db, get_graph_registry
+from api.deps import get_db, get_graph_registry, require_admin
 from db import DB
 from schemas import (
     AssistantCreate,
@@ -36,6 +36,7 @@ async def create_assistant(
     body: AssistantCreate,
     db: Annotated[DB, Depends(get_db)],
     graphs: Annotated[dict, Depends(get_graph_registry)],
+    _admin: Annotated[None, Depends(require_admin)],
 ):
     if body.graph_id not in graphs:
         raise HTTPException(
@@ -71,6 +72,7 @@ async def update_assistant(
     assistant_id: str,
     body: AssistantUpdate,
     db: Annotated[DB, Depends(get_db)],
+    _admin: Annotated[None, Depends(require_admin)],
 ):
     row = await db.update_assistant(
         assistant_id,
@@ -90,6 +92,7 @@ async def update_assistant(
 async def delete_assistant(
     assistant_id: str,
     db: Annotated[DB, Depends(get_db)],
+    _admin: Annotated[None, Depends(require_admin)],
 ):
     await db.delete_assistant(assistant_id)
     return {"ok": True}

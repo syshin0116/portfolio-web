@@ -25,12 +25,12 @@ sources:
   - https://info.arxiv.org/help/api/user-manual.html
   - https://huggingface.co/papers/trending
 created: 2026-05-18
-updated: 2026-05-24
+updated: 2026-07-12
 author: wiki-curator
 draft: false
 ---
 
-## Key claims
+## Key Claims
 
 - Public-facing article: [기술 정보 레이더 글](../AI/2026-05-18-Tech-Intelligence-Radar.md)이 사용자에게 보여줄 설명 글이고, 이 위키 페이지는 그 글에서 재사용 가능한 운영 패턴만 정리하는 knowledge layer다.
 - 정보 과부하의 원인은 “새로운 레포가 너무 많다”만이 아니다. 이미 알고 있는 레포가 release, changelog, examples, benchmark, docs를 통해 계속 변하는데 그 변화를 놓치기 때문이다.
@@ -335,6 +335,8 @@ Tech intelligence radar의 목적은 더 많은 탭을 열게 만드는 것이 �
 - [[second-brain-rag]]
 - [[agentic-decision-workflow]]
 - [[blog-seo]]
+
+## Footnotes
 
 [^github-repos]: GitHub REST API repository endpoints: https://docs.github.com/en/rest/repos
 [^github-releases]: GitHub REST API releases endpoints: https://docs.github.com/en/rest/releases

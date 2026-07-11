@@ -3,7 +3,6 @@
 from langchain_core.tools import tool
 
 from agent.lib.bm25_search import bm25_search as _bm25
-from agent.lib.config import get_config
 from agent.lib.content_loader import get_cached_docs, load_one
 from agent.lib.frontmatter_index import metadata_filter as _metadata
 from agent.lib.result_formatter import format_results
@@ -50,7 +49,9 @@ def metadata_filter(
         date_from: Start date in YYYY-MM-DD format.
         date_to: End date in YYYY-MM-DD format.
     """
-    results = _metadata(tags=tags, category=category, date_from=date_from, date_to=date_to)
+    results = _metadata(
+        tags=tags, category=category, date_from=date_from, date_to=date_to
+    )
     return format_results(results, source="metadata_filter")
 
 
@@ -74,18 +75,21 @@ def list_posts(category: str | None = None, limit: int = 20) -> str:
         category: Optional category to filter (AI, Dev, Study, Projects, Tools, Events, Others).
         limit: Maximum number of posts to return.
     """
-    docs = get_cached_docs()
+    # The loader cache is shared with the BM25 index, so never reorder it in place.
+    docs = list(get_cached_docs())
     if category:
         docs = [d for d in docs if d.meta.category.lower() == category.lower()]
 
     # Sort by date descending
-    docs.sort(key=lambda d: d.meta.date or __import__("datetime").date.min, reverse=True)
+    docs.sort(
+        key=lambda d: d.meta.date or __import__("datetime").date.min, reverse=True
+    )
 
     lines = [f"Blog posts ({len(docs)} total):\n"]
     for d in docs[:limit]:
         date_str = str(d.meta.date) if d.meta.date else "no date"
         tags = ", ".join(d.meta.tags[:5]) if d.meta.tags else ""
-        lines.append(f"- [{d.meta.path}] \"{d.meta.title}\" ({date_str}) {tags}")
+        lines.append(f'- [{d.meta.path}] "{d.meta.title}" ({date_str}) {tags}')
 
     return "\n".join(lines)
 
@@ -111,4 +115,11 @@ def read_post(path: str) -> str:
     return header + doc.body
 
 
-TOOLS = [keyword_search, semantic_search, metadata_filter, graph_traverse, list_posts, read_post]
+TOOLS = [
+    keyword_search,
+    semantic_search,
+    metadata_filter,
+    graph_traverse,
+    list_posts,
+    read_post,
+]

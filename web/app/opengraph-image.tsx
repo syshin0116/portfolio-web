@@ -42,7 +42,7 @@ export default async function OGImage() {
               letterSpacing: "-3px",
             }}
           >
-            Syshin0116's
+            {"Syshin0116's"}
           </div>
           <div
             style={{
@@ -58,7 +58,6 @@ export default async function OGImage() {
         </div>
 
         {/* Right: logo */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={logoSrc}
           width={240}

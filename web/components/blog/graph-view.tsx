@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { tagPath } from "@/lib/tag"
 
 interface GraphNode {
   id: string; title: string; tags: string[]; type?: "note" | "tag"
@@ -176,7 +177,9 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
         .join("g")
         .attr("cursor", "pointer")
         .on("click", (_, d) => {
-          if (d.type === "tag") router.push(`/blog/tags/${d.id.replace("tag/", "")}`)
+          if (d.type === "tag") {
+            router.push(`/blog/tags/${tagPath(d.id.replace("tag/", ""))}`)
+          }
           else router.push(`/blog/${d.id}`)
         })
         .on("mouseenter", (_, d) => {

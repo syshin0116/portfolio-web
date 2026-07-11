@@ -12,12 +12,18 @@ def format_results(
     query: str = "",
 ) -> str:
     if not results:
-        return f"[{source}] No results found" + (f" for '{query}'" if query else "") + "."
+        return (
+            f"[{source}] No results found" + (f" for '{query}'" if query else "") + "."
+        )
 
-    lines = [f"Found {len(results)} result(s) via {source}" + (f" for '{query}'" if query else "") + ":\n"]
+    lines = [
+        f"Found {len(results)} result(s) via {source}"
+        + (f" for '{query}'" if query else "")
+        + ":\n"
+    ]
 
     for i, r in enumerate(results, 1):
-        lines.append(f"{i}. [{r.path}] \"{r.title}\" (score: {r.score:.2f})")
+        lines.append(f'{i}. [{r.path}] "{r.title}" (score: {r.score:.2f})')
         if r.snippet:
             snippet = r.snippet.replace("\n", " ").strip()
             if len(snippet) > 300:

@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.deps import get_db
+from api.deps import get_db, get_user_id
 from db import DB
 from schemas import CronCreate, CronResponse, CronSearch, CronUpdate
 
@@ -29,9 +29,15 @@ def _to_response(row: dict) -> CronResponse:
 
 @router.post("/threads/{thread_id}/runs/crons", response_model=CronResponse)
 async def create_thread_cron(
-    thread_id: str, body: CronCreate, db: Annotated[DB, Depends(get_db)]
+    thread_id: str,
+    body: CronCreate,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
+    if not await db.get_thread(thread_id, user_id):
+        raise HTTPException(status_code=404, detail="Thread not found")
     row = await db.create_cron(
+        owner_id=user_id,
         schedule=body.schedule,
         assistant_id=body.assistant_id,
         thread_id=thread_id,
@@ -46,8 +52,13 @@ async def create_thread_cron(
 
 
 @router.post("/runs/crons", response_model=CronResponse)
-async def create_stateless_cron(body: CronCreate, db: Annotated[DB, Depends(get_db)]):
+async def create_stateless_cron(
+    body: CronCreate,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
+):
     row = await db.create_cron(
+        owner_id=user_id,
         schedule=body.schedule,
         assistant_id=body.assistant_id,
         input=body.input,
@@ -62,10 +73,14 @@ async def create_stateless_cron(body: CronCreate, db: Annotated[DB, Depends(get_
 
 @router.patch("/runs/crons/{cron_id}", response_model=CronResponse)
 async def update_cron(
-    cron_id: str, body: CronUpdate, db: Annotated[DB, Depends(get_db)]
+    cron_id: str,
+    body: CronUpdate,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     row = await db.update_cron(
         cron_id,
+        user_id,
         schedule=body.schedule,
         end_time=body.end_time,
         input=body.input,
@@ -82,14 +97,24 @@ async def update_cron(
 
 
 @router.delete("/runs/crons/{cron_id}")
-async def delete_cron(cron_id: str, db: Annotated[DB, Depends(get_db)]):
-    await db.delete_cron(cron_id)
+async def delete_cron(
+    cron_id: str,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
+):
+    if not await db.delete_cron(cron_id, user_id):
+        raise HTTPException(status_code=404, detail="Cron not found")
     return {"ok": True}
 
 
 @router.post("/runs/crons/search", response_model=list[CronResponse])
-async def search_crons(body: CronSearch, db: Annotated[DB, Depends(get_db)]):
+async def search_crons(
+    body: CronSearch,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
+):
     rows = await db.search_crons(
+        owner_id=user_id,
         assistant_id=body.assistant_id,
         thread_id=body.thread_id,
         enabled=body.enabled,

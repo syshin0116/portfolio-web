@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sse_starlette.sse import EventSourceResponse
 
-from api.deps import get_db, get_run_manager
+from api.deps import get_db, get_run_manager, get_user_id
 from api.run_manager_base import RunConflictError, RunManagerBase
 from db import DB
 from schemas import RunCreate, RunResponse
@@ -27,12 +27,16 @@ def _to_response(row: dict) -> RunResponse:
     )
 
 
-async def _ensure_thread(db: DB, thread_id: str, if_not_exists: str | None = None):
-    row = await db.get_thread(thread_id)
+async def _ensure_thread(
+    db: DB, thread_id: str, user_id: str, if_not_exists: str | None = None
+):
+    row = await db.get_thread(thread_id, user_id)
     if not row:
         if if_not_exists == "reject":
             raise HTTPException(status_code=404, detail="Thread not found")
-        await db.create_thread(thread_id=thread_id)
+        row = await db.create_thread(thread_id=thread_id, owner_id=user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Thread not found")
 
 
 def _resolve_checkpoint_id(body) -> str | None:
@@ -80,12 +84,14 @@ async def create_run(
     body: RunCreate,
     db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    await _ensure_thread(db, thread_id, body.if_not_exists)
+    await _ensure_thread(db, thread_id, user_id, body.if_not_exists)
     assistant_config = await _get_assistant_config(db, body.assistant_id)
     try:
         row = await run_manager.create_run(
             thread_id,
+            user_id=user_id,
             run_input=body.input,
             command=body.command,
             config=body.config,
@@ -111,12 +117,14 @@ async def stream_run(
     body: RunCreate,
     db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    await _ensure_thread(db, thread_id, body.if_not_exists)
+    await _ensure_thread(db, thread_id, user_id, body.if_not_exists)
     assistant_config = await _get_assistant_config(db, body.assistant_id)
     try:
         run_id, event_gen = await run_manager.stream_run(
             thread_id,
+            user_id=user_id,
             run_input=body.input,
             command=body.command,
             config=body.config,
@@ -146,12 +154,14 @@ async def wait_run(
     body: RunCreate,
     db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    await _ensure_thread(db, thread_id, body.if_not_exists)
+    await _ensure_thread(db, thread_id, user_id, body.if_not_exists)
     assistant_config = await _get_assistant_config(db, body.assistant_id)
     try:
         result = await run_manager.wait_run(
             thread_id,
+            user_id=user_id,
             run_input=body.input,
             command=body.command,
             config=body.config,
@@ -173,11 +183,14 @@ async def wait_run(
 async def list_runs(
     thread_id: str,
     db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
     offset: Annotated[int, Query(ge=0)] = 0,
     status: str | None = None,
 ):
-    rows = await db.list_runs(thread_id, limit=limit, offset=offset, status=status)
+    rows = await db.list_runs(
+        thread_id, owner_id=user_id, limit=limit, offset=offset, status=status
+    )
     return [_to_response(r) for r in rows]
 
 
@@ -186,8 +199,9 @@ async def get_run(
     thread_id: str,
     run_id: str,
     db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    row = await db.get_run(thread_id, run_id)
+    row = await db.get_run(thread_id, run_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Run not found")
     return _to_response(row)
@@ -197,10 +211,14 @@ async def get_run(
 async def stream_existing_run(
     thread_id: str,
     run_id: str,
+    db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     """Rejoin an existing run's SSE stream (reconnection after disconnect)."""
-    event_gen = run_manager.join_stream(thread_id, run_id)
+    if not await db.get_run(thread_id, run_id, user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    event_gen = run_manager.join_stream(thread_id, run_id, user_id=user_id)
     response = EventSourceResponse(event_gen)
     response.headers["X-Accel-Buffering"] = "no"
     return response
@@ -210,9 +228,13 @@ async def stream_existing_run(
 async def cancel_run(
     thread_id: str,
     run_id: str,
+    db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    await run_manager.cancel_run(thread_id, run_id)
+    if not await db.get_run(thread_id, run_id, user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    await run_manager.cancel_run(thread_id, run_id, user_id=user_id)
     return {"ok": True}
 
 
@@ -220,9 +242,13 @@ async def cancel_run(
 async def join_run(
     thread_id: str,
     run_id: str,
+    db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    result = await run_manager.join_run(thread_id, run_id)
+    if not await db.get_run(thread_id, run_id, user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    result = await run_manager.join_run(thread_id, run_id, user_id=user_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Run not found or no state")
     return result
@@ -233,8 +259,10 @@ async def delete_run(
     thread_id: str,
     run_id: str,
     db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
-    await db.delete_run(thread_id, run_id)
+    if not await db.delete_run(thread_id, run_id, user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
     return {"ok": True}
 
 
@@ -248,12 +276,14 @@ async def stateless_stream_run(
     body: RunCreate,
     db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     thread_id = str(uuid.uuid4())
-    await db.create_thread(thread_id=thread_id)
+    await db.create_thread(thread_id=thread_id, owner_id=user_id)
     assistant_config = await _get_assistant_config(db, body.assistant_id)
     run_id, event_gen = await run_manager.stream_run(
         thread_id,
+        user_id=user_id,
         run_input=body.input,
         command=body.command,
         config=body.config,
@@ -275,12 +305,14 @@ async def stateless_create_run(
     body: RunCreate,
     db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     thread_id = str(uuid.uuid4())
-    await db.create_thread(thread_id=thread_id)
+    await db.create_thread(thread_id=thread_id, owner_id=user_id)
     assistant_config = await _get_assistant_config(db, body.assistant_id)
     row = await run_manager.create_run(
         thread_id,
+        user_id=user_id,
         run_input=body.input,
         command=body.command,
         config=body.config,
@@ -299,12 +331,14 @@ async def stateless_wait_run(
     body: RunCreate,
     db: Annotated[DB, Depends(get_db)],
     run_manager: Annotated[RunManagerBase, Depends(get_run_manager)],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     thread_id = str(uuid.uuid4())
-    await db.create_thread(thread_id=thread_id)
+    await db.create_thread(thread_id=thread_id, owner_id=user_id)
     assistant_config = await _get_assistant_config(db, body.assistant_id)
     result = await run_manager.wait_run(
         thread_id,
+        user_id=user_id,
         run_input=body.input,
         command=body.command,
         config=body.config,

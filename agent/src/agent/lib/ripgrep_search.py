@@ -28,16 +28,21 @@ def ripgrep_search(
 
     cmd = [
         cfg.rg_binary,
+        "--no-config",
         "--json",
-        "--max-count", "5",  # max matches per file
-        "--glob", glob,
+        "--max-count",
+        "5",  # max matches per file
+        "--glob",
+        glob,
     ]
     if case_insensitive:
         cmd.append("-i")
     if context_lines > 0:
         cmd.extend(["-C", str(context_lines)])
 
-    cmd.extend([query, str(cfg.content_dir)])
+    # `-e` forces query to be parsed as a pattern even when it starts with `-`.
+    # `--` prevents the content path from being interpreted as another option.
+    cmd.extend(["-e", query, "--", str(cfg.content_dir)])
 
     try:
         result = subprocess.run(
@@ -47,7 +52,9 @@ def ripgrep_search(
             timeout=10,
         )
     except FileNotFoundError:
-        logger.warning("ripgrep (%s) not found, falling back to Python search", cfg.rg_binary)
+        logger.warning(
+            "ripgrep (%s) not found, falling back to Python search", cfg.rg_binary
+        )
         return _python_fallback(query, case_insensitive, max_results, cfg)
     except subprocess.TimeoutExpired:
         logger.warning("ripgrep timed out for query: %s", query)
@@ -75,18 +82,22 @@ def ripgrep_search(
     for fpath, match_lines in matches_by_file.items():
         doc = doc_by_path.get(fpath)
         title = doc.meta.title if doc else fpath.split("/")[-1]
-        rel_path = doc.meta.path if doc else fpath.replace(str(cfg.content_dir) + "/", "")
+        rel_path = (
+            doc.meta.path if doc else fpath.replace(str(cfg.content_dir) + "/", "")
+        )
 
         snippet = "\n".join(match_lines[:3])
         score = min(len(match_lines) / 5.0, 1.0)  # normalize by max matches
 
-        results.append(SearchResult(
-            path=rel_path,
-            title=title,
-            score=score,
-            snippet=snippet,
-            source="ripgrep",
-        ))
+        results.append(
+            SearchResult(
+                path=rel_path,
+                title=title,
+                score=score,
+                snippet=snippet,
+                source="ripgrep",
+            )
+        )
 
     results.sort(key=lambda r: r.score, reverse=True)
     return results[:max_results]
@@ -124,13 +135,15 @@ def _python_fallback(
         else:
             snippet = ""
 
-        results.append(SearchResult(
-            path=doc.meta.path,
-            title=doc.meta.title,
-            score=min(len(matches) / 5.0, 1.0),
-            snippet=snippet,
-            source="ripgrep-fallback",
-        ))
+        results.append(
+            SearchResult(
+                path=doc.meta.path,
+                title=doc.meta.title,
+                score=min(len(matches) / 5.0, 1.0),
+                snippet=snippet,
+                source="ripgrep-fallback",
+            )
+        )
 
     results.sort(key=lambda r: r.score, reverse=True)
     return results[:max_results]

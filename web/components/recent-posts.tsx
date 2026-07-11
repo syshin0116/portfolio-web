@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Calendar, ArrowRight } from "lucide-react";
 import notesList from "@/.generated/notes-list.json";
+import type { NoteEntry } from "@/lib/blog";
 
 function formatDate(date: string | undefined | null): string {
   if (!date) return "";
@@ -10,7 +11,7 @@ function formatDate(date: string | undefined | null): string {
 }
 
 export function RecentPosts() {
-  const posts = (notesList as any[]).slice(0, 3);
+  const posts = (notesList as NoteEntry[]).slice(0, 3);
 
   return (
     <section>

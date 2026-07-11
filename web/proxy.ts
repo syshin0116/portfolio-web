@@ -1,4 +1,3 @@
-import { auth } from "@/lib/auth"
 import { NextRequest, NextResponse } from "next/server"
 
 async function markdownForAgents(request: NextRequest) {
@@ -21,8 +20,7 @@ export async function proxy(request: NextRequest) {
   const mdResponse = await markdownForAgents(request);
   if (mdResponse) return mdResponse;
 
-  // Then run auth middleware
-  return (auth as any)(request);
+  return NextResponse.next();
 }
 
 export const config = {

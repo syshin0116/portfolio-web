@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.deps import get_db
+from api.deps import get_db, require_admin
 from db import DB
 from schemas import ModelCreate, ModelResponse, ModelUpdate
 
@@ -37,6 +37,7 @@ async def list_models(
 async def create_model(
     body: ModelCreate,
     db: Annotated[DB, Depends(get_db)],
+    _admin: Annotated[None, Depends(require_admin)],
 ):
     row = await db.create_model(
         provider=body.provider,
@@ -53,6 +54,7 @@ async def update_model(
     model_id: str,
     body: ModelUpdate,
     db: Annotated[DB, Depends(get_db)],
+    _admin: Annotated[None, Depends(require_admin)],
 ):
     row = await db.update_model(model_id, **body.model_dump(exclude_none=True))
     if not row:
@@ -64,6 +66,7 @@ async def update_model(
 async def delete_model(
     model_id: str,
     db: Annotated[DB, Depends(get_db)],
+    _admin: Annotated[None, Depends(require_admin)],
 ):
     await db.delete_model(model_id)
     return {"ok": True}

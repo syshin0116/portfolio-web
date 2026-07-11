@@ -12,6 +12,8 @@ from langgraph.store.postgres import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 
 from agent.graph import create_graph
+from api.auth import AgentAuthMiddleware, allowed_origins
+from api.legacy_migration import migrate_legacy_data
 from api.logging_config import setup_logging
 from api.middleware import RequestLoggingMiddleware
 from api.routes.assistants import router as assistants_router
@@ -50,6 +52,19 @@ async def lifespan(app: FastAPI):
 
         db = DB(pool)
         await db.setup()
+        migration = await migrate_legacy_data(
+            pool, os.environ.get("AGENT_LEGACY_OWNER_ID")
+        )
+        if migration.applied:
+            logger.info(
+                "Legacy ownership migration applied: threads=%d crons=%d "
+                "checkpoint_threads=%d store_namespaces=%d memory_prefixes=%d",
+                migration.threads,
+                migration.crons,
+                migration.checkpoint_threads,
+                migration.store_namespaces,
+                migration.memory_prefixes,
+            )
 
         compiled_graphs = {
             "agent": create_graph(checkpointer=checkpointer, store=store),
@@ -85,12 +100,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="LangGraph Agent API", lifespan=lifespan)
 
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(AgentAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Last-Event-ID",
+        "X-Request-ID",
+    ],
 )
 
 
@@ -103,7 +124,6 @@ async def ok():
 @app.get("/info")
 async def info():
     return {"version": "0.1.0", "graphs": ["agent"]}
-
 
 
 app.include_router(assistants_router)

@@ -56,18 +56,13 @@ for page in content/wiki/*.md; do
 done
 ```
 
-### 4. Sources that point to non-existent files (severity: red)
+### 4. Invalid sources (severity: red)
 
 ```bash
-grep -h "^  - " content/wiki/*.md \
-  | sed 's/^  - //' \
-  | sort -u \
-  | while read -r src; do
-      [ ! -f "$src" ] && echo "missing source: $src"
-    done
+bun .claude/skills/wiki-curator/scripts/verify.ts
 ```
 
-If a source path is dead, the page is stale. Surface to user.
+Report every `source-invalid` failure. Repo-local sources must be existing files inside the repository; remote sources must be syntactically valid absolute HTTPS URLs. The verifier validates URL syntax without fetching the URL.
 
 ### 5. Stale claims (severity: yellow)
 

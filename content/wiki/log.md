@@ -42,3 +42,4 @@
 - Renamed: content/wiki/repo-intelligence-radar.md → tech-intelligence-radar.md (+ architecture/scoring/digest SVGs)
 - Updated backlinks: content/wiki/index.md (rebuilt), content/AI/2026-05-18-Tech-Intelligence-Radar.md
 - Updated frontmatter title/summary and in-body self-name labels (Repo radar → Tech radar) to align with the broadened scope and the source article's "Technical Intelligence Radar" terminology. Claims unchanged.
+## [2026-07-12 16:37 UTC] migrate | normalized source provenance, repaired mandatory headings/footnotes, and rebuilt index

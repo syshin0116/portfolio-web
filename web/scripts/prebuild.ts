@@ -18,13 +18,15 @@
 
 import path from "node:path"
 import fs from "node:fs/promises"
+import type { Dirent } from "node:fs"
 import {
   getAllMarkdownFiles,
   buildFileTree,
   buildSearchIndex,
 } from "nuartz"
 import { renderMarkdown } from "nuartz/markdown"
-import type { MarkdownFile, RenderResult, Frontmatter, TocEntry } from "nuartz"
+import type { Frontmatter, TocEntry } from "nuartz"
+import { isAllowedMediaPath } from "../lib/media"
 
 const ROOT = path.join(import.meta.dir, "..")
 const CONTENT_DIR = path.join(ROOT, "..", "content")
@@ -88,18 +90,20 @@ async function writeJSON(filePath: string, data: unknown) {
 async function copyMediaFiles() {
   let count = 0
   async function walk(dir: string) {
-    let entries: { name: string; isDirectory(): boolean }[]
+    let entries: Dirent<string>[]
     try {
-      entries = (await fs.readdir(dir, { withFileTypes: true })) as any
+      entries = await fs.readdir(dir, { withFileTypes: true })
     } catch {
       return
     }
     for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue
       const fullPath = path.join(dir, entry.name)
       if (entry.isDirectory()) {
         await walk(fullPath)
-      } else if (!entry.name.endsWith(".md")) {
+      } else if (entry.isFile()) {
         const relative = path.relative(CONTENT_DIR, fullPath)
+        if (!isAllowedMediaPath(relative)) continue
         const dest = path.join(PUBLIC_DIR, "content", relative)
         await fs.mkdir(path.dirname(dest), { recursive: true })
         await fs.copyFile(fullPath, dest)
@@ -107,6 +111,7 @@ async function copyMediaFiles() {
       }
     }
   }
+  await fs.rm(path.join(PUBLIC_DIR, "content"), { recursive: true, force: true })
   await walk(CONTENT_DIR)
   console.log(`prebuild: copied ${count} media files`)
 }
@@ -356,6 +361,7 @@ async function main() {
     { slug: string; title: string; description: string | null; date: string | null }[]
   > = {}
   for (const file of files) {
+    if (file.frontmatter.draft || file.frontmatter.published === false) continue
     const fileTags: string[] = (file.frontmatter.tags as string[]) ?? []
     for (const tag of fileTags) {
       if (!tagIndex[tag]) tagIndex[tag] = []

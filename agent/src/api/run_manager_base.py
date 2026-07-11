@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 
+from api.resource_scope import scoped_checkpoint_thread_id
+
 
 class RunConflictError(Exception):
     """Raised when a run conflicts with multitask strategy."""
@@ -22,6 +24,7 @@ class RunManagerBase(ABC):
         self,
         thread_id: str,
         *,
+        user_id: str,
         graph_id: str = "agent",
         run_input: dict | None = None,
         command: dict | None = None,
@@ -42,6 +45,7 @@ class RunManagerBase(ABC):
         self,
         thread_id: str,
         *,
+        user_id: str,
         graph_id: str = "agent",
         run_input: dict | None = None,
         command: dict | None = None,
@@ -62,6 +66,7 @@ class RunManagerBase(ABC):
         self,
         thread_id: str,
         *,
+        user_id: str,
         graph_id: str = "agent",
         run_input: dict | None = None,
         command: dict | None = None,
@@ -77,14 +82,18 @@ class RunManagerBase(ABC):
 
     @abstractmethod
     async def join_stream(
-        self, thread_id: str, run_id: str
+        self, thread_id: str, run_id: str, *, user_id: str
     ) -> AsyncIterator[dict[str, Any]]: ...
 
     @abstractmethod
-    async def cancel_run(self, thread_id: str, run_id: str) -> None: ...
+    async def cancel_run(
+        self, thread_id: str, run_id: str, *, user_id: str
+    ) -> None: ...
 
     @abstractmethod
-    async def join_run(self, thread_id: str, run_id: str) -> dict[str, Any] | None: ...
+    async def join_run(
+        self, thread_id: str, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None: ...
 
 
 # ---- Shared helpers ----
@@ -92,6 +101,41 @@ class RunManagerBase(ABC):
 # Default stream modes for background runs (matches LangGraph Platform:
 # "Background runs default to having the union of all stream modes enabled")
 DEFAULT_BG_STREAM_MODES = ["values", "messages-tuple", "updates"]
+
+
+def _merge_user_configurable(
+    target: dict[str, Any], source: dict[str, Any] | None
+) -> None:
+    """Merge user configurable values without accepting checkpoint identity keys."""
+    if not source:
+        return
+    configurable = source.get("configurable")
+    if not isinstance(configurable, dict):
+        return
+
+    for key, value in configurable.items():
+        if key in {"thread_id", "user_id"} or key.startswith("checkpoint_"):
+            continue
+        target[key] = value
+
+
+def build_graph_config(
+    thread_id: str,
+    *,
+    user_id: str,
+    assistant_config: dict[str, Any] | None = None,
+    run_config: dict[str, Any] | None = None,
+    checkpoint_id: str | None = None,
+) -> dict[str, Any]:
+    """Build execution config with server-controlled thread/checkpoint identity."""
+    configurable: dict[str, Any] = {}
+    _merge_user_configurable(configurable, assistant_config)
+    _merge_user_configurable(configurable, run_config)
+    configurable["thread_id"] = scoped_checkpoint_thread_id(user_id, thread_id)
+    configurable["user_id"] = user_id
+    if checkpoint_id:
+        configurable["checkpoint_id"] = checkpoint_id
+    return {"configurable": configurable}
 
 
 def resolve_input(run_input: dict | None, command: dict | None) -> Any:

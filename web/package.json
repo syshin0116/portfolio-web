@@ -14,7 +14,7 @@
   "dependencies": {
     "@auth/pg-adapter": "^1.11.1",
     "@giscus/react": "^3.1.0",
-    "@langchain/core": "^1.0.6",
+    "@langchain/core": "^1.1.27",
     "@langchain/langgraph": "^1.0.2",
     "@langchain/langgraph-sdk": "^1.0.2",
     "@langchain/react": "^1.0.26",
@@ -72,7 +72,7 @@
     "pagefind": "^1.4.0",
     "postcss": "^8",
     "tailwindcss": "^4.0.8",
-    "typescript": "^7"
+    "typescript": "^5.9.3"
   },
   "overrides": {
     "@types/react": "19.1.16",

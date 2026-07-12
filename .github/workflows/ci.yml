@@ -37,7 +37,7 @@ jobs:
       AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret
       NEXT_PUBLIC_AGENT_API_URL: http://localhost:8000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.10
@@ -56,7 +56,7 @@ jobs:
     env:
       AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

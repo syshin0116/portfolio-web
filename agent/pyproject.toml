@@ -63,5 +63,5 @@ dev = [
     "ruff",
     "httpx",
     "asgi-lifespan>=2.1.0",
-    "langgraph-cli[inmem]>=0.4.19",
+    "langgraph-cli>=0.4.31",
 ]

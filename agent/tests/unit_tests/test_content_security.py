@@ -81,7 +81,14 @@ async def test_blog_backend_rejects_all_mutation_apis(tmp_path):
     post.write_text("original", encoding="utf-8")
     backend = ReadOnlyFilesystemBackend(root_dir=tmp_path, virtual_mode=True)
 
-    assert "original" in backend.read("/post.md")
+    read_result = backend.read("/post.md")
+    content = (
+        read_result
+        if isinstance(read_result, str)
+        else read_result.file_data["content"]
+    )
+
+    assert "original" in content
     assert backend.write("/new.md", "new").error == "Blog content is read-only"
     assert backend.edit("/post.md", "original", "changed").error == (
         "Blog content is read-only"

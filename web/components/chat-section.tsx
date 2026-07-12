@@ -657,7 +657,8 @@ export default function ChatSection() {
     defaultHeaders: agentHeaders,
     messagesKey: "messages",
     onCreated(run) {
-      setSavedRunId((run as any).runId ?? run.run_id) // eslint-disable-line @typescript-eslint/no-explicit-any
+      const runInfo = run as any // eslint-disable-line @typescript-eslint/no-explicit-any
+      setSavedRunId(runInfo.runId ?? runInfo.run_id)
     },
   }) as unknown as StreamHandle
 

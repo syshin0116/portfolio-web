@@ -13,7 +13,7 @@ type: <free-form, see below>
 tags:
   - <free-form, see below>
 sources:
-  - content/AI/2026-04-19-LLM-Text-to-SQL-실전-가이드.md
+  - content/AI/2026-04-19-LLM-Text-to-SQL.md
 summary: "1–3 sentence rich summary. Single source for callout rendering, search snippets, OG meta, RSS."
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
@@ -27,7 +27,7 @@ draft: false
 | `title` | Korean or English. Short and search-friendly. Kebab-case version becomes the filename. |
 | `type` | Free-form. Reuse existing values across the wiki when possible (consistency emerges over time). Don't invent parallel terms (e.g., `tool` vs `tooling` vs `utility`). When in doubt, omit. |
 | `tags` | 5–10 per page, drawn from multiple dimensions (domain, language, technique, concept, meta). Reuse existing vocabulary first; new tags are OK when nothing fits. |
-| `sources` | Required. Every source post that contributed to this page. Append on update; never remove unless the source is deleted. |
+| `sources` | Required. Every source that contributed to this page. Use an existing repo-relative file path or an absolute HTTPS URL. Append on update; never remove unless the source is deleted. |
 | `summary` | Required. 1–3 sentences. The single canonical summary used for callout rendering, index.md descriptions, search snippets. No `## Summary` section in body. |
 | `created` | First write. Never change. |
 | `updated` | Bump on every edit. |
@@ -69,7 +69,7 @@ Every wiki page follows this section template. Mandatory sections must be presen
 Verbatim quotes from sources. Code blocks must be copy-pasteable.
 
 ```python
-# from content/AI/2026-04-19-LLM-Text-to-SQL-실전-가이드.md
+# from content/AI/2026-04-19-LLM-Text-to-SQL.md
 def example(): ...
 ```
 
@@ -86,7 +86,7 @@ Optional. When sources disagree, list both with attribution. Do not resolve.
 
 ## Footnotes
 
-[^1]: content/AI/2026-04-19-LLM-Text-to-SQL-실전-가이드.md
+[^1]: content/AI/2026-04-19-LLM-Text-to-SQL.md
 [^2]: content/Tools/2024-07-29-Zettelkasten.md
 ```
 
@@ -171,10 +171,11 @@ If folders are introduced, append the folder: `concepts/zettelkasten.md`. The sl
 
 | | Where | Targets | Purpose |
 |---|---|---|---|
-| `sources:` | frontmatter | source paths (`content/AI/...md`) | Provenance |
+| `sources:` | frontmatter | repo-relative files or absolute HTTPS URLs | Provenance |
 | `[[wikilink]]` | body | wiki page slugs (`[[zettelkasten]]`) | Conceptual connection |
 
 - `[[wikilinks]]` only point to `content/wiki/` pages. Never wikilink to a source post.
+- Repo-local sources must exist and stay inside the repository. HTTPS sources must be syntactically valid; the verify gate does not fetch them.
 - Targets must exist or be created in the same operation.
 - Verify with the script (LLMs hallucinate links):
   ```bash
@@ -223,7 +224,7 @@ Format:
 
 | Source | Wiki pages |
 |--------|------------|
-| content/AI/2026-04-19-LLM-Text-to-SQL-실전-가이드.md | [[text-to-sql]], [[llm-prompting]] |
+| content/AI/2026-04-19-LLM-Text-to-SQL.md | [[text-to-sql]], [[llm-prompting]] |
 ```
 
 This is the **L1 cache for the LLM** - every ingest reads it first to find candidate pages without reading every wiki file.

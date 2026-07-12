@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useDeferredValue } from "react"
 import { useRouter } from "next/navigation"
+import { tagPath } from "@/lib/tag"
 import { FileText, Hash, Loader2 } from "lucide-react"
 import {
   CommandDialog,
@@ -89,7 +90,7 @@ export function CommandPalette() {
           const tags = [...new Set(entriesRef.current.flatMap((e) => e.tags))]
             .filter((t) => t.toLowerCase().includes(lower))
             .slice(0, 5)
-            .map((t) => ({ slug: `tags/${t}`, title: `#${t}`, excerpt: "Browse tag", type: "tag" as const }))
+            .map((t) => ({ slug: `tags/${tagPath(t)}`, title: `#${t}`, excerpt: "Browse tag", type: "tag" as const }))
           setResults({ notes: [], tags })
         }
         return

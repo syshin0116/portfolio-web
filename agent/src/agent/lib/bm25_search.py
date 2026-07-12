@@ -28,10 +28,13 @@ def _get_kiwi():
     if _kiwi is None:
         try:
             from kiwipiepy import Kiwi
+
             _kiwi = Kiwi()
             logger.info("kiwipiepy loaded for Korean tokenization")
         except ImportError:
-            logger.warning("kiwipiepy not available, falling back to whitespace tokenization")
+            logger.warning(
+                "kiwipiepy not available, falling back to whitespace tokenization"
+            )
             _kiwi = False  # sentinel: tried but failed
     return _kiwi if _kiwi is not False else None
 
@@ -65,8 +68,16 @@ def _build_index(config: SearchConfig) -> None:
     _bm25 = BM25Okapi(corpus)
     _bm25_docs = docs
     _bm25_corpus = corpus
-    _bm25_mtime = max((d.meta.date.toordinal() if d.meta.date else 0) for d in docs) if docs else 0
-    logger.info("BM25 index built: %d documents, avg %.0f tokens", len(docs), sum(len(c) for c in corpus) / max(len(corpus), 1))
+    _bm25_mtime = (
+        max((d.meta.date.toordinal() if d.meta.date else 0) for d in docs)
+        if docs
+        else 0
+    )
+    logger.info(
+        "BM25 index built: %d documents, avg %.0f tokens",
+        len(docs),
+        sum(len(c) for c in corpus) / max(len(corpus), 1),
+    )
 
 
 def _get_snippet(doc: ContentDoc, query_tokens: list[str], max_chars: int = 300) -> str:
@@ -87,7 +98,7 @@ def _get_snippet(doc: ContentDoc, query_tokens: list[str], max_chars: int = 300)
 
     snippet = best_para.strip()
     if len(snippet) > max_chars:
-        snippet = snippet[:max_chars - 3] + "..."
+        snippet = snippet[: max_chars - 3] + "..."
     return snippet or doc.meta.description
 
 
@@ -123,12 +134,14 @@ def bm25_search(
     results: list[SearchResult] = []
     for idx, norm_score in scored[:top_k]:
         doc = _bm25_docs[idx]
-        results.append(SearchResult(
-            path=doc.meta.path,
-            title=doc.meta.title,
-            score=round(norm_score, 3),
-            snippet=_get_snippet(doc, query_tokens),
-            source="bm25",
-        ))
+        results.append(
+            SearchResult(
+                path=doc.meta.path,
+                title=doc.meta.title,
+                score=round(norm_score, 3),
+                snippet=_get_snippet(doc, query_tokens),
+                source="bm25",
+            )
+        )
 
     return results

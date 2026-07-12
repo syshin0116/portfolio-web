@@ -32,7 +32,9 @@ def _parse_date(val: object) -> date | None:
     s = str(val).strip()
     for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M %z", "%Y-%m-%d %H:%M:%S %z"):
         try:
-            return datetime.strptime(s[:19] if len(s) > 19 else s, fmt[:len(s)+1].rstrip()).date()
+            return datetime.strptime(
+                s[:19] if len(s) > 19 else s, fmt[: len(s) + 1].rstrip()
+            ).date()
         except (ValueError, IndexError):
             continue
     # Try just the date portion
@@ -60,7 +62,7 @@ def _parse_one(path: Path, content_dir: Path) -> ContentDoc | None:
             fm = yaml.safe_load(fm_match.group(1)) or {}
         except yaml.YAMLError:
             fm = {}
-        body = raw[fm_match.end():]
+        body = raw[fm_match.end() :]
     else:
         fm = {}
         body = raw
@@ -122,7 +124,15 @@ def get_cached_docs(config: SearchConfig | None = None) -> list[ContentDoc]:
 def load_one(path: str, config: SearchConfig | None = None) -> ContentDoc | None:
     """Load a single blog post by relative path."""
     cfg = config or get_config()
-    full = cfg.content_dir / path
-    if not full.exists():
+    try:
+        content_dir = cfg.content_dir.resolve()
+        requested = Path(path)
+        if requested.is_absolute() or requested.suffix != ".md":
+            return None
+        full = (content_dir / requested).resolve()
+    except (OSError, RuntimeError, ValueError):
         return None
-    return _parse_one(full, cfg.content_dir)
+
+    if not full.is_relative_to(content_dir) or not full.is_file():
+        return None
+    return _parse_one(full, content_dir)

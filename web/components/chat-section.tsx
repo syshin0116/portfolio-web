@@ -1,8 +1,10 @@
 "use client"
 
 import { useStream } from "@langchain/react"
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { useSearchParams } from "next/navigation"
+import Link from "next/link"
+import { useAuth } from "@/contexts/AuthContext"
 import {
   ChatContainerContent,
   ChatContainerRoot,
@@ -619,15 +621,25 @@ function QueueDisplay({ queue }: { queue: any }) { // eslint-disable-line @types
 
 export default function ChatSection() {
   const searchParams = useSearchParams()
+  const { user, loading: authLoading } = useAuth()
+  const authenticatedUserId = user?.id ?? user?.email
   const [input, setInput] = useState("")
   const [savedRunId, setSavedRunId] = useState<string | null>(null)
   const [models, setModels] = useState<Model[]>([])
   const [selectedModel, setSelectedModel] = useState<string>("")
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set())
+  const [agentToken, setAgentToken] = useState<string | null>(null)
+  const [agentAuthError, setAgentAuthError] = useState<string | null>(null)
+  const agentHeaders = useMemo<Record<string, string>>(() => {
+    const headers: Record<string, string> = {}
+    if (agentToken) headers.Authorization = `Bearer ${agentToken}`
+    return headers
+  }, [agentToken])
 
   const thread = useStream({
     apiUrl: API_URL,
     assistantId: "agent",
+    defaultHeaders: agentHeaders,
     messagesKey: "messages",
     onCreated(run) {
       setSavedRunId(run.run_id)
@@ -636,6 +648,39 @@ export default function ChatSection() {
 
   const interrupt = thread.interrupt as any // eslint-disable-line @typescript-eslint/no-explicit-any
   const getMetadata = thread.getMessagesMetadata
+
+  useEffect(() => {
+    if (!authenticatedUserId) {
+      setAgentToken(null)
+      setAgentAuthError(null)
+      return
+    }
+
+    let cancelled = false
+    const refreshToken = async () => {
+      try {
+        const response = await fetch("/api/agent-token", { method: "POST" })
+        if (!response.ok) throw new Error("Agent authentication failed")
+        const data = (await response.json()) as { token: string }
+        if (!cancelled) {
+          setAgentToken(data.token)
+          setAgentAuthError(null)
+        }
+      } catch {
+        if (!cancelled) {
+          setAgentToken(null)
+          setAgentAuthError("Agent authentication failed")
+        }
+      }
+    }
+
+    void refreshToken()
+    const timer = window.setInterval(refreshToken, 10 * 60 * 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [authenticatedUserId])
 
   // Reset chat
   useEffect(() => {
@@ -648,19 +693,26 @@ export default function ChatSection() {
 
   // Fetch models
   useEffect(() => {
-    fetch(`${API_URL}/models`)
+    if (!agentToken) return
+    fetch(`${API_URL}/models`, { headers: agentHeaders })
+      .then((response) => {
+        if (!response.ok) throw new Error("Failed to load models")
+        return response
+      })
       .then((r) => r.json())
       .then((data: Model[]) => {
         setModels(data)
-        if (!selectedModel) {
+        setSelectedModel((current) => {
+          if (current) return current
           const def = data.find((m) => m.is_default)
-          setSelectedModel(def?.model_id ?? data[0]?.model_id ?? "")
-        }
+          return def?.model_id ?? data[0]?.model_id ?? ""
+        })
       })
       .catch(() => {})
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [agentHeaders, agentToken])
 
   const submitMessage = (text: string) => {
+    if (!agentToken) return
     const newMessage = { type: "human" as const, content: text, id: `optimistic-${Date.now()}` }
     const configurable: Record<string, unknown> = {}
     if (selectedModel) configurable.model = selectedModel
@@ -780,8 +832,9 @@ export default function ChatSection() {
                         블로그 포스트, 프로젝트, 기술 경험에 대해 질문하세요
                       </p>
                     </div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      {SUGGESTIONS.map((s) => (
+                    {agentToken ? (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        {SUGGESTIONS.map((s) => (
                         <PromptSuggestion
                           key={s.text}
                           className="h-auto gap-2 px-4 py-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
@@ -790,8 +843,13 @@ export default function ChatSection() {
                           <s.icon className="size-4 shrink-0 text-primary/70" />
                           <span className="text-sm">{s.text}</span>
                         </PromptSuggestion>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    ) : !authLoading && !user ? (
+                      <Button asChild>
+                        <Link href="/login">Sign in to chat</Link>
+                      </Button>
+                    ) : null}
                   </div>
                 )}
 
@@ -855,6 +913,11 @@ export default function ChatSection() {
             {thread.error != null && (
               <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
                 {String((thread.error as Error)?.message ?? thread.error)}
+              </div>
+            )}
+            {agentAuthError && (
+              <div className="border-t border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
+                {agentAuthError}
               </div>
             )}
 
@@ -921,14 +984,24 @@ export default function ChatSection() {
                   </Button>
                 )}
               </div>
-              <PromptInput
-                value={input}
-                onValueChange={setInput}
-                onSubmit={handleSubmit}
-                isLoading={thread.isLoading}
-                className="mx-auto max-w-3xl shadow-sm transition-shadow focus-within:shadow-md"
-              >
-                <PromptInputTextarea placeholder="메시지를 입력하세요..." />
+              {!authLoading && !user ? (
+                <div className="mx-auto flex max-w-3xl justify-center py-3">
+                  <Button asChild>
+                    <Link href="/login">Sign in to chat</Link>
+                  </Button>
+                </div>
+              ) : (
+                <PromptInput
+                  value={input}
+                  onValueChange={setInput}
+                  onSubmit={handleSubmit}
+                  isLoading={thread.isLoading}
+                  className="mx-auto max-w-3xl shadow-sm transition-shadow focus-within:shadow-md"
+                >
+                  <PromptInputTextarea
+                    placeholder={agentToken ? "메시지를 입력하세요..." : "Connecting..."}
+                    disabled={!agentToken}
+                  />
                 <PromptInputActions className="justify-end px-2 pb-2">
                   {thread.isLoading ? (
                     <PromptInputAction tooltip="Stop">
@@ -946,7 +1019,7 @@ export default function ChatSection() {
                       <Button
                         size="sm"
                         className="size-8 rounded-full bg-primary transition-transform active:scale-90"
-                        disabled={!input.trim()}
+                        disabled={!agentToken || !input.trim()}
                         onClick={(e) => { e.stopPropagation(); handleSubmit() }}
                       >
                         <ArrowUpIcon className="size-3.5" />
@@ -954,7 +1027,8 @@ export default function ChatSection() {
                     </PromptInputAction>
                   )}
                 </PromptInputActions>
-              </PromptInput>
+                </PromptInput>
+              )}
             </div>
           </div>
         </div>

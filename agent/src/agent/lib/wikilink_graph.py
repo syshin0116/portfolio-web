@@ -110,13 +110,15 @@ def graph_traverse(
             continue
 
         score = 1.0 / (1.0 + dist)  # closer = higher score
-        results.append(SearchResult(
-            path=path,
-            title=doc.meta.title,
-            score=round(score, 3),
-            snippet=doc.meta.description or f"Connected at depth {dist}",
-            source="wikilink",
-        ))
+        results.append(
+            SearchResult(
+                path=path,
+                title=doc.meta.title,
+                score=round(score, 3),
+                snippet=doc.meta.description or f"Connected at depth {dist}",
+                source="wikilink",
+            )
+        )
 
     results.sort(key=lambda r: r.score, reverse=True)
-    return results[:cfg.max_results]
+    return results[: cfg.max_results]

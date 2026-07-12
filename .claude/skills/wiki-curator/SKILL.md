@@ -48,7 +48,7 @@ The script enforces (deterministically - don't try to verify by eye):
 - body has no `## Summary` section (lives in frontmatter)
 - body has no `> [!summary]` callout (legacy)
 - body has mandatory sections (`## Key Claims`, `## Footnotes`)
-- every `sources:` path exists on disk
+- every `sources:` entry is either a valid HTTPS URL or an existing repo-local file
 - summary length 1–500 chars
 - tags non-empty
 
@@ -63,6 +63,14 @@ Non-obvious things that bite:
 - **`stat -f '%m %N'` is macOS; use `stat -c '%Y %n'` on Linux.** ingest's "recent N" command differs by OS.
 - **`gh pr create` requires the Claude GitHub App installed on the repo with write permission.** First-time setup, not the routine's job to fix.
 - **Body `[!summary]` callouts are legacy** (from before frontmatter migration). Don't recreate them.
+
+## Mirrored skill trees
+
+`.claude/skills/wiki-curator/` and `.agents/skills/wiki-curator/` are byte-for-byte mirrors. Commands use the `.claude/` path because the existing routine invokes it. Apply every skill-contract change to both trees and verify with:
+
+```bash
+diff -ru .agents/skills/wiki-curator .claude/skills/wiki-curator
+```
 
 ## Output style
 

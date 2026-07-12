@@ -1,4 +1,5 @@
 import notesList from "@/.generated/notes-list.json"
+import type { NoteEntry } from "@/lib/blog"
 
 export const dynamic = "force-static"
 
@@ -14,7 +15,7 @@ function escapeXml(str: string): string {
 }
 
 export async function GET() {
-  const posts = (notesList as any[])
+  const posts = (notesList as NoteEntry[])
     .filter((f) => !f.draft)
     .slice(0, 50)
 

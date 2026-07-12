@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
@@ -25,6 +26,7 @@ _SETUP_STATEMENTS = [
     )""",
     """CREATE TABLE IF NOT EXISTS threads (
         thread_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        owner_id TEXT NOT NULL,
         metadata JSONB NOT NULL DEFAULT '{}',
         status TEXT NOT NULL DEFAULT 'idle',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -46,6 +48,7 @@ _SETUP_STATEMENTS = [
     )""",
     """CREATE TABLE IF NOT EXISTS crons (
         cron_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        owner_id TEXT NOT NULL,
         assistant_id UUID,
         thread_id UUID REFERENCES threads(thread_id) ON DELETE SET NULL,
         schedule TEXT NOT NULL,
@@ -77,9 +80,13 @@ _SETUP_STATEMENTS = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )""",
+    "ALTER TABLE threads ADD COLUMN IF NOT EXISTS owner_id TEXT",
+    "ALTER TABLE crons ADD COLUMN IF NOT EXISTS owner_id TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_threads_owner_id ON threads(owner_id)",
     "CREATE INDEX IF NOT EXISTS idx_runs_thread_id ON runs(thread_id)",
     "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)",
     "CREATE INDEX IF NOT EXISTS idx_crons_enabled ON crons(enabled)",
+    "CREATE INDEX IF NOT EXISTS idx_crons_owner_id ON crons(owner_id)",
     "CREATE INDEX IF NOT EXISTS idx_store_namespace ON store_items(namespace)",
     "CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider)",
     "CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(enabled)",
@@ -113,6 +120,25 @@ def _ns_to_str(namespace: list[str]) -> str:
 
 def _str_to_ns(s: str) -> list[str]:
     return s.split(".") if s else []
+
+
+_USER_NAMESPACE_ROOT = "__users__"
+
+
+def _user_namespace(user_id: str) -> list[str]:
+    digest = hashlib.sha256(user_id.encode()).hexdigest()
+    return [_USER_NAMESPACE_ROOT, digest]
+
+
+def _scope_namespace(user_id: str, namespace: list[str]) -> list[str]:
+    return [*_user_namespace(user_id), *namespace]
+
+
+def _unscope_namespace(user_id: str, namespace: list[str]) -> list[str]:
+    prefix = _user_namespace(user_id)
+    if namespace[: len(prefix)] != prefix:
+        raise ValueError("namespace does not belong to user")
+    return namespace[len(prefix) :]
 
 
 class _DictRowConnection:
@@ -298,45 +324,50 @@ class DB:
     async def create_thread(
         self,
         *,
+        owner_id: str,
         thread_id: str | None = None,
         metadata: dict | None = None,
         if_exists: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         tid = thread_id or _uuid()
         now = _now()
         async with self._conn() as conn:
             if if_exists == "do_nothing":
                 row = await (
                     await conn.execute(
-                        "SELECT * FROM threads WHERE thread_id = %s", (tid,)
+                        "SELECT * FROM threads WHERE thread_id = %s AND owner_id = %s",
+                        (tid, owner_id),
                     )
                 ).fetchone()
                 if row:
                     return dict(row)
             row = await (
                 await conn.execute(
-                    """INSERT INTO threads (thread_id, metadata, status, created_at, updated_at)
-                    VALUES (%s, %s, 'idle', %s, %s)
+                    """INSERT INTO threads
+                    (thread_id, owner_id, metadata, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, 'idle', %s, %s)
                     ON CONFLICT (thread_id) DO UPDATE SET
                         metadata = EXCLUDED.metadata,
                         updated_at = EXCLUDED.updated_at
+                    WHERE threads.owner_id = EXCLUDED.owner_id
                     RETURNING *""",
-                    (tid, json.dumps(metadata or {}), now, now),
+                    (tid, owner_id, json.dumps(metadata or {}), now, now),
                 )
             ).fetchone()
-            return dict(row)
+            return dict(row) if row else None
 
-    async def get_thread(self, thread_id: str) -> dict[str, Any] | None:
+    async def get_thread(self, thread_id: str, owner_id: str) -> dict[str, Any] | None:
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT * FROM threads WHERE thread_id = %s", (thread_id,)
+                    "SELECT * FROM threads WHERE thread_id = %s AND owner_id = %s",
+                    (thread_id, owner_id),
                 )
             ).fetchone()
             return dict(row) if row else None
 
     async def update_thread(
-        self, thread_id: str, **kwargs: Any
+        self, thread_id: str, owner_id: str, **kwargs: Any
     ) -> dict[str, Any] | None:
         sets = []
         vals = []
@@ -349,33 +380,40 @@ class DB:
                     sets.append(f"{k} = %s")
                     vals.append(v)
         if not sets:
-            return await self.get_thread(thread_id)
+            return await self.get_thread(thread_id, owner_id)
         sets.append("updated_at = %s")
         vals.append(_now())
         vals.append(thread_id)
+        vals.append(owner_id)
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"UPDATE threads SET {', '.join(sets)} WHERE thread_id = %s RETURNING *",
+                    f"UPDATE threads SET {', '.join(sets)} "
+                    "WHERE thread_id = %s AND owner_id = %s RETURNING *",
                     vals,
                 )
             ).fetchone()
             return dict(row) if row else None
 
-    async def delete_thread(self, thread_id: str) -> None:
+    async def delete_thread(self, thread_id: str, owner_id: str) -> bool:
         async with self._conn() as conn:
-            await conn.execute("DELETE FROM threads WHERE thread_id = %s", (thread_id,))
+            cursor = await conn.execute(
+                "DELETE FROM threads WHERE thread_id = %s AND owner_id = %s",
+                (thread_id, owner_id),
+            )
+            return cursor.rowcount > 0
 
     async def search_threads(
         self,
         *,
+        owner_id: str,
         metadata: dict | None = None,
         status: str | None = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        where = []
-        vals: list[Any] = []
+        where = ["owner_id = %s"]
+        vals: list[Any] = [owner_id]
         if status:
             where.append("status = %s")
             vals.append(status)
@@ -393,11 +431,14 @@ class DB:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    async def set_thread_status(self, thread_id: str, status: str) -> None:
+    async def set_thread_status(
+        self, thread_id: str, status: str, owner_id: str
+    ) -> None:
         async with self._conn() as conn:
             await conn.execute(
-                "UPDATE threads SET status = %s, updated_at = %s WHERE thread_id = %s",
-                (status, _now(), thread_id),
+                """UPDATE threads SET status = %s, updated_at = %s
+                WHERE thread_id = %s AND owner_id = %s""",
+                (status, _now(), thread_id, owner_id),
             )
 
     # ---- Runs ----
@@ -406,6 +447,7 @@ class DB:
         self,
         *,
         thread_id: str,
+        owner_id: str,
         assistant_id: str | None = None,
         input: dict | None = None,
         command: dict | None = None,
@@ -414,7 +456,7 @@ class DB:
         kwargs: dict | None = None,
         multitask_strategy: str = "reject",
         status: str = "pending",
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         run_id = _uuid()
         now = _now()
         async with self._conn() as conn:
@@ -422,11 +464,11 @@ class DB:
                 await conn.execute(
                     """INSERT INTO runs
                     (run_id, thread_id, assistant_id, status, input, command, config, metadata, kwargs, multitask_strategy, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    SELECT %s, thread_id, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    FROM threads WHERE thread_id = %s AND owner_id = %s
                     RETURNING *""",
                     (
                         run_id,
-                        thread_id,
                         assistant_id,
                         status,
                         json.dumps(input) if input else None,
@@ -437,65 +479,84 @@ class DB:
                         multitask_strategy,
                         now,
                         now,
+                        thread_id,
+                        owner_id,
                     ),
-                )
-            ).fetchone()
-            return dict(row)
-
-    async def get_run(self, thread_id: str, run_id: str) -> dict[str, Any] | None:
-        async with self._conn() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT * FROM runs WHERE run_id = %s AND thread_id = %s",
-                    (run_id, thread_id),
                 )
             ).fetchone()
             return dict(row) if row else None
 
-    async def update_run_status(self, run_id: str, status: str) -> None:
+    async def get_run(
+        self, thread_id: str, run_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """SELECT r.* FROM runs r
+                    JOIN threads t ON t.thread_id = r.thread_id
+                    WHERE r.run_id = %s AND r.thread_id = %s AND t.owner_id = %s""",
+                    (run_id, thread_id, owner_id),
+                )
+            ).fetchone()
+            return dict(row) if row else None
+
+    async def update_run_status(self, run_id: str, status: str, owner_id: str) -> None:
         async with self._conn() as conn:
             await conn.execute(
-                "UPDATE runs SET status = %s, updated_at = %s WHERE run_id = %s",
-                (status, _now(), run_id),
+                """UPDATE runs AS r SET status = %s, updated_at = %s
+                FROM threads AS t WHERE r.run_id = %s
+                AND t.thread_id = r.thread_id AND t.owner_id = %s""",
+                (status, _now(), run_id, owner_id),
             )
 
     async def list_runs(
         self,
         thread_id: str,
         *,
+        owner_id: str,
         limit: int = 10,
         offset: int = 0,
         status: str | None = None,
     ) -> list[dict[str, Any]]:
-        where = ["thread_id = %s"]
-        vals: list[Any] = [thread_id]
+        where = ["r.thread_id = %s", "t.owner_id = %s"]
+        vals: list[Any] = [thread_id, owner_id]
         if status:
-            where.append("status = %s")
+            where.append("r.status = %s")
             vals.append(status)
         clause = " AND ".join(where)
         vals.extend([limit, offset])
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
-                    f"SELECT * FROM runs WHERE {clause} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    f"SELECT r.* FROM runs r JOIN threads t ON t.thread_id = r.thread_id "
+                    f"WHERE {clause} ORDER BY r.created_at DESC LIMIT %s OFFSET %s",
                     vals,
                 )
             ).fetchall()
             return [dict(r) for r in rows]
 
-    async def delete_run(self, thread_id: str, run_id: str) -> None:
+    async def delete_run(self, thread_id: str, run_id: str, owner_id: str) -> bool:
         async with self._conn() as conn:
-            await conn.execute(
-                "DELETE FROM runs WHERE run_id = %s AND thread_id = %s",
-                (run_id, thread_id),
+            cursor = await conn.execute(
+                """DELETE FROM runs r USING threads t
+                WHERE r.run_id = %s AND r.thread_id = %s
+                AND t.thread_id = r.thread_id AND t.owner_id = %s""",
+                (run_id, thread_id, owner_id),
             )
+            return cursor.rowcount > 0
 
-    async def get_active_run_for_thread(self, thread_id: str) -> dict[str, Any] | None:
+    async def get_active_run_for_thread(
+        self, thread_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT * FROM runs WHERE thread_id = %s AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1",
-                    (thread_id,),
+                    """SELECT r.* FROM runs r
+                    JOIN threads t ON t.thread_id = r.thread_id
+                    WHERE r.thread_id = %s AND t.owner_id = %s
+                    AND r.status IN ('pending', 'running')
+                    ORDER BY r.created_at DESC LIMIT 1""",
+                    (thread_id, owner_id),
                 )
             ).fetchone()
             return dict(row) if row else None
@@ -503,9 +564,14 @@ class DB:
     # ---- Store ----
 
     async def store_put(
-        self, namespace: list[str], key: str, value: dict[str, Any]
+        self,
+        namespace: list[str],
+        key: str,
+        value: dict[str, Any],
+        *,
+        owner_id: str,
     ) -> None:
-        ns = _ns_to_str(namespace)
+        ns = _ns_to_str(_scope_namespace(owner_id, namespace))
         now = _now()
         async with self._conn() as conn:
             await conn.execute(
@@ -517,8 +583,10 @@ class DB:
                 (ns, key, json.dumps(value), now, now),
             )
 
-    async def store_get(self, namespace: list[str], key: str) -> dict[str, Any] | None:
-        ns = _ns_to_str(namespace)
+    async def store_get(
+        self, namespace: list[str], key: str, *, owner_id: str
+    ) -> dict[str, Any] | None:
+        ns = _ns_to_str(_scope_namespace(owner_id, namespace))
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
@@ -529,28 +597,32 @@ class DB:
             if not row:
                 return None
             r = dict(row)
-            r["namespace"] = _str_to_ns(r["namespace"])
+            r["namespace"] = _unscope_namespace(owner_id, _str_to_ns(r["namespace"]))
             return r
 
-    async def store_delete(self, namespace: list[str], key: str) -> None:
-        ns = _ns_to_str(namespace)
+    async def store_delete(
+        self, namespace: list[str], key: str, *, owner_id: str
+    ) -> bool:
+        ns = _ns_to_str(_scope_namespace(owner_id, namespace))
         async with self._conn() as conn:
-            await conn.execute(
+            cursor = await conn.execute(
                 "DELETE FROM store_items WHERE namespace = %s AND key = %s",
                 (ns, key),
             )
+            return cursor.rowcount > 0
 
     async def store_search(
         self,
         namespace_prefix: list[str],
         *,
+        owner_id: str,
         filter: dict | None = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        prefix = _ns_to_str(namespace_prefix)
-        where = ["namespace LIKE %s"]
-        vals: list[Any] = [f"{prefix}%"]
+        prefix = _ns_to_str(_scope_namespace(owner_id, namespace_prefix))
+        where = ["(namespace = %s OR namespace LIKE %s)"]
+        vals: list[Any] = [prefix, f"{prefix}.%"]
         if filter:
             where.append("value @> %s")
             vals.append(json.dumps(filter))
@@ -566,30 +638,34 @@ class DB:
             result = []
             for r in rows:
                 d = dict(r)
-                d["namespace"] = _str_to_ns(d["namespace"])
+                d["namespace"] = _unscope_namespace(
+                    owner_id, _str_to_ns(d["namespace"])
+                )
                 result.append(d)
             return result
 
     async def store_list_namespaces(
         self,
         *,
+        owner_id: str,
         prefix: list[str] | None = None,
         suffix: list[str] | None = None,
         max_depth: int | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[list[str]]:
-        where = []
-        vals: list[Any] = []
+        user_prefix = _ns_to_str(_user_namespace(owner_id))
+        where = ["(namespace = %s OR namespace LIKE %s)"]
+        vals: list[Any] = [user_prefix, f"{user_prefix}.%"]
         if prefix:
-            p = _ns_to_str(prefix)
-            where.append("namespace LIKE %s")
-            vals.append(f"{p}%")
+            p = _ns_to_str(_scope_namespace(owner_id, prefix))
+            where.append("(namespace = %s OR namespace LIKE %s)")
+            vals.extend([p, f"{p}.%"])
         if suffix:
             s = _ns_to_str(suffix)
             where.append("namespace LIKE %s")
-            vals.append(f"%{s}")
-        clause = " AND ".join(where) if where else "TRUE"
+            vals.append(f"%.{s}")
+        clause = " AND ".join(where)
         vals.extend([limit, offset])
         async with self._conn() as conn:
             rows = await (
@@ -598,7 +674,9 @@ class DB:
                     vals,
                 )
             ).fetchall()
-            namespaces = [_str_to_ns(r["namespace"]) for r in rows]
+            namespaces = [
+                _unscope_namespace(owner_id, _str_to_ns(r["namespace"])) for r in rows
+            ]
             if max_depth is not None:
                 seen: set[tuple[str, ...]] = set()
                 filtered = []
@@ -615,6 +693,7 @@ class DB:
     async def create_cron(
         self,
         *,
+        owner_id: str,
         schedule: str,
         assistant_id: str | None = None,
         thread_id: str | None = None,
@@ -631,11 +710,12 @@ class DB:
             row = await (
                 await conn.execute(
                     """INSERT INTO crons
-                    (cron_id, assistant_id, thread_id, schedule, timezone, end_time, input, config, metadata, enabled, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (cron_id, owner_id, assistant_id, thread_id, schedule, timezone, end_time, input, config, metadata, enabled, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *""",
                     (
                         cron_id,
+                        owner_id,
                         assistant_id,
                         thread_id,
                         schedule,
@@ -652,14 +732,19 @@ class DB:
             ).fetchone()
             return dict(row)
 
-    async def get_cron(self, cron_id: str) -> dict[str, Any] | None:
+    async def get_cron(self, cron_id: str, owner_id: str) -> dict[str, Any] | None:
         async with self._conn() as conn:
             row = await (
-                await conn.execute("SELECT * FROM crons WHERE cron_id = %s", (cron_id,))
+                await conn.execute(
+                    "SELECT * FROM crons WHERE cron_id = %s AND owner_id = %s",
+                    (cron_id, owner_id),
+                )
             ).fetchone()
             return dict(row) if row else None
 
-    async def update_cron(self, cron_id: str, **kwargs: Any) -> dict[str, Any] | None:
+    async def update_cron(
+        self, cron_id: str, owner_id: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
         sets = []
         vals = []
         for k, v in kwargs.items():
@@ -671,34 +756,41 @@ class DB:
                     sets.append(f"{k} = %s")
                     vals.append(v)
         if not sets:
-            return await self.get_cron(cron_id)
+            return await self.get_cron(cron_id, owner_id)
         sets.append("updated_at = %s")
         vals.append(_now())
         vals.append(cron_id)
+        vals.append(owner_id)
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"UPDATE crons SET {', '.join(sets)} WHERE cron_id = %s RETURNING *",
+                    f"UPDATE crons SET {', '.join(sets)} "
+                    "WHERE cron_id = %s AND owner_id = %s RETURNING *",
                     vals,
                 )
             ).fetchone()
             return dict(row) if row else None
 
-    async def delete_cron(self, cron_id: str) -> None:
+    async def delete_cron(self, cron_id: str, owner_id: str) -> bool:
         async with self._conn() as conn:
-            await conn.execute("DELETE FROM crons WHERE cron_id = %s", (cron_id,))
+            cursor = await conn.execute(
+                "DELETE FROM crons WHERE cron_id = %s AND owner_id = %s",
+                (cron_id, owner_id),
+            )
+            return cursor.rowcount > 0
 
     async def search_crons(
         self,
         *,
+        owner_id: str,
         assistant_id: str | None = None,
         thread_id: str | None = None,
         enabled: bool | None = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        where = []
-        vals: list[Any] = []
+        where = ["owner_id = %s"]
+        vals: list[Any] = [owner_id]
         if assistant_id:
             where.append("assistant_id = %s")
             vals.append(assistant_id)

@@ -2,18 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { CONTENT_DIR } from "@/lib/content"
+import { mediaSecurityHeaders, mediaTypeForPath } from "@/lib/media"
 
-const MIME_TYPES: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".pdf": "application/pdf",
-  ".mp4": "video/mp4",
-  ".mp3": "audio/mpeg",
-}
+const CONTENT_ROOT = path.resolve(CONTENT_DIR)
 
 export async function GET(
   _req: NextRequest,
@@ -21,22 +12,35 @@ export async function GET(
 ) {
   const { path: pathParts } = await params
   const joined = pathParts.join("/")
+  const contentType = mediaTypeForPath(joined)
+  if (!contentType) {
+    return new NextResponse("Not Found", { status: 404 })
+  }
+
   const normalized = path.normalize(joined)
-  if (normalized.startsWith("..")) {
+  if (normalized === "." || normalized.startsWith("..")) {
     return new NextResponse("Forbidden", { status: 403 })
   }
-  const filePath = path.join(CONTENT_DIR, normalized)
-  if (!filePath.startsWith(CONTENT_DIR + path.sep) && filePath !== CONTENT_DIR) {
+  const filePath = path.resolve(CONTENT_ROOT, normalized)
+  if (!filePath.startsWith(CONTENT_ROOT + path.sep)) {
     return new NextResponse("Forbidden", { status: 403 })
   }
   try {
-    const data = await fs.readFile(filePath)
-    const ext = path.extname(filePath).toLowerCase()
-    const contentType = MIME_TYPES[ext] ?? "application/octet-stream"
+    const [realContentRoot, realFilePath] = await Promise.all([
+      fs.realpath(CONTENT_ROOT),
+      fs.realpath(filePath),
+    ])
+    if (!realFilePath.startsWith(realContentRoot + path.sep)) {
+      return new NextResponse("Forbidden", { status: 403 })
+    }
+
+    const data = await fs.readFile(realFilePath)
     return new NextResponse(data, {
       headers: {
         "Content-Type": contentType,
+        "X-Content-Type-Options": "nosniff",
         "Cache-Control": "public, max-age=86400",
+        ...mediaSecurityHeaders(joined),
       },
     })
   } catch {

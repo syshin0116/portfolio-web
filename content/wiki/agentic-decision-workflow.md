@@ -25,12 +25,12 @@ sources:
   - https://fortelabs.com/blog/para/
   - https://learn.microsoft.com/en-us/azure/search/search-document-level-access-overview
 created: 2026-05-17
-updated: 2026-05-18
+updated: 2026-07-12
 author: wiki-curator
 draft: false
 ---
 
-## Key claims
+## Key Claims
 
 - Agentic workflow의 목표는 사람을 완전히 제거하는 것이 아니라, 사람이 **decision making**에 집중하도록 반복 작업과 정리를 agent에게 넘기는 것이다.
 - Atlassian HULA 사례는 좋은 기준점을 준다. agent는 work item을 읽고 plan, code, PR까지 만들지만, engineer가 plan approval, code review, feedback을 담당한다.[^hula]

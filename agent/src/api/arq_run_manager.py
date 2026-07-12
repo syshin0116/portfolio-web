@@ -27,14 +27,18 @@ from arq.connections import ArqRedis, RedisSettings
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from api.arq_run_queue import prune_stale_heads
+from api.resource_scope import scoped_checkpoint_thread_id
 from api.run_manager_base import (
     DEFAULT_BG_STREAM_MODES,
     RunConflictError,
     RunManagerBase,
+    build_graph_config,
     format_stream_event,
     normalize_stream_modes,
     resolve_input,
 )
+from api.run_queue import RedisRunTurn, register_run, unregister_run
 from db import DB
 
 logger = logging.getLogger(__name__)
@@ -99,21 +103,23 @@ class ArqRunManager(RunManagerBase):
         self,
         thread_id: str,
         *,
+        user_id: str,
         assistant_config: dict | None = None,
         run_config: dict | None = None,
         checkpoint_id: str | None = None,
     ) -> dict[str, Any]:
-        configurable: dict[str, Any] = {"thread_id": thread_id}
-        if assistant_config:
-            configurable.update(assistant_config.get("configurable", {}))
-        if run_config:
-            configurable.update(run_config.get("configurable", {}))
-        if checkpoint_id:
-            configurable["checkpoint_id"] = checkpoint_id
-        return {"configurable": configurable}
+        return build_graph_config(
+            thread_id,
+            user_id=user_id,
+            assistant_config=assistant_config,
+            run_config=run_config,
+            checkpoint_id=checkpoint_id,
+        )
 
-    async def _handle_multitask(self, thread_id: str, strategy: str) -> None:
-        active_run = await self.db.get_active_run_for_thread(thread_id)
+    async def _handle_multitask(
+        self, thread_id: str, user_id: str, strategy: str
+    ) -> None:
+        active_run = await self.db.get_active_run_for_thread(thread_id, user_id)
         if not active_run:
             return
         run_id = str(active_run["run_id"])
@@ -122,7 +128,7 @@ class ArqRunManager(RunManagerBase):
                 f"Thread {thread_id} already has an active run {run_id}"
             )
         elif strategy in ("interrupt", "rollback"):
-            await self.cancel_run(thread_id, run_id)
+            await self.cancel_run(thread_id, run_id, user_id=user_id)
 
     # ---- Background run (offloaded to ARQ worker) ----
 
@@ -130,6 +136,7 @@ class ArqRunManager(RunManagerBase):
         self,
         thread_id: str,
         *,
+        user_id: str,
         graph_id: str = "agent",
         run_input: dict | None = None,
         command: dict | None = None,
@@ -145,10 +152,11 @@ class ArqRunManager(RunManagerBase):
         checkpoint_id: str | None = None,
     ) -> dict[str, Any]:
         if multitask_strategy != "enqueue":
-            await self._handle_multitask(thread_id, multitask_strategy)
+            await self._handle_multitask(thread_id, user_id, multitask_strategy)
 
         run_record = await self.db.create_run(
             thread_id=thread_id,
+            owner_id=user_id,
             assistant_id=assistant_id,
             input=run_input,
             command=command,
@@ -163,7 +171,10 @@ class ArqRunManager(RunManagerBase):
             multitask_strategy=multitask_strategy,
             status="pending",
         )
+        if run_record is None:
+            raise ValueError(f"Thread {thread_id} is not owned by the current user")
         run_id = str(run_record["run_id"])
+        thread_key = scoped_checkpoint_thread_id(user_id, thread_id)
 
         raw_modes = (
             [stream_mode]
@@ -171,26 +182,37 @@ class ArqRunManager(RunManagerBase):
             else list(stream_mode or DEFAULT_BG_STREAM_MODES)
         )
 
-        # Enqueue ARQ job — worker picks it up
-        await self.arq_pool.enqueue_job(
-            "execute_run",
-            run_id,
-            thread_id,
-            graph_id=graph_id,
-            run_input=run_input,
-            command=command,
-            config=config,
-            assistant_config=assistant_config,
-            stream_mode=raw_modes,
-            checkpoint_id=checkpoint_id,
-        )
+        await register_run(self.redis, thread_key, run_id)
+        try:
+            # The Redis queue supplies cross-worker FIFO order; ARQ job IDs
+            # prevent duplicate workers from executing the same run.
+            job = await self.arq_pool.enqueue_job(
+                "execute_run",
+                run_id,
+                thread_id,
+                user_id=user_id,
+                graph_id=graph_id,
+                run_input=run_input,
+                command=command,
+                config=config,
+                assistant_config=assistant_config,
+                stream_mode=raw_modes,
+                checkpoint_id=checkpoint_id,
+                _job_id=f"run:{run_id}",
+            )
+            if job is None:
+                raise RuntimeError(f"ARQ job for run {run_id} was not enqueued")
+        except Exception:
+            await unregister_run(self.redis, thread_key, run_id)
+            await self.db.update_run_status(run_id, "error", user_id)
+            raise
 
         return run_record
 
     # ---- Join stream (Redis pub/sub) ----
 
     async def join_stream(
-        self, thread_id: str, run_id: str
+        self, thread_id: str, run_id: str, *, user_id: str
     ) -> AsyncIterator[dict[str, Any]]:
         yield {
             "event": "metadata",
@@ -229,6 +251,7 @@ class ArqRunManager(RunManagerBase):
         self,
         thread_id: str,
         *,
+        user_id: str,
         graph_id: str = "agent",
         run_input: dict | None = None,
         command: dict | None = None,
@@ -244,39 +267,62 @@ class ArqRunManager(RunManagerBase):
         checkpoint_id: str | None = None,
     ) -> tuple[str, AsyncIterator[dict[str, Any]]]:
         if multitask_strategy != "enqueue":
-            await self._handle_multitask(thread_id, multitask_strategy)
+            await self._handle_multitask(thread_id, user_id, multitask_strategy)
 
         run_record = await self.db.create_run(
             thread_id=thread_id,
+            owner_id=user_id,
             assistant_id=assistant_id,
             input=run_input,
             command=command,
             config=config,
             metadata=metadata,
             multitask_strategy=multitask_strategy,
-            status="running",
+            status="pending",
         )
+        if run_record is None:
+            raise ValueError(f"Thread {thread_id} is not owned by the current user")
         run_id = str(run_record["run_id"])
-        await self.db.set_thread_status(thread_id, "busy")
+        thread_key = scoped_checkpoint_thread_id(user_id, thread_id)
+        await register_run(self.redis, thread_key, run_id)
 
         async def _generate() -> AsyncIterator[dict[str, Any]]:
-            graph = self._get_graph(graph_id)
-            lg_config = self._build_config(
-                thread_id,
-                assistant_config=assistant_config,
-                run_config=config,
-                checkpoint_id=checkpoint_id,
-            )
-            graph_input = resolve_input(run_input, command)
-            modes = [stream_mode] if isinstance(stream_mode, str) else list(stream_mode)
-            modes = normalize_stream_modes(modes)
+            turn = RedisRunTurn(self.redis, thread_key, run_id)
 
-            yield {
-                "event": "metadata",
-                "data": json.dumps({"run_id": run_id, "attempt": 1}),
-            }
+            async def _prune_stale_predecessors() -> None:
+                await prune_stale_heads(
+                    self.db,
+                    self.redis,
+                    thread_id=thread_id,
+                    thread_key=thread_key,
+                    run_id=run_id,
+                    user_id=user_id,
+                )
 
             try:
+                await turn.acquire(on_wait=_prune_stale_predecessors)
+                graph = self._get_graph(graph_id)
+                lg_config = self._build_config(
+                    thread_id,
+                    user_id=user_id,
+                    assistant_config=assistant_config,
+                    run_config=config,
+                    checkpoint_id=checkpoint_id,
+                )
+                graph_input = resolve_input(run_input, command)
+                modes = (
+                    [stream_mode] if isinstance(stream_mode, str) else list(stream_mode)
+                )
+                modes = normalize_stream_modes(modes)
+
+                await self.db.update_run_status(run_id, "running", user_id)
+                await self.db.set_thread_status(thread_id, "busy", user_id)
+
+                yield {
+                    "event": "metadata",
+                    "data": json.dumps({"run_id": run_id, "attempt": 1}),
+                }
+
                 if len(modes) == 1:
                     async for chunk in graph.astream(
                         graph_input, config=lg_config, stream_mode=modes[0], context={}
@@ -288,17 +334,19 @@ class ArqRunManager(RunManagerBase):
                     ):
                         yield format_stream_event(mode, chunk)
 
-                await self.db.update_run_status(run_id, "success")
-                await self.db.set_thread_status(thread_id, "idle")
+                await self.db.update_run_status(run_id, "success", user_id)
+                await self.db.set_thread_status(thread_id, "idle", user_id)
             except asyncio.CancelledError:
-                await self.db.update_run_status(run_id, "interrupted")
-                await self.db.set_thread_status(thread_id, "interrupted")
+                await self.db.update_run_status(run_id, "interrupted", user_id)
+                await self.db.set_thread_status(thread_id, "interrupted", user_id)
                 raise
             except Exception as e:
                 logger.exception("Stream run %s failed: %s", run_id, e)
-                await self.db.update_run_status(run_id, "error")
-                await self.db.set_thread_status(thread_id, "error")
+                await self.db.update_run_status(run_id, "error", user_id)
+                await self.db.set_thread_status(thread_id, "error", user_id)
                 yield {"event": "error", "data": json.dumps({"error": str(e)})}
+            finally:
+                await turn.release()
 
         return run_id, _generate()
 
@@ -308,6 +356,7 @@ class ArqRunManager(RunManagerBase):
         self,
         thread_id: str,
         *,
+        user_id: str,
         graph_id: str = "agent",
         run_input: dict | None = None,
         command: dict | None = None,
@@ -321,55 +370,79 @@ class ArqRunManager(RunManagerBase):
         checkpoint_id: str | None = None,
     ) -> dict[str, Any]:
         if multitask_strategy != "enqueue":
-            await self._handle_multitask(thread_id, multitask_strategy)
+            await self._handle_multitask(thread_id, user_id, multitask_strategy)
 
         run_record = await self.db.create_run(
             thread_id=thread_id,
+            owner_id=user_id,
             assistant_id=assistant_id,
             input=run_input,
             command=command,
             config=config,
             metadata=metadata,
             multitask_strategy=multitask_strategy,
-            status="running",
+            status="pending",
         )
+        if run_record is None:
+            raise ValueError(f"Thread {thread_id} is not owned by the current user")
         run_id = str(run_record["run_id"])
-        await self.db.set_thread_status(thread_id, "busy")
+        thread_key = scoped_checkpoint_thread_id(user_id, thread_id)
+        await register_run(self.redis, thread_key, run_id)
+        turn = RedisRunTurn(self.redis, thread_key, run_id)
 
-        graph = self._get_graph(graph_id)
-        lg_config = self._build_config(
-            thread_id,
-            assistant_config=assistant_config,
-            run_config=config,
-            checkpoint_id=checkpoint_id,
-        )
-        graph_input = resolve_input(run_input, command)
+        async def _prune_stale_predecessors() -> None:
+            await prune_stale_heads(
+                self.db,
+                self.redis,
+                thread_id=thread_id,
+                thread_key=thread_key,
+                run_id=run_id,
+                user_id=user_id,
+            )
 
         try:
+            await turn.acquire(on_wait=_prune_stale_predecessors)
+            graph = self._get_graph(graph_id)
+            lg_config = self._build_config(
+                thread_id,
+                user_id=user_id,
+                assistant_config=assistant_config,
+                run_config=config,
+                checkpoint_id=checkpoint_id,
+            )
+            graph_input = resolve_input(run_input, command)
+
+            await self.db.update_run_status(run_id, "running", user_id)
+            await self.db.set_thread_status(thread_id, "busy", user_id)
+
             result = await graph.ainvoke(graph_input, config=lg_config, context={})
-            await self.db.update_run_status(run_id, "success")
-            await self.db.set_thread_status(thread_id, "idle")
+            await self.db.update_run_status(run_id, "success", user_id)
+            await self.db.set_thread_status(thread_id, "idle", user_id)
             return result
         except asyncio.CancelledError:
-            await self.db.update_run_status(run_id, "interrupted")
-            await self.db.set_thread_status(thread_id, "interrupted")
+            await self.db.update_run_status(run_id, "interrupted", user_id)
+            await self.db.set_thread_status(thread_id, "interrupted", user_id)
             return {"__error__": "Run was cancelled"}
         except Exception as e:
             logger.exception("Wait run %s failed: %s", run_id, e)
-            await self.db.update_run_status(run_id, "error")
-            await self.db.set_thread_status(thread_id, "error")
+            await self.db.update_run_status(run_id, "error", user_id)
+            await self.db.set_thread_status(thread_id, "error", user_id)
             return {"__error__": str(e)}
+        finally:
+            await turn.release()
 
     # ---- Cancel / Join ----
 
-    async def cancel_run(self, thread_id: str, run_id: str) -> None:
+    async def cancel_run(self, thread_id: str, run_id: str, *, user_id: str) -> None:
         # Publish cancel signal to worker
         channel = _key(_CTL_CHANNEL, run_id)
         await self.redis.publish(channel, "cancel")
-        await self.db.update_run_status(run_id, "interrupted")
-        await self.db.set_thread_status(thread_id, "interrupted")
+        await self.db.update_run_status(run_id, "interrupted", user_id)
+        await self.db.set_thread_status(thread_id, "interrupted", user_id)
 
-    async def join_run(self, thread_id: str, run_id: str) -> dict[str, Any] | None:
+    async def join_run(
+        self, thread_id: str, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None:
         # Wait for run completion by subscribing to events
         pubsub = self.redis.pubsub()
         channel = _key(_EVT_CHANNEL, run_id)
@@ -392,7 +465,7 @@ class ArqRunManager(RunManagerBase):
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()
 
-        config = {"configurable": {"thread_id": thread_id}}
+        config = build_graph_config(thread_id, user_id=user_id)
         snapshot = await self.checkpointer.aget_tuple(config)
         if snapshot:
             return snapshot.checkpoint.get("channel_values", {})

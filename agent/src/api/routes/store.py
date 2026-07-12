@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.deps import get_db
+from api.deps import get_db, get_user_id
 from db import DB
 from schemas import (
     ItemResponse,
@@ -18,8 +18,12 @@ router = APIRouter(prefix="/store", tags=["store"])
 
 
 @router.put("/items")
-async def put_item(body: StoreItemPut, db: Annotated[DB, Depends(get_db)]):
-    await db.store_put(body.namespace, body.key, body.value)
+async def put_item(
+    body: StoreItemPut,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
+):
+    await db.store_put(body.namespace, body.key, body.value, owner_id=user_id)
     return {"ok": True}
 
 
@@ -28,9 +32,10 @@ async def get_item(
     db: Annotated[DB, Depends(get_db)],
     namespace: Annotated[str, Query(description="Dot-separated namespace")],
     key: Annotated[str, Query()],
+    user_id: Annotated[str, Depends(get_user_id)],
 ):
     ns = namespace.split(".")
-    item = await db.store_get(ns, key)
+    item = await db.store_get(ns, key, owner_id=user_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     return ItemResponse(
@@ -43,15 +48,24 @@ async def get_item(
 
 
 @router.delete("/items")
-async def delete_item(body: StoreItemDelete, db: Annotated[DB, Depends(get_db)]):
-    await db.store_delete(body.namespace, body.key)
+async def delete_item(
+    body: StoreItemDelete,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
+):
+    await db.store_delete(body.namespace, body.key, owner_id=user_id)
     return {"ok": True}
 
 
 @router.post("/items/search", response_model=list[ItemResponse])
-async def search_items(body: StoreItemSearch, db: Annotated[DB, Depends(get_db)]):
+async def search_items(
+    body: StoreItemSearch,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
+):
     items = await db.store_search(
         body.namespace_prefix,
+        owner_id=user_id,
         filter=body.filter,
         limit=body.limit,
         offset=body.offset,
@@ -69,8 +83,13 @@ async def search_items(body: StoreItemSearch, db: Annotated[DB, Depends(get_db)]
 
 
 @router.post("/namespaces")
-async def list_namespaces(body: StoreNamespaceList, db: Annotated[DB, Depends(get_db)]):
+async def list_namespaces(
+    body: StoreNamespaceList,
+    db: Annotated[DB, Depends(get_db)],
+    user_id: Annotated[str, Depends(get_user_id)],
+):
     namespaces = await db.store_list_namespaces(
+        owner_id=user_id,
         prefix=body.prefix,
         suffix=body.suffix,
         max_depth=body.max_depth,

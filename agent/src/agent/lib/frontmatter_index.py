@@ -46,17 +46,19 @@ def metadata_filter(
         if d_to and m.date and m.date > d_to:
             continue
 
-        results.append(SearchResult(
-            path=m.path,
-            title=m.title,
-            score=1.0,
-            snippet=m.description or f"Tags: {', '.join(m.tags)}" if m.tags else "",
-            source="metadata",
-        ))
+        results.append(
+            SearchResult(
+                path=m.path,
+                title=m.title,
+                score=1.0,
+                snippet=m.description or f"Tags: {', '.join(m.tags)}" if m.tags else "",
+                source="metadata",
+            )
+        )
 
     # Sort by date descending
     results.sort(key=lambda r: _get_date(r.path, docs), reverse=True)
-    return results[:cfg.max_results]
+    return results[: cfg.max_results]
 
 
 def _get_date(path: str, docs: list) -> date:

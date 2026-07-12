@@ -7,8 +7,8 @@ name = "syshin0116-dev-agent"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "deepagents>=0.4",
-    "langgraph>=1.0",
+    "deepagents>=0.6.12",
+    "langgraph>=1.2.9",
     "langchain>=0.3",
     "langchain-anthropic",
     "langchain-openai",
@@ -17,11 +17,11 @@ dependencies = [
     "python-dotenv",
     "fastapi>=0.115",
     "uvicorn>=0.30",
-    "sse-starlette>=3.0",
+    "sse-starlette>=3.4.5",
     "pyyaml>=6.0",
     "chromadb>=0.6",
     "rank-bm25>=0.2.2",
-    "kiwipiepy>=0.18.0",
+    "kiwipiepy>=0.23.2",
     "pydantic-settings>=2.0",
 ]
 
@@ -63,5 +63,5 @@ dev = [
     "ruff",
     "httpx",
     "asgi-lifespan>=2.1.0",
-    "langgraph-cli[inmem]>=0.4.19",
+    "langgraph-cli>=0.4.31",
 ]

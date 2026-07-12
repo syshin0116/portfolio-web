@@ -69,6 +69,21 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LGMessage = any
 
+type StreamHandle = ReturnType<typeof useStream> & {
+  getMessagesMetadata: (message: any, index?: number) => any // eslint-disable-line @typescript-eslint/no-explicit-any
+  switchThread: (newThreadId: string | null) => void
+  joinStream: (runId: string, lastEventId?: string) => Promise<void>
+  setBranch: (branch: string) => void
+  queue?: {
+    size: number
+    entries: Array<{ id: string; values: Record<string, unknown> }>
+    cancel: (id: string) => Promise<boolean>
+    clear: () => Promise<void>
+  }
+  submit: (values: any, options?: any) => Promise<void> // eslint-disable-line @typescript-eslint/no-explicit-any
+  interrupt: any // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
 const API_URL = process.env.NEXT_PUBLIC_AGENT_API_URL || "http://localhost:8000"
 
 const SUGGESTIONS = [
@@ -642,9 +657,9 @@ export default function ChatSection() {
     defaultHeaders: agentHeaders,
     messagesKey: "messages",
     onCreated(run) {
-      setSavedRunId(run.run_id)
+      setSavedRunId((run as any).runId ?? run.run_id) // eslint-disable-line @typescript-eslint/no-explicit-any
     },
-  })
+  }) as unknown as StreamHandle
 
   const interrupt = thread.interrupt as any // eslint-disable-line @typescript-eslint/no-explicit-any
   const getMetadata = thread.getMessagesMetadata

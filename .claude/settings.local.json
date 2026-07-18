@@ -3,5 +3,9 @@
     "allow": [
       "WebSearch"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "context7",
+    "sequential-thinking"
+  ]
 }

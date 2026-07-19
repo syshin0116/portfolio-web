@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-arq = ["arq>=0.26", "redis>=5.0"]
+arq = ["arq>=0.28.0", "redis>=5.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

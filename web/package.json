@@ -67,7 +67,7 @@
     "@types/node": "^26",
     "@types/react": "19.1.16",
     "@types/react-dom": "19.1.9",
-    "eslint": "^9",
+    "eslint": "^10",
     "eslint-config-next": "^16.1.6",
     "pagefind": "^1.4.0",
     "postcss": "^8",

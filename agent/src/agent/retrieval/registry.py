@@ -6,24 +6,14 @@ import json
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 
-from agent.retrieval.fingerprint import canonical_config, retriever_fingerprint
+from agent.retrieval.fingerprint import (
+    canonical_config,
+    retriever_fingerprint,
+    validate_implementation_id,
+)
 from agent.retrieval.protocol import Corpus, Retrieval, Retriever
 
 RetrieverFactory = Callable[[Corpus, Mapping[str, object]], Retriever]
-
-
-def _callable_identity(factory: RetrieverFactory) -> str:
-    module = getattr(factory, "__module__", None)
-    qualname = getattr(factory, "__qualname__", None)
-    if not isinstance(module, str) or not module:
-        raise ValueError(
-            "factory has no stable module; pass an explicit implementation_id"
-        )
-    if not isinstance(qualname, str) or not qualname:
-        raise ValueError(
-            "factory has no stable qualified name; pass an explicit implementation_id"
-        )
-    return f"{module}:{qualname}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,9 +164,9 @@ class RetrieverRegistry:
         method_id: str,
         factory: RetrieverFactory,
         *,
+        implementation_id: str,
         config: Mapping[str, object] | None = None,
         servable: bool = True,
-        implementation_id: str | None = None,
     ) -> RetrieverRegistration:
         if not isinstance(method_id, str) or not method_id.strip():
             raise ValueError("method_id must be a non-empty string")
@@ -187,24 +177,9 @@ class RetrieverRegistry:
         if not isinstance(servable, bool):
             raise TypeError("servable must be a boolean")
 
-        resolved_implementation_id = (
-            implementation_id
-            if implementation_id is not None
-            else _callable_identity(factory)
-        )
-        if (
-            not isinstance(resolved_implementation_id, str)
-            or not resolved_implementation_id.strip()
-        ):
-            raise ValueError("implementation_id must be a non-empty string")
-        if resolved_implementation_id != resolved_implementation_id.strip():
-            raise ValueError(
-                "implementation_id cannot contain leading or trailing whitespace"
-            )
-
         registration = RetrieverRegistration(
             method_id=method_id,
-            implementation_id=resolved_implementation_id,
+            implementation_id=validate_implementation_id(implementation_id),
             factory=factory,
             config_json=canonical_config({} if config is None else config),
             servable=servable,

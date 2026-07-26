@@ -61,6 +61,30 @@ def test_retriever_fingerprint_when_inputs_match_is_stable_known_digest() -> Non
 
 
 @pytest.mark.parametrize(
+    "implementation_id",
+    [
+        "",
+        "agent.retrieval.bm25:create",
+        "@1",
+        "agent.retrieval.bm25:create@",
+        "agent.retrieval.bm25:create@1@dirty",
+        " agent.retrieval.bm25:create@1",
+        "agent.retrieval.bm25:create@1 ",
+    ],
+)
+def test_retriever_fingerprint_when_implementation_id_is_not_versioned_rejects(
+    implementation_id: str,
+) -> None:
+    with pytest.raises(ValueError, match="implementation_id|versioned"):
+        retriever_fingerprint(
+            method_id="bm25-kiwi",
+            implementation_id=implementation_id,
+            config={"k1": 1.5, "b": 0.75},
+            corpus_fingerprint="sha256:corpus-a",
+        )
+
+
+@pytest.mark.parametrize(
     "config",
     [
         {"bad": float("nan")},

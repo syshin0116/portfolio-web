@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 type JSONScalar = None | bool | int | float | str
-type JSONValue = JSONScalar | Mapping[str, JSONValue] | Sequence[JSONValue]
+type JSONValue = (
+    JSONScalar | Mapping[str, JSONValue] | list[JSONValue] | tuple[JSONValue, ...]
+)
 
 _FINGERPRINT_SCHEMA = "retriever-fingerprint-v1"
 
@@ -65,6 +67,23 @@ def _require_identity(value: str, *, field: str) -> str:
     return value
 
 
+def validate_implementation_id(value: str) -> str:
+    """Require a caller-owned identity revision such as ``module:create@2``."""
+
+    implementation_id = _require_identity(value, field="implementation_id")
+    parts = implementation_id.split("@")
+    if (
+        len(parts) != 2
+        or not parts[0]
+        or not parts[1]
+        or any(character.isspace() for character in implementation_id)
+    ):
+        raise ValueError(
+            "implementation_id must be versioned as '<identity>@<version-or-sha>'"
+        )
+    return implementation_id
+
+
 def retriever_fingerprint(
     *,
     method_id: str,
@@ -77,10 +96,7 @@ def retriever_fingerprint(
     payload = {
         "schema": _FINGERPRINT_SCHEMA,
         "method_id": _require_identity(method_id, field="method_id"),
-        "implementation_id": _require_identity(
-            implementation_id,
-            field="implementation_id",
-        ),
+        "implementation_id": validate_implementation_id(implementation_id),
         "config": json.loads(canonical_config(config)),
         "corpus_fingerprint": _require_identity(
             corpus_fingerprint,
@@ -103,4 +119,5 @@ __all__ = [
     "JSONValue",
     "canonical_config",
     "retriever_fingerprint",
+    "validate_implementation_id",
 ]

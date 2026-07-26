@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,118 @@ def test_hit_when_given_plain_path_coerces_it_to_validated_doc_id() -> None:
 
     assert hit == Hit(doc_id=DocId("AI/한국어 post.md"), rank=1, score=-7.25)
     assert isinstance(hit.doc_id, DocId)
+
+
+def test_hit_when_chunk_id_is_not_a_string_rejects_before_serialization() -> None:
+    with pytest.raises(TypeError, match="chunk_id.*string"):
+        Hit(
+            doc_id=DocId("AI/post.md"),
+            chunk_id=object(),  # type: ignore[arg-type]
+            rank=1,
+            score=1.0,
+        )
+
+
+def test_hit_metadata_when_nested_sources_mutate_keeps_immutable_snapshot() -> None:
+    tags: list[object] = ["rag", {"language": "ko"}]
+    metrics: dict[str, object] = {"coverage": 0.5}
+    hit = Hit(
+        doc_id=DocId("AI/post.md"),
+        rank=1,
+        score=4.25,
+        metadata={"tags": tags, "metrics": metrics},
+    )
+
+    tags.append("changed")
+    metrics["coverage"] = 1.0
+
+    frozen_tags = hit.metadata["tags"]
+    frozen_metrics = hit.metadata["metrics"]
+    assert frozen_tags == ("rag", {"language": "ko"})
+    assert isinstance(frozen_metrics, Mapping)
+    assert frozen_metrics == {"coverage": 0.5}
+    with pytest.raises(TypeError):
+        frozen_tags[0] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        frozen_metrics["coverage"] = 1.0  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"bad": float("nan")},
+        {"bad": float("inf")},
+        {"bad": object()},
+        {"bad": {"set-value"}},
+        {1: "non-string key"},
+        {"nested": {1: "non-string key"}},
+    ],
+)
+def test_hit_metadata_when_value_is_not_portable_json_rejects(
+    metadata: object,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match="JSON|finite|string"):
+        Hit(
+            doc_id=DocId("AI/post.md"),
+            rank=1,
+            score=1.0,
+            metadata=metadata,  # type: ignore[arg-type]
+        )
+
+
+def test_hit_metadata_when_value_is_cyclic_rejects() -> None:
+    metadata: dict[str, object] = {}
+    metadata["self"] = metadata
+
+    with pytest.raises(ValueError, match="cyclic JSON"):
+        Hit(
+            doc_id=DocId("AI/post.md"),
+            rank=1,
+            score=1.0,
+            metadata=metadata,
+        )
+
+
+def test_retrieval_as_dict_when_metadata_is_nested_returns_independent_json_copy() -> (
+    None
+):
+    hit = Hit(
+        doc_id=DocId("AI/한국어.md"),
+        chunk_id="intro",
+        rank=1,
+        score=-3.5,
+        text="본문",
+        metadata={
+            "tags": ["rag", "한국어"],
+            "details": {"published": True, "aliases": None},
+        },
+    )
+    retrieval = Retrieval(query="검색", hits=(hit,))
+
+    payload = retrieval.as_dict()
+
+    assert payload == {
+        "query": "검색",
+        "hits": [
+            {
+                "doc_id": "AI/한국어.md",
+                "rank": 1,
+                "score": -3.5,
+                "chunk_id": "intro",
+                "text": "본문",
+                "metadata": {
+                    "tags": ["rag", "한국어"],
+                    "details": {"published": True, "aliases": None},
+                },
+            }
+        ],
+    }
+    assert (
+        json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False)) == payload
+    )
+
+    payload["hits"][0]["metadata"]["tags"].append("mutated")
+    assert hit.as_dict()["metadata"]["tags"] == ["rag", "한국어"]
 
 
 @pytest.mark.parametrize("rank", [True, 0, -1, 1.5])
@@ -127,6 +241,24 @@ def test_retrieval_when_two_hits_claim_same_rank_rejects_ambiguous_order() -> No
             hits=(
                 Hit(doc_id=DocId("AI/a.md"), rank=1, score=1.0),
                 Hit(doc_id=DocId("AI/b.md"), rank=1, score=2.0),
+            ),
+        )
+
+
+@pytest.mark.parametrize("ranks", [(1, 3), (2, 3)])
+def test_retrieval_when_sorted_ranks_have_a_gap_or_do_not_start_at_one_rejects(
+    ranks: tuple[int, int],
+) -> None:
+    with pytest.raises(ValueError, match=r"contiguous.*1\.\.N"):
+        Retrieval(
+            query="gap",
+            hits=tuple(
+                Hit(
+                    doc_id=DocId(f"AI/{rank}.md"),
+                    rank=rank,
+                    score=float(rank),
+                )
+                for rank in ranks
             ),
         )
 

@@ -60,12 +60,14 @@ def test_registry_views_when_lab_method_is_not_servable_exposes_it_only_for_eval
     registry.register(
         "bm25",
         create_echo,
+        implementation_id="tests:create_echo@1",
         config={"score": 2.5},
         servable=True,
     )
     registry.register(
         "colbert-lab",
         create_echo,
+        implementation_id="tests:create_echo@1",
         config={"score": 9.0},
         servable=False,
     )
@@ -119,6 +121,7 @@ def test_registry_fingerprint_when_shared_registration_is_imported_matches() -> 
     eval_registry.register(
         "colbert-lab",
         create_echo,
+        implementation_id="tests:create_echo@1",
         config={"score": 4.0},
         servable=False,
     )
@@ -131,27 +134,90 @@ def test_registry_fingerprint_when_shared_registration_is_imported_matches() -> 
     )
 
 
-def test_registry_fingerprint_when_same_method_id_points_to_other_factory_differs() -> (
-    None
-):
-    left = RetrieverRegistry()
-    right = RetrieverRegistry()
-    left.register("bm25", create_echo, config={"score": 2.5})
-    right.register("bm25", create_different_echo, config={"score": 2.5})
+def test_registry_fingerprint_when_factory_code_changes_requires_version_bump() -> None:
+    original = RetrieverRegistry()
+    changed_but_version_reused = RetrieverRegistry()
+    changed_and_version_bumped = RetrieverRegistry()
+    original.register(
+        "bm25",
+        create_echo,
+        implementation_id="tests:bm25@1",
+        config={"score": 2.5},
+    )
+    changed_but_version_reused.register(
+        "bm25",
+        create_different_echo,
+        implementation_id="tests:bm25@1",
+        config={"score": 2.5},
+    )
+    changed_and_version_bumped.register(
+        "bm25",
+        create_different_echo,
+        implementation_id="tests:bm25@2",
+        config={"score": 2.5},
+    )
 
-    assert left.retrievable.fingerprint(
-        "bm25", "sha256:corpus-a"
-    ) != right.retrievable.fingerprint("bm25", "sha256:corpus-a")
+    original_fingerprint = original.retrievable.fingerprint(
+        "bm25",
+        "sha256:corpus-a",
+    )
+    assert (
+        changed_but_version_reused.retrievable.fingerprint(
+            "bm25",
+            "sha256:corpus-a",
+        )
+        == original_fingerprint
+    )
+    assert (
+        changed_and_version_bumped.retrievable.fingerprint(
+            "bm25",
+            "sha256:corpus-a",
+        )
+        != original_fingerprint
+    )
+
+
+def test_registry_when_implementation_id_is_omitted_rejects() -> None:
+    registry = RetrieverRegistry()
+
+    with pytest.raises(TypeError, match="implementation_id"):
+        registry.register(  # type: ignore[call-arg]
+            "bm25",
+            create_echo,
+            config={"score": 2.5},
+        )
+
+
+def test_registry_when_implementation_id_has_no_version_rejects() -> None:
+    registry = RetrieverRegistry()
+
+    with pytest.raises(ValueError, match="versioned"):
+        registry.register(
+            "bm25",
+            create_echo,
+            implementation_id="tests:bm25",
+            config={"score": 2.5},
+        )
 
 
 def test_registry_when_method_id_is_registered_twice_rejects_ambiguous_factory() -> (
     None
 ):
     registry = RetrieverRegistry()
-    registry.register("bm25", create_echo, config={"score": 2.5})
+    registry.register(
+        "bm25",
+        create_echo,
+        implementation_id="tests:create_echo@1",
+        config={"score": 2.5},
+    )
 
     with pytest.raises(ValueError, match="already registered"):
-        registry.register("bm25", create_different_echo, config={"score": 2.5})
+        registry.register(
+            "bm25",
+            create_different_echo,
+            implementation_id="tests:create_different_echo@1",
+            config={"score": 2.5},
+        )
 
 
 def test_registration_when_caller_mutates_original_config_keeps_identity_unchanged() -> (
@@ -159,7 +225,12 @@ def test_registration_when_caller_mutates_original_config_keeps_identity_unchang
 ):
     config = {"score": 2.5, "fields": ["title"]}
     registry = RetrieverRegistry()
-    registration = registry.register("bm25", create_echo, config=config)
+    registration = registry.register(
+        "bm25",
+        create_echo,
+        implementation_id="tests:create_echo@1",
+        config=config,
+    )
     before = registration.fingerprint("sha256:corpus-a")
 
     config["score"] = 999.0
@@ -173,4 +244,9 @@ def test_registration_when_falsey_config_is_not_a_mapping_rejects() -> None:
     registry = RetrieverRegistry()
 
     with pytest.raises(TypeError, match="mapping"):
-        registry.register("bm25", create_echo, config=[])  # type: ignore[arg-type]
+        registry.register(
+            "bm25",
+            create_echo,
+            implementation_id="tests:create_echo@1",
+            config=[],  # type: ignore[arg-type]
+        )

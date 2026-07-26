@@ -106,12 +106,12 @@ those same links turned out to be the better prize.
 ### Graph and link structure
 
 > **Measured, and weaker than assumed.** The graph over the published corpus:
-> **122 of 335 files have any edge, 213 are isolated (63.58%)**, and non-singleton
-> components are `[94, 11, 4, 3, 3, 3, 2, 2]`. The `wiki/index.md` hub is degree **29**,
-> not the ~100 an
-> earlier pass estimated. Fixing the link parser barely helps: stripping code fences
-> changes the resolved edge count by **zero**, and path-form resolution adds **8** edges
-> (218 to 226). Neither changes node coverage at all.
+> **115 of 335 files have any edge, 220 are isolated (65.67%)**, and non-singleton
+> components are `[48, 39, 11, 4, 3, 3, 3, 2, 2]`. The `wiki/index.md` hub is degree
+> **29**, not the ~100 an earlier pass estimated. The ambiguity-safe resolver emits
+> **213 edges** after content-relative and source-relative resolution and excludes seven
+> remaining multi-candidate occurrences instead of silently connecting the
+> lexicographically first document.
 >
 > Two consequences, both binding. **A graph method is a `Stage` over a first-stage
 > retriever, never a standalone retriever** - on two-thirds of queries it has nothing to

@@ -71,7 +71,7 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 
 | Package | Pin | Note |
 |---|---|---|
-| `aegra-api`, `aegra-cli` | `==0.9.24` | Latest release verified 2026-07-26; includes Agent Protocol v2 streaming via native v3. **Never `pip install aegra`** |
+| `aegra-api`, `aegra-cli` | `==0.9.24` | Latest release verified 2026-07-26; includes feature-flagged Agent Protocol v2 streaming via native v3. **Never `pip install aegra`** |
 | `langgraph` | `==1.2.9` | Aegra's own lock resolves 1.2.6. Rollback pin documented |
 | `langgraph-sdk` | `==0.4.2` | `Auth`, `AuthContext`, `ServerRuntime` |
 | `langgraph-checkpoint-postgres` | `==3.1.0` | Above Aegra's locked 3.0.4, so untested by Aegra CI. Rollback: `==3.0.4` |
@@ -98,7 +98,7 @@ Dockerfile                         # one deployable agent image
 pyproject.toml                     # uv workspace: agent + eval
 uv.lock                            # one lock for the workspace
 protocol/
-├── agent-protocol.lock.json       # upstream commit/schema hash + Aegra support matrix
+├── agent-protocol.lock.json       # upstream commit/schema hash + Aegra dialect/support matrix
 └── fixtures/                      # committed AP v2 event/replay/HITL streams
 scripts/
 ├── build_index.py                 # content/ -> published-only generated mirror
@@ -187,6 +187,11 @@ part of the contract; renaming one requires updating branch protection in the sa
   `protocol/agent-protocol.lock.json`, regenerate bindings in a temporary directory, and
   fail on a diff. Replay committed content-block, tool, nested namespace, replay, error,
   and HITL fixtures through both Python and TypeScript consumers.
+- The lock records both upstream Agent Protocol and the Aegra tag. Aegra 0.9.24 implements
+  the current v2 event model as a draft dialect at
+  `POST /threads/{thread_id}/stream/events`, while upstream documents
+  `POST /threads/{thread_id}/stream`. This path difference is explicit compatibility data,
+  not hidden behind a misleading “fully conformant” label.
 - Path filters include root `pyproject.toml`, `uv.lock`, `aegra.json`, `Dockerfile`,
   `protocol/**`, `scripts/**`, `content/**`, `agent/**`, `eval/**`, and `web/**`. A
   `content/**` change must rebuild both the web artifacts and the agent mirror.
@@ -238,23 +243,31 @@ deepagents.
 
 - `aegra.json` at the repo root: `dependencies: ["./agent/src"]`,
   `graphs: {"agent": "./agent/src/agent/graph.py:graph"}`. No `auth` or `http` block yet.
+- Set `FF_V2_EVENT_STREAMING=true`; Aegra 0.9.24 returns 503 from its AP v2 event route
+  without this feature flag. Probe capabilities before starting the conversation.
 - Install `aegra-api==0.9.24 aegra-cli==0.9.24`; confirm no resolver conflict.
 - Minimal `graph.py` rewrite: drop `checkpointer=`/`store=` and `_lazy_graph`. Aegra does
   `graph.copy(update={checkpointer, store})` per request, so a compiled graph registers
   as-is. **The `backend=` factory form is deprecated** (0.5.0, removal 0.7.0) - pass a
   `BackendProtocol` instance.
+- The instance migration includes the current `StoreBackend(runtime, ...)` construction and
+  namespace callback: both the runtime constructor and `context.runtime.config` access are
+  deprecated for removal in deepagents 0.7. Resolve the namespace from the authoritative
+  Aegra identity/config without any deprecated backend warnings; changing only
+  `_build_backend` is incomplete.
 - `aegra serve` against local Postgres; confirm the Alembic tables appear.
 - `scripts/smoke.py` on `langgraph_sdk.get_client`. **This becomes the permanent gate for
   every version bump.**
 
 **Accept:** a **two-turn** Korean conversation with at least one tool call completes over
-Agent Protocol v2 `POST /threads/{thread_id}/stream`, using content-block deltas, tool and
-run lifecycle events, and nested namespaces where applicable. Persist the last event/replay
-cursor, disconnect, reconnect, and prove that no visible content is duplicated or lost.
-Reload the thread, restart the process, and confirm the conversation still restores.
-Verify store/memory namespace isolation and that a client-supplied
-`configurable.user_id` cannot change the trusted identity. Exercise interrupt/resume
-through `/threads/{thread_id}/commands`.
+Aegra 0.9.24's AP v2 `POST /threads/{thread_id}/stream/events`, using content-block
+deltas, tool and run lifecycle events, and nested namespaces where applicable. Within one
+server lifetime, persist the last event/replay cursor, disconnect, reconnect, and prove that
+no visible content is duplicated or lost. Separately restart the process and prove
+checkpoint/thread state restores; do not claim broker event replay survives a process
+restart unless a test demonstrates it. Verify store/memory namespace isolation and that a
+client-supplied `configurable.user_id` cannot change the trusted identity. Exercise
+interrupt/resume through `/threads/{thread_id}/commands`.
 
 > The second turn is not decoration - it is the exact regression from Aegra issues #224
 > (fixed 0.7.5) and #352 (fixed 0.9.14), both deepagents multi-turn bugs. If it fails,
@@ -453,9 +466,11 @@ web/components/chat/
 - Keep assistant-ui as the component/runtime layer, but do **not** make
   `unstable_createLangGraphStream` the production transport: it calls legacy
   `client.runs.stream`. Implement `AgentProtocolV2Transport` over the generated Agent
-  Streaming Protocol TypeScript bindings and `POST /threads/{thread_id}/stream`, with the
-  HTTP commands sidecar for resume/cancel/HITL. The legacy adapter is permitted only as a
-  temporary comparison fixture during P3.
+  Streaming Protocol TypeScript bindings and Aegra's
+  `POST /threads/{thread_id}/stream/events`, with the HTTP commands sidecar for
+  resume/cancel/HITL. Keep the upstream `/stream` path in the compatibility matrix so a
+  future conformant Aegra release is a transport switch, not a rediscovery. The legacy
+  adapter is permitted only as a temporary comparison fixture during P3.
 - The transport maps content-block deltas, tool lifecycle, run lifecycle, checkpoints,
   tasks, nested-agent namespaces, replay cursors, and structured errors into assistant-ui
   runtime state. Unknown event kinds are logged and ignored without corrupting known state;

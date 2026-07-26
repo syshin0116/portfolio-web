@@ -65,10 +65,13 @@ Two findings de-risked this substantially:
 ## Decision
 
 Adopt assistant-ui as the component/runtime layer, with a typed custom transport over
-Aegra's Agent Protocol v2 thread-centric streaming endpoints and generated Agent Streaming
-Protocol bindings. `@assistant-ui/react-langgraph` 0.14.12 remains a temporary migration
-fixture, not the production transport, because `unstable_createLangGraphStream` calls the
-legacy `runs.stream` surface.
+Aegra's Agent Protocol v2 event stream and generated Agent Streaming Protocol bindings.
+For Aegra 0.9.24 the concrete SSE path is
+`POST /threads/{thread_id}/stream/events` and requires
+`FF_V2_EVENT_STREAMING=true`; upstream currently documents `/stream`, so the pinned
+protocol lock records this dialect difference. `@assistant-ui/react-langgraph` 0.14.12
+remains a temporary migration fixture, not the production transport, because
+`unstable_createLangGraphStream` calls the legacy `runs.stream` surface.
 
 **Not `@assistant-ui/react-langchain`.** An earlier draft recommended it on the basis that
 it wraps `useStream`; that reasoning applied to keeping the old backend, and the package is

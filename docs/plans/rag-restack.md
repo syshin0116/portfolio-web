@@ -443,6 +443,7 @@ web/components/chat/
 ├── error-state.tsx               # 401/403/409/429/5xx/reconnect mapping
 └── runtime/
     ├── agent-protocol-v2.ts       # typed transport + reducer
+    ├── aegra-rest.ts              # cancel/state/history compatibility bridge
     ├── thread-adapter.ts
     ├── auth.ts
     └── protocol-types.ts          # generated; schema lock identifies source
@@ -485,6 +486,12 @@ web/components/chat/
   Keep the upstream `/stream` path in the compatibility matrix so a future conformant
   Aegra release is a transport switch, not a rediscovery. The legacy adapter is permitted
   only as a temporary comparison fixture during P3.
+- Isolate operations missing from Aegra's v2 command dispatcher in `aegra-rest.ts`:
+  cancellation uses `POST /threads/{thread_id}/runs/{run_id}/cancel`; checkpoint
+  state/fork and Edit/Regenerate use the `/state` and `/state/checkpoint` routes; branch
+  history/load uses `/history`. These are an explicit Aegra compatibility bridge, not AP v2
+  commands. Fixture-test their response mapping and delete each fallback when Aegra adds
+  the corresponding command.
 - The transport maps content-block deltas, tool lifecycle, run lifecycle, checkpoints,
   tasks, nested-agent namespaces, replay cursors, and structured errors into assistant-ui
   runtime state. Unknown event kinds are logged and ignored without corrupting known state;
@@ -509,7 +516,9 @@ QuickJS, and nested-subagent events render from committed protocol fixtures; HIT
 resume uses `input.respond`, cancellation uses the run-cancel endpoint, and both are
 fixture-tested; desktop and 390 px mobile visual snapshots cover every required state;
 keyboard/a11y and Korean IME tests pass; no production import or network call uses the
-legacy `/runs/stream` transport.
+legacy `/runs/stream` transport. Edit/Regenerate and history either pass against the
+documented REST compatibility bridge or are visibly disabled; they never silently render
+and fail.
 
 ### ✅ Basic chat works end to end here
 

@@ -74,6 +74,11 @@ HITL `value` versus upstream `payload` field. `@assistant-ui/react-langgraph` 0.
 remains a temporary migration fixture, not the production transport, because
 `unstable_createLangGraphStream` calls the legacy `runs.stream` surface.
 
+Operations absent from the v2 command dispatcher use one isolated Aegra REST compatibility
+bridge: run cancellation, state/checkpoint fork for Edit and Regenerate, and thread
+history. They are not described as v2 commands, and each fallback has fixture parity tests
+so it can be deleted independently when Aegra implements the corresponding command.
+
 **Not `@assistant-ui/react-langchain`.** An earlier draft recommended it on the basis that
 it wraps `useStream`; that reasoning applied to keeping the old backend, and the package is
 for LangChain.js runnables rather than an Agent Protocol server.
@@ -108,6 +113,8 @@ Exact pins, no `^`.
 - The application owns a protocol-to-runtime reducer until assistant-ui ships a native
   Agent Protocol v2 adapter. That adds code, but makes replay, nested-agent namespaces,
   content blocks, tool lifecycle, and HITL commands explicit and fixture-testable.
+- A small Aegra REST bridge remains for cancel, checkpoint fork/state, and history because
+  Aegra 0.9.24's v2 command sidecar implements only `run.start` and `input.respond`.
 - Two silent-failure traps: omitting `getCheckpointId` makes Edit and Regenerate simply not
   render (reads as a missing feature, not missing config), and when
   `unstable_threadListAdapter` is set, `create` and `delete` are silently ignored so

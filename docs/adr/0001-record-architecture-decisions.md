@@ -1,12 +1,21 @@
 ---
-id: 0001-record-architecture-decisions
 title: "ADR-0001: Record architecture decisions"
+description: >
+  Record significant decisions as MADR files in docs/adr/, versioned with the code,
+  so future work does not lose the rationale.
+when_to_read: >
+  Before changing how decisions are recorded, or when unsure whether something
+  belongs in DECISIONS.md or in an ADR.
+tags: [adr, process, documentation]
 status: accepted
 date: "2026-05-22"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-tags: [adr, process]
+updated: "2026-07-26"
+owners: ["@syshin0116"]
+refs: [../conventions/frontmatter.md, ../../DECISIONS.md]
+template: adr
 ---
 
 # ADR-0001: Record architecture decisions
@@ -40,3 +49,14 @@ never deleted or rewritten.
 ## Revisit when
 
 If ADRs go unmaintained and stop reflecting reality.
+
+## Changelog
+
+- 2026-07-11: partially amended in practice - `DECISIONS.md` became the default tier
+  and ADRs the exception, because this ADR's own stated trade-off ("needs the
+  discipline to write") is what happened: no decision was recorded here for seven
+  weeks. Recorded as a `DECISIONS.md` entry rather than a superseding ADR.
+- 2026-07-26: frontmatter migrated to
+  [`conventions/frontmatter.md`](../conventions/frontmatter.md) (`id` dropped - the
+  path is the identifier; `description`, `when_to_read`, `refs`, `template` added).
+  Decision text unchanged.

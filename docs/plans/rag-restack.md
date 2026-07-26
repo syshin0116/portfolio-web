@@ -111,6 +111,9 @@ agent/
 │   ├── posts/
 │   ├── catalog.json
 │   ├── bm25/
+│   │   ├── dictionary-evidence.json
+│   │   ├── fitted.sqlite3
+│   │   └── manifest.json
 │   ├── wikilinks.json
 │   └── kiwi-user-dictionary.txt
 ├── src/agent/
@@ -350,19 +353,30 @@ From scratch, native to deepagents 0.6.12. Absorbs the old leak-fix phase.
 A broken baseline invalidates every comparison drawn against it. Three independent fixes,
 all needed - see [the registry](../reference/retrieval-methods.md#the-korean-tokenizer-problem):
 
-1. **User dictionary** built from high-precision corpus evidence. `add_user_word("도커",
+1. **Reviewed user dictionary with a complete candidate audit.** `add_user_word("도커",
    "NNP")` restores `['도커']`, verified, but tags alone do not: the corpus has `Docker`
-   and no `도커` tag. Combine Hangul tags, the Hangul side of corpus-attested
-   `한글(ASCII)` aliases, and a reviewed seed/deny list. Emit every term's provenance and
-   checksum, and include the dictionary plus Kiwi configuration in the method fingerprint.
-   If Kiwi is unavailable, fail the build rather than silently serving a fallback under
-   the same method ID.
+   and no `도커` tag. Preserve every Hangul tag and corpus-attested `한글(ASCII)` alias as
+   a sorted candidate with provenance in `dictionary-evidence.json`, but activate only
+   owner-reviewed seeds after applying deny-wins policy. Never promote a candidate merely
+   because it was collected: doing so turns grammatical forms such as `크다`, `없다`, and
+   `검증하고` into NNPs and collapses useful compounds such as `개발+도구`. Include the
+   policy, canonical dictionary bytes, evidence checksum, and exact Kiwi configuration in
+   the method fingerprint. Pin Kiwi 0.23.2, its separately distributed model data 0.23.0,
+   and the CoNg model with the default dictionary enabled and typo/Wikidata multiword
+   dictionaries disabled; the exact `s:` channel preserves surface matches while
+   component morphemes remain available. If Kiwi is unavailable, fail the build rather
+   than silently serving a fallback under the same method ID.
 2. **Drop `VV` and `VA` from the keep-list.** They are what survives when an unknown noun
    is mis-analysed, which is what turns a tokenization failure into a confident wrong
    answer instead of an empty result.
 3. **Index a namespaced surface-form channel alongside morphemes**, so a term the
    dictionary has not caught up with still matches exactly without colliding with
    morphological tokens.
+4. **Fit once at build time.** Persist document lengths, first-seen term-order IDFs, and
+   sparse postings in deterministic SQLite (`mode=ro&immutable=1` at runtime). Do not ship
+   raw token documents or construct `BM25Okapi` while serving. The registry identity path
+   reads checksums only, so creating one registered retriever creates exactly one Kiwi
+   tokenizer instead of fitting/loading the method twice.
 
 Also remove the `score / max(scores)` normalisation: it forces the top hit to exactly 1.000
 for **any** query including nonsense.
@@ -371,7 +385,9 @@ for **any** query including nonsense.
 manifest pinned to the corpus tree. On the published 335-document corpus, current
 `도커` recall@13 is 3/13 and the corrected method reaches 13/13; raw scores match
 `BM25Okapi` without normalisation, ties are stable by DocId, serialized/load-time results
-are identical, and an absent nonsense term produces no hit. The previously quoted macro
+are identical, the fitted DB is byte-deterministic, clean registry runtime peak RSS stays
+below 550 MiB, and absent, zero-score, and negative-score terms produce no hit under the
+documented positive-score-only contract. The previously quoted macro
 recall 0.323 → 0.605 has no versioned queryset or qrels in the repository and is **not a
 gate**. Add a macro gate only with owner-reviewed `topic-smoke-v1` in P4.
 

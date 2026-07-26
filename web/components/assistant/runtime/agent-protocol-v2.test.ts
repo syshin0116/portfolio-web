@@ -178,7 +178,53 @@ describe("locked Agent Protocol v2 fixtures", () => {
       role: "assistant",
       status: "complete",
     })
-    expect(selectVisibleText(state)).toBe("근거를 찾았습니다.")
+    expect(state.messages[0].content[0].content).toMatchObject({
+      type: "text",
+      text: "근거를 찾았습니다.",
+    })
+    expect(selectVisibleText(state)).toBe("")
+  })
+
+  test("selects only root assistant text for the visitor-facing answer", () => {
+    const state = reduceFixtureEvents(fixture("content-tool-run.json"))
+    const answer = state.messages.find((message) => message.id === "msg-answer")
+    if (!answer) throw new Error("fixture is missing the root answer")
+    const visitorState: AgentRuntimeState = {
+      ...state,
+      messages: [
+        {
+          ...answer,
+          key: "root-human",
+          id: "root-human",
+          role: "user",
+          protocolRole: "human",
+          content: [
+            {
+              index: 0,
+              status: "complete",
+              content: { type: "text", text: "방문자 질문" },
+            },
+          ],
+        },
+        {
+          ...answer,
+          key: "root-system",
+          id: "root-system",
+          role: "system",
+          protocolRole: "system",
+          content: [
+            {
+              index: 0,
+              status: "complete",
+              content: { type: "text", text: "내부 시스템 문구" },
+            },
+          ],
+        },
+        ...state.messages,
+      ],
+    }
+
+    expect(selectVisibleText(visitorState)).toBe("도커 관련 글을 찾았습니다.")
   })
 
   test("reconnects from the reducer cursor without duplicate visible text", () => {
@@ -319,6 +365,75 @@ describe("locked Agent Protocol v2 fixtures", () => {
       message: "Assistant 'missing-agent' was not found.",
     })
   })
+
+  test.each([null, "accepted", 42] as const)(
+    "reduces a correlated success with non-object result %p without throwing",
+    (result) => {
+      const command = recordsOfKind(
+        fixture("structured-error.json"),
+        "command"
+      )[0].payload as Command
+      const response = {
+        type: "success",
+        id: command.id,
+        result,
+      } as unknown as CommandResponse
+
+      const state = reduceAgentCommandResult(
+        createAgentRuntimeState(),
+        command,
+        response
+      )
+
+      expect(state.run).toEqual({ status: "started" })
+      expect(state.lastCommand).toEqual({
+        id: 30,
+        method: "run.start",
+        type: "success",
+      })
+      expect(state.error).toBeUndefined()
+    }
+  )
+
+  test.each([null, 999] as const)(
+    "surfaces an uncorrelated server error with response id %p and records a diagnostic",
+    (responseId) => {
+      const command = recordsOfKind(
+        fixture("structured-error.json"),
+        "command"
+      )[0].payload as Command
+      const response: ErrorResponse = {
+        type: "error",
+        id: responseId,
+        error: "unknown_error",
+        message: "The server rejected the command.",
+      }
+
+      const state = reduceAgentCommandResult(
+        createAgentRuntimeState(),
+        command,
+        response
+      )
+
+      expect(state.error).toEqual({
+        source: "command",
+        commandId: 30,
+        code: "unknown_error",
+        message: "The server rejected the command.",
+      })
+      expect(state.lastCommand).toEqual({
+        id: 30,
+        method: "run.start",
+        type: "error",
+      })
+      expect(state.diagnostics).toEqual([
+        {
+          kind: "malformed",
+          message: `Command response ${String(responseId)} does not match 30`,
+        },
+      ])
+    }
+  )
 
   test("maps checkpoints, tasks, values, updates, custom data, and all delta kinds", () => {
     const base = 200
@@ -636,6 +751,60 @@ describe("AgentProtocolV2Transport", () => {
         retryAfterMs: status === 429 ? 12_000 : undefined,
       })
     }
+  })
+
+  test("clears a cached token after HTTP 401 so the next request refreshes it", async () => {
+    let tokenCalls = 0
+    let requestCalls = 0
+    const authorizationHeaders: string[] = []
+    const transport = new AgentProtocolV2Transport({
+      baseUrl: "https://agent.example",
+      nowSeconds: () => 1_000,
+      onRequest: async () => {
+        tokenCalls += 1
+        return { token: `token-${tokenCalls}`, expiresAt: 2_000 }
+      },
+      fetch: (async (_input, init) => {
+        requestCalls += 1
+        authorizationHeaders.push(
+          new Headers(init?.headers).get("authorization") ?? ""
+        )
+        if (requestCalls === 1) {
+          return Response.json(
+            { detail: "expired application token" },
+            { status: 401 }
+          )
+        }
+        return Response.json({
+          type: "success",
+          id: 30,
+          result: { run_id: "run-after-refresh" },
+        })
+      }) as typeof fetch,
+    })
+    const command = recordsOfKind(
+      fixture("structured-error.json"),
+      "command"
+    )[0].payload as Command
+
+    await expect(
+      transport.sendCommand("thread-1", command)
+    ).rejects.toMatchObject({
+      kind: "unauthorized",
+      status: 401,
+    })
+    await expect(
+      transport.sendCommand("thread-1", command)
+    ).resolves.toMatchObject({
+      type: "success",
+      result: { run_id: "run-after-refresh" },
+    })
+
+    expect(tokenCalls).toBe(2)
+    expect(authorizationHeaders).toEqual([
+      "Bearer token-1",
+      "Bearer token-2",
+    ])
   })
 
   test("rejects an SSE id that cannot represent either event id or sequence", async () => {

@@ -1210,11 +1210,13 @@ export function reduceAgentCommandResult(
   command: Command,
   response: CommandResponse | ErrorResponse
 ): AgentRuntimeState {
+  let nextState = state
   if (response.id !== command.id) {
-    return diagnostic(state, {
+    nextState = diagnostic(state, {
       kind: "malformed",
       message: `Command response ${String(response.id)} does not match ${command.id}`,
     })
+    if (response.type !== "error") return nextState
   }
   const appliedThroughSeq = commandAppliedThrough(response)
   const lastCommand: AgentRuntimeCommandState = {
@@ -1225,7 +1227,7 @@ export function reduceAgentCommandResult(
   }
   if (response.type === "error") {
     return {
-      ...state,
+      ...nextState,
       lastCommand,
       error: {
         source: "command",
@@ -1236,15 +1238,15 @@ export function reduceAgentCommandResult(
     }
   }
 
-  const result = response.result as JsonObject
+  const result = isObject(response.result) ? response.result : {}
   const runId = typeof result.run_id === "string" ? result.run_id : undefined
   const responseKeys = respondedInterruptKeys(command)
   return {
-    ...state,
+    ...nextState,
     lastCommand,
     error: undefined,
     run: {
-      ...state.run,
+      ...nextState.run,
       ...(runId === undefined ? {} : { runId }),
       ...(command.method === "run.start" || command.method === "input.respond"
         ? { status: "started" as const }
@@ -1252,8 +1254,8 @@ export function reduceAgentCommandResult(
     },
     interrupts:
       responseKeys.size === 0
-        ? state.interrupts
-        : state.interrupts.map((interrupt) =>
+        ? nextState.interrupts
+        : nextState.interrupts.map((interrupt) =>
             responseKeys.has(interrupt.key)
               ? { ...interrupt, status: "responded" as const }
               : interrupt
@@ -1263,6 +1265,10 @@ export function reduceAgentCommandResult(
 
 export function selectVisibleText(state: AgentRuntimeState): string {
   return state.messages
+    .filter(
+      (message) =>
+        message.role === "assistant" && message.namespace.length === 0
+    )
     .flatMap((message) => message.content)
     .map((block) =>
       block.content.type === "text" &&
@@ -1594,6 +1600,7 @@ export class AgentProtocolV2Transport {
     }
     if (response.ok) return response
 
+    if (response.status === 401) this.#token?.clear()
     const payload = await responsePayload(response)
     const detail = errorDetail(payload)
     const featureFlagHint =

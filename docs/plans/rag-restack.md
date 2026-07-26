@@ -311,46 +311,69 @@ From scratch, native to deepagents 0.6.12. Absorbs the old leak-fix phase.
 
 ### P1.2 The build-time published-only mirror
 - `scripts/build_index.py` copies **only published posts** into `agent/.index/posts/`, and
-  that mirror becomes the container's only content root.
+  that mirror becomes the container's only content root. At content tree
+  `71c5bbda097cc20be0cb15ca4666fd6917f89d5f`, the source has 336 Markdown files but the
+  Nuartz-published set has **335**: basename-leading `_` files are excluded, including
+  `AI/pdf-parser/_index.md`. The mirror, catalogue, graph, dictionary, and every fitted
+  index must all use the same 335-document set.
 - This is the draft boundary, and it is the whole reason it cannot be bypassed. Today the
   boundary is a runtime predicate that three code paths must each remember; two forget and
   the third is wrong. **In the rebuild a draft is not filtered, it is absent from the
   image.**
-- Fail closed: `draft` and `private` must be booleans when present; unexpected types are a
-  **build failure**. A document is published only when neither flag is `true`. YAML parse
-  errors and non-mapping frontmatter are build failures, not silent skips. Documents with
-  no frontmatter follow one explicit corpus policy, covered by fixtures, rather than being
-  published accidentally. Reject symlinks that resolve outside `content/`.
-- Same step emits `catalog.json`, the fitted BM25 index, the resolved wikilink graph, and
-  the Kiwi user dictionary. That moves **6.11s of tokenization** out of the first visitor's
-  request.
+- Fail closed: `draft` and `private` must be booleans when present; either `true` excludes
+  the document and cannot be overridden. `published: false` also excludes, but the
+  existing date/date-like-string `published` values are legacy publication timestamps,
+  not booleans; preserve them as metadata. Reject other `published` types, and fail on an
+  `unlisted` key until its semantics are explicitly decided. YAML parse errors, duplicate
+  keys, and non-mapping frontmatter are build failures, not silent skips.
+- Preserve the three currently public no-frontmatter documents through exact
+  content-relative POSIX DocIds in owner-reviewed `agent/corpus-policy.toml`; a new
+  no-frontmatter document or a stale allowlist entry is a build failure. Reject broken and
+  out-of-tree symlinks. Preserve original Unicode paths, including U+200B, while rejecting
+  NFC/case-fold collisions that would be ambiguous on another filesystem.
+- P1.2 emits the mirror, `catalog.json`, corpus manifest/fingerprint, and resolved
+  wikilink graph. P1.3 extends the same deterministic build with the Kiwi dictionary and
+  fitted BM25 artifacts; it does not introduce a second corpus scan.
 - CI test: build from fixtures containing public, draft, private, malformed, missing-
-  frontmatter, and out-of-tree symlink cases; assert only the explicitly published fixture
-  reaches `agent/.index/posts/`. Then walk the real mirror and fail if any excluded source
-  appears. This makes the boundary auditable rather than aspirational.
+  frontmatter, legacy `published` dates, `published: false`, `_hidden.md`, unknown
+  `unlisted`, Unicode/case collisions, and out-of-tree symlink cases; assert only the
+  explicitly published fixture reaches `agent/.index/posts/`. Then walk the real mirror,
+  require exactly 335 Markdown files, and fail if any excluded source appears. This makes
+  the boundary auditable rather than aspirational.
 
-> Note the corpus currently has **zero** `draft: true` posts, so all of this guards nothing
-> today. That is exactly why the bugs survived review, and exactly why the boundary should
-> be structural before it matters.
+> The corpus currently has zero `draft: true`, `private`, or boolean `published` values,
+> but it already has one Nuartz-hidden `_index.md` that the Python agent indexes and three
+> public no-frontmatter legacy files. The boundary fixes a present 336-vs-335 drift as well
+> as future leaks.
 
 ### P1.3 The corrected BM25 baseline `BLOCKER for everything in P4`
 A broken baseline invalidates every comparison drawn against it. Three independent fixes,
 all needed - see [the registry](../reference/retrieval-methods.md#the-korean-tokenizer-problem):
 
-1. **User dictionary** built from the corpus. `add_user_word("도커", "NNP")` restores
-   `['도커']`, verified. Frontmatter `tags` are the best source - the author has already
-   hand-labelled the domain vocabulary.
+1. **User dictionary** built from high-precision corpus evidence. `add_user_word("도커",
+   "NNP")` restores `['도커']`, verified, but tags alone do not: the corpus has `Docker`
+   and no `도커` tag. Combine Hangul tags, the Hangul side of corpus-attested
+   `한글(ASCII)` aliases, and a reviewed seed/deny list. Emit every term's provenance and
+   checksum, and include the dictionary plus Kiwi configuration in the method fingerprint.
+   If Kiwi is unavailable, fail the build rather than silently serving a fallback under
+   the same method ID.
 2. **Drop `VV` and `VA` from the keep-list.** They are what survives when an unknown noun
    is mis-analysed, which is what turns a tokenization failure into a confident wrong
    answer instead of an empty result.
-3. **Index the surface form alongside morphemes**, so a term the dictionary has not caught
-   up with still matches exactly.
+3. **Index a namespaced surface-form channel alongside morphemes**, so a term the
+   dictionary has not caught up with still matches exactly without colliding with
+   morphological tokens.
 
 Also remove the `score / max(scores)` normalisation: it forces the top hit to exactly 1.000
 for **any** query including nonsense.
 
-**Accept:** executable tests, not inspection. `도커` recall@13 goes 0/13 → 13/13; macro
-recall@10 goes 0.323 → 0.605; a nonsense query scores measurably below a real one.
+**Accept:** executable tests, not inspection, against a committed literal-term qrel
+manifest pinned to the corpus tree. On the published 335-document corpus, current
+`도커` recall@13 is 3/13 and the corrected method reaches 13/13; raw scores match
+`BM25Okapi` without normalisation, ties are stable by DocId, serialized/load-time results
+are identical, and an absent nonsense term produces no hit. The previously quoted macro
+recall 0.323 → 0.605 has no versioned queryset or qrels in the repository and is **not a
+gate**. Add a macro gate only with owner-reviewed `topic-smoke-v1` in P4.
 
 ### P1.4 Native composition
 - **No content backend route.** `ls`/`glob`/`grep`/`read_file` are in the compiled ToolNode
@@ -535,25 +558,28 @@ The actual deliverable. Forks off P1's Protocol and can proceed alongside P2 and
   imports `eval/`. Promoting a lab method means moving its implementation and registering
   the same method ID/fingerprint in the servable registry. This keeps the image slim
   without forking the interface.
-- **Bootstrap the qrels from the 174 aliased `[[target|alias]]` links.** The alias is the
-  author's own Korean surface form for a target document - free known-item ground truth in
-  quantity, which no public corpus has. Use it before spending anything on LLM-generated
-  queries.
+- **Bootstrap qrel candidates from the 164 aliased `[[target|alias]]` occurrences in the
+  published corpus.** The alias is the author's own Korean surface form for a target
+  document - free known-item evidence that no public corpus has. Resolve, deduplicate, and
+  record exclusions before calling them gold; use them before spending anything on
+  LLM-generated queries.
 - Keep two versioned query-set contracts rather than mixing their metrics:
   `known-item-alias-v1` maps each alias to one target and headlines Hit@k and MRR;
   `topic-smoke-v1` contains manually reviewed multi-document qrels and headlines recall@k.
   Each committed manifest records its generator/version, corpus tree SHA, qrels, and
   exclusions. The BM25 macro-recall regression uses `topic-smoke-v1`.
 - Pin the corpus by **git tree sha of `content/`**. The harness never reads live `content/`.
-- **Report `coverage` alongside recall@k, always.** The wikilink graph covers 123 of 336
-  files, so a graph method that declines to answer on two-thirds of queries would otherwise
-  look strong on the third where it fires.
+- **Report `coverage` alongside recall@k, always.** The published-corpus wikilink graph is
+  sparse, so a graph method that declines to answer on most queries would otherwise look
+  strong only where it fires. Record its exact node/edge coverage in the generated corpus
+  manifest rather than copying statistics from the former 336-document agent corpus.
 - **Do not headline nDCG.** On four smoke queries nDCG@10 read 1.000 for every one while
   recall@10 ranged 0.23 to 0.77. It saturates when relevant-sets are large and ungraded.
 - Local `results/<tree-sha>/` JSON is the **system of record**; LangSmith's free tier keeps
   traces 14 days and caps at ~3 full sweeps a month. Use it as a comparison UI, not storage.
-- A committed pytest regression gate on macro recall@10 - the thing that would have caught
-  the tokenizer bug.
+- A committed pytest regression gate on macro recall@10, added only after
+  `topic-smoke-v1` qrels receive owner relevance review. Until then, the literal-term
+  Docker qrel and synthetic tokenizer contracts are the P1.3 regression gates.
 - Emit a Markdown leaderboard and SVG plots, so results drop into a blog post without
   retyping. This matches the repo's existing `.mmd` → `.svg` diagram convention.
 

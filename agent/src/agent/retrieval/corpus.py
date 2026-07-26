@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from agent.retrieval.protocol import DocId
 
@@ -15,9 +15,6 @@ MANIFEST_SCHEMA = "published-corpus-manifest-v2"
 _FINGERPRINT_SCHEMA = "published-corpus-fingerprint-v1"
 _SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 DERIVED_ARTIFACT_PATHS = ("catalog.json", "wikilinks.json")
-_EXPECTED_TOP_LEVEL_ENTRIES = frozenset(
-    {"manifest.json", "posts", *DERIVED_ARTIFACT_PATHS}
-)
 _MANIFEST_KEYS = frozenset(
     {
         "artifacts",
@@ -183,6 +180,27 @@ def _parse_manifest_artifact(value: object, *, index: int) -> _ManifestArtifact:
     if not isinstance(path, str):
         raise CorpusManifestError(f"{location}.path must be a string")
     if (
+        not path
+        or "\x00" in path
+        or "\\" in path
+        or re.match(r"^[A-Za-z]:", path) is not None
+    ):
+        raise CorpusManifestError(
+            f"{location}.path must be a canonical content-relative POSIX path"
+        )
+    pure_path = PurePosixPath(path)
+    if (
+        pure_path.is_absolute()
+        or pure_path.as_posix() != path
+        or not pure_path.parts
+        or any(part in {"", ".", ".."} for part in pure_path.parts)
+        or pure_path.parts[0] in {"manifest.json", "posts"}
+    ):
+        raise CorpusManifestError(
+            f"{location}.path must be a canonical content-relative POSIX path "
+            "outside manifest.json and posts/"
+        )
+    if (
         isinstance(byte_count, bool)
         or not isinstance(byte_count, int)
         or byte_count < 0
@@ -191,6 +209,47 @@ def _parse_manifest_artifact(value: object, *, index: int) -> _ManifestArtifact:
     if not isinstance(checksum, str) or _SHA256_PATTERN.fullmatch(checksum) is None:
         raise CorpusManifestError(f"{location}.sha256 must be a sha256 checksum")
     return _ManifestArtifact(path, byte_count, checksum)
+
+
+def _inventory_artifact_files(index_root: Path) -> tuple[str, ...]:
+    files: list[str] = []
+
+    def walk(path: Path) -> None:
+        relative = path.relative_to(index_root).as_posix()
+        if path.is_symlink():
+            raise CorpusManifestError(
+                f"derived corpus artifacts must not contain symlinks: {relative}"
+            )
+        if path.is_file():
+            files.append(relative)
+            return
+        if not path.is_dir():
+            raise CorpusManifestError(
+                f"derived corpus artifacts contain an unsupported entry: {relative}"
+            )
+        try:
+            children = tuple(path.iterdir())
+        except OSError as exc:
+            raise CorpusManifestError(
+                f"cannot inspect derived corpus artifact directory {relative}: {exc}"
+            ) from exc
+        if not children:
+            raise CorpusManifestError(
+                f"derived corpus artifacts contain an empty directory: {relative}"
+            )
+        for child in children:
+            walk(child)
+
+    try:
+        entries = tuple(index_root.iterdir())
+    except OSError as exc:
+        raise CorpusManifestError(
+            f"cannot inspect corpus index root {index_root}: {exc}"
+        ) from exc
+    for entry in entries:
+        if entry.name not in {"manifest.json", "posts"}:
+            walk(entry)
+    return tuple(sorted(files))
 
 
 def _parse_excluded_document(value: object, *, index: int) -> tuple[DocId, str]:
@@ -227,46 +286,24 @@ class PublishedCorpus:
     """
 
     def __init__(self, index_root: Path | str) -> None:
-        self._index_root = Path(index_root)
-        if self._index_root.is_symlink():
+        requested_index_root = Path(index_root)
+        if requested_index_root.is_symlink():
             raise CorpusManifestError(
-                f"corpus index root must not be a symlink: {self._index_root}"
+                f"corpus index root must not be a symlink: {requested_index_root}"
             )
         try:
-            resolved_index_root = self._index_root.resolve(strict=True)
-            entries = tuple(self._index_root.iterdir())
+            resolved_index_root = requested_index_root.resolve(strict=True)
         except OSError as exc:
             raise CorpusManifestError(
-                f"cannot inspect corpus index root {self._index_root}: {exc}"
+                f"cannot inspect corpus index root {requested_index_root}: {exc}"
             ) from exc
         if not resolved_index_root.is_dir():
             raise CorpusManifestError(
-                f"corpus index root is not a directory: {self._index_root}"
+                f"corpus index root is not a directory: {requested_index_root}"
             )
-        for entry in entries:
-            if entry.is_symlink():
-                raise CorpusManifestError(
-                    f"corpus index top-level entry must not be a symlink: {entry.name}"
-                )
-        actual_top_level = {entry.name for entry in entries}
-        unexpected_top_level = sorted(actual_top_level - _EXPECTED_TOP_LEVEL_ENTRIES)
-        missing_top_level = sorted(_EXPECTED_TOP_LEVEL_ENTRIES - actual_top_level)
-        if unexpected_top_level:
-            raise CorpusManifestError(
-                "unexpected corpus index entries: " + ", ".join(unexpected_top_level)
-            )
-        if missing_top_level:
-            raise CorpusManifestError(
-                "corpus index is missing required entries: "
-                + ", ".join(missing_top_level)
-            )
-        for name in ("manifest.json", *DERIVED_ARTIFACT_PATHS):
-            if not (self._index_root / name).is_file():
-                raise CorpusManifestError(
-                    f"corpus index entry must be a regular file: {name}"
-                )
-        self._posts_root = self._index_root / "posts"
-        manifest = _load_manifest(self._index_root / "manifest.json")
+        self._index_root = resolved_index_root
+        self._posts_root = resolved_index_root / "posts"
+        manifest = _load_manifest(resolved_index_root / "manifest.json")
         _require_exact_keys(
             manifest,
             expected=_MANIFEST_KEYS,
@@ -316,10 +353,30 @@ class PublishedCorpus:
             for index, value in enumerate(raw_artifacts)
         )
         artifact_paths = tuple(artifact.path for artifact in artifacts)
-        if artifact_paths != DERIVED_ARTIFACT_PATHS:
+        if artifact_paths != tuple(sorted(artifact_paths)):
             raise CorpusManifestError(
-                "manifest artifacts must list exactly, in order: "
-                + ", ".join(DERIVED_ARTIFACT_PATHS)
+                "manifest artifacts must be sorted by canonical path"
+            )
+        if len(artifact_paths) != len(set(artifact_paths)):
+            raise CorpusManifestError("manifest artifacts contain duplicate paths")
+        missing_core = sorted(set(DERIVED_ARTIFACT_PATHS) - set(artifact_paths))
+        if missing_core:
+            raise CorpusManifestError(
+                "manifest artifacts are missing required core artifacts: "
+                + ", ".join(missing_core)
+            )
+        actual_artifact_paths = _inventory_artifact_files(resolved_index_root)
+        unexpected_artifacts = sorted(set(actual_artifact_paths) - set(artifact_paths))
+        missing_artifacts = sorted(set(artifact_paths) - set(actual_artifact_paths))
+        if unexpected_artifacts:
+            raise CorpusManifestError(
+                "unexpected derived corpus artifact files: "
+                + ", ".join(unexpected_artifacts)
+            )
+        if missing_artifacts:
+            raise CorpusManifestError(
+                "manifested derived corpus artifacts are missing: "
+                + ", ".join(missing_artifacts)
             )
         for artifact in artifacts:
             self._read_verified_artifact(
@@ -385,6 +442,16 @@ class PublishedCorpus:
                     f"published mirror must not contain symlinks: {path}"
                 )
             if path.is_dir():
+                try:
+                    if not any(path.iterdir()):
+                        raise CorpusManifestError(
+                            "published mirror must not contain empty directories: "
+                            f"{path.relative_to(self._posts_root).as_posix()}"
+                        )
+                except OSError as exc:
+                    raise CorpusManifestError(
+                        f"cannot inspect published mirror directory {path}: {exc}"
+                    ) from exc
                 continue
             if not path.is_file():
                 raise CorpusManifestError(

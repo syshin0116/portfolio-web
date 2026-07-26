@@ -1,9 +1,12 @@
-"""Deterministic Korean BM25 build artifacts and runtime retriever."""
+"""Deterministic Korean BM25 build artifacts and load-only runtime retrieval."""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
+import sqlite3
 import tomllib
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -15,39 +18,57 @@ from typing import TYPE_CHECKING
 
 from agent.retrieval.corpus import PublishedCorpus, content_checksum
 from agent.retrieval.fingerprint import canonical_config, retriever_fingerprint
-from agent.retrieval.protocol import Corpus, DocId, Hit, Retrieval
+from agent.retrieval.protocol import Corpus, Hit, Retrieval
 from agent.retrieval.registry import registry
 
 if TYPE_CHECKING:
     from agent.retrieval.corpus_build import CorpusSnapshot, SourceDocument
 
 BM25_METHOD_ID = "bm25"
-BM25_IMPLEMENTATION_ID = "agent.retrieval.bm25:create@1"
-BM25_MANIFEST_SCHEMA = "kiwi-bm25-manifest-v1"
-BM25_TOKEN_SCHEMA = "bm25-token-corpus-v1"
+BM25_IMPLEMENTATION_ID = "agent.retrieval.bm25:create@2"
+BM25_MANIFEST_SCHEMA = "kiwi-bm25-manifest-v2"
+BM25_FITTED_SCHEMA = "bm25-okapi-sqlite-v1"
 DICTIONARY_SCHEMA = "kiwi-user-dictionary-v1"
+DICTIONARY_EVIDENCE_SCHEMA = "kiwi-dictionary-evidence-v1"
 DICTIONARY_POLICY_SCHEMA_VERSION = 1
 EXPECTED_KIWI_VERSION = "0.23.2"
+EXPECTED_KIWI_MODEL_VERSION = "0.23.0"
 EXPECTED_RANK_BM25_VERSION = "0.2.2"
+EXPECTED_NUMPY_VERSION = "2.4.4"
+SQLITE_APPLICATION_ID = 0x424D3235
+SQLITE_USER_VERSION = 1
+SQLITE_PAGE_SIZE = 4096
 MORPHEME_NAMESPACE = "m:"
 SURFACE_NAMESPACE = "s:"
 SURFACE_PATTERN = r"[0-9A-Za-z가-힣]+"
 INDEXED_FIELDS = ("title", "description", "tags", "body")
+K1 = 1.5
+B = 0.75
+EPSILON = 0.25
 
 BM25_CONFIG: dict[str, object] = {
     "artifact_schema": BM25_MANIFEST_SCHEMA,
+    "dictionary_evidence_schema": DICTIONARY_EVIDENCE_SCHEMA,
     "dictionary_schema": DICTIONARY_SCHEMA,
     "fields": list(INDEXED_FIELDS),
+    "fitted_schema": BM25_FITTED_SCHEMA,
     "ranker": {
         "algorithm": "BM25Okapi",
-        "b": 0.75,
-        "epsilon": 0.25,
-        "k1": 1.5,
+        "b": B,
+        "epsilon": EPSILON,
+        "k1": K1,
         "package": "rank-bm25",
+        "positive_scores_only": True,
         "version": EXPECTED_RANK_BM25_VERSION,
     },
     "tokenizer": {
         "keep_pos": ["NN*", "SL"],
+        "load_default_dict": True,
+        "load_multi_dict": False,
+        "load_typo_dict": False,
+        "model_package": "kiwipiepy-model",
+        "model_type": "cong",
+        "model_version": EXPECTED_KIWI_MODEL_VERSION,
         "morpheme_namespace": MORPHEME_NAMESPACE,
         "normalization": "NFC+casefold",
         "num_workers": 1,
@@ -58,6 +79,7 @@ BM25_CONFIG: dict[str, object] = {
         "version": EXPECTED_KIWI_VERSION,
     },
 }
+BM25_CONFIG_SHA256 = content_checksum(canonical_config(BM25_CONFIG).encode("utf-8"))
 
 _SURFACE_RE = re.compile(SURFACE_PATTERN)
 _HANGUL_TERM_RE = re.compile(r"^[가-힣]{2,}$")
@@ -72,10 +94,11 @@ _MANIFEST_KEYS = frozenset(
         "corpus_fingerprint",
         "dictionary",
         "document_count",
+        "evidence",
+        "fitted",
         "implementation_id",
         "method_id",
         "schema",
-        "tokens",
     }
 )
 _DICTIONARY_KEYS = frozenset(
@@ -89,19 +112,65 @@ _DICTIONARY_KEYS = frozenset(
         "sha256",
     }
 )
+_REFERENCE_KEYS = frozenset({"path", "schema", "sha256"})
+_FITTED_REFERENCE_KEYS = frozenset({"path", "schema", "sha256", "sqlite_version"})
+_EVIDENCE_KEYS = frozenset(
+    {"candidate_count", "candidates", "corpus_fingerprint", "schema"}
+)
 _DICTIONARY_ENTRY_KEYS = frozenset({"pos", "sources", "term"})
 _DICTIONARY_SOURCE_KEYS = frozenset({"evidence", "kind", "source"})
-_TOKENS_REFERENCE_KEYS = frozenset({"path", "schema", "sha256"})
-_TOKEN_ROOT_KEYS = frozenset(
+_EXPECTED_TABLE_COLUMNS = {
+    "documents": (
+        ("doc_index", "INTEGER", 0, 1),
+        ("doc_id", "TEXT", 1, 0),
+        ("doc_len", "INTEGER", 1, 0),
+    ),
+    "meta": (("key", "TEXT", 1, 1), ("value", "TEXT", 1, 0)),
+    "postings": (
+        ("term_id", "INTEGER", 1, 1),
+        ("doc_index", "INTEGER", 1, 2),
+        ("tf", "INTEGER", 1, 0),
+    ),
+    "terms": (
+        ("term_id", "INTEGER", 0, 1),
+        ("token", "TEXT", 1, 0),
+        ("idf", "REAL", 1, 0),
+    ),
+}
+_EXPECTED_INDEXES = {
+    "documents": frozenset({(1, "u", 0, ("doc_id",))}),
+    "meta": frozenset({(1, "pk", 0, ("key",))}),
+    "postings": frozenset({(1, "pk", 0, ("term_id", "doc_index"))}),
+    "terms": frozenset({(1, "u", 0, ("token",))}),
+}
+_EXPECTED_POSTING_FOREIGN_KEYS = frozenset(
     {
+        ("documents", "doc_index", "doc_index", "NO ACTION", "NO ACTION", "NONE"),
+        ("terms", "term_id", "term_id", "NO ACTION", "NO ACTION", "NONE"),
+    }
+)
+_META_KEYS = frozenset(
+    {
+        "average_document_length",
+        "average_idf",
+        "b",
+        "config_sha256",
         "corpus_fingerprint",
         "dictionary_sha256",
         "document_count",
-        "documents",
+        "epsilon",
+        "evidence_sha256",
+        "kiwi_model_version",
+        "k1",
+        "numpy_version",
+        "policy_sha256",
+        "posting_count",
+        "rank_bm25_version",
         "schema",
+        "sqlite_version",
+        "term_count",
     }
 )
-_TOKEN_DOCUMENT_KEYS = frozenset({"doc_id", "tokens"})
 
 
 class Bm25ArtifactError(ValueError):
@@ -142,6 +211,17 @@ class DictionaryPolicy:
     seeds: tuple[str, ...]
     deny: frozenset[str]
     checksum: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Bm25Descriptor:
+    index_root: Path
+    dictionary_path: Path
+    evidence_path: Path
+    fitted_path: Path
+    entries: tuple[DictionaryEntry, ...]
+    identity: dict[str, object]
+    manifest: dict[str, object]
 
 
 def _normalize(value: str) -> str:
@@ -193,9 +273,8 @@ def _read_json(path: Path) -> dict[str, object]:
     return value
 
 
-def _write_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+def _json_bytes(value: object) -> bytes:
+    return (
         json.dumps(
             value,
             ensure_ascii=False,
@@ -203,9 +282,30 @@ def _write_json(path: Path, value: object) -> None:
             indent=2,
             sort_keys=True,
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_json_bytes(value))
+
+
+def _file_checksum(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise Bm25ArtifactError(f"cannot checksum BM25 artifact {path}: {exc}") from exc
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _require_checksum(value: object, *, location: str) -> str:
+    if not isinstance(value, str) or _CHECKSUM_RE.fullmatch(value) is None:
+        raise Bm25ArtifactError(f"{location} must be a sha256 checksum")
+    return value
 
 
 def _policy_terms(value: object, *, field: str) -> tuple[str, ...]:
@@ -243,8 +343,7 @@ def load_dictionary_policy(path: Path | str) -> DictionaryPolicy:
     )
     schema_version = value["schema_version"]
     if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, int)
+        type(schema_version) is not int
         or schema_version != DICTIONARY_POLICY_SCHEMA_VERSION
     ):
         raise Bm25ArtifactError(
@@ -258,17 +357,10 @@ def load_dictionary_policy(path: Path | str) -> DictionaryPolicy:
         or policy_id != policy_id.strip()
     ):
         raise Bm25ArtifactError("BM25 dictionary policy_id must be non-empty")
-    seeds = _policy_terms(value["seeds"], field="seeds")
-    deny = _policy_terms(value["deny"], field="deny")
-    overlap = sorted(set(seeds) & set(deny))
-    if overlap:
-        raise Bm25ArtifactError(
-            "BM25 dictionary policy seed/deny overlap: " + ", ".join(overlap)
-        )
     return DictionaryPolicy(
         policy_id=policy_id,
-        seeds=seeds,
-        deny=frozenset(deny),
+        seeds=_policy_terms(value["seeds"], field="seeds"),
+        deny=frozenset(_policy_terms(value["deny"], field="deny")),
         checksum=content_checksum(raw),
     )
 
@@ -294,22 +386,12 @@ def _source_fields(document: SourceDocument) -> tuple[tuple[str, str], ...]:
     )
 
 
-def collect_dictionary_evidence(
+def collect_dictionary_candidates(
     snapshot: CorpusSnapshot,
-    policy: DictionaryPolicy,
 ) -> tuple[DictionaryEntry, ...]:
-    """Collect seeds, pure-Hangul tags, and attested ``한글(ASCII)`` aliases."""
+    """Collect all tag/alias candidates for audit without activating them."""
 
     evidence: dict[str, set[DictionarySource]] = {}
-    for term in policy.seeds:
-        evidence.setdefault(term, set()).add(
-            DictionarySource(
-                kind="seed",
-                source=policy.policy_id,
-                evidence=term,
-            )
-        )
-
     for document in snapshot.documents:
         source = str(document.doc_id)
         tags = document.metadata.get("tags")
@@ -327,8 +409,7 @@ def collect_dictionary_evidence(
                         )
                     )
         for field, text in _source_fields(document):
-            normalized_text = unicodedata.normalize("NFC", text)
-            for match in _ALIAS_RE.finditer(normalized_text):
+            for match in _ALIAS_RE.finditer(unicodedata.normalize("NFC", text)):
                 term = _normalize(match.group("hangul"))
                 evidence.setdefault(term, set()).add(
                     DictionarySource(
@@ -337,12 +418,43 @@ def collect_dictionary_evidence(
                         evidence=f"{field}:{match.group('latin').strip()}",
                     )
                 )
-
     return tuple(
         DictionaryEntry(term=term, sources=tuple(sorted(sources)))
         for term, sources in sorted(evidence.items())
-        if term not in policy.deny
     )
+
+
+def select_dictionary_entries(
+    candidates: Sequence[DictionaryEntry],
+    policy: DictionaryPolicy,
+) -> tuple[DictionaryEntry, ...]:
+    """Activate only reviewed seeds, with deny taking precedence."""
+
+    by_term = {entry.term: entry for entry in candidates}
+    entries: list[DictionaryEntry] = []
+    for term in policy.seeds:
+        if term in policy.deny:
+            continue
+        candidate_sources = by_term.get(term)
+        sources = set(candidate_sources.sources if candidate_sources else ())
+        sources.add(
+            DictionarySource(
+                kind="seed",
+                source=policy.policy_id,
+                evidence=term,
+            )
+        )
+        entries.append(DictionaryEntry(term=term, sources=tuple(sorted(sources))))
+    return tuple(entries)
+
+
+def collect_dictionary_evidence(
+    snapshot: CorpusSnapshot,
+    policy: DictionaryPolicy,
+) -> tuple[DictionaryEntry, ...]:
+    """Backward-compatible name for the reviewed active dictionary entries."""
+
+    return select_dictionary_entries(collect_dictionary_candidates(snapshot), policy)
 
 
 def _installed_version(package: str, *, expected: str) -> str:
@@ -357,6 +469,13 @@ def _installed_version(package: str, *, expected: str) -> str:
             f"{package} version drift: expected {expected}, installed {actual}"
         )
     return actual
+
+
+def _require_runtime_dependencies() -> None:
+    _installed_version("kiwipiepy", expected=EXPECTED_KIWI_VERSION)
+    _installed_version("kiwipiepy-model", expected=EXPECTED_KIWI_MODEL_VERSION)
+    _installed_version("rank-bm25", expected=EXPECTED_RANK_BM25_VERSION)
+    _installed_version("numpy", expected=EXPECTED_NUMPY_VERSION)
 
 
 def _import_kiwi_class() -> type:
@@ -375,17 +494,30 @@ def _import_bm25_class() -> type:
     return BM25Okapi
 
 
-def _require_runtime_dependencies() -> None:
-    _installed_version("kiwipiepy", expected=EXPECTED_KIWI_VERSION)
-    _installed_version("rank-bm25", expected=EXPECTED_RANK_BM25_VERSION)
+def _import_numpy() -> object:
+    try:
+        import numpy
+    except ImportError as exc:
+        raise Bm25ArtifactError("NumPy is unavailable") from exc
+    return numpy
 
 
 class _KiwiTokenizer:
-    def __init__(self, dictionary_path: Path) -> None:
+    def __init__(
+        self,
+        dictionary_path: Path,
+        entries: Sequence[DictionaryEntry] = (),
+    ) -> None:
         _require_runtime_dependencies()
         try:
             kiwi_class = _import_kiwi_class()
-            self._kiwi = kiwi_class(num_workers=1)
+            self._kiwi = kiwi_class(
+                num_workers=1,
+                model_type="cong",
+                load_default_dict=True,
+                load_typo_dict=False,
+                load_multi_dict=False,
+            )
             loaded = self._kiwi.load_user_dictionary(str(dictionary_path))
         except Bm25ArtifactError:
             raise
@@ -393,10 +525,25 @@ class _KiwiTokenizer:
             raise Bm25ArtifactError(
                 f"Kiwi user dictionary load failed: {dictionary_path}: {exc}"
             ) from exc
-        if isinstance(loaded, bool) or not isinstance(loaded, int) or loaded < 0:
+        if type(loaded) is not int or loaded < 0:
             raise Bm25ArtifactError(
                 "Kiwi user dictionary returned an invalid load count"
             )
+        for entry in entries:
+            try:
+                analyzed = self._kiwi.tokenize(entry.term)
+            except Exception as exc:
+                raise Bm25ArtifactError(
+                    f"Kiwi approved seed verification failed: {entry.term}: {exc}"
+                ) from exc
+            if (
+                len(analyzed) != 1
+                or _normalize(analyzed[0].form) != entry.term
+                or analyzed[0].tag != "NNP"
+            ):
+                raise Bm25ArtifactError(
+                    f"Kiwi approved seed must tokenize as one exact NNP: {entry.term}"
+                )
 
     def tokenize(self, text: str) -> list[str]:
         if not isinstance(text, str):
@@ -442,6 +589,174 @@ def _document_tokens(
     return tokens
 
 
+def _sqlite_float(value: float) -> str:
+    if not math.isfinite(value):
+        raise Bm25ArtifactError("BM25 fitted metadata cannot contain non-finite floats")
+    return repr(float(value))
+
+
+def _build_fitted_sqlite(
+    path: Path,
+    *,
+    snapshot: CorpusSnapshot,
+    token_documents: Sequence[Sequence[str]],
+    corpus_fingerprint: str,
+    dictionary_checksum: str,
+    evidence_checksum: str,
+    policy_checksum: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ranker = None
+    if token_documents and any(token_documents):
+        bm25_class = _import_bm25_class()
+        ranker = bm25_class(
+            list(token_documents),
+            k1=K1,
+            b=B,
+            epsilon=EPSILON,
+        )
+        doc_lengths = tuple(int(value) for value in ranker.doc_len)
+        average_document_length = float(ranker.avgdl)
+        average_idf = float(ranker.average_idf)
+        ordered_terms = tuple(ranker.idf.items())
+        doc_frequencies = ranker.doc_freqs
+    else:
+        doc_lengths = tuple(len(tokens) for tokens in token_documents)
+        average_document_length = 0.0
+        average_idf = 0.0
+        ordered_terms = ()
+        doc_frequencies = tuple({} for _ in token_documents)
+
+    term_ids = {token: term_id for term_id, (token, _) in enumerate(ordered_terms)}
+    postings = sorted(
+        (
+            term_ids[token],
+            doc_index,
+            int(tf),
+        )
+        for doc_index, frequencies in enumerate(doc_frequencies)
+        for token, tf in frequencies.items()
+    )
+    metadata = {
+        "average_document_length": _sqlite_float(average_document_length),
+        "average_idf": _sqlite_float(average_idf),
+        "b": _sqlite_float(B),
+        "config_sha256": BM25_CONFIG_SHA256,
+        "corpus_fingerprint": corpus_fingerprint,
+        "dictionary_sha256": dictionary_checksum,
+        "document_count": str(len(snapshot.documents)),
+        "epsilon": _sqlite_float(EPSILON),
+        "evidence_sha256": evidence_checksum,
+        "kiwi_model_version": EXPECTED_KIWI_MODEL_VERSION,
+        "k1": _sqlite_float(K1),
+        "numpy_version": EXPECTED_NUMPY_VERSION,
+        "policy_sha256": policy_checksum,
+        "posting_count": str(len(postings)),
+        "rank_bm25_version": EXPECTED_RANK_BM25_VERSION,
+        "schema": BM25_FITTED_SCHEMA,
+        "sqlite_version": sqlite3.sqlite_version,
+        "term_count": str(len(ordered_terms)),
+    }
+    try:
+        connection = sqlite3.connect(path)
+        connection.execute(f"PRAGMA page_size={SQLITE_PAGE_SIZE}")
+        connection.execute("PRAGMA auto_vacuum=NONE")
+        connection.execute("PRAGMA journal_mode=OFF")
+        connection.execute("PRAGMA synchronous=OFF")
+        connection.execute("PRAGMA temp_store=MEMORY")
+        connection.execute(f"PRAGMA application_id={SQLITE_APPLICATION_ID}")
+        connection.execute(f"PRAGMA user_version={SQLITE_USER_VERSION}")
+        connection.executescript(
+            """
+            CREATE TABLE meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            ) WITHOUT ROWID;
+            CREATE TABLE documents (
+                doc_index INTEGER PRIMARY KEY
+                    CHECK (typeof(doc_index) = 'integer' AND doc_index >= 0),
+                doc_id TEXT NOT NULL UNIQUE,
+                doc_len INTEGER NOT NULL
+                    CHECK (typeof(doc_len) = 'integer' AND doc_len >= 0)
+            );
+            CREATE TABLE terms (
+                term_id INTEGER PRIMARY KEY
+                    CHECK (typeof(term_id) = 'integer' AND term_id >= 0),
+                token TEXT NOT NULL UNIQUE,
+                idf REAL NOT NULL
+                    CHECK (typeof(idf) = 'real')
+            );
+            CREATE TABLE postings (
+                term_id INTEGER NOT NULL,
+                doc_index INTEGER NOT NULL,
+                tf INTEGER NOT NULL CHECK (typeof(tf) = 'integer' AND tf > 0),
+                PRIMARY KEY (term_id, doc_index),
+                FOREIGN KEY (term_id) REFERENCES terms(term_id),
+                FOREIGN KEY (doc_index) REFERENCES documents(doc_index)
+            ) WITHOUT ROWID;
+            """
+        )
+        connection.executemany(
+            "INSERT INTO meta(key, value) VALUES (?, ?)",
+            sorted(metadata.items()),
+        )
+        connection.executemany(
+            "INSERT INTO documents(doc_index, doc_id, doc_len) VALUES (?, ?, ?)",
+            (
+                (index, str(document.doc_id), doc_lengths[index])
+                for index, document in enumerate(snapshot.documents)
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO terms(term_id, token, idf) VALUES (?, ?, ?)",
+            (
+                (term_id, token, float(idf))
+                for term_id, (token, idf) in enumerate(ordered_terms)
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO postings(term_id, doc_index, tf) VALUES (?, ?, ?)",
+            postings,
+        )
+        connection.commit()
+        connection.execute("VACUUM")
+        connection.close()
+    except (OSError, sqlite3.Error) as exc:
+        raise Bm25ArtifactError(
+            f"cannot build fitted BM25 SQLite artifact: {exc}"
+        ) from exc
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+
+def _identity_config(
+    *,
+    corpus_fingerprint: str,
+    policy_checksum: str,
+    dictionary_checksum: str,
+    evidence_checksum: str,
+    fitted_checksum: str,
+    manifest_checksum: str,
+    sqlite_version: str,
+) -> dict[str, object]:
+    return {
+        "bm25_manifest_sha256": manifest_checksum,
+        "config": BM25_CONFIG,
+        "config_sha256": BM25_CONFIG_SHA256,
+        "corpus_fingerprint": corpus_fingerprint,
+        "dictionary_policy_sha256": policy_checksum,
+        "dictionary_sha256": dictionary_checksum,
+        "evidence_sha256": evidence_checksum,
+        "fitted_sha256": fitted_checksum,
+        "kiwi_model_version": EXPECTED_KIWI_MODEL_VERSION,
+        "kiwi_version": EXPECTED_KIWI_VERSION,
+        "numpy_version": EXPECTED_NUMPY_VERSION,
+        "rank_bm25_version": EXPECTED_RANK_BM25_VERSION,
+        "sqlite_version": sqlite_version,
+    }
+
+
 def build_bm25_artifacts(
     snapshot: CorpusSnapshot,
     *,
@@ -449,10 +764,23 @@ def build_bm25_artifacts(
     policy_path: Path | str,
     corpus_fingerprint: str,
 ) -> str:
-    """Extend one existing corpus snapshot with deterministic BM25 artifacts."""
+    """Fit BM25 once from one snapshot and emit deterministic safe artifacts."""
 
+    _require_runtime_dependencies()
     policy = load_dictionary_policy(policy_path)
-    entries = collect_dictionary_evidence(snapshot, policy)
+    candidates = collect_dictionary_candidates(snapshot)
+    entries = select_dictionary_entries(candidates, policy)
+
+    evidence_payload = {
+        "candidate_count": len(candidates),
+        "candidates": [entry.as_dict() for entry in candidates],
+        "corpus_fingerprint": corpus_fingerprint,
+        "schema": DICTIONARY_EVIDENCE_SCHEMA,
+    }
+    evidence_path = index_root / "bm25" / "dictionary-evidence.json"
+    _write_json(evidence_path, evidence_payload)
+    evidence_checksum = content_checksum(evidence_path.read_bytes())
+
     dictionary_path = index_root / "kiwi-user-dictionary.txt"
     dictionary_payload = _dictionary_bytes(
         entries,
@@ -460,24 +788,23 @@ def build_bm25_artifacts(
     )
     dictionary_path.write_bytes(dictionary_payload)
     dictionary_checksum = content_checksum(dictionary_payload)
-    tokenizer = _KiwiTokenizer(dictionary_path)
+    tokenizer = _KiwiTokenizer(dictionary_path, entries)
+    token_documents = [
+        _document_tokens(document, tokenizer=tokenizer)
+        for document in snapshot.documents
+    ]
 
-    token_payload = {
-        "corpus_fingerprint": corpus_fingerprint,
-        "dictionary_sha256": dictionary_checksum,
-        "document_count": len(snapshot.documents),
-        "documents": [
-            {
-                "doc_id": str(document.doc_id),
-                "tokens": _document_tokens(document, tokenizer=tokenizer),
-            }
-            for document in snapshot.documents
-        ],
-        "schema": BM25_TOKEN_SCHEMA,
-    }
-    tokens_path = index_root / "bm25" / "documents.json"
-    _write_json(tokens_path, token_payload)
-    tokens_checksum = content_checksum(tokens_path.read_bytes())
+    fitted_path = index_root / "bm25" / "fitted.sqlite3"
+    _build_fitted_sqlite(
+        fitted_path,
+        snapshot=snapshot,
+        token_documents=token_documents,
+        corpus_fingerprint=corpus_fingerprint,
+        dictionary_checksum=dictionary_checksum,
+        evidence_checksum=evidence_checksum,
+        policy_checksum=policy.checksum,
+    )
+    fitted_checksum = _file_checksum(fitted_path)
     manifest = {
         "config": BM25_CONFIG,
         "corpus_fingerprint": corpus_fingerprint,
@@ -491,26 +818,32 @@ def build_bm25_artifacts(
             "sha256": dictionary_checksum,
         },
         "document_count": len(snapshot.documents),
+        "evidence": {
+            "path": "bm25/dictionary-evidence.json",
+            "schema": DICTIONARY_EVIDENCE_SCHEMA,
+            "sha256": evidence_checksum,
+        },
+        "fitted": {
+            "path": "bm25/fitted.sqlite3",
+            "schema": BM25_FITTED_SCHEMA,
+            "sha256": fitted_checksum,
+            "sqlite_version": sqlite3.sqlite_version,
+        },
         "implementation_id": BM25_IMPLEMENTATION_ID,
         "method_id": BM25_METHOD_ID,
         "schema": BM25_MANIFEST_SCHEMA,
-        "tokens": {
-            "path": "bm25/documents.json",
-            "schema": BM25_TOKEN_SCHEMA,
-            "sha256": tokens_checksum,
-        },
     }
     manifest_path = index_root / "bm25" / "manifest.json"
     _write_json(manifest_path, manifest)
-    identity = {
-        "config": BM25_CONFIG,
-        "corpus_fingerprint": corpus_fingerprint,
-        "dictionary_policy_sha256": policy.checksum,
-        "dictionary_sha256": dictionary_checksum,
-        "kiwi_version": EXPECTED_KIWI_VERSION,
-        "rank_bm25_version": EXPECTED_RANK_BM25_VERSION,
-        "tokens_sha256": tokens_checksum,
-    }
+    identity = _identity_config(
+        corpus_fingerprint=corpus_fingerprint,
+        policy_checksum=policy.checksum,
+        dictionary_checksum=dictionary_checksum,
+        evidence_checksum=evidence_checksum,
+        fitted_checksum=fitted_checksum,
+        manifest_checksum=_file_checksum(manifest_path),
+        sqlite_version=sqlite3.sqlite_version,
+    )
     return retriever_fingerprint(
         method_id=BM25_METHOD_ID,
         implementation_id=BM25_IMPLEMENTATION_ID,
@@ -526,240 +859,603 @@ def _artifact_path(index_root: Path, value: object, *, expected: str) -> Path:
     if path.is_symlink():
         raise Bm25ArtifactError(f"BM25 artifact must not be a symlink: {path}")
     try:
-        resolved_root = index_root.resolve(strict=True)
         resolved = path.resolve(strict=True)
     except OSError as exc:
         raise Bm25ArtifactError(f"BM25 artifact is missing: {path}") from exc
-    if not resolved.is_relative_to(resolved_root) or not resolved.is_file():
+    if not resolved.is_relative_to(index_root) or not resolved.is_file():
         raise Bm25ArtifactError(f"BM25 artifact escapes index root: {path}")
-    return path
+    return resolved
 
 
-def _require_checksum(value: object, *, location: str) -> str:
-    if not isinstance(value, str) or _CHECKSUM_RE.fullmatch(value) is None:
-        raise Bm25ArtifactError(f"{location} must be a sha256 checksum")
-    return value
-
-
-def _validate_dictionary_manifest(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise Bm25ArtifactError("bm25 manifest dictionary must be an object")
-    _require_exact_keys(value, expected=_DICTIONARY_KEYS, location="dictionary")
-    if value["schema"] != DICTIONARY_SCHEMA:
-        raise Bm25ArtifactError("unsupported BM25 dictionary schema")
-    if (
-        isinstance(value["entry_count"], bool)
-        or not isinstance(value["entry_count"], int)
-        or value["entry_count"] < 0
-    ):
-        raise Bm25ArtifactError("dictionary.entry_count must be non-negative")
-    entries = value["entries"]
-    if not isinstance(entries, list) or len(entries) != value["entry_count"]:
-        raise Bm25ArtifactError("dictionary.entries must match dictionary.entry_count")
-    previous = ""
-    for index, entry in enumerate(entries):
-        location = f"dictionary.entries[{index}]"
-        if not isinstance(entry, dict):
-            raise Bm25ArtifactError(f"{location} must be an object")
+def _parse_dictionary_sources(
+    value: object,
+    *,
+    location: str,
+    allowed_kinds: frozenset[str],
+) -> tuple[DictionarySource, ...]:
+    if not isinstance(value, list) or not value:
+        raise Bm25ArtifactError(f"{location} must be a non-empty array")
+    sources: list[DictionarySource] = []
+    for index, raw_source in enumerate(value):
+        source_location = f"{location}[{index}]"
+        if not isinstance(raw_source, dict):
+            raise Bm25ArtifactError(f"{source_location} must be an object")
         _require_exact_keys(
-            entry,
-            expected=_DICTIONARY_ENTRY_KEYS,
-            location=location,
+            raw_source,
+            expected=_DICTIONARY_SOURCE_KEYS,
+            location=source_location,
         )
-        term = entry["term"]
+        kind = raw_source["kind"]
+        source = raw_source["source"]
+        evidence = raw_source["evidence"]
+        if kind not in allowed_kinds:
+            raise Bm25ArtifactError(f"{source_location}.kind is invalid")
+        if not isinstance(source, str) or not source:
+            raise Bm25ArtifactError(f"{source_location}.source must be non-empty")
+        if not isinstance(evidence, str) or not evidence:
+            raise Bm25ArtifactError(f"{source_location}.evidence must be non-empty")
+        sources.append(DictionarySource(kind=kind, source=source, evidence=evidence))
+    result = tuple(sources)
+    if result != tuple(sorted(set(result))):
+        raise Bm25ArtifactError(f"{location} must be sorted and unique")
+    return result
+
+
+def _parse_dictionary_entries(
+    value: object,
+    *,
+    location: str,
+    allowed_kinds: frozenset[str],
+) -> tuple[DictionaryEntry, ...]:
+    if not isinstance(value, list):
+        raise Bm25ArtifactError(f"{location} must be an array")
+    entries: list[DictionaryEntry] = []
+    for index, raw_entry in enumerate(value):
+        entry_location = f"{location}[{index}]"
+        if not isinstance(raw_entry, dict):
+            raise Bm25ArtifactError(f"{entry_location} must be an object")
+        _require_exact_keys(
+            raw_entry,
+            expected=_DICTIONARY_ENTRY_KEYS,
+            location=entry_location,
+        )
+        term = raw_entry["term"]
         if (
             not isinstance(term, str)
+            or term != _normalize(term)
             or _HANGUL_TERM_RE.fullmatch(term) is None
-            or term <= previous
         ):
-            raise Bm25ArtifactError(
-                "dictionary entries must have sorted unique Hangul terms"
+            raise Bm25ArtifactError(f"{entry_location}.term is invalid")
+        if raw_entry["pos"] != "NNP":
+            raise Bm25ArtifactError(f"{entry_location}.pos must be NNP")
+        entries.append(
+            DictionaryEntry(
+                term=term,
+                sources=_parse_dictionary_sources(
+                    raw_entry["sources"],
+                    location=f"{entry_location}.sources",
+                    allowed_kinds=allowed_kinds,
+                ),
             )
-        previous = term
-        if entry["pos"] != "NNP":
-            raise Bm25ArtifactError(f"{location}.pos must be NNP")
-        sources = entry["sources"]
-        if not isinstance(sources, list) or not sources:
-            raise Bm25ArtifactError(f"{location}.sources must be non-empty")
-        for source_index, source in enumerate(sources):
-            source_location = f"{location}.sources[{source_index}]"
-            if not isinstance(source, dict):
-                raise Bm25ArtifactError(f"{source_location} must be an object")
-            _require_exact_keys(
-                source,
-                expected=_DICTIONARY_SOURCE_KEYS,
-                location=source_location,
-            )
-            if source["kind"] not in {"alias", "seed", "tag"}:
-                raise Bm25ArtifactError(f"{source_location}.kind is invalid")
-            if not all(
-                isinstance(source[field], str) and source[field]
-                for field in ("evidence", "source")
-            ):
-                raise Bm25ArtifactError(
-                    f"{source_location} evidence/source must be non-empty strings"
-                )
-    _require_checksum(value["sha256"], location="dictionary.sha256")
-    _require_checksum(value["policy_sha256"], location="dictionary.policy_sha256")
-    if not isinstance(value["policy_id"], str) or not value["policy_id"]:
+        )
+    result = tuple(entries)
+    terms = tuple(entry.term for entry in result)
+    if terms != tuple(sorted(set(terms))):
+        raise Bm25ArtifactError(
+            f"{location} must have sorted unique normalized Hangul terms"
+        )
+    return result
+
+
+def _parse_reference(
+    value: object,
+    *,
+    location: str,
+    expected_path: str,
+    expected_schema: str,
+) -> tuple[str, str]:
+    if not isinstance(value, dict):
+        raise Bm25ArtifactError(f"{location} must be an object")
+    _require_exact_keys(value, expected=_REFERENCE_KEYS, location=location)
+    if value["path"] != expected_path:
+        raise Bm25ArtifactError(f"{location}.path must be {expected_path!r}")
+    if value["schema"] != expected_schema:
+        raise Bm25ArtifactError(f"{location}.schema is unsupported")
+    return expected_path, _require_checksum(
+        value["sha256"],
+        location=f"{location}.sha256",
+    )
+
+
+def _load_descriptor(corpus: Corpus) -> _Bm25Descriptor:
+    if not isinstance(corpus, PublishedCorpus):
+        raise TypeError("Bm25Retriever requires a PublishedCorpus")
+    index_root = corpus.index_root
+    manifest_path = _artifact_path(
+        index_root,
+        "bm25/manifest.json",
+        expected="bm25/manifest.json",
+    )
+    manifest = _read_json(manifest_path)
+    _require_exact_keys(manifest, expected=_MANIFEST_KEYS, location="BM25 manifest")
+    if manifest["schema"] != BM25_MANIFEST_SCHEMA:
+        raise Bm25ArtifactError("unsupported BM25 manifest schema")
+    if manifest["method_id"] != BM25_METHOD_ID:
+        raise Bm25ArtifactError("BM25 manifest method_id mismatch")
+    if manifest["implementation_id"] != BM25_IMPLEMENTATION_ID:
+        raise Bm25ArtifactError("BM25 manifest implementation_id mismatch")
+    if canonical_config(manifest["config"]) != canonical_config(BM25_CONFIG):
+        raise Bm25ArtifactError("BM25 manifest config mismatch")
+    if manifest["corpus_fingerprint"] != corpus.fingerprint:
+        raise Bm25ArtifactError("BM25 manifest corpus fingerprint mismatch")
+    if type(manifest["document_count"]) is not int or manifest["document_count"] != len(
+        corpus.doc_ids()
+    ):
+        raise Bm25ArtifactError("BM25 manifest document_count mismatch")
+
+    raw_dictionary = manifest["dictionary"]
+    if not isinstance(raw_dictionary, dict):
+        raise Bm25ArtifactError("BM25 manifest dictionary must be an object")
+    _require_exact_keys(
+        raw_dictionary,
+        expected=_DICTIONARY_KEYS,
+        location="dictionary",
+    )
+    if raw_dictionary["schema"] != DICTIONARY_SCHEMA:
+        raise Bm25ArtifactError("unsupported BM25 dictionary schema")
+    if (
+        not isinstance(raw_dictionary["policy_id"], str)
+        or not raw_dictionary["policy_id"]
+    ):
         raise Bm25ArtifactError("dictionary.policy_id must be non-empty")
-    return value
+    policy_checksum = _require_checksum(
+        raw_dictionary["policy_sha256"],
+        location="dictionary.policy_sha256",
+    )
+    dictionary_checksum = _require_checksum(
+        raw_dictionary["sha256"],
+        location="dictionary.sha256",
+    )
+    entries = _parse_dictionary_entries(
+        raw_dictionary["entries"],
+        location="dictionary.entries",
+        allowed_kinds=frozenset({"alias", "seed", "tag"}),
+    )
+    if type(raw_dictionary["entry_count"]) is not int or raw_dictionary[
+        "entry_count"
+    ] != len(entries):
+        raise Bm25ArtifactError("dictionary.entry_count must match dictionary.entries")
+    expected_seed_sources = tuple(
+        DictionarySource(
+            kind="seed",
+            source=raw_dictionary["policy_id"],
+            evidence=entry.term,
+        )
+        for entry in entries
+    )
+    for entry, seed_source in zip(entries, expected_seed_sources, strict=True):
+        actual_seed_sources = {
+            source for source in entry.sources if source.kind == "seed"
+        }
+        if actual_seed_sources != {seed_source}:
+            raise Bm25ArtifactError(
+                "dictionary entry must have exactly one reviewed seed provenance: "
+                f"{entry.term}"
+            )
+    dictionary_path = _artifact_path(
+        index_root,
+        raw_dictionary["path"],
+        expected="kiwi-user-dictionary.txt",
+    )
+    if _file_checksum(dictionary_path) != dictionary_checksum:
+        raise Bm25ArtifactError("BM25 dictionary checksum mismatch")
+    try:
+        dictionary_payload = dictionary_path.read_bytes()
+    except OSError as exc:
+        raise Bm25ArtifactError(f"cannot read BM25 dictionary: {exc}") from exc
+    if dictionary_payload != _dictionary_bytes(
+        entries,
+        corpus_fingerprint=corpus.fingerprint,
+    ):
+        raise Bm25ArtifactError(
+            "BM25 dictionary bytes do not match canonical manifest entries"
+        )
+
+    evidence_relative, evidence_checksum = _parse_reference(
+        manifest["evidence"],
+        location="evidence",
+        expected_path="bm25/dictionary-evidence.json",
+        expected_schema=DICTIONARY_EVIDENCE_SCHEMA,
+    )
+    evidence_path = _artifact_path(
+        index_root,
+        evidence_relative,
+        expected=evidence_relative,
+    )
+    if _file_checksum(evidence_path) != evidence_checksum:
+        raise Bm25ArtifactError("BM25 evidence checksum mismatch")
+
+    fitted = manifest["fitted"]
+    if not isinstance(fitted, dict):
+        raise Bm25ArtifactError("fitted must be an object")
+    _require_exact_keys(fitted, expected=_FITTED_REFERENCE_KEYS, location="fitted")
+    if fitted["path"] != "bm25/fitted.sqlite3":
+        raise Bm25ArtifactError("fitted.path must be 'bm25/fitted.sqlite3'")
+    if fitted["schema"] != BM25_FITTED_SCHEMA:
+        raise Bm25ArtifactError("unsupported BM25 fitted schema")
+    fitted_checksum = _require_checksum(
+        fitted["sha256"],
+        location="fitted.sha256",
+    )
+    if fitted["sqlite_version"] != sqlite3.sqlite_version:
+        raise Bm25ArtifactError(
+            "BM25 fitted SQLite version differs from the runtime version"
+        )
+    fitted_path = _artifact_path(
+        index_root,
+        fitted["path"],
+        expected="bm25/fitted.sqlite3",
+    )
+    if _file_checksum(fitted_path) != fitted_checksum:
+        raise Bm25ArtifactError("BM25 fitted artifact checksum mismatch")
+    identity = _identity_config(
+        corpus_fingerprint=corpus.fingerprint,
+        policy_checksum=policy_checksum,
+        dictionary_checksum=dictionary_checksum,
+        evidence_checksum=evidence_checksum,
+        fitted_checksum=fitted_checksum,
+        manifest_checksum=_file_checksum(manifest_path),
+        sqlite_version=fitted["sqlite_version"],
+    )
+    return _Bm25Descriptor(
+        index_root=index_root,
+        dictionary_path=dictionary_path,
+        evidence_path=evidence_path,
+        fitted_path=fitted_path,
+        entries=entries,
+        identity=identity,
+        manifest=manifest,
+    )
 
 
-def _load_token_documents(
-    index_root: Path,
-    reference: object,
+def _validate_evidence(descriptor: _Bm25Descriptor, *, corpus: Corpus) -> None:
+    evidence = _read_json(descriptor.evidence_path)
+    if descriptor.evidence_path.read_bytes() != _json_bytes(evidence):
+        raise Bm25ArtifactError("BM25 dictionary evidence is not canonical JSON")
+    _require_exact_keys(
+        evidence,
+        expected=_EVIDENCE_KEYS,
+        location="dictionary evidence",
+    )
+    if evidence["schema"] != DICTIONARY_EVIDENCE_SCHEMA:
+        raise Bm25ArtifactError("unsupported BM25 dictionary evidence schema")
+    if evidence["corpus_fingerprint"] != corpus.fingerprint:
+        raise Bm25ArtifactError("BM25 evidence corpus fingerprint mismatch")
+    candidates = _parse_dictionary_entries(
+        evidence["candidates"],
+        location="dictionary evidence.candidates",
+        allowed_kinds=frozenset({"alias", "tag"}),
+    )
+    if type(evidence["candidate_count"]) is not int or evidence[
+        "candidate_count"
+    ] != len(candidates):
+        raise Bm25ArtifactError(
+            "dictionary evidence candidate_count must match candidates"
+        )
+    candidate_sources = {entry.term: set(entry.sources) for entry in candidates}
+    for entry in descriptor.entries:
+        non_seed_sources = {source for source in entry.sources if source.kind != "seed"}
+        if non_seed_sources != candidate_sources.get(entry.term, set()):
+            raise Bm25ArtifactError(
+                f"dictionary provenance differs from evidence: {entry.term}"
+            )
+
+
+def _readonly_connection(path: Path) -> sqlite3.Connection:
+    uri = path.as_uri() + "?mode=ro&immutable=1"
+    try:
+        connection = sqlite3.connect(uri, uri=True)
+        connection.enable_load_extension(False)
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("PRAGMA mmap_size=0")
+        connection.execute("PRAGMA cache_size=-2048")
+        return connection
+    except sqlite3.Error as exc:
+        raise Bm25ArtifactError(
+            f"cannot open fitted BM25 SQLite artifact: {exc}"
+        ) from exc
+
+
+def _canonical_int(value: str, *, location: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise Bm25ArtifactError(f"{location} must be a canonical integer") from exc
+    if parsed < 0 or str(parsed) != value:
+        raise Bm25ArtifactError(f"{location} must be a canonical non-negative integer")
+    return parsed
+
+
+def _canonical_float(value: str, *, location: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise Bm25ArtifactError(f"{location} must be a canonical float") from exc
+    if not math.isfinite(parsed) or repr(parsed) != value:
+        raise Bm25ArtifactError(f"{location} must be a canonical finite float")
+    return parsed
+
+
+def _validate_fitted(
+    descriptor: _Bm25Descriptor,
     *,
     corpus: Corpus,
-    dictionary_checksum: str,
-) -> tuple[tuple[DocId, ...], tuple[list[str], ...], str]:
-    if not isinstance(reference, dict):
-        raise Bm25ArtifactError("bm25 manifest tokens must be an object")
-    _require_exact_keys(
-        reference,
-        expected=_TOKENS_REFERENCE_KEYS,
-        location="tokens",
-    )
-    if reference["schema"] != BM25_TOKEN_SCHEMA:
-        raise Bm25ArtifactError("unsupported BM25 token schema reference")
-    expected_checksum = _require_checksum(
-        reference["sha256"],
-        location="tokens.sha256",
-    )
-    tokens_path = _artifact_path(
-        index_root,
-        reference["path"],
-        expected="bm25/documents.json",
-    )
-    if content_checksum(tokens_path.read_bytes()) != expected_checksum:
-        raise Bm25ArtifactError("BM25 token artifact checksum mismatch")
-    payload = _read_json(tokens_path)
-    _require_exact_keys(
-        payload,
-        expected=_TOKEN_ROOT_KEYS,
-        location="BM25 token artifact",
-    )
-    if payload["schema"] != BM25_TOKEN_SCHEMA:
-        raise Bm25ArtifactError("unsupported BM25 token artifact schema")
-    if payload["corpus_fingerprint"] != corpus.fingerprint:
-        raise Bm25ArtifactError("BM25 token artifact corpus fingerprint mismatch")
-    if payload["dictionary_sha256"] != dictionary_checksum:
-        raise Bm25ArtifactError("BM25 token artifact dictionary checksum mismatch")
-    raw_documents = payload["documents"]
-    if not isinstance(raw_documents, list):
-        raise Bm25ArtifactError("BM25 token artifact documents must be an array")
-    if isinstance(payload["document_count"], bool) or payload["document_count"] != len(
-        raw_documents
-    ):
-        raise Bm25ArtifactError("BM25 token artifact document_count mismatch")
-    doc_ids: list[DocId] = []
-    token_documents: list[list[str]] = []
-    for index, raw_document in enumerate(raw_documents):
-        location = f"BM25 token artifact documents[{index}]"
-        if not isinstance(raw_document, dict):
-            raise Bm25ArtifactError(f"{location} must be an object")
-        _require_exact_keys(
-            raw_document,
-            expected=_TOKEN_DOCUMENT_KEYS,
-            location=location,
-        )
-        try:
-            doc_id = DocId(raw_document["doc_id"])
-        except (TypeError, ValueError) as exc:
-            raise Bm25ArtifactError(f"{location}.doc_id is invalid") from exc
-        tokens = raw_document["tokens"]
-        if not isinstance(tokens, list) or not all(
-            isinstance(token, str)
-            and token
-            and token.startswith((MORPHEME_NAMESPACE, SURFACE_NAMESPACE))
-            for token in tokens
+) -> tuple[object, float]:
+    numpy = _import_numpy()
+    connection = _readonly_connection(descriptor.fitted_path)
+    try:
+        if (
+            connection.execute("PRAGMA application_id").fetchone()[0]
+            != SQLITE_APPLICATION_ID
         ):
-            raise Bm25ArtifactError(f"{location}.tokens are invalid")
-        doc_ids.append(doc_id)
-        token_documents.append(tokens)
-    if tuple(doc_ids) != tuple(corpus.doc_ids()):
-        raise Bm25ArtifactError(
-            "BM25 token artifact DocIds do not exactly match the published corpus"
+            raise Bm25ArtifactError("BM25 fitted application_id mismatch")
+        if (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            != SQLITE_USER_VERSION
+        ):
+            raise Bm25ArtifactError("BM25 fitted user_version mismatch")
+        if connection.execute("PRAGMA page_size").fetchone()[0] != SQLITE_PAGE_SIZE:
+            raise Bm25ArtifactError("BM25 fitted page_size mismatch")
+        integrity = connection.execute("PRAGMA integrity_check").fetchall()
+        if integrity != [("ok",)]:
+            raise Bm25ArtifactError("BM25 fitted SQLite integrity check failed")
+        objects = {
+            (row[0], row[1])
+            for row in connection.execute(
+                "SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
+            )
+        }
+        expected_objects = {("table", name) for name in _EXPECTED_TABLE_COLUMNS}
+        if objects != expected_objects:
+            raise Bm25ArtifactError(
+                "BM25 fitted SQLite schema contains unknown objects"
+            )
+        for table, expected_columns in _EXPECTED_TABLE_COLUMNS.items():
+            columns = tuple(
+                (row[1], row[2], row[3], row[5])
+                for row in connection.execute(f"PRAGMA table_info({table})")
+            )
+            if columns != expected_columns:
+                raise Bm25ArtifactError(f"BM25 fitted SQLite {table} columns mismatch")
+            indexes = set()
+            for row in connection.execute(f"PRAGMA index_list({table})"):
+                _, index_name, unique, origin, partial = row
+                escaped_name = index_name.replace('"', '""')
+                indexed_columns = tuple(
+                    index_row[2]
+                    for index_row in connection.execute(
+                        f'PRAGMA index_info("{escaped_name}")'
+                    )
+                )
+                indexes.add((unique, origin, partial, indexed_columns))
+            if indexes != _EXPECTED_INDEXES[table]:
+                raise Bm25ArtifactError(
+                    f"BM25 fitted SQLite {table} index constraints mismatch"
+                )
+            foreign_keys = {
+                (row[2], row[3], row[4], row[5], row[6], row[7])
+                for row in connection.execute(f"PRAGMA foreign_key_list({table})")
+            }
+            expected_foreign_keys = (
+                _EXPECTED_POSTING_FOREIGN_KEYS if table == "postings" else frozenset()
+            )
+            if foreign_keys != expected_foreign_keys:
+                raise Bm25ArtifactError(
+                    f"BM25 fitted SQLite {table} foreign keys mismatch"
+                )
+
+        metadata_rows = connection.execute(
+            "SELECT key, value, typeof(key), typeof(value) FROM meta ORDER BY key"
+        ).fetchall()
+        if not all(row[2:] == ("text", "text") for row in metadata_rows):
+            raise Bm25ArtifactError("BM25 fitted metadata values must be text")
+        metadata = {row[0]: row[1] for row in metadata_rows}
+        if set(metadata) != _META_KEYS or len(metadata) != len(metadata_rows):
+            raise Bm25ArtifactError("BM25 fitted metadata keys mismatch")
+        expected_metadata = {
+            "config_sha256": BM25_CONFIG_SHA256,
+            "corpus_fingerprint": corpus.fingerprint,
+            "dictionary_sha256": descriptor.identity["dictionary_sha256"],
+            "evidence_sha256": descriptor.identity["evidence_sha256"],
+            "kiwi_model_version": EXPECTED_KIWI_MODEL_VERSION,
+            "numpy_version": EXPECTED_NUMPY_VERSION,
+            "policy_sha256": descriptor.identity["dictionary_policy_sha256"],
+            "rank_bm25_version": EXPECTED_RANK_BM25_VERSION,
+            "schema": BM25_FITTED_SCHEMA,
+            "sqlite_version": sqlite3.sqlite_version,
+        }
+        for key, expected in expected_metadata.items():
+            if metadata[key] != expected:
+                raise Bm25ArtifactError(f"BM25 fitted metadata {key} mismatch")
+        document_count = _canonical_int(
+            metadata["document_count"],
+            location="fitted document_count",
         )
-    return tuple(doc_ids), tuple(token_documents), expected_checksum
+        term_count = _canonical_int(
+            metadata["term_count"],
+            location="fitted term_count",
+        )
+        posting_count = _canonical_int(
+            metadata["posting_count"],
+            location="fitted posting_count",
+        )
+        average_document_length = _canonical_float(
+            metadata["average_document_length"],
+            location="fitted average_document_length",
+        )
+        stored_average_idf = _canonical_float(
+            metadata["average_idf"],
+            location="fitted average_idf",
+        )
+        if _canonical_float(metadata["k1"], location="fitted k1") != K1:
+            raise Bm25ArtifactError("BM25 fitted k1 mismatch")
+        if _canonical_float(metadata["b"], location="fitted b") != B:
+            raise Bm25ArtifactError("BM25 fitted b mismatch")
+        if _canonical_float(metadata["epsilon"], location="fitted epsilon") != EPSILON:
+            raise Bm25ArtifactError("BM25 fitted epsilon mismatch")
+        if document_count != len(corpus.doc_ids()):
+            raise Bm25ArtifactError("BM25 fitted document_count mismatch")
+
+        document_rows = connection.execute(
+            "SELECT doc_index, doc_id, doc_len, "
+            "typeof(doc_index), typeof(doc_id), typeof(doc_len) "
+            "FROM documents ORDER BY doc_index"
+        ).fetchall()
+        if len(document_rows) != document_count:
+            raise Bm25ArtifactError("BM25 fitted documents count mismatch")
+        if not all(row[3:] == ("integer", "text", "integer") for row in document_rows):
+            raise Bm25ArtifactError("BM25 fitted document types are invalid")
+        if tuple(row[0] for row in document_rows) != tuple(range(document_count)):
+            raise Bm25ArtifactError("BM25 fitted document indices must be contiguous")
+        if tuple(row[1] for row in document_rows) != tuple(map(str, corpus.doc_ids())):
+            raise Bm25ArtifactError(
+                "BM25 fitted DocIds do not exactly match the published corpus"
+            )
+        duplicate_doc_id = connection.execute(
+            "SELECT 1 FROM documents GROUP BY doc_id HAVING COUNT(*) != 1 LIMIT 1"
+        ).fetchone()
+        if duplicate_doc_id is not None:
+            raise Bm25ArtifactError("BM25 fitted document DocIds must be unique")
+        if any(row[2] < 0 for row in document_rows):
+            raise Bm25ArtifactError("BM25 fitted doc_len must be non-negative")
+        doc_lengths = numpy.array([row[2] for row in document_rows])
+        expected_avgdl = (
+            float(sum(row[2] for row in document_rows)) / document_count
+            if document_count
+            else 0.0
+        )
+        if average_document_length != expected_avgdl:
+            raise Bm25ArtifactError("BM25 fitted average document length mismatch")
+
+        term_query = (
+            "SELECT t.term_id, t.token, t.idf, typeof(t.term_id), "
+            "typeof(t.token), typeof(t.idf), COUNT(p.doc_index) "
+            "FROM terms AS t LEFT JOIN postings AS p USING(term_id) "
+            "GROUP BY t.term_id ORDER BY t.term_id"
+        )
+        idf_sum = 0.0
+        seen_terms = 0
+        for index, row in enumerate(connection.execute(term_query)):
+            term_id, token, idf, id_type, token_type, idf_type, doc_frequency = row
+            if term_id != index or (id_type, token_type, idf_type) != (
+                "integer",
+                "text",
+                "real",
+            ):
+                raise Bm25ArtifactError("BM25 fitted term indices/types are invalid")
+            valid_token = isinstance(token, str) and token == _normalize(token)
+            if valid_token and token.startswith(MORPHEME_NAMESPACE):
+                valid_token = bool(token.removeprefix(MORPHEME_NAMESPACE))
+            elif valid_token and token.startswith(SURFACE_NAMESPACE):
+                valid_token = (
+                    _SURFACE_RE.fullmatch(token.removeprefix(SURFACE_NAMESPACE))
+                    is not None
+                )
+            else:
+                valid_token = False
+            if not valid_token or not math.isfinite(idf):
+                raise Bm25ArtifactError(f"BM25 fitted token/idf is invalid: {token!r}")
+            if doc_frequency <= 0 or doc_frequency > document_count:
+                raise Bm25ArtifactError(
+                    f"BM25 fitted token has invalid document frequency: {token!r}"
+                )
+            raw_idf = math.log(document_count - doc_frequency + 0.5) - math.log(
+                doc_frequency + 0.5
+            )
+            # rank-bm25 0.2.2 uses sequential ``+=`` in first-seen term order.
+            idf_sum += raw_idf
+            seen_terms += 1
+        if seen_terms != term_count:
+            raise Bm25ArtifactError("BM25 fitted term count mismatch")
+        duplicate_token = connection.execute(
+            "SELECT 1 FROM terms GROUP BY token HAVING COUNT(*) != 1 LIMIT 1"
+        ).fetchone()
+        if duplicate_token is not None:
+            raise Bm25ArtifactError("BM25 fitted term tokens must be unique")
+        average_idf = idf_sum / seen_terms if seen_terms else 0.0
+        if average_idf != stored_average_idf:
+            raise Bm25ArtifactError("BM25 fitted average IDF mismatch")
+        for _, _, stored_idf, _, _, _, doc_frequency in connection.execute(term_query):
+            raw_idf = math.log(document_count - doc_frequency + 0.5) - math.log(
+                doc_frequency + 0.5
+            )
+            expected_idf = EPSILON * average_idf if raw_idf < 0 else raw_idf
+            if stored_idf != expected_idf:
+                raise Bm25ArtifactError("BM25 fitted term IDF mismatch")
+
+        actual_posting_count = connection.execute(
+            "SELECT COUNT(*) FROM postings"
+        ).fetchone()[0]
+        if actual_posting_count != posting_count:
+            raise Bm25ArtifactError("BM25 fitted posting count mismatch")
+        duplicate_posting = connection.execute(
+            "SELECT 1 FROM postings GROUP BY term_id, doc_index "
+            "HAVING COUNT(*) != 1 LIMIT 1"
+        ).fetchone()
+        if duplicate_posting is not None:
+            raise Bm25ArtifactError("BM25 fitted postings must be unique")
+        invalid_postings = connection.execute(
+            "SELECT COUNT(*) FROM postings AS p "
+            "LEFT JOIN terms AS t ON t.term_id = p.term_id "
+            "LEFT JOIN documents AS d ON d.doc_index = p.doc_index "
+            "WHERE typeof(p.term_id) != 'integer' "
+            "OR typeof(p.doc_index) != 'integer' "
+            "OR typeof(p.tf) != 'integer' OR p.tf <= 0 "
+            "OR t.term_id IS NULL OR d.doc_index IS NULL"
+        ).fetchone()[0]
+        if invalid_postings:
+            raise Bm25ArtifactError("BM25 fitted postings are invalid")
+        length_rows = dict(
+            connection.execute(
+                "SELECT doc_index, SUM(tf) FROM postings GROUP BY doc_index"
+            )
+        )
+        if any(
+            length_rows.get(doc_index, 0) != doc_len
+            for doc_index, _, doc_len, *_ in document_rows
+        ):
+            raise Bm25ArtifactError(
+                "BM25 fitted document lengths do not match posting frequencies"
+            )
+        return doc_lengths, average_document_length
+    except sqlite3.Error as exc:
+        raise Bm25ArtifactError(f"cannot validate fitted BM25 SQLite: {exc}") from exc
+    finally:
+        connection.close()
 
 
 class Bm25Retriever:
-    """Load-only Retriever over the built Korean Kiwi/BM25 artifacts."""
+    """Load-only Retriever over fitted Korean Kiwi/BM25 artifacts."""
 
     def __init__(self, corpus: Corpus) -> None:
-        if not isinstance(corpus, PublishedCorpus):
-            raise TypeError("Bm25Retriever requires a PublishedCorpus")
         _require_runtime_dependencies()
-        index_root = corpus.index_root
-        manifest_path = _artifact_path(
-            index_root,
-            "bm25/manifest.json",
-            expected="bm25/manifest.json",
-        )
-        manifest = _read_json(manifest_path)
-        _require_exact_keys(
-            manifest,
-            expected=_MANIFEST_KEYS,
-            location="BM25 manifest",
-        )
-        if manifest["schema"] != BM25_MANIFEST_SCHEMA:
-            raise Bm25ArtifactError("unsupported BM25 manifest schema")
-        if manifest["method_id"] != BM25_METHOD_ID:
-            raise Bm25ArtifactError("BM25 manifest method_id mismatch")
-        if manifest["implementation_id"] != BM25_IMPLEMENTATION_ID:
-            raise Bm25ArtifactError("BM25 manifest implementation_id mismatch")
-        if canonical_config(manifest["config"]) != canonical_config(BM25_CONFIG):
-            raise Bm25ArtifactError("BM25 manifest config mismatch")
-        if manifest["corpus_fingerprint"] != corpus.fingerprint:
-            raise Bm25ArtifactError("BM25 manifest corpus fingerprint mismatch")
-        if isinstance(manifest["document_count"], bool) or manifest[
-            "document_count"
-        ] != len(corpus.doc_ids()):
-            raise Bm25ArtifactError("BM25 manifest document_count mismatch")
-
-        dictionary = _validate_dictionary_manifest(manifest["dictionary"])
-        dictionary_checksum = _require_checksum(
-            dictionary["sha256"],
-            location="dictionary.sha256",
-        )
-        dictionary_path = _artifact_path(
-            index_root,
-            dictionary["path"],
-            expected="kiwi-user-dictionary.txt",
-        )
-        if content_checksum(dictionary_path.read_bytes()) != dictionary_checksum:
-            raise Bm25ArtifactError("BM25 dictionary checksum mismatch")
-        self._tokenizer = _KiwiTokenizer(dictionary_path)
-        doc_ids, token_documents, tokens_checksum = _load_token_documents(
-            index_root,
-            manifest["tokens"],
+        descriptor = _load_descriptor(corpus)
+        _validate_evidence(descriptor, corpus=corpus)
+        doc_lengths, average_document_length = _validate_fitted(
+            descriptor,
             corpus=corpus,
-            dictionary_checksum=dictionary_checksum,
         )
-        self._doc_ids = doc_ids
-        self._token_documents = token_documents
-        bm25_class = _import_bm25_class()
-        self._ranker = (
-            bm25_class(
-                list(token_documents),
-                k1=1.5,
-                b=0.75,
-                epsilon=0.25,
-            )
-            if token_documents
-            else None
+        self._tokenizer = _KiwiTokenizer(
+            descriptor.dictionary_path,
+            descriptor.entries,
         )
         self._corpus = corpus
-        self._identity_config = {
-            "config": BM25_CONFIG,
-            "corpus_fingerprint": corpus.fingerprint,
-            "dictionary_policy_sha256": dictionary["policy_sha256"],
-            "dictionary_sha256": dictionary_checksum,
-            "kiwi_version": EXPECTED_KIWI_VERSION,
-            "rank_bm25_version": EXPECTED_RANK_BM25_VERSION,
-            "tokens_sha256": tokens_checksum,
-        }
+        self._doc_ids = tuple(corpus.doc_ids())
+        self._doc_lengths = doc_lengths
+        self._average_document_length = average_document_length
+        self._fitted_path = descriptor.fitted_path
+        self._identity_config = descriptor.identity
 
     @property
     def identity_config(self) -> dict[str, object]:
@@ -784,12 +1480,49 @@ class Bm25Retriever:
             raise TypeError("query must be a string")
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
             raise ValueError("limit must be a non-negative integer")
-        if limit == 0 or self._ranker is None:
+        if limit == 0 or not self._doc_ids:
             return Retrieval(query=query)
         query_tokens = self.tokenize(query)
         if not query_tokens:
             return Retrieval(query=query)
-        scores = self._ranker.get_scores(query_tokens)
+        numpy = _import_numpy()
+        scores = numpy.zeros(len(self._doc_ids))
+        connection = _readonly_connection(self._fitted_path)
+        try:
+            for token in query_tokens:
+                rows = connection.execute(
+                    "SELECT t.idf, p.doc_index, p.tf "
+                    "FROM terms AS t JOIN postings AS p USING(term_id) "
+                    "WHERE t.token = ? ORDER BY p.doc_index",
+                    (token,),
+                ).fetchall()
+                if not rows:
+                    continue
+                idf = rows[0][0]
+                q_freq = numpy.zeros(len(self._doc_ids), dtype=numpy.int_)
+                for row_idf, doc_index, tf in rows:
+                    if row_idf != idf:
+                        raise Bm25ArtifactError(
+                            "BM25 fitted postings contain inconsistent IDF values"
+                        )
+                    q_freq[doc_index] = tf
+                scores += idf * (
+                    q_freq
+                    * (K1 + 1)
+                    / (
+                        q_freq
+                        + K1
+                        * (
+                            1
+                            - B
+                            + B * self._doc_lengths / self._average_document_length
+                        )
+                    )
+                )
+        except sqlite3.Error as exc:
+            raise Bm25ArtifactError(f"BM25 fitted query failed: {exc}") from exc
+        finally:
+            connection.close()
         ordered = sorted(
             (
                 (float(score), doc_id)
@@ -798,18 +1531,20 @@ class Bm25Retriever:
             ),
             key=lambda item: (-item[0], str(item[1])),
         )
-        hits = tuple(
-            Hit(doc_id=doc_id, rank=rank, score=score)
-            for rank, (score, doc_id) in enumerate(ordered[:limit], start=1)
+        return Retrieval(
+            query=query,
+            hits=tuple(
+                Hit(doc_id=doc_id, rank=rank, score=score)
+                for rank, (score, doc_id) in enumerate(ordered[:limit], start=1)
+            ),
         )
-        return Retrieval(query=query, hits=hits)
 
 
 def create(
     corpus: Corpus,
     config: Mapping[str, object],
 ) -> Bm25Retriever:
-    """Registry factory with an explicit, portable implementation configuration."""
+    """Registry factory with an explicit portable implementation configuration."""
 
     if canonical_config(config) != canonical_config(BM25_CONFIG):
         raise Bm25ArtifactError("registered BM25 config does not match implementation")
@@ -823,9 +1558,11 @@ def bm25_identity(
     corpus: Corpus,
     config: Mapping[str, object],
 ) -> Mapping[str, object]:
-    """Resolve the same artifact identity used by an instantiated retriever."""
+    """Resolve checksummed artifact identity without constructing a retriever."""
 
-    return create(corpus, config).identity_config
+    if canonical_config(config) != canonical_config(BM25_CONFIG):
+        raise Bm25ArtifactError("registered BM25 config does not match implementation")
+    return _load_descriptor(corpus).identity
 
 
 registry.register(
@@ -839,19 +1576,22 @@ registry.register(
 
 __all__ = [
     "BM25_CONFIG",
+    "BM25_FITTED_SCHEMA",
     "BM25_IMPLEMENTATION_ID",
     "BM25_MANIFEST_SCHEMA",
     "BM25_METHOD_ID",
-    "BM25_TOKEN_SCHEMA",
     "Bm25ArtifactError",
     "Bm25Retriever",
+    "DICTIONARY_EVIDENCE_SCHEMA",
     "DictionaryEntry",
     "DictionaryPolicy",
     "DictionarySource",
     "build_bm25_artifacts",
     "bm25_identity",
+    "collect_dictionary_candidates",
     "collect_dictionary_evidence",
     "create",
     "create_bm25",
     "load_dictionary_policy",
+    "select_dictionary_entries",
 ]

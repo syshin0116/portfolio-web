@@ -7,7 +7,6 @@ seeds = [
   "랭그래프",
 ]
 
-# Longer alias evidence can mask a reviewed seed under Kiwi's longest-match rule.
-deny = [
-  "도커라이즈",
-]
+# Candidate collection never activates a term. If a reviewed seed is later denied,
+# deny wins without deleting its corpus evidence from the audit artifact.
+deny = []

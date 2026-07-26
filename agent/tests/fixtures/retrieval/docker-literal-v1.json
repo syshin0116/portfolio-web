@@ -5,6 +5,14 @@
     "raw_top_score": 0.9698229744875738
   },
   "content_tree_sha": "71c5bbda097cc20be0cb15ca4666fd6917f89d5f",
+  "corrected_baseline": {
+    "expected_recall_at_13": 13,
+    "implementation": "agent.retrieval.bm25:create@2",
+    "load_multi_dict": false,
+    "load_typo_dict": false,
+    "model_type": "cong",
+    "raw_top_score": 14.908095493363383
+  },
   "corpus_fingerprint": "sha256:a36065dae4d6471b25ddb71b815338e7d9d165bd177286a528761c7c63d55d10",
   "generator": "literal-substring-qrel-v1",
   "qrels": [

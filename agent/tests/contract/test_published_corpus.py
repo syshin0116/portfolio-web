@@ -70,14 +70,22 @@ def test_manifest_protects_every_derived_artifact(tmp_path: Path) -> None:
     manifest = json.loads((index / "manifest.json").read_text(encoding="utf-8"))
 
     assert manifest["schema"] == "published-corpus-manifest-v2"
+    artifact_paths = sorted(
+        path.relative_to(index).as_posix()
+        for path in index.rglob("*")
+        if path.is_file()
+        and path != index / "manifest.json"
+        and not path.is_relative_to(index / "posts")
+    )
     assert manifest["artifacts"] == [
         {
             "bytes": len((index / name).read_bytes()),
             "path": name,
             "sha256": content_checksum((index / name).read_bytes()),
         }
-        for name in ("catalog.json", "wikilinks.json")
+        for name in artifact_paths
     ]
+    assert {"catalog.json", "wikilinks.json"} <= set(artifact_paths)
 
 
 @pytest.mark.parametrize("artifact_name", ["catalog.json", "wikilinks.json"])
@@ -98,7 +106,7 @@ def test_loader_rejects_any_extra_top_level_entry(tmp_path: Path) -> None:
     index = _fixture_index(tmp_path)
     (index / "unexpected.bin").write_bytes(b"not manifested")
 
-    with pytest.raises(CorpusManifestError, match="unexpected corpus index entries"):
+    with pytest.raises(CorpusManifestError, match="unexpected.*artifact"):
         PublishedCorpus(index)
 
 

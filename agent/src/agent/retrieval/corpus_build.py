@@ -818,7 +818,7 @@ def _write_snapshot(
     output_root: Path,
     *,
     bm25_policy_path: Path | str,
-) -> str:
+) -> tuple[str, str]:
     posts_root = output_root / "posts"
     posts_root.mkdir(parents=True)
     fingerprint = corpus_fingerprint(
@@ -850,14 +850,32 @@ def _write_snapshot(
     }
     for artifact_path in DERIVED_ARTIFACT_PATHS:
         (output_root / artifact_path).write_bytes(artifact_payloads[artifact_path])
+    # P1.3 consumes this exact immutable snapshot; it never scans source content again.
+    from agent.retrieval.bm25 import build_bm25_artifacts
+
+    try:
+        bm25_build_fingerprint = build_bm25_artifacts(
+            snapshot,
+            index_root=output_root,
+            policy_path=bm25_policy_path,
+            corpus_fingerprint=fingerprint,
+        )
+    except ValueError as exc:
+        raise CorpusBuildError(f"BM25 artifact build failed: {exc}") from exc
+    artifact_paths = sorted(
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("*")
+        if path.is_file() and not path.is_relative_to(posts_root)
+    )
     manifest = {
         "artifacts": [
             {
-                "bytes": len(artifact_payloads[path]),
+                "bytes": len(payload),
                 "path": path,
-                "sha256": content_checksum(artifact_payloads[path]),
+                "sha256": content_checksum(payload),
             }
-            for path in DERIVED_ARTIFACT_PATHS
+            for path in artifact_paths
+            for payload in [(output_root / path).read_bytes()]
         ],
         "corpus_fingerprint": fingerprint,
         "document_count": len(snapshot.documents),
@@ -870,20 +888,9 @@ def _write_snapshot(
         "schema": MANIFEST_SCHEMA,
         "source_markdown_count": snapshot.source_markdown_count,
     }
+    # The root manifest inventories every finalized artifact, so it is always written last.
     _write_json(output_root / "manifest.json", manifest)
-    # P1.3 consumes this exact immutable snapshot; it never scans source content again.
-    from agent.retrieval.bm25 import build_bm25_artifacts
-
-    try:
-        build_bm25_artifacts(
-            snapshot,
-            index_root=output_root,
-            policy_path=bm25_policy_path,
-            corpus_fingerprint=fingerprint,
-        )
-    except ValueError as exc:
-        raise CorpusBuildError(f"BM25 artifact build failed: {exc}") from exc
-    return fingerprint
+    return fingerprint, bm25_build_fingerprint
 
 
 def _install_atomically(staged: Path, output_root: Path) -> None:
@@ -946,7 +953,7 @@ def build_index(
         )
     )
     try:
-        fingerprint = _write_snapshot(
+        fingerprint, bm25_build_fingerprint = _write_snapshot(
             snapshot,
             staged,
             bm25_policy_path=bm25_policy_path,
@@ -958,6 +965,11 @@ def build_index(
             bm25_fingerprint = Bm25Retriever(corpus).fingerprint
         except ValueError as exc:
             raise CorpusBuildError(f"BM25 artifact audit failed: {exc}") from exc
+        if bm25_fingerprint != bm25_build_fingerprint:
+            raise CorpusBuildError(
+                "BM25 builder/runtime fingerprint mismatch: "
+                f"{bm25_build_fingerprint} != {bm25_fingerprint}"
+            )
         _install_atomically(staged, output)
     except Exception:
         if staged.exists():

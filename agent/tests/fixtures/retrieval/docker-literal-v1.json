@@ -2,7 +2,7 @@
   "behavioral_baseline": {
     "expected_recall_at_13": 3,
     "implementation": "legacy-kiwi-nn-vv-va-sl-v1",
-    "raw_top_score": 0.9698229744875738
+    "top_doc_id": "Study/Code-Test/2024-01-17-lvl2_뒤에 있는 큰 수 찾기.md"
   },
   "content_tree_sha": "71c5bbda097cc20be0cb15ca4666fd6917f89d5f",
   "corrected_baseline": {
@@ -10,8 +10,7 @@
     "implementation": "agent.retrieval.bm25:create@2",
     "load_multi_dict": false,
     "load_typo_dict": false,
-    "model_type": "cong",
-    "raw_top_score": 14.908095493363383
+    "model_type": "cong"
   },
   "corpus_fingerprint": "sha256:a36065dae4d6471b25ddb71b815338e7d9d165bd177286a528761c7c63d55d10",
   "generator": "literal-substring-qrel-v1",

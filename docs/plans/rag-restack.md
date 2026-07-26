@@ -385,9 +385,12 @@ for **any** query including nonsense.
 manifest pinned to the corpus tree. On the published 335-document corpus, current
 `도커` recall@13 is 3/13 and the corrected method reaches 13/13; raw scores match
 `BM25Okapi` without normalisation, ties are stable by DocId, serialized/load-time results
-are identical, the fitted DB is byte-deterministic, clean registry runtime peak RSS stays
-below 550 MiB, and absent, zero-score, and negative-score terms produce no hit under the
-documented positive-score-only contract. The previously quoted macro
+are identical, the fitted DB is byte-deterministic within the pinned build target, clean
+Linux registry runtime `VmHWM` stays below 550 MiB, and absent, zero-score, and
+negative-score terms produce no hit under the documented positive-score-only contract.
+Build and evaluate the deployable artifact in the same pinned Linux x86_64 image; Kiwi's
+optimized kernels can produce small cross-architecture floating-point differences even
+when package and model versions match. The previously quoted macro
 recall 0.323 → 0.605 has no versioned queryset or qrels in the repository and is **not a
 gate**. Add a macro gate only with owner-reviewed `topic-smoke-v1` in P4.
 
@@ -440,9 +443,11 @@ if auth registration or its secret is missing.
   **Neon project regions are fixed at creation**, so this is only available now.
 - Use the **direct** endpoint, not `-pooler`: `checkpointer.setup()` issues
   `CREATE INDEX CONCURRENTLY`, which Neon documents as direct-connection-only.
-- Deploy: `--no-cpu-throttling --timeout 3600 --max-instances 1 --concurrency 20`, a
-  **dedicated minimal service account**, Postgres pool knobs turned down (Aegra opens up to
-  ~50 connections by default).
+- Deploy initially with `--memory 1Gi --no-cpu-throttling --timeout 3600
+  --max-instances 1 --concurrency 20`, a **dedicated minimal service account**, and
+  Postgres pool knobs turned down (Aegra opens up to ~50 connections by default). Cloud
+  Run's 512 MiB default is too close to the measured ~373 MiB clean Linux x86_64 BM25
+  runtime before Aegra, API, database pools, and concurrent requests are loaded.
 - Verify the owner token succeeds and an anonymous or forged token receives 401/403 on the
   exact streaming route used by the frontend, not only on a metadata route.
 - `--max-instances 1` is load-bearing: it is what makes P5's in-process guard correct.
@@ -451,8 +456,9 @@ if auth registration or its secret is missing.
 
 **Accept:** `/health` 200 and `scripts/smoke.py` pass with owner preview credentials; the
 same streaming requests without credentials or with a forged subject receive 401/403;
-cold-start-to-first-token is measured and recorded. Do not continue if graph routes are
-anonymously reachable.
+cold-start-to-first-token and full-image cold-start plus concurrency-20 memory are measured
+and recorded without approaching the 1 GiB limit. Do not continue if graph routes are
+anonymously reachable or the measured memory leaves inadequate headroom.
 
 ---
 

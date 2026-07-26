@@ -238,10 +238,17 @@ containing the literal term as the qrel:
 
 | Variant | `도커` recall@13 | raw top score |
 |---|---:|---:|
-| current implementation | **3 / 13** | 0.969823 |
+| current implementation | **3 / 13** | ≈ 0.9698 |
 | explicit `도커` dictionary entry | **13 / 13** | 7.397427 |
 | plus `VV`/`VA` removal | **13 / 13** | 7.407296 |
-| reviewed seeds + namespaced surface channel + pinned CoNg config | **13 / 13** | 14.908095 |
+| reviewed seeds + namespaced surface channel + pinned CoNg config | **13 / 13** | ≈ 14.908 |
+
+The raw-score values in this comparison are observations, not cross-platform golden
+constants. Kiwi's optimized kernels produce small architecture-specific floating-point
+differences even with pinned package and model versions. The qrel therefore gates the
+portable behavior (literal set and recall), while a separate differential test requires
+the fitted artifact to match `rank-bm25` exactly on the platform that built it. Production
+artifacts are built and evaluated in the pinned Linux x86_64 deployment image.
 
 The former 0/13 baseline was not reproducible on the pinned tree: three literal matches
 leak into the ranking, while the top result is still an unrelated coding-test post about

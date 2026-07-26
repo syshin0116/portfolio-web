@@ -8,6 +8,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -1054,7 +1055,29 @@ def test_real_docker_qrel_pins_tree_and_reproduces_baseline_then_fix(
         if qrel["query"] in corpus.read(doc_id)
     }
 
+    assert set(qrel) == {
+        "behavioral_baseline",
+        "content_tree_sha",
+        "corrected_baseline",
+        "corpus_fingerprint",
+        "generator",
+        "qrels",
+        "query",
+        "schema",
+    }
     assert qrel["schema"] == "literal-term-qrels-v1"
+    assert set(qrel["behavioral_baseline"]) == {
+        "expected_recall_at_13",
+        "implementation",
+        "top_doc_id",
+    }
+    assert set(qrel["corrected_baseline"]) == {
+        "expected_recall_at_13",
+        "implementation",
+        "load_multi_dict",
+        "load_typo_dict",
+        "model_type",
+    }
     assert qrel["content_tree_sha"] == "71c5bbda097cc20be0cb15ca4666fd6917f89d5f"
     assert qrel["corpus_fingerprint"] == corpus.fingerprint
     assert relevant == actual_literal
@@ -1092,10 +1115,8 @@ def test_real_docker_qrel_pins_tree_and_reproduces_baseline_then_fix(
     legacy_recall = len(relevant & {doc_id for _, doc_id in legacy_ranking})
     assert legacy_recall == qrel["behavioral_baseline"]["expected_recall_at_13"]
     assert legacy_recall == 3
-    assert legacy_ranking[0][0] == pytest.approx(
-        qrel["behavioral_baseline"]["raw_top_score"]
-    )
-    assert legacy_ranking[0][0] == pytest.approx(0.9698229744875738)
+    assert legacy_ranking[0][1] == qrel["behavioral_baseline"]["top_doc_id"]
+    assert legacy_ranking[0][0] > 0.0
 
     retriever = Bm25Retriever(corpus)
     result = retriever.retrieve(qrel["query"], limit=13)
@@ -1127,7 +1148,6 @@ def test_real_docker_qrel_pins_tree_and_reproduces_baseline_then_fix(
     ]
     assert result.hits[0].score is not None
     assert result.hits[0].score > 1.0
-    assert result.hits[0].score == qrel["corrected_baseline"]["raw_top_score"]
 
 
 def test_real_fitted_sqlite_stays_below_cloud_run_memory_gate(
@@ -1135,26 +1155,50 @@ def test_real_fitted_sqlite_stays_below_cloud_run_memory_gate(
 ) -> None:
     fitted = real_index / "bm25" / "fitted.sqlite3"
     assert fitted.stat().st_size < 8 * 1024 * 1024
+    measurement = textwrap.dedent(
+        f"""
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        from agent.retrieval.corpus import PublishedCorpus
+        from agent.retrieval.registry import registry
+        import agent.retrieval.bm25
+
+        corpus = PublishedCorpus(Path({str(real_index)!r}))
+        retriever = registry.servable.create("bm25", corpus)
+        assert retriever.retrieve("도커", limit=13).hits
+        if sys.platform.startswith("linux"):
+            status = dict()
+            for line in Path("/proc/self/status").read_text().splitlines():
+                key, separator, rest = line.partition(":")
+                if separator and key in {{"VmHWM", "VmRSS"}}:
+                    value, unit = rest.split()
+                    if unit != "kB":
+                        raise RuntimeError(f"unexpected Linux memory unit: {{unit}}")
+                    status[key] = int(value) / 1024
+            peak_mib = status["VmHWM"]
+            steady_mib = status["VmRSS"]
+        elif sys.platform == "darwin":
+            import resource
+            import subprocess
+
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            peak_mib = peak / 1024 / 1024
+            steady_mib = int(
+                subprocess.check_output(
+                    ["ps", "-o", "rss=", "-p", str(os.getpid())],
+                    text=True,
+                ).strip()
+            ) / 1024
+        else:
+            raise RuntimeError(f"unsupported memory-metric platform: {{sys.platform}}")
+        print(json.dumps(dict(peak_mib=peak_mib, steady_mib=steady_mib)))
+        """
+    )
     completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import json,os,resource,subprocess,sys;"
-                "from pathlib import Path;"
-                "from agent.retrieval.corpus import PublishedCorpus;"
-                "from agent.retrieval.registry import registry;"
-                "import agent.retrieval.bm25;"
-                f"c=PublishedCorpus(Path({str(real_index)!r}));"
-                "r=registry.servable.create('bm25',c);"
-                "assert r.retrieve('도커',limit=13).hits;"
-                "peak=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss;"
-                "peak=peak/1024/1024 if sys.platform=='darwin' else peak/1024;"
-                "steady=int(subprocess.check_output("
-                "['ps','-o','rss=','-p',str(os.getpid())],text=True).strip())/1024;"
-                "print(json.dumps({'peak_mib':peak,'steady_mib':steady}))"
-            ),
-        ],
+        [sys.executable, "-c", measurement],
         check=True,
         capture_output=True,
         env={**os.environ, "PYTHONHASHSEED": "0"},
@@ -1162,5 +1206,6 @@ def test_real_fitted_sqlite_stays_below_cloud_run_memory_gate(
         timeout=60,
     )
     memory = json.loads(completed.stdout)
-    assert memory["steady_mib"] < 500.0
-    assert memory["peak_mib"] < 550.0
+    assert memory["steady_mib"] <= memory["peak_mib"], memory
+    assert memory["steady_mib"] < 500.0, memory
+    assert memory["peak_mib"] < 550.0, memory

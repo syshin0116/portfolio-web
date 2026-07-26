@@ -42,8 +42,9 @@ invites re-implementing it in six months.
 Two things gate every entry in this table, both from
 [ADR-0008](../adr/0008-chatbot-is-a-rag-evaluation-testbed.md):
 
-- **A correct BM25 baseline.** The current one indexes `도커` as `크` ("big"), so every
-  comparison drawn against it is invalid, not merely pessimistic. See
+- **A correct BM25 baseline.** The legacy implementation indexed `도커` as `크` ("big"),
+  so comparisons drawn against it were invalid, not merely pessimistic. The corrected
+  fitted baseline below is now the comparison floor. See
   [the tokenizer note](#the-korean-tokenizer-problem).
 - **One retriever interface**, used by both the chat and the harness. Methods are plugs.
 
@@ -78,7 +79,7 @@ those same links turned out to be the better prize.
 
 | Method | Status | Meant to teach |
 |---|---|---|
-| BM25 + Kiwi morphological tokenization | `blocked` | The baseline everything else is measured against. Blocked on the tokenizer fix below |
+| BM25 + Kiwi morphological tokenization | `implemented` | The fitted, raw-score baseline everything else is measured against |
 | BM25 + character n-grams | `planned` | Whether morphological analysis earns its complexity, or n-grams match it on mixed-script Korean |
 | BM25 field weighting (title/tags/body) | `planned` | How much of retrieval quality is just "the title said so" |
 | Exact substring / regex | `planned` | The floor. If a method cannot beat grep, it is not earning its cost |
@@ -207,11 +208,14 @@ are fine, so the failure is silent and selective.
 
 Three independent fixes, all needed:
 
-1. **A user dictionary.** `add_user_word("도커", "NNP")` restores `['도커']`, verified.
-   Build it from high-precision corpus evidence: Hangul tags, the Hangul side of
-   corpus-attested `한글(ASCII)` aliases, and a reviewed seed/deny list. Tags alone are
-   insufficient: the current corpus has `Docker`, `LangGraph`, and `Kubernetes` tags but
-   none of their Korean forms. Record each term's provenance and checksum.
+1. **A reviewed user dictionary plus candidate evidence.** `add_user_word("도커", "NNP")`
+   restores `['도커']`, verified. Hangul tags and the Hangul side of corpus-attested
+   `한글(ASCII)` aliases are valuable candidate evidence, but they are not automatically
+   safe NNPs: the corpus also yields grammatical forms (`크다`, `없다`, `검증하고`) and
+   compounds whose components aid recall (`개발+도구`). Store all candidates and sorted
+   provenance in `dictionary-evidence.json`; activate only owner-reviewed seeds, with
+   deny taking precedence. Tags alone are insufficient: the corpus has `Docker`,
+   `LangGraph`, and `Kubernetes` tags but none of their Korean forms.
 2. **Drop `VV` and `VA` from the keep-list.** Verb and adjective stems are noise for
    retrieval, and worse, they are exactly what survives when an unknown noun is
    mis-analysed. Dropping them turns this failure into an empty result instead of a
@@ -223,15 +227,28 @@ Three independent fixes, all needed:
 The second fix is the structural one: it converts a silent failure into a loud one. The
 first two alone would fix `도커` and leave the next unknown term to fail the same way.
 
+The deployed tokenizer pins Kiwi 0.23.2, the separate `kiwipiepy-model` 0.23.0 data
+package, and the `cong` model; it keeps the default dictionary and disables the typo and
+Wikidata multiword dictionaries. The latter avoids a roughly 150 MiB runtime cost and
+preserves component tokens; the exact `s:` channel still covers a full surface form. The
+active real dictionary is exactly `도커` and `랭그래프`.
+
 **Measured effect of the fix** on the published 335-document corpus, with the 13 files
 containing the literal term as the qrel:
 
 | Variant | `도커` recall@13 | raw top score |
 |---|---:|---:|
-| current implementation | **3 / 13** | 0.969823 |
+| current implementation | **3 / 13** | ≈ 0.9698 |
 | explicit `도커` dictionary entry | **13 / 13** | 7.397427 |
 | plus `VV`/`VA` removal | **13 / 13** | 7.407296 |
-| plus namespaced surface channel | **13 / 13** | 14.907699 |
+| reviewed seeds + namespaced surface channel + pinned CoNg config | **13 / 13** | ≈ 14.908 |
+
+The raw-score values in this comparison are observations, not cross-platform golden
+constants. Kiwi's optimized kernels produce small architecture-specific floating-point
+differences even with pinned package and model versions. The qrel therefore gates the
+portable behavior (literal set and recall), while a separate differential test requires
+the fitted artifact to match `rank-bm25` exactly on the platform that built it. Production
+artifacts are built and evaluated in the pinned Linux x86_64 deployment image.
 
 The former 0/13 baseline was not reproducible on the pinned tree: three literal matches
 leak into the ranking, while the top result is still an unrelated coding-test post about
@@ -243,6 +260,13 @@ Score normalisation remains a separate bug: `score / max(scores)` forces every n
 query's top result to 1.000 and destroys method-native magnitude. Do not normalise inside
 a retriever - `rank` is authoritative, `score` stays raw, and an absent nonsense term
 should produce no hit.
+
+The corrected implementation fits `rank-bm25` exactly once during the one-scan corpus
+build, then stores document lengths, first-seen-order IDFs, and sparse postings in a
+deterministic SQLite artifact. Runtime opens it read-only and immutable and queries only
+the postings needed for the query; it neither retains raw token documents nor constructs
+`BM25Okapi`. Scores at or below zero are intentionally omitted, including common-term
+negative IDFs and the exact half-corpus zero-IDF boundary.
 
 ## Results
 

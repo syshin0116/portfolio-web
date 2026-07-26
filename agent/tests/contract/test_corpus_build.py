@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from agent.retrieval import corpus_build
-from agent.retrieval.corpus import PublishedCorpus
+from agent.retrieval.corpus import PublishedCorpus, content_checksum
 from agent.retrieval.corpus_build import (
     CorpusBuildError,
     build_index,
@@ -56,7 +59,9 @@ def _read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _artifact_doc_ids(index: Path) -> tuple[set[str], set[str], set[str], set[str]]:
+def _artifact_doc_ids(
+    index: Path,
+) -> tuple[set[str], set[str], set[str], set[str], set[str]]:
     mirrored = {
         path.relative_to(index / "posts").as_posix()
         for path in (index / "posts").rglob("*.md")
@@ -64,11 +69,14 @@ def _artifact_doc_ids(index: Path) -> tuple[set[str], set[str], set[str], set[st
     manifest = _read_json(index / "manifest.json")
     catalog = _read_json(index / "catalog.json")
     wikilinks = _read_json(index / "wikilinks.json")
+    with sqlite3.connect(index / "bm25" / "fitted.sqlite3") as connection:
+        fitted = {row[0] for row in connection.execute("SELECT doc_id FROM documents")}
     return (
         mirrored,
         {entry["doc_id"] for entry in manifest["documents"]},
         {entry["doc_id"] for entry in catalog["documents"]},
         set(wikilinks["adjacency"]),
+        fitted,
     )
 
 
@@ -124,7 +132,13 @@ def test_build_uses_one_scan_and_identical_published_set_for_every_artifact(
     }
     assert scans == 1
     assert report.document_count == len(expected)
-    assert _artifact_doc_ids(index) == (expected, expected, expected, expected)
+    assert _artifact_doc_ids(index) == (
+        expected,
+        expected,
+        expected,
+        expected,
+        expected,
+    )
     assert not (index / "posts" / "AI" / "_hidden.md").exists()
     assert not (index / "posts" / "AI" / "draft.md").exists()
 
@@ -479,6 +493,346 @@ def test_build_is_byte_deterministic_and_runtime_loadable(tmp_path: Path) -> Non
     assert PublishedCorpus(first).fingerprint == one.fingerprint
 
 
+def test_manifest_recursively_inventories_every_artifact_and_core_only_is_compatible(
+    tmp_path: Path,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(content, "AI/a.md", "title: A")
+    index = tmp_path / "index"
+    build_index(
+        content_root=content,
+        policy_path=_write_policy(tmp_path / "policy.toml"),
+        output_root=index,
+    )
+    manifest = _read_json(index / "manifest.json")
+    paths = [entry["path"] for entry in manifest["artifacts"]]
+    actual = sorted(
+        path.relative_to(index).as_posix()
+        for path in index.rglob("*")
+        if path.is_file()
+        and path != index / "manifest.json"
+        and not path.is_relative_to(index / "posts")
+    )
+
+    assert paths == actual
+    assert {"catalog.json", "wikilinks.json"} <= set(paths)
+    assert paths == sorted(set(paths))
+
+    core = tmp_path / "core-only"
+    shutil.copytree(index, core)
+    core_manifest = _read_json(core / "manifest.json")
+    core_entries = [
+        entry
+        for entry in core_manifest["artifacts"]
+        if entry["path"] in {"catalog.json", "wikilinks.json"}
+    ]
+    for entry in core_manifest["artifacts"]:
+        if entry not in core_entries:
+            (core / entry["path"]).unlink()
+    for directory in sorted(
+        (path for path in core.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        if directory != core / "posts":
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+    core_manifest["artifacts"] = core_entries
+    (core / "manifest.json").write_text(
+        json.dumps(
+            core_manifest,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert PublishedCorpus(core).doc_ids() == ("AI/a.md",)
+
+
+def test_manifest_accepts_an_arbitrary_manifested_nested_artifact(
+    tmp_path: Path,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(content, "AI/a.md", "title: A")
+    index = tmp_path / "index"
+    build_index(
+        content_root=content,
+        policy_path=_write_policy(tmp_path / "policy.toml"),
+        output_root=index,
+    )
+    extra = index / "extensions" / "nested" / "value.bin"
+    extra.parent.mkdir(parents=True)
+    extra.write_bytes(b"extension")
+    manifest = _read_json(index / "manifest.json")
+    payload = extra.read_bytes()
+    manifest["artifacts"].append(
+        {
+            "bytes": len(payload),
+            "path": "extensions/nested/value.bin",
+            "sha256": content_checksum(payload),
+        }
+    )
+    manifest["artifacts"].sort(key=lambda entry: entry["path"])
+    (index / "manifest.json").write_text(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert PublishedCorpus(index).doc_ids() == ("AI/a.md",)
+
+
+def test_manifest_requires_core_artifacts_and_canonical_sorted_unique_paths(
+    tmp_path: Path,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(content, "AI/a.md", "title: A")
+    index = tmp_path / "index"
+    build_index(
+        content_root=content,
+        policy_path=_write_policy(tmp_path / "policy.toml"),
+        output_root=index,
+    )
+    original = _read_json(index / "manifest.json")
+
+    missing_core = tmp_path / "missing-core"
+    shutil.copytree(index, missing_core)
+    missing_manifest = _read_json(missing_core / "manifest.json")
+    missing_manifest["artifacts"] = [
+        entry
+        for entry in missing_manifest["artifacts"]
+        if entry["path"] != "catalog.json"
+    ]
+    (missing_core / "manifest.json").write_text(
+        json.dumps(missing_manifest, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="missing required core.*catalog"):
+        PublishedCorpus(missing_core)
+
+    for index_number, invalid_path in enumerate(
+        (
+            "./x",
+            "../x",
+            "/x",
+            "bad\\x",
+            "posts/x",
+            "manifest.json",
+            "C:/x",
+        )
+    ):
+        mutated = tmp_path / f"invalid-{index_number}"
+        shutil.copytree(index, mutated)
+        manifest = json.loads(json.dumps(original))
+        manifest["artifacts"].append(
+            {
+                "bytes": 0,
+                "path": invalid_path,
+                "sha256": content_checksum(b""),
+            }
+        )
+        manifest["artifacts"].sort(key=lambda entry: entry["path"])
+        (mutated / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="canonical.*POSIX"):
+            PublishedCorpus(mutated)
+
+    duplicate = tmp_path / "duplicate"
+    shutil.copytree(index, duplicate)
+    duplicate_manifest = json.loads(json.dumps(original))
+    duplicate_manifest["artifacts"].append(dict(duplicate_manifest["artifacts"][0]))
+    duplicate_manifest["artifacts"].sort(key=lambda entry: entry["path"])
+    (duplicate / "manifest.json").write_text(
+        json.dumps(duplicate_manifest, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        PublishedCorpus(duplicate)
+
+    unsorted = tmp_path / "unsorted"
+    shutil.copytree(index, unsorted)
+    unsorted_manifest = json.loads(json.dumps(original))
+    unsorted_manifest["artifacts"].reverse()
+    (unsorted / "manifest.json").write_text(
+        json.dumps(unsorted_manifest, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sorted"):
+        PublishedCorpus(unsorted)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("nested-extra", "unexpected.*artifact"),
+        ("missing", "artifact.*missing"),
+        ("empty-directory", "empty.*director"),
+    ],
+)
+def test_recursive_artifact_inventory_fails_closed(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(content, "AI/a.md", "title: A")
+    index = tmp_path / "index"
+    build_index(
+        content_root=content,
+        policy_path=_write_policy(tmp_path / "policy.toml"),
+        output_root=index,
+    )
+    if mutation == "nested-extra":
+        extra = index / "bm25" / "nested" / "extra.bin"
+        extra.parent.mkdir()
+        extra.write_bytes(b"extra")
+    elif mutation == "missing":
+        (index / "bm25" / "dictionary-evidence.json").unlink()
+    else:
+        (index / "bm25" / "empty").mkdir()
+
+    with pytest.raises(ValueError, match=message):
+        PublishedCorpus(index)
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
+@pytest.mark.parametrize("target_kind", ["file", "directory"])
+def test_recursive_artifact_inventory_rejects_symlinks(
+    tmp_path: Path,
+    target_kind: str,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(content, "AI/a.md", "title: A")
+    index = tmp_path / "index"
+    build_index(
+        content_root=content,
+        policy_path=_write_policy(tmp_path / "policy.toml"),
+        output_root=index,
+    )
+    if target_kind == "file":
+        (index / "bm25" / "linked").symlink_to(
+            index / "bm25" / "dictionary-evidence.json"
+        )
+    else:
+        (index / "linked-bm25").symlink_to(index / "bm25", target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        PublishedCorpus(index)
+
+
+def test_published_corpus_returns_the_verified_resolved_index_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(content, "AI/a.md", "title: A")
+    index = tmp_path / "index"
+    build_index(
+        content_root=content,
+        policy_path=_write_policy(tmp_path / "policy.toml"),
+        output_root=index,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert PublishedCorpus(Path("index")).index_root == index.resolve()
+
+
+def test_root_manifest_is_written_only_after_bm25_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.retrieval import bm25
+
+    content = tmp_path / "content"
+    _write_post(content, "AI/a.md", "title: A")
+    index = tmp_path / "index"
+    original = bm25.build_bm25_artifacts
+
+    def wrapped(*args: object, **kwargs: object) -> str:
+        staged = kwargs["index_root"]
+        assert isinstance(staged, Path)
+        assert not (staged / "manifest.json").exists()
+        result = original(*args, **kwargs)
+        assert not (staged / "manifest.json").exists()
+        return result
+
+    monkeypatch.setattr(bm25, "build_bm25_artifacts", wrapped)
+    build_index(
+        content_root=content,
+        policy_path=_write_policy(tmp_path / "policy.toml"),
+        output_root=index,
+    )
+
+    assert (index / "manifest.json").is_file()
+
+
+def test_late_bm25_audit_failure_keeps_previous_install_byte_identical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.retrieval import bm25
+
+    content = tmp_path / "content"
+    post = _write_post(content, "AI/a.md", "title: A", "old")
+    policy = _write_policy(tmp_path / "policy.toml")
+    index = tmp_path / "index"
+    build_index(content_root=content, policy_path=policy, output_root=index)
+    before = _tree_digest(index)
+    post.write_text("---\ntitle: A\n---\nnew\n", encoding="utf-8")
+
+    class BrokenAudit:
+        def __init__(self, corpus: object) -> None:
+            raise bm25.Bm25ArtifactError("injected late audit failure")
+
+    monkeypatch.setattr(bm25, "Bm25Retriever", BrokenAudit)
+    with pytest.raises(CorpusBuildError, match="late audit failure"):
+        build_index(content_root=content, policy_path=policy, output_root=index)
+
+    assert _tree_digest(index) == before
+
+
+def test_builder_runtime_fingerprint_mismatch_keeps_previous_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.retrieval import bm25
+
+    content = tmp_path / "content"
+    post = _write_post(content, "AI/a.md", "title: A", "old")
+    policy = _write_policy(tmp_path / "policy.toml")
+    index = tmp_path / "index"
+    build_index(content_root=content, policy_path=policy, output_root=index)
+    before = _tree_digest(index)
+    post.write_text("---\ntitle: A\n---\nnew\n", encoding="utf-8")
+    original = bm25.build_bm25_artifacts
+
+    def mismatching_fingerprint(*args: object, **kwargs: object) -> str:
+        original(*args, **kwargs)
+        return "sha256:" + ("0" * 64)
+
+    monkeypatch.setattr(
+        bm25,
+        "build_bm25_artifacts",
+        mismatching_fingerprint,
+    )
+    with pytest.raises(CorpusBuildError, match="builder/runtime fingerprint mismatch"):
+        build_index(content_root=content, policy_path=policy, output_root=index)
+
+    assert _tree_digest(index) == before
+
+
 def test_wikilinks_emit_resolved_deterministic_bidirectional_graph(
     tmp_path: Path,
 ) -> None:
@@ -671,7 +1025,7 @@ def test_real_corpus_build_is_exactly_the_nuartz_published_335(
     sets = _artifact_doc_ids(index)
     assert report.document_count == 335
     assert all(len(doc_ids) == 335 for doc_ids in sets)
-    assert sets[0] == sets[1] == sets[2] == sets[3]
+    assert sets[0] == sets[1] == sets[2] == sets[3] == sets[4]
     assert "AI/pdf-parser/_index.md" not in sets[0]
     assert "Events/2024-07-24-\u200bMLOps Now - LLM in Production.md" in sets[0]
 

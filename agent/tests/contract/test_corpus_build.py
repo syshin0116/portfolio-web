@@ -165,6 +165,33 @@ def test_draft_and_private_when_present_require_strict_booleans(
 
 
 @pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("draft", "yes", "draft.*boolean"),
+        ("draft", "off", "draft.*boolean"),
+        ("private", "on", "private.*boolean"),
+        ("published", "no", "published.*date-like"),
+    ],
+)
+def test_yaml_1_1_boolean_words_remain_strings_and_fail_strict_type_validation(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(content, "AI/post.md", f"{field}: {value}")
+    policy = _write_policy(tmp_path / "policy.toml")
+
+    with pytest.raises(CorpusBuildError, match=message):
+        build_index(
+            content_root=content,
+            policy_path=policy,
+            output_root=tmp_path / "index",
+        )
+
+
+@pytest.mark.parametrize(
     "value",
     [
         "null",
@@ -285,6 +312,45 @@ def test_frontmatter_after_a_leading_blank_is_an_allowlisted_legacy_document(
     assert (index / "posts" / "Projects" / "legacy.md").read_text() == raw
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "\ufeff---\ndraft: true\n---\nbody\n",
+        "---   \ndraft: true\n---\nbody\n",
+    ],
+    ids=["utf8-bom", "trailing-opener-whitespace"],
+)
+def test_gray_matter_compatible_openers_apply_flags_and_make_allowlist_stale(
+    tmp_path: Path,
+    raw: str,
+) -> None:
+    content = tmp_path / "content"
+    _write_raw(content, "wiki/legacy.md", raw)
+    empty_policy = _write_policy(tmp_path / "empty-policy.toml")
+    index = tmp_path / "index"
+
+    report = build_index(
+        content_root=content,
+        policy_path=empty_policy,
+        output_root=index,
+    )
+
+    assert report.document_count == 0
+    assert _read_json(index / "manifest.json")["excluded_documents"] == [
+        {"doc_id": "wiki/legacy.md", "reason": "draft"}
+    ]
+
+    with pytest.raises(CorpusBuildError, match="stale.*wiki/legacy.md"):
+        build_index(
+            content_root=content,
+            policy_path=_write_policy(
+                tmp_path / "stale-policy.toml",
+                "wiki/legacy.md",
+            ),
+            output_root=tmp_path / "stale-index",
+        )
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
 @pytest.mark.parametrize("kind", ["broken", "out-of-tree"])
 def test_broken_and_out_of_tree_symlinks_fail(
@@ -328,11 +394,43 @@ def test_in_tree_symlink_is_copied_as_a_regular_mirror_document(
     assert not mirrored.is_symlink()
 
 
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
+def test_source_replaced_by_out_of_tree_symlink_after_discovery_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = tmp_path / "content"
+    victim = _write_post(content, "AI/victim.md", "title: Original")
+    outside = _write_post(tmp_path, "outside.md", "title: Outside", "OUTSIDE_SECRET")
+    policy = _write_policy(tmp_path / "policy.toml")
+    real_discover = corpus_build._discover_markdown
+
+    def discover_then_swap(content_root: Path) -> object:
+        candidates = real_discover(content_root)
+        victim.unlink()
+        victim.symlink_to(outside)
+        return candidates
+
+    monkeypatch.setattr(corpus_build, "_discover_markdown", discover_then_swap)
+
+    with pytest.raises(CorpusBuildError, match="changed during corpus scan"):
+        build_index(
+            content_root=content,
+            policy_path=policy,
+            output_root=tmp_path / "index",
+        )
+    assert not (tmp_path / "index").exists()
+
+
 def test_portable_path_validation_rejects_nfc_and_casefold_collisions() -> None:
     with pytest.raises(CorpusBuildError, match="NFC/case-fold collision"):
         validate_portable_doc_ids(("AI/Café.md", "AI/Cafe\u0301.md"))
     with pytest.raises(CorpusBuildError, match="NFC/case-fold collision"):
         validate_portable_doc_ids(("AI/straße.md", "AI/strasse.md"))
+    with pytest.raises(CorpusBuildError, match="file/directory collision"):
+        validate_portable_doc_ids(("AI/foo.md", "ai/foo.md/bar.md"))
+    with pytest.raises(CorpusBuildError, match="file/directory collision"):
+        validate_portable_doc_ids(("ai/foo.md/bar.md", "AI/foo.md"))
 
 
 def test_unicode_paths_and_raw_bytes_are_preserved(tmp_path: Path) -> None:
@@ -432,6 +530,76 @@ def test_wikilinks_emit_resolved_deterministic_bidirectional_graph(
     ]
 
 
+def test_wikilinks_resolve_explicit_then_relative_then_unique_global(
+    tmp_path: Path,
+) -> None:
+    content = tmp_path / "content"
+    _write_post(
+        content,
+        "Series/overview.md",
+        "title: Overview",
+        "[[content/Projects/Explicit]]\n"
+        "[[Target]]\n"
+        "[[Unique Global]]\n"
+        "[[Clash|ambiguous alias]]\n",
+    )
+    _write_post(content, "Projects/Explicit.md", "title: Root Explicit")
+    _write_post(
+        content,
+        "Series/content/Projects/Explicit.md",
+        "title: Relative Explicit",
+    )
+    _write_post(content, "Series/Target.md", "title: Series Target")
+    _write_post(content, "Other/Target.md", "title: Other Target")
+    _write_post(content, "Global/only.md", "title: Unique Global")
+    _write_post(content, "A/Clash.md", "title: A Clash")
+    _write_post(content, "B/Clash.md", "title: B Clash")
+    policy = _write_policy(tmp_path / "policy.toml")
+    index = tmp_path / "index"
+
+    build_index(content_root=content, policy_path=policy, output_root=index)
+
+    graph = _read_json(index / "wikilinks.json")
+    assert graph["schema"] == "published-wikilinks-v2"
+    assert graph["links"] == [
+        {
+            "alias": None,
+            "source_doc_id": "Series/overview.md",
+            "target": "content/Projects/Explicit",
+            "target_doc_id": "Projects/Explicit.md",
+        },
+        {
+            "alias": None,
+            "source_doc_id": "Series/overview.md",
+            "target": "Target",
+            "target_doc_id": "Series/Target.md",
+        },
+        {
+            "alias": None,
+            "source_doc_id": "Series/overview.md",
+            "target": "Unique Global",
+            "target_doc_id": "Global/only.md",
+        },
+    ]
+    assert graph["excluded_links"] == [
+        {
+            "alias": "ambiguous alias",
+            "candidates": ["A/Clash.md", "B/Clash.md"],
+            "reason": "ambiguous-target",
+            "source_doc_id": "Series/overview.md",
+            "target": "Clash",
+        }
+    ]
+    clash = next(item for item in graph["ambiguous_names"] if item["name"] == "clash")
+    assert clash == {
+        "candidates": ["A/Clash.md", "B/Clash.md"],
+        "name": "clash",
+    }
+    assert graph["edge_count"] == 3
+    assert graph["adjacency"]["A/Clash.md"] == []
+    assert graph["adjacency"]["B/Clash.md"] == []
+
+
 def test_cli_builds_to_an_explicit_output_and_reports_json(tmp_path: Path) -> None:
     content = tmp_path / "content"
     _write_post(content, "AI/public.md", "draft: false")
@@ -462,6 +630,8 @@ def test_cli_builds_to_an_explicit_output_and_reports_json(tmp_path: Path) -> No
     assert report["source_markdown_count"] == 1
     assert Path(report["output"]) == index
     assert (index / "posts" / "AI" / "public.md").is_file()
+    before = _tree_digest(index)
+    _write_post(content, "AI/second.md", "draft: false")
 
     mismatch = subprocess.run(
         [
@@ -474,7 +644,7 @@ def test_cli_builds_to_an_explicit_output_and_reports_json(tmp_path: Path) -> No
             "--output",
             str(index),
             "--expect-document-count",
-            "2",
+            "1",
         ],
         check=False,
         capture_output=True,
@@ -482,7 +652,9 @@ def test_cli_builds_to_an_explicit_output_and_reports_json(tmp_path: Path) -> No
         timeout=30,
     )
     assert mismatch.returncode == 1
-    assert "expected 2 published documents, built 1" in mismatch.stderr
+    assert "expected 1 published documents, built 2" in mismatch.stderr
+    assert _tree_digest(index) == before
+    assert not (index / "posts" / "AI" / "second.md").exists()
 
 
 def test_real_corpus_build_is_exactly_the_nuartz_published_335(
@@ -512,9 +684,29 @@ def test_real_corpus_build_is_exactly_the_nuartz_published_335(
         }
     ]
     graph = _read_json(index / "wikilinks.json")
-    assert graph["edge_count"] == 226
-    assert graph["nodes_with_edges"] == 122
-    assert graph["isolated_node_count"] == 213
+    assert graph["edge_count"] == 213
+    assert graph["nodes_with_edges"] == 115
+    assert graph["isolated_node_count"] == 220
+    assert {
+        "alias": "01. 출발점 - Quartz의 한계에서 시작된 여정",
+        "source_doc_id": "Projects/Nuartz/00-Overview.md",
+        "target": "01-Motivation",
+        "target_doc_id": "Projects/Nuartz/01-Motivation.md",
+    } in graph["links"]
+    assert {
+        "alias": None,
+        "source_doc_id": "wiki/index.md",
+        "target": "docker",
+        "target_doc_id": "wiki/docker.md",
+    } in graph["links"]
+    ambiguous = [
+        occurrence
+        for occurrence in graph["excluded_links"]
+        if occurrence["reason"] == "ambiguous-target"
+    ]
+    assert len(ambiguous) == 7
+    assert all(len(occurrence["candidates"]) > 1 for occurrence in ambiguous)
+    assert all("target_doc_id" not in occurrence for occurrence in ambiguous)
     alias_occurrences = [
         occurrence
         for field in ("links", "unresolved", "excluded_links")

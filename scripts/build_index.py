@@ -51,20 +51,10 @@ def main(argv: list[str] | None = None) -> int:
             content_root=args.content_root,
             policy_path=args.policy,
             output_root=args.output,
+            expected_document_count=args.expect_document_count,
         )
     except CorpusBuildError as exc:
         print(f"corpus build failed: {exc}", file=sys.stderr)
-        return 1
-    if (
-        args.expect_document_count is not None
-        and report.document_count != args.expect_document_count
-    ):
-        print(
-            "corpus build failed: expected "
-            f"{args.expect_document_count} published documents, "
-            f"built {report.document_count}",
-            file=sys.stderr,
-        )
         return 1
     print(
         json.dumps(

@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import math
 import os
+import posixpath
 import re
 import shutil
+import stat
 import tempfile
 import tomllib
 import unicodedata
@@ -20,6 +22,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from agent.retrieval.corpus import (
+    DERIVED_ARTIFACT_PATHS,
     MANIFEST_SCHEMA,
     PublishedCorpus,
     content_checksum,
@@ -28,7 +31,7 @@ from agent.retrieval.corpus import (
 from agent.retrieval.protocol import DocId
 
 CATALOG_SCHEMA = "published-corpus-catalog-v1"
-WIKILINK_SCHEMA = "published-wikilinks-v1"
+WIKILINK_SCHEMA = "published-wikilinks-v2"
 POLICY_SCHEMA_VERSION = 1
 
 _DATE_LIKE_PATTERN = re.compile(
@@ -41,6 +44,7 @@ _DATE_LIKE_PATTERN = re.compile(
 _DATE_PREFIX_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+)$")
 _FENCE_PATTERN = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 _WIKILINK_PATTERN = re.compile(r"(?<!!)\[\[([^\[\]|]+?)(?:\|([^\[\]]*?))?\]\]")
+_YAML_1_2_BOOLEAN_PATTERN = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
 
 
 class CorpusBuildError(ValueError):
@@ -53,6 +57,19 @@ class _DuplicateKeyError(ValueError):
 
 class _StrictSafeLoader(yaml.SafeLoader):
     pass
+
+
+_StrictSafeLoader.yaml_implicit_resolvers = {
+    key: [
+        (tag, pattern) for tag, pattern in resolvers if tag != "tag:yaml.org,2002:bool"
+    ]
+    for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_StrictSafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    _YAML_1_2_BOOLEAN_PATTERN,
+    list("tTfF"),
+)
 
 
 def _construct_unique_mapping(
@@ -116,6 +133,9 @@ class BuildReport:
 class _SourceCandidate:
     doc_id: DocId
     path: Path
+    read_path: Path
+    logical_version: tuple[int, int, int, int, int, int]
+    resolved_version: tuple[int, int, int, int, int, int]
 
 
 def _portable_path_key(doc_id: str) -> str:
@@ -125,16 +145,34 @@ def _portable_path_key(doc_id: str) -> str:
 def validate_portable_doc_ids(doc_ids: Iterable[DocId | str]) -> None:
     """Reject paths that collapse together on case-folding/NFC filesystems."""
 
-    seen: dict[str, DocId] = {}
+    seen_files: dict[tuple[str, ...], DocId] = {}
+    required_directories: dict[tuple[str, ...], DocId] = {}
     for value in doc_ids:
         doc_id = DocId(value)
-        key = _portable_path_key(str(doc_id))
-        previous = seen.get(key)
+        key = tuple(
+            _portable_path_key(part) for part in PurePosixPath(str(doc_id)).parts
+        )
+        previous = seen_files.get(key)
         if previous is not None and previous != doc_id:
             raise CorpusBuildError(
                 f"NFC/case-fold collision between {previous!s} and {doc_id!s}"
             )
-        seen[key] = doc_id
+        directory_owner = required_directories.get(key)
+        if directory_owner is not None:
+            raise CorpusBuildError(
+                "NFC/case-fold file/directory collision between "
+                f"{doc_id!s} and {directory_owner!s}"
+            )
+        for length in range(1, len(key)):
+            prefix = key[:length]
+            file_owner = seen_files.get(prefix)
+            if file_owner is not None:
+                raise CorpusBuildError(
+                    "NFC/case-fold file/directory collision between "
+                    f"{file_owner!s} and {doc_id!s}"
+                )
+            required_directories.setdefault(prefix, doc_id)
+        seen_files[key] = doc_id
 
 
 def _load_policy(path: Path) -> tuple[int, frozenset[DocId]]:
@@ -187,6 +225,48 @@ def _is_within(path: Path, root: Path) -> bool:
     return path == root or path.is_relative_to(root)
 
 
+def _stat_version(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        stat.S_IFMT(value.st_mode),
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _source_candidate(
+    *,
+    doc_id: DocId,
+    path: Path,
+    resolved_root: Path,
+) -> _SourceCandidate:
+    try:
+        logical_stat = path.lstat()
+        read_path = path.resolve(strict=True)
+        if not _is_within(read_path, resolved_root):
+            raise CorpusBuildError(f"out-of-tree symlink in content tree: {doc_id}")
+        resolved_stat = read_path.stat(follow_symlinks=False)
+    except CorpusBuildError:
+        raise
+    except OSError as exc:
+        raise CorpusBuildError(
+            f"source changed during corpus scan: {doc_id}: {exc}"
+        ) from exc
+    if not stat.S_ISREG(resolved_stat.st_mode):
+        raise CorpusBuildError(
+            f"source changed during corpus scan: {doc_id} is not a regular file"
+        )
+    return _SourceCandidate(
+        doc_id=doc_id,
+        path=path,
+        read_path=read_path,
+        logical_version=_stat_version(logical_stat),
+        resolved_version=_stat_version(resolved_stat),
+    )
+
+
 def _discover_markdown(content_root: Path) -> tuple[_SourceCandidate, ...]:
     try:
         resolved_root = content_root.resolve(strict=True)
@@ -237,14 +317,22 @@ def _discover_markdown(content_root: Path) -> tuple[_SourceCandidate, ...]:
                     continue
                 if target.is_file() and logical_path.suffix == ".md":
                     candidates.append(
-                        _SourceCandidate(DocId(logical_path.as_posix()), entry_path)
+                        _source_candidate(
+                            doc_id=DocId(logical_path.as_posix()),
+                            path=entry_path,
+                            resolved_root=resolved_root,
+                        )
                     )
                 continue
             if entry.is_dir(follow_symlinks=False):
                 walk(entry_path, logical, descendants)
             elif entry.is_file(follow_symlinks=False) and logical_path.suffix == ".md":
                 candidates.append(
-                    _SourceCandidate(DocId(logical_path.as_posix()), entry_path)
+                    _source_candidate(
+                        doc_id=DocId(logical_path.as_posix()),
+                        path=entry_path,
+                        resolved_root=resolved_root,
+                    )
                 )
 
     walk(content_root, (), frozenset())
@@ -253,16 +341,64 @@ def _discover_markdown(content_root: Path) -> tuple[_SourceCandidate, ...]:
     return tuple(candidates)
 
 
+def _read_source(candidate: _SourceCandidate) -> bytes:
+    try:
+        if _stat_version(candidate.path.lstat()) != candidate.logical_version:
+            raise CorpusBuildError(
+                f"{candidate.doc_id}: source changed during corpus scan"
+            )
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(candidate.read_path, flags)
+        with os.fdopen(descriptor, "rb") as source:
+            opened_version = _stat_version(os.fstat(source.fileno()))
+            if opened_version != candidate.resolved_version:
+                raise CorpusBuildError(
+                    f"{candidate.doc_id}: source changed during corpus scan"
+                )
+            payload = source.read()
+            if _stat_version(os.fstat(source.fileno())) != opened_version:
+                raise CorpusBuildError(
+                    f"{candidate.doc_id}: source changed while being read"
+                )
+        if _stat_version(candidate.path.lstat()) != candidate.logical_version:
+            raise CorpusBuildError(
+                f"{candidate.doc_id}: source changed during corpus scan"
+            )
+    except CorpusBuildError:
+        raise
+    except OSError as exc:
+        raise CorpusBuildError(
+            f"{candidate.doc_id}: source changed during corpus scan: {exc}"
+        ) from exc
+    return payload
+
+
 def _split_frontmatter(
     text: str,
     *,
     doc_id: DocId,
 ) -> tuple[str, str] | None:
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].rstrip("\r\n") != "---":
+    parse_text = text.removeprefix("\ufeff")
+    lines = parse_text.splitlines(keepends=True)
+    if not lines:
         return None
+    opener = lines[0].rstrip("\r\n")
+    if not opener.startswith("---") or opener.startswith("----"):
+        return None
+    language = opener[3:].strip()
+    if language not in {"", "yaml"}:
+        raise CorpusBuildError(
+            f"{doc_id}: unsupported gray-matter frontmatter language {language!r}"
+        )
     for index, line in enumerate(lines[1:], start=1):
-        if line.rstrip("\r\n") == "---":
+        delimiter = line.rstrip("\r\n")
+        if delimiter.startswith("---"):
+            if delimiter[3:].strip():
+                raise CorpusBuildError(
+                    f"{doc_id}: unsupported YAML closing delimiter {delimiter!r}"
+                )
             return "".join(lines[1:index]), "".join(lines[index + 1 :])
     raise CorpusBuildError(f"{doc_id}: YAML frontmatter has no closing delimiter")
 
@@ -404,12 +540,10 @@ def scan_corpus(
             excluded.append(ExcludedDocument(doc_id, "basename-leading-underscore"))
             continue
         try:
-            raw = candidate.path.read_bytes()
+            raw = _read_source(candidate)
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise CorpusBuildError(f"{doc_id}: source is not valid UTF-8") from exc
-        except OSError as exc:
-            raise CorpusBuildError(f"{doc_id}: cannot read source: {exc}") from exc
 
         frontmatter = _split_frontmatter(text, doc_id=doc_id)
         if frontmatter is None:
@@ -508,13 +642,27 @@ def _lookup_key(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
+def _source_relative_target(
+    source_doc_id: DocId,
+    target: str,
+    *,
+    path_lookup: Mapping[str, DocId],
+) -> DocId | None:
+    if target.startswith("/") or target.startswith("content/"):
+        return None
+    source_parent = PurePosixPath(str(source_doc_id)).parent.as_posix()
+    relative = posixpath.normpath(posixpath.join(source_parent, target))
+    if relative == ".." or relative.startswith("../") or relative.startswith("/"):
+        return None
+    return path_lookup.get(_lookup_key(relative))
+
+
 def _wikilink_graph(
     documents: tuple[SourceDocument, ...],
     *,
     fingerprint: str,
 ) -> dict[str, object]:
     path_lookup: dict[str, DocId] = {}
-    name_lookup: dict[str, DocId] = {}
     name_candidates: dict[str, list[DocId]] = {}
 
     for document in documents:
@@ -544,7 +692,6 @@ def _wikilink_graph(
         ]
         for name in names:
             key = _lookup_key(name)
-            name_lookup.setdefault(key, document.doc_id)
             candidates = name_candidates.setdefault(key, [])
             if document.doc_id not in candidates:
                 candidates.append(document.doc_id)
@@ -565,7 +712,27 @@ def _wikilink_graph(
             alias = alias_value.strip() if alias_value is not None else None
             target_doc_id = path_lookup.get(_lookup_key(target))
             if target_doc_id is None:
-                target_doc_id = name_lookup.get(_lookup_key(target))
+                target_doc_id = _source_relative_target(
+                    document.doc_id,
+                    target,
+                    path_lookup=path_lookup,
+                )
+            candidates = name_candidates.get(_lookup_key(target), [])
+            if target_doc_id is None and len(candidates) == 1:
+                target_doc_id = candidates[0]
+            if target_doc_id is None and len(candidates) > 1:
+                excluded_links.append(
+                    {
+                        "alias": alias,
+                        "candidates": [
+                            str(candidate) for candidate in sorted(candidates, key=str)
+                        ],
+                        "reason": "ambiguous-target",
+                        "source_doc_id": str(document.doc_id),
+                        "target": target,
+                    }
+                )
+                continue
             if target_doc_id is None:
                 unresolved.append(
                     {
@@ -601,9 +768,8 @@ def _wikilink_graph(
 
     ambiguous_names = [
         {
-            "candidates": [str(candidate) for candidate in candidates],
+            "candidates": [str(candidate) for candidate in sorted(candidates, key=str)],
             "name": name,
-            "selected": str(name_lookup[name]),
         }
         for name, candidates in sorted(name_candidates.items())
         if len(candidates) > 1
@@ -628,8 +794,8 @@ def _wikilink_graph(
     }
 
 
-def _write_json(path: Path, payload: object) -> None:
-    path.write_text(
+def _json_bytes(payload: object) -> bytes:
+    return (
         json.dumps(
             payload,
             ensure_ascii=False,
@@ -637,9 +803,12 @@ def _write_json(path: Path, payload: object) -> None:
             indent=2,
             sort_keys=True,
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.write_bytes(_json_bytes(payload))
 
 
 def _write_snapshot(snapshot: CorpusSnapshot, output_root: Path) -> str:
@@ -661,7 +830,28 @@ def _write_snapshot(snapshot: CorpusSnapshot, output_root: Path) -> str:
             }
         )
 
+    catalog = {
+        "corpus_fingerprint": fingerprint,
+        "document_count": len(snapshot.documents),
+        "documents": [_catalog_entry(document) for document in snapshot.documents],
+        "schema": CATALOG_SCHEMA,
+    }
+    graph = _wikilink_graph(snapshot.documents, fingerprint=fingerprint)
+    artifact_payloads = {
+        "catalog.json": _json_bytes(catalog),
+        "wikilinks.json": _json_bytes(graph),
+    }
+    for artifact_path in DERIVED_ARTIFACT_PATHS:
+        (output_root / artifact_path).write_bytes(artifact_payloads[artifact_path])
     manifest = {
+        "artifacts": [
+            {
+                "bytes": len(artifact_payloads[path]),
+                "path": path,
+                "sha256": content_checksum(artifact_payloads[path]),
+            }
+            for path in DERIVED_ARTIFACT_PATHS
+        ],
         "corpus_fingerprint": fingerprint,
         "document_count": len(snapshot.documents),
         "documents": manifest_documents,
@@ -673,16 +863,7 @@ def _write_snapshot(snapshot: CorpusSnapshot, output_root: Path) -> str:
         "schema": MANIFEST_SCHEMA,
         "source_markdown_count": snapshot.source_markdown_count,
     }
-    catalog = {
-        "corpus_fingerprint": fingerprint,
-        "document_count": len(snapshot.documents),
-        "documents": [_catalog_entry(document) for document in snapshot.documents],
-        "schema": CATALOG_SCHEMA,
-    }
-    graph = _wikilink_graph(snapshot.documents, fingerprint=fingerprint)
     _write_json(output_root / "manifest.json", manifest)
-    _write_json(output_root / "catalog.json", catalog)
-    _write_json(output_root / "wikilinks.json", graph)
     return fingerprint
 
 
@@ -716,10 +897,26 @@ def build_index(
     content_root: Path | str,
     policy_path: Path | str,
     output_root: Path | str,
+    expected_document_count: int | None = None,
 ) -> BuildReport:
     """Build all P1.2 artifacts from one validated source snapshot."""
 
+    if expected_document_count is not None and (
+        isinstance(expected_document_count, bool)
+        or not isinstance(expected_document_count, int)
+        or expected_document_count < 0
+    ):
+        raise CorpusBuildError("expected document count must be a non-negative integer")
     snapshot = scan_corpus(content_root=content_root, policy_path=policy_path)
+    document_count = len(snapshot.documents)
+    if (
+        expected_document_count is not None
+        and document_count != expected_document_count
+    ):
+        raise CorpusBuildError(
+            f"expected {expected_document_count} published documents, "
+            f"built {document_count}"
+        )
     output = Path(output_root)
     output.parent.mkdir(parents=True, exist_ok=True)
     staged = Path(
@@ -737,7 +934,7 @@ def build_index(
             shutil.rmtree(staged)
         raise
     return BuildReport(
-        document_count=len(snapshot.documents),
+        document_count=document_count,
         source_markdown_count=snapshot.source_markdown_count,
         fingerprint=fingerprint,
         output_root=output,

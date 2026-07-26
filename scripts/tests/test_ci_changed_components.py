@@ -40,6 +40,18 @@ class PathClassificationTests(unittest.TestCase):
                     changes.classify_paths([path]),
                 )
 
+    def test_nuartz_publication_semantics_paths_run_every_component(self) -> None:
+        for path in (
+            "web/package.json",
+            "web/bun.lock",
+            "web/scripts/prebuild.ts",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": True, "agent": True, "eval": True},
+                    changes.classify_paths([path]),
+                )
+
     def test_root_runtime_and_scripts_run_agent_and_eval(self) -> None:
         for path in ("aegra.json", "Dockerfile", "scripts/build_index.py"):
             with self.subTest(path=path):
@@ -70,7 +82,7 @@ class DetectionTests(unittest.TestCase):
             result = changes.detect("pull_request", "a" * 40, "b" * 40)
         changed_paths.assert_called_once_with("a" * 40, "b" * 40)
         self.assertEqual(
-            {"web": True, "agent": False, "eval": False},
+            {"web": True, "agent": True, "eval": True},
             result,
         )
 

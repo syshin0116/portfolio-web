@@ -11,11 +11,16 @@ from pathlib import Path
 
 from agent.retrieval.protocol import DocId
 
-MANIFEST_SCHEMA = "published-corpus-manifest-v1"
+MANIFEST_SCHEMA = "published-corpus-manifest-v2"
 _FINGERPRINT_SCHEMA = "published-corpus-fingerprint-v1"
 _SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+DERIVED_ARTIFACT_PATHS = ("catalog.json", "wikilinks.json")
+_EXPECTED_TOP_LEVEL_ENTRIES = frozenset(
+    {"manifest.json", "posts", *DERIVED_ARTIFACT_PATHS}
+)
 _MANIFEST_KEYS = frozenset(
     {
+        "artifacts",
         "corpus_fingerprint",
         "document_count",
         "documents",
@@ -25,6 +30,7 @@ _MANIFEST_KEYS = frozenset(
         "source_markdown_count",
     }
 )
+_ARTIFACT_KEYS = frozenset({"bytes", "path", "sha256"})
 _DOCUMENT_KEYS = frozenset({"bytes", "doc_id", "sha256"})
 _EXCLUDED_DOCUMENT_KEYS = frozenset({"doc_id", "reason"})
 _EXCLUSION_REASONS = frozenset(
@@ -44,6 +50,13 @@ class CorpusManifestError(ValueError):
 @dataclass(frozen=True, slots=True)
 class _ManifestDocument:
     doc_id: DocId
+    byte_count: int
+    checksum: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ManifestArtifact:
+    path: str
     byte_count: int
     checksum: str
 
@@ -159,6 +172,27 @@ def _parse_manifest_document(value: object, *, index: int) -> _ManifestDocument:
     return _ManifestDocument(doc_id, byte_count, checksum)
 
 
+def _parse_manifest_artifact(value: object, *, index: int) -> _ManifestArtifact:
+    location = f"manifest.artifacts[{index}]"
+    if not isinstance(value, dict):
+        raise CorpusManifestError(f"{location} must be an object")
+    _require_exact_keys(value, expected=_ARTIFACT_KEYS, location=location)
+    path = value["path"]
+    byte_count = value["bytes"]
+    checksum = value["sha256"]
+    if not isinstance(path, str):
+        raise CorpusManifestError(f"{location}.path must be a string")
+    if (
+        isinstance(byte_count, bool)
+        or not isinstance(byte_count, int)
+        or byte_count < 0
+    ):
+        raise CorpusManifestError(f"{location}.bytes must be a non-negative integer")
+    if not isinstance(checksum, str) or _SHA256_PATTERN.fullmatch(checksum) is None:
+        raise CorpusManifestError(f"{location}.sha256 must be a sha256 checksum")
+    return _ManifestArtifact(path, byte_count, checksum)
+
+
 def _parse_excluded_document(value: object, *, index: int) -> tuple[DocId, str]:
     location = f"manifest.excluded_documents[{index}]"
     if not isinstance(value, dict):
@@ -180,7 +214,7 @@ def _parse_excluded_document(value: object, *, index: int) -> tuple[DocId, str]:
         raise CorpusManifestError(f"{location}.doc_id must identify a Markdown file")
     if not isinstance(reason, str) or reason not in _EXCLUSION_REASONS:
         raise CorpusManifestError(
-            f"{location}.reason is not a schema-v1 exclusion reason"
+            f"{location}.reason is not a supported exclusion reason"
         )
     return doc_id, reason
 
@@ -198,6 +232,39 @@ class PublishedCorpus:
             raise CorpusManifestError(
                 f"corpus index root must not be a symlink: {self._index_root}"
             )
+        try:
+            resolved_index_root = self._index_root.resolve(strict=True)
+            entries = tuple(self._index_root.iterdir())
+        except OSError as exc:
+            raise CorpusManifestError(
+                f"cannot inspect corpus index root {self._index_root}: {exc}"
+            ) from exc
+        if not resolved_index_root.is_dir():
+            raise CorpusManifestError(
+                f"corpus index root is not a directory: {self._index_root}"
+            )
+        for entry in entries:
+            if entry.is_symlink():
+                raise CorpusManifestError(
+                    f"corpus index top-level entry must not be a symlink: {entry.name}"
+                )
+        actual_top_level = {entry.name for entry in entries}
+        unexpected_top_level = sorted(actual_top_level - _EXPECTED_TOP_LEVEL_ENTRIES)
+        missing_top_level = sorted(_EXPECTED_TOP_LEVEL_ENTRIES - actual_top_level)
+        if unexpected_top_level:
+            raise CorpusManifestError(
+                "unexpected corpus index entries: " + ", ".join(unexpected_top_level)
+            )
+        if missing_top_level:
+            raise CorpusManifestError(
+                "corpus index is missing required entries: "
+                + ", ".join(missing_top_level)
+            )
+        for name in ("manifest.json", *DERIVED_ARTIFACT_PATHS):
+            if not (self._index_root / name).is_file():
+                raise CorpusManifestError(
+                    f"corpus index entry must be a regular file: {name}"
+                )
         self._posts_root = self._index_root / "posts"
         manifest = _load_manifest(self._index_root / "manifest.json")
         _require_exact_keys(
@@ -240,6 +307,25 @@ class PublishedCorpus:
             raise CorpusManifestError("manifest documents must be sorted by DocId")
         if len(doc_ids) != len(set(doc_ids)):
             raise CorpusManifestError("manifest contains duplicate DocIds")
+
+        raw_artifacts = manifest.get("artifacts")
+        if not isinstance(raw_artifacts, list):
+            raise CorpusManifestError("manifest artifacts must be an array")
+        artifacts = tuple(
+            _parse_manifest_artifact(value, index=index)
+            for index, value in enumerate(raw_artifacts)
+        )
+        artifact_paths = tuple(artifact.path for artifact in artifacts)
+        if artifact_paths != DERIVED_ARTIFACT_PATHS:
+            raise CorpusManifestError(
+                "manifest artifacts must list exactly, in order: "
+                + ", ".join(DERIVED_ARTIFACT_PATHS)
+            )
+        for artifact in artifacts:
+            self._read_verified_artifact(
+                artifact,
+                index_root=resolved_index_root,
+            )
 
         policy_schema_version = manifest.get("policy_schema_version")
         if type(policy_schema_version) is not int or policy_schema_version != 1:
@@ -341,6 +427,38 @@ class PublishedCorpus:
         self._fingerprint = fingerprint
         self._resolved_posts_root = posts_root
 
+    def _read_verified_artifact(
+        self,
+        artifact: _ManifestArtifact,
+        *,
+        index_root: Path,
+    ) -> bytes:
+        path = self._index_root / artifact.path
+        if path.is_symlink():
+            raise CorpusManifestError(
+                f"derived corpus artifact must not be a symlink: {artifact.path}"
+            )
+        try:
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(index_root) or not resolved.is_file():
+                raise CorpusManifestError(
+                    f"derived corpus artifact escapes the index: {artifact.path}"
+                )
+            payload = path.read_bytes()
+        except CorpusManifestError:
+            raise
+        except OSError as exc:
+            raise CorpusManifestError(
+                f"cannot read derived corpus artifact {artifact.path}: {exc}"
+            ) from exc
+        if len(payload) != artifact.byte_count:
+            raise CorpusManifestError(
+                f"{artifact.path} artifact checksum/byte count mismatch"
+            )
+        if content_checksum(payload) != artifact.checksum:
+            raise CorpusManifestError(f"{artifact.path} artifact checksum mismatch")
+        return payload
+
     @property
     def fingerprint(self) -> str:
         return self._fingerprint
@@ -401,6 +519,7 @@ class PublishedCorpus:
 
 __all__ = [
     "CorpusManifestError",
+    "DERIVED_ARTIFACT_PATHS",
     "MANIFEST_SCHEMA",
     "PublishedCorpus",
     "content_checksum",

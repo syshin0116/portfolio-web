@@ -51,6 +51,10 @@ class UpstreamArtifactTests(unittest.TestCase):
         self.payloads = {
             "protocol.openapi": b"protocol openapi\n",
             "protocol.cddl": b"protocol cddl\n",
+            "protocol.packageManifest": b'{"packageManager":"pnpm@10.33.0"}\n',
+            "protocol.pnpmLock": b"lockfileVersion: '9.0'\n",
+            "protocol.pnpmWorkspace": b"packages:\n  - slides\n",
+            "protocol.pythonFixup": b"print('fixup')\n",
             "protocol.pythonBinding": self.python_binding,
             "protocol.typescriptBinding": self.typescript_binding,
             "aegra.openapi": b"aegra openapi\n",
@@ -72,12 +76,29 @@ class UpstreamArtifactTests(unittest.TestCase):
                         "protocol.cddl",
                         "streaming/protocol.cddl",
                     ),
+                    "packageManifest": self._artifact(
+                        "protocol.packageManifest",
+                        "streaming/package.json",
+                    ),
+                    "pnpmLock": self._artifact(
+                        "protocol.pnpmLock",
+                        "streaming/pnpm-lock.yaml",
+                    ),
+                    "pnpmWorkspace": self._artifact(
+                        "protocol.pnpmWorkspace",
+                        "streaming/pnpm-workspace.yaml",
+                    ),
+                    "pythonFixup": self._artifact(
+                        "protocol.pythonFixup",
+                        "streaming/scripts/fixup.py",
+                    ),
                     "pythonBinding": {
                         **self._artifact(
                             "protocol.pythonBinding",
                             "streaming/py/langchain_protocol/protocol.py",
                         ),
                         "vendoredPath": "protocol/generated/python/protocol.py",
+                        "package": "langchain-protocol==0.0.18",
                     },
                     "typescriptBinding": {
                         **self._artifact(
@@ -85,6 +106,18 @@ class UpstreamArtifactTests(unittest.TestCase):
                             "streaming/js/protocol.ts",
                         ),
                         "vendoredPath": "protocol/generated/typescript/protocol.ts",
+                        "package": "@langchain/protocol@0.0.18",
+                    },
+                },
+                "codegen": {
+                    "nodeVersion": "24.14.0",
+                    "corepackVersion": "0.34.6",
+                    "pythonVersion": "3.12",
+                    "packageManager": "pnpm@10.33.0",
+                    "packages": {
+                        "cddl": "0.20.1",
+                        "cddl2py": "0.2.2",
+                        "cddl2ts": "0.9.1",
                     },
                 },
             },
@@ -146,6 +179,10 @@ class UpstreamArtifactTests(unittest.TestCase):
             [
                 "protocol.openapi",
                 "protocol.cddl",
+                "protocol.packageManifest",
+                "protocol.pnpmLock",
+                "protocol.pnpmWorkspace",
+                "protocol.pythonFixup",
                 "protocol.pythonBinding",
                 "protocol.typescriptBinding",
                 "aegra.openapi",
@@ -203,6 +240,10 @@ class UpstreamArtifactTests(unittest.TestCase):
             protocol_paths = {
                 "/openapi.json": "protocol.openapi",
                 "/streaming/protocol.cddl": "protocol.cddl",
+                "/streaming/package.json": "protocol.packageManifest",
+                "/streaming/pnpm-lock.yaml": "protocol.pnpmLock",
+                "/streaming/pnpm-workspace.yaml": "protocol.pnpmWorkspace",
+                "/streaming/scripts/fixup.py": "protocol.pythonFixup",
                 "/streaming/py/langchain_protocol/protocol.py": (
                     "protocol.pythonBinding"
                 ),
@@ -224,6 +265,10 @@ class UpstreamArtifactTests(unittest.TestCase):
             "protocol": (
                 "openapi",
                 "cddl",
+                "packageManifest",
+                "pnpmLock",
+                "pnpmWorkspace",
+                "pythonFixup",
                 "pythonBinding",
                 "typescriptBinding",
             ),
@@ -289,6 +334,45 @@ class UpstreamArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(
             upstream.UpstreamVerificationError,
             "aegra.route must use upstreamPath",
+        ):
+            upstream.verify_upstream(lock, fetch=self._fetch)
+
+    def test_rejects_missing_or_drifted_codegen_toolchain(self) -> None:
+        mutations = (
+            ("deleted", None),
+            ("nodeVersion", "24.13.0"),
+            ("corepackVersion", "0.33.0"),
+            ("pythonVersion", "3.13"),
+            ("packageManager", "pnpm@latest"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                lock = copy.deepcopy(self.lock)
+                if field == "deleted":
+                    del lock["protocol"]["codegen"]
+                else:
+                    lock["protocol"]["codegen"][field] = value
+                with self.assertRaisesRegex(
+                    upstream.UpstreamVerificationError,
+                    "protocol codegen must exactly match lockVersion 1",
+                ):
+                    upstream.verify_upstream(lock, fetch=self._fetch)
+
+    def test_rejects_codegen_package_version_drift(self) -> None:
+        lock = copy.deepcopy(self.lock)
+        lock["protocol"]["codegen"]["packages"]["cddl2ts"] = "0.9.2"
+        with self.assertRaisesRegex(
+            upstream.UpstreamVerificationError,
+            "protocol codegen must exactly match lockVersion 1",
+        ):
+            upstream.verify_upstream(lock, fetch=self._fetch)
+
+    def test_rejects_unrecognized_artifact_metadata(self) -> None:
+        lock = copy.deepcopy(self.lock)
+        lock["protocol"]["artifacts"]["cddl"]["replacementPath"] = "other.cddl"
+        with self.assertRaisesRegex(
+            upstream.UpstreamVerificationError,
+            "protocol.cddl fields must exactly match lockVersion 1",
         ):
             upstream.verify_upstream(lock, fetch=self._fetch)
 

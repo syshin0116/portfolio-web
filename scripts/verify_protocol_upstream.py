@@ -8,6 +8,7 @@ import json
 import re
 import sys
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -20,32 +21,55 @@ LOCK_V1_REPOSITORIES = {
     "protocol": "https://github.com/langchain-ai/agent-protocol",
     "aegra": "https://github.com/ibbybuilds/aegra",
 }
-LOCK_V1_ARTIFACTS: dict[str, dict[str, tuple[str, str | None]]] = {
+LOCK_V1_CODEGEN: dict[str, Any] = {
+    "nodeVersion": "24.14.0",
+    "corepackVersion": "0.34.6",
+    "pythonVersion": "3.12",
+    "packageManager": "pnpm@10.33.0",
+    "packages": {
+        "cddl": "0.20.1",
+        "cddl2py": "0.2.2",
+        "cddl2ts": "0.9.1",
+    },
+}
+LOCK_V1_ARTIFACTS: dict[
+    str,
+    dict[str, tuple[str, str | None, dict[str, str]]],
+] = {
     "protocol": {
-        "openapi": ("openapi.json", None),
-        "cddl": ("streaming/protocol.cddl", None),
+        "openapi": ("openapi.json", None, {}),
+        "cddl": ("streaming/protocol.cddl", None, {}),
+        "packageManifest": ("streaming/package.json", None, {}),
+        "pnpmLock": ("streaming/pnpm-lock.yaml", None, {}),
+        "pnpmWorkspace": ("streaming/pnpm-workspace.yaml", None, {}),
+        "pythonFixup": ("streaming/scripts/fixup.py", None, {}),
         "pythonBinding": (
             "streaming/py/langchain_protocol/protocol.py",
             "protocol/generated/python/protocol.py",
+            {"package": "langchain-protocol==0.0.18"},
         ),
         "typescriptBinding": (
             "streaming/js/protocol.ts",
             "protocol/generated/typescript/protocol.ts",
+            {"package": "@langchain/protocol@0.0.18"},
         ),
     },
     "aegra": {
-        "openapi": ("docs/openapi.json", None),
+        "openapi": ("docs/openapi.json", None, {}),
         "route": (
             "libs/aegra-api/src/aegra_api/api/event_streaming.py",
             None,
+            {},
         ),
         "wireBuilders": (
             "libs/aegra-api/src/aegra_api/services/event_streaming/protocol.py",
             None,
+            {},
         ),
         "commands": (
             "libs/aegra-api/src/aegra_api/services/event_streaming/commands.py",
             None,
+            {},
         ),
     },
 }
@@ -57,6 +81,23 @@ MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 
 class UpstreamVerificationError(RuntimeError):
     """A locked upstream artifact is unavailable or differs from its digest."""
+
+
+@dataclass(frozen=True)
+class LockedArtifact:
+    """One fully schema-validated immutable upstream artifact."""
+
+    section: str
+    name: str
+    repository: str
+    commit: str
+    upstream_path: str
+    sha256: str
+    vendored_path: str | None
+
+    @property
+    def label(self) -> str:
+        return f"{self.section}.{self.name}"
 
 
 def _raw_url(repository: str, commit: str, upstream_path: str) -> str:
@@ -121,7 +162,11 @@ def _artifacts(
             f"missing={missing}, extra={extra}"
         )
 
-    for name, (required_upstream_path, required_vendored_path) in expected.items():
+    for name, (
+        required_upstream_path,
+        required_vendored_path,
+        required_metadata,
+    ) in expected.items():
         artifact = artifacts[name]
         if not isinstance(artifact, dict):
             raise UpstreamVerificationError(
@@ -140,6 +185,24 @@ def _artifacts(
                     f"{section_name}.{name} must use vendoredPath "
                     f"{required_vendored_path!r}, got {vendored_path!r}"
                 )
+        for field, required_value in required_metadata.items():
+            actual_value = artifact.get(field)
+            if actual_value != required_value:
+                raise UpstreamVerificationError(
+                    f"{section_name}.{name} must use {field} "
+                    f"{required_value!r}, got {actual_value!r}"
+                )
+        required_fields = {"upstreamPath", "sha256", *required_metadata}
+        if required_vendored_path is not None:
+            required_fields.add("vendoredPath")
+        actual_fields = set(artifact)
+        if actual_fields != required_fields:
+            missing_fields = sorted(required_fields - actual_fields)
+            extra_fields = sorted(actual_fields - required_fields)
+            raise UpstreamVerificationError(
+                f"{section_name}.{name} fields must exactly match lockVersion 1; "
+                f"missing={missing_fields}, extra={extra_fields}"
+            )
         yield name, artifact, required_vendored_path
 
 
@@ -153,12 +216,8 @@ def _vendored_path(raw_path: str) -> Path:
     return resolved
 
 
-def verify_upstream(
-    lock: dict[str, Any],
-    *,
-    fetch: Callable[[str], bytes] = _fetch,
-) -> list[str]:
-    """Return verified artifact labels or raise on the first mismatch."""
+def locked_artifacts(lock: dict[str, Any]) -> list[LockedArtifact]:
+    """Validate the complete lock schema before any artifact is fetched."""
     lock_version = lock.get("lockVersion")
     if (
         not isinstance(lock_version, int)
@@ -169,7 +228,7 @@ def verify_upstream(
             f"lockVersion must be the integer 1, got {lock_version!r}"
         )
 
-    verified: list[str] = []
+    locked: list[LockedArtifact] = []
     for section_name in ("protocol", "aegra"):
         section = lock.get(section_name)
         if not isinstance(section, dict):
@@ -186,6 +245,11 @@ def verify_upstream(
                 f"{section_name} must use repository {required_repository!r}, "
                 f"got {repository!r}"
             )
+        if section_name == "protocol" and section.get("codegen") != LOCK_V1_CODEGEN:
+            raise UpstreamVerificationError(
+                "protocol codegen must exactly match lockVersion 1; "
+                f"expected {LOCK_V1_CODEGEN!r}, got {section.get('codegen')!r}"
+            )
 
         for artifact_name, artifact, required_vendored_path in _artifacts(
             section_name,
@@ -200,43 +264,78 @@ def verify_upstream(
                 raise UpstreamVerificationError(
                     f"{section_name}.{artifact_name} has an invalid sha256"
                 )
-
-            upstream = fetch(_raw_url(repository, commit, upstream_path))
-            actual_digest = hashlib.sha256(upstream).hexdigest()
-            if actual_digest != expected_digest:
-                raise UpstreamVerificationError(
-                    f"{section_name}.{artifact_name} digest differs: "
-                    f"expected {expected_digest}, got {actual_digest}"
+            locked.append(
+                LockedArtifact(
+                    section=section_name,
+                    name=artifact_name,
+                    repository=repository,
+                    commit=commit,
+                    upstream_path=upstream_path,
+                    sha256=expected_digest,
+                    vendored_path=required_vendored_path,
                 )
+            )
+    return locked
 
-            if required_vendored_path is not None:
-                path = _vendored_path(required_vendored_path)
-                try:
-                    local = path.read_bytes()
-                except OSError as exc:
-                    raise UpstreamVerificationError(
-                        f"cannot read vendored artifact {required_vendored_path}: {exc}"
-                    ) from exc
-                if local != upstream:
-                    raise UpstreamVerificationError(
-                        f"{section_name}.{artifact_name} vendored bytes differ "
-                        f"from {commit}:{upstream_path}"
-                    )
-            verified.append(f"{section_name}.{artifact_name}")
+
+def load_lock(path: Path = LOCK_PATH) -> dict[str, Any]:
+    """Load a protocol lock object without weakening JSON type checks."""
+    try:
+        lock = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise UpstreamVerificationError(
+            f"cannot read protocol lock {path}: {exc}"
+        ) from exc
+    if not isinstance(lock, dict):
+        raise UpstreamVerificationError("protocol lock must be an object")
+    return lock
+
+
+def verify_upstream(
+    lock: dict[str, Any],
+    *,
+    fetch: Callable[[str], bytes] = _fetch,
+) -> list[str]:
+    """Return verified artifact labels or raise on the first mismatch."""
+    artifacts = locked_artifacts(lock)
+    verified: list[str] = []
+    for artifact in artifacts:
+        upstream = fetch(
+            _raw_url(
+                artifact.repository,
+                artifact.commit,
+                artifact.upstream_path,
+            )
+        )
+        actual_digest = hashlib.sha256(upstream).hexdigest()
+        if actual_digest != artifact.sha256:
+            raise UpstreamVerificationError(
+                f"{artifact.label} digest differs: "
+                f"expected {artifact.sha256}, got {actual_digest}"
+            )
+
+        if artifact.vendored_path is not None:
+            path = _vendored_path(artifact.vendored_path)
+            try:
+                local = path.read_bytes()
+            except OSError as exc:
+                raise UpstreamVerificationError(
+                    f"cannot read vendored artifact {artifact.vendored_path}: {exc}"
+                ) from exc
+            if local != upstream:
+                raise UpstreamVerificationError(
+                    f"{artifact.label} vendored bytes differ "
+                    f"from {artifact.commit}:{artifact.upstream_path}"
+                )
+        verified.append(artifact.label)
     return verified
 
 
 def main() -> int:
     try:
-        lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
-        if not isinstance(lock, dict):
-            raise UpstreamVerificationError("protocol lock must be an object")
+        lock = load_lock()
         verified = verify_upstream(lock)
-    except (
-        OSError,
-        json.JSONDecodeError,
-        UpstreamVerificationError,
-    ) as exc:
+    except UpstreamVerificationError as exc:
         print(f"upstream protocol verification failed: {exc}", file=sys.stderr)
         return 1
 

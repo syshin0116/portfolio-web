@@ -14,10 +14,37 @@ bindings are byte-for-byte copies of that release.
 - Canonical schema: upstream `streaming/protocol.cddl`
 - Fixture wire profile: the official generated snake_case bindings
 
-The exact OpenAPI, CDDL, binding, and Aegra implementation hashes are in
-[`agent-protocol.lock.json`](agent-protocol.lock.json). A future protocol bump
+The exact OpenAPI, CDDL, upstream package manifest, pnpm lock/workspace,
+Python fixup, generated bindings, and Aegra implementation hashes are in
+[`agent-protocol.lock.json`](agent-protocol.lock.json). The generator runtime
+is also fixed to Node 24.14.0, Corepack 0.34.6, pnpm 10.33.0, Python 3.12,
+`cddl` 0.20.1, `cddl2py` 0.2.2, and `cddl2ts` 0.9.1. A future protocol bump
 must update the lock, regenerate both bindings from that revision, update the
 fixtures, and rerun the complete P0 compatibility gate.
+
+## Reproducible codegen gate
+
+Code generation has an explicit network boundary. `prepare` downloads only
+the files named by the exact upstream commit, verifies each digest, and runs a
+frozen pnpm install with lifecycle scripts disabled. `verify` performs no
+downloads: it validates CDDL, regenerates both bindings repeatedly, and
+requires three-way byte equality between regenerated, upstream-committed, and
+repo-vendored files.
+
+```bash
+protocol_codegen_workspace="$(mktemp -d)"
+uv run --no-project --python 3.12 python scripts/verify_protocol_codegen.py prepare \
+  --workspace "$protocol_codegen_workspace"
+uv run --no-project --python 3.12 python scripts/verify_protocol_codegen.py verify \
+  --workspace "$protocol_codegen_workspace" \
+  --repeat 5
+```
+
+The pnpm integrity lock fixes package bytes and `--ignore-scripts` prevents
+install lifecycle execution. The `cddl`, `cddl2py`, and `cddl2ts` binaries are
+still third-party executable code; exact pins do not prove maintainer intent.
+Permanent byte comparison is also the cross-platform determinism gate rather
+than an assumption based on one development machine.
 
 ## Offline gate
 
@@ -28,6 +55,13 @@ python scripts/protocol_contract.py
 python -m unittest discover -s protocol/tests -v
 python scripts/smoke.py
 ```
+
+The TypeScript side uses an isolated TypeScript 5.9.3 lock rather than the web
+application dependency tree. It converts all committed JSON records to
+`as const satisfies` literals against the real generated binding, compiles
+them, then replays event shape coverage and the Aegra `value` to `payload`
+translation at runtime. Generated fixture source and JavaScript output live
+only under the runner's temporary directory.
 
 Fixtures cover content-block assembly, tool and run lifecycles, nested
 namespaces, sequence replay after disconnect, HITL commands, structured errors,

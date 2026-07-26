@@ -1,0 +1,42 @@
+{
+  "fixture_version": 1,
+  "name": "structured command error",
+  "description": "A valid run.start command receives a correlated protocol error envelope.",
+  "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+  "wire_profile": "official-generated-snake-case",
+  "records": [
+    {
+      "kind": "command",
+      "payload": {
+        "id": 30,
+        "method": "run.start",
+        "params": {
+          "assistant_id": "missing-agent",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "실패 형태를 확인해줘."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "command_response",
+      "payload": {
+        "type": "error",
+        "id": 30,
+        "error": "no_such_run",
+        "message": "Assistant 'missing-agent' was not found.",
+        "meta": {
+          "applied_through_seq": 0
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "coverage": ["structured_error"]
+  }
+}

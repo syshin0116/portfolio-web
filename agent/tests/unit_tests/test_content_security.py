@@ -110,7 +110,7 @@ async def test_blog_backend_rejects_all_mutation_apis(tmp_path):
 
 
 def test_blog_composite_route_uses_read_only_backend():
-    backend = _build_backend()(SimpleNamespace(state={}))
+    backend = _build_backend()
     blog_backend = backend.routes["/blog/"]
 
     assert isinstance(blog_backend, ReadOnlyFilesystemBackend)

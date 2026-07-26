@@ -96,10 +96,10 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
   open. The stand-in is an in-process busy set that is correct only at
   `--max-instances 1`, and is a check rather than a lock. **This ADR reverses that part of
   the 2026-07-11 entry.**
-- `@auth.on.*` handlers are **not dispatched** on `/threads/{id}/runs/stream`,
-  `/runs/wait`, the stateless `/runs*` variants, or `/threads/{id}/events` - the streaming
-  path is exactly what the frontend uses. Handlers become hygiene; the SQL predicate and
-  ASGI middleware are the real boundary.
+- `@auth.on.*` handlers are **not dispatched** consistently across legacy streaming paths,
+  and P0 found Aegra's AP v2 path/commands differ from upstream. The production frontend
+  uses `/threads/{id}/stream/events`, but authorization still cannot depend on handler
+  dispatch: the SQL predicate and outer ASGI middleware are the real boundary.
 - Aegra with no auth file is **fail-open** (one shared `anonymous` identity), where the
   current server is fail-closed. A typo in `aegra.json` degrades an outage into an open door.
 - Pre-1.0 with bus factor 1: `ibbybuilds` holds 629 of ~800 commits, three releases shipped

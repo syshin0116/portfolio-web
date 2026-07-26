@@ -46,9 +46,10 @@ downstream requires a user record.
 **Wire format.** `/threads/{id}/runs/stream` emits `messages/partial` /
 `messages/complete` / `updates` (`services/graph_streaming.py:204-205,412`) - exactly what
 `@assistant-ui/react-langgraph`'s `LangChainEvent` type and the SDK's default
-`streamProtocol: "legacy"` parse. Agent Protocol v2's content-block format lives on
-`POST /threads/{id}/events`; `FF_V2_EVENT_STREAMING=True` enables *that endpoint* and does
-not change `/runs/stream`.
+`streamProtocol: "legacy"` parse. P0 later verified that Aegra 0.9.24's Agent Protocol v2
+content-block format lives on `POST /threads/{id}/stream/events`, not the upstream
+`/threads/{id}/stream`; `FF_V2_EVENT_STREAMING=true` enables that endpoint and does not
+change `/runs/stream`.
 
 **Adapter surface is tiny.** `@assistant-ui/react-langgraph` makes exactly one SDK call -
 `client.runs.stream(...)` inside `unstable_createLangGraphStream`. Grepping its dist for

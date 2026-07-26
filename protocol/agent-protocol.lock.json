@@ -19,6 +19,22 @@
         "upstreamPath": "streaming/protocol.cddl",
         "sha256": "e04cfd6db218df4573b3bbfdca615aa503b0380bb588081ebe36514f7977e2e2"
       },
+      "packageManifest": {
+        "upstreamPath": "streaming/package.json",
+        "sha256": "dfe1d12bf41ebcbde7a4704b818b580b574b035d09a041c9aaf9a0c5b92faa7a"
+      },
+      "pnpmLock": {
+        "upstreamPath": "streaming/pnpm-lock.yaml",
+        "sha256": "816c3c3b2ce0ae1a9f99ce49eca83be1b8b7e65eaf7842df2112b6db1ced4f85"
+      },
+      "pnpmWorkspace": {
+        "upstreamPath": "streaming/pnpm-workspace.yaml",
+        "sha256": "feab5101c23861362175a60721448a13d3e8d62d242fe2b89515f356c3ef1d44"
+      },
+      "pythonFixup": {
+        "upstreamPath": "streaming/scripts/fixup.py",
+        "sha256": "d2b7424ec93a29500f910d15d59ac5a01281df4b6034b132623111e50d8af5cc"
+      },
       "pythonBinding": {
         "upstreamPath": "streaming/py/langchain_protocol/protocol.py",
         "vendoredPath": "protocol/generated/python/protocol.py",
@@ -30,6 +46,17 @@
         "vendoredPath": "protocol/generated/typescript/protocol.ts",
         "package": "@langchain/protocol@0.0.18",
         "sha256": "c48feb85acb7af2ff24573c36d80d942d74f40a218fd7f52913d5fd08d22487d"
+      }
+    },
+    "codegen": {
+      "nodeVersion": "24.14.0",
+      "corepackVersion": "0.34.6",
+      "pythonVersion": "3.12",
+      "packageManager": "pnpm@10.33.0",
+      "packages": {
+        "cddl": "0.20.1",
+        "cddl2py": "0.2.2",
+        "cddl2ts": "0.9.1"
       }
     },
     "bindingWireProfile": {

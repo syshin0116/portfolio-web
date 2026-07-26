@@ -4,3 +4,7 @@
 # Trade-off: union resolves silently, so a genuine edit to an existing line can be
 # duplicated rather than flagged. Acceptable while entries are append-only one-liners.
 DECISIONS.md merge=union
+
+# Generated upstream bindings are vendored byte-for-byte. Preserve upstream
+# trailing whitespace so their locked hashes remain independently verifiable.
+protocol/generated/** whitespace=-blank-at-eof

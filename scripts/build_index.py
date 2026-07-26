@@ -37,6 +37,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="generated corpus index directory",
     )
     parser.add_argument(
+        "--bm25-policy",
+        type=Path,
+        default=REPO_ROOT / "agent" / "bm25-policy.toml",
+        help="owner-reviewed BM25 dictionary seed/deny policy",
+    )
+    parser.add_argument(
         "--expect-document-count",
         type=int,
         help="fail if the published mirror does not contain this exact count",
@@ -50,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         report = build_index(
             content_root=args.content_root,
             policy_path=args.policy,
+            bm25_policy_path=args.bm25_policy,
             output_root=args.output,
             expected_document_count=args.expect_document_count,
         )
@@ -60,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "corpus_fingerprint": report.fingerprint,
+                "bm25_fingerprint": report.bm25_fingerprint,
                 "document_count": report.document_count,
                 "output": str(report.output_root),
                 "source_markdown_count": report.source_markdown_count,

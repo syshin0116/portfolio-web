@@ -14,6 +14,10 @@ from agent.retrieval.fingerprint import (
 from agent.retrieval.protocol import Corpus, Retrieval, Retriever
 
 RetrieverFactory = Callable[[Corpus, Mapping[str, object]], Retriever]
+RetrieverIdentityFactory = Callable[
+    [Corpus, Mapping[str, object]],
+    Mapping[str, object],
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +29,7 @@ class RetrieverRegistration:
     factory: RetrieverFactory
     config_json: str
     servable: bool
+    identity_factory: RetrieverIdentityFactory | None
 
     @property
     def config(self) -> dict[str, object]:
@@ -35,11 +40,34 @@ class RetrieverRegistration:
             raise TypeError("registered retriever config is not an object")
         return value
 
-    def fingerprint(self, corpus_fingerprint: str) -> str:
+    def identity_config(self, corpus: Corpus | None = None) -> dict[str, object]:
+        if self.identity_factory is None:
+            return self.config
+        if corpus is None:
+            raise ValueError(
+                f"retriever {self.method_id!r} requires a Corpus to resolve "
+                "artifact identity"
+            )
+        return json.loads(canonical_config(self.identity_factory(corpus, self.config)))
+
+    def fingerprint(self, corpus: Corpus | str) -> str:
+        if isinstance(corpus, str):
+            if self.identity_factory is not None:
+                raise ValueError(
+                    f"retriever {self.method_id!r} requires a Corpus, not only a "
+                    "corpus fingerprint, to include artifact identity"
+                )
+            corpus_fingerprint = corpus
+            config = self.config
+        else:
+            corpus_fingerprint = getattr(corpus, "fingerprint", None)
+            if not isinstance(corpus_fingerprint, str) or not corpus_fingerprint:
+                raise ValueError("corpus fingerprint must be a non-empty string")
+            config = self.identity_config(corpus)
         return retriever_fingerprint(
             method_id=self.method_id,
             implementation_id=self.implementation_id,
-            config=self.config,
+            config=config,
             corpus_fingerprint=corpus_fingerprint,
         )
 
@@ -51,6 +79,7 @@ class ResolvedRetriever:
     registration: RetrieverRegistration
     corpus_fingerprint: str
     implementation: Retriever
+    identity_config_json: str
 
     @property
     def method_id(self) -> str:
@@ -61,8 +90,20 @@ class ResolvedRetriever:
         return self.registration.config
 
     @property
+    def identity_config(self) -> dict[str, object]:
+        value = json.loads(self.identity_config_json)
+        if not isinstance(value, dict):
+            raise TypeError("resolved retriever identity config is not an object")
+        return value
+
+    @property
     def fingerprint(self) -> str:
-        return self.registration.fingerprint(self.corpus_fingerprint)
+        return retriever_fingerprint(
+            method_id=self.registration.method_id,
+            implementation_id=self.registration.implementation_id,
+            config=self.identity_config,
+            corpus_fingerprint=self.corpus_fingerprint,
+        )
 
     def retrieve(self, query: str, *, limit: int = 10) -> Retrieval:
         result = self.implementation.retrieve(query, limit=limit)
@@ -126,14 +167,24 @@ class RegistryView(Mapping[str, RetrieverRegistration]):
             raise TypeError(
                 f"factory for {method_id!r} returned an object without retrieve()"
             )
+        expected_identity = registration.identity_config(corpus)
+        implementation_identity = getattr(implementation, "identity_config", None)
+        if implementation_identity is not None:
+            actual_identity_json = canonical_config(implementation_identity)
+            if actual_identity_json != canonical_config(expected_identity):
+                raise ValueError(
+                    f"retriever {method_id!r} runtime identity differs from its "
+                    "registered identity"
+                )
         return ResolvedRetriever(
             registration=registration,
             corpus_fingerprint=corpus_fingerprint,
             implementation=implementation,
+            identity_config_json=canonical_config(expected_identity),
         )
 
-    def fingerprint(self, method_id: str, corpus_fingerprint: str) -> str:
-        return self[method_id].fingerprint(corpus_fingerprint)
+    def fingerprint(self, method_id: str, corpus: Corpus | str) -> str:
+        return self[method_id].fingerprint(corpus)
 
 
 class RetrieverRegistry:
@@ -167,6 +218,7 @@ class RetrieverRegistry:
         implementation_id: str,
         config: Mapping[str, object] | None = None,
         servable: bool = True,
+        identity_factory: RetrieverIdentityFactory | None = None,
     ) -> RetrieverRegistration:
         if not isinstance(method_id, str) or not method_id.strip():
             raise ValueError("method_id must be a non-empty string")
@@ -176,6 +228,8 @@ class RetrieverRegistry:
             raise TypeError("factory must be callable")
         if not isinstance(servable, bool):
             raise TypeError("servable must be a boolean")
+        if identity_factory is not None and not callable(identity_factory):
+            raise TypeError("identity_factory must be callable or None")
 
         registration = RetrieverRegistration(
             method_id=method_id,
@@ -183,6 +237,7 @@ class RetrieverRegistry:
             factory=factory,
             config_json=canonical_config({} if config is None else config),
             servable=servable,
+            identity_factory=identity_factory,
         )
         self._add(registration)
         return registration
@@ -208,6 +263,7 @@ __all__ = [
     "RegistryView",
     "ResolvedRetriever",
     "RetrieverFactory",
+    "RetrieverIdentityFactory",
     "RetrieverRegistration",
     "RetrieverRegistry",
     "registry",

@@ -33,6 +33,7 @@ from agent.retrieval.protocol import DocId
 CATALOG_SCHEMA = "published-corpus-catalog-v1"
 WIKILINK_SCHEMA = "published-wikilinks-v2"
 POLICY_SCHEMA_VERSION = 1
+DEFAULT_BM25_POLICY = Path(__file__).resolve().parents[3] / "bm25-policy.toml"
 
 _DATE_LIKE_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}"
@@ -126,6 +127,7 @@ class BuildReport:
     document_count: int
     source_markdown_count: int
     fingerprint: str
+    bm25_fingerprint: str
     output_root: Path
 
 
@@ -811,7 +813,12 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_bytes(_json_bytes(payload))
 
 
-def _write_snapshot(snapshot: CorpusSnapshot, output_root: Path) -> str:
+def _write_snapshot(
+    snapshot: CorpusSnapshot,
+    output_root: Path,
+    *,
+    bm25_policy_path: Path | str,
+) -> str:
     posts_root = output_root / "posts"
     posts_root.mkdir(parents=True)
     fingerprint = corpus_fingerprint(
@@ -864,6 +871,18 @@ def _write_snapshot(snapshot: CorpusSnapshot, output_root: Path) -> str:
         "source_markdown_count": snapshot.source_markdown_count,
     }
     _write_json(output_root / "manifest.json", manifest)
+    # P1.3 consumes this exact immutable snapshot; it never scans source content again.
+    from agent.retrieval.bm25 import build_bm25_artifacts
+
+    try:
+        build_bm25_artifacts(
+            snapshot,
+            index_root=output_root,
+            policy_path=bm25_policy_path,
+            corpus_fingerprint=fingerprint,
+        )
+    except ValueError as exc:
+        raise CorpusBuildError(f"BM25 artifact build failed: {exc}") from exc
     return fingerprint
 
 
@@ -898,8 +917,9 @@ def build_index(
     policy_path: Path | str,
     output_root: Path | str,
     expected_document_count: int | None = None,
+    bm25_policy_path: Path | str = DEFAULT_BM25_POLICY,
 ) -> BuildReport:
-    """Build all P1.2 artifacts from one validated source snapshot."""
+    """Build the corpus mirror and BM25 artifacts from one validated snapshot."""
 
     if expected_document_count is not None and (
         isinstance(expected_document_count, bool)
@@ -926,8 +946,18 @@ def build_index(
         )
     )
     try:
-        fingerprint = _write_snapshot(snapshot, staged)
-        PublishedCorpus(staged)
+        fingerprint = _write_snapshot(
+            snapshot,
+            staged,
+            bm25_policy_path=bm25_policy_path,
+        )
+        corpus = PublishedCorpus(staged)
+        from agent.retrieval.bm25 import Bm25Retriever
+
+        try:
+            bm25_fingerprint = Bm25Retriever(corpus).fingerprint
+        except ValueError as exc:
+            raise CorpusBuildError(f"BM25 artifact audit failed: {exc}") from exc
         _install_atomically(staged, output)
     except Exception:
         if staged.exists():
@@ -937,6 +967,7 @@ def build_index(
         document_count=document_count,
         source_markdown_count=snapshot.source_markdown_count,
         fingerprint=fingerprint,
+        bm25_fingerprint=bm25_fingerprint,
         output_root=output,
     )
 
@@ -946,6 +977,7 @@ __all__ = [
     "CATALOG_SCHEMA",
     "CorpusBuildError",
     "CorpusSnapshot",
+    "DEFAULT_BM25_POLICY",
     "SourceDocument",
     "WIKILINK_SCHEMA",
     "build_index",

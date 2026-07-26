@@ -1,0 +1,13 @@
+schema_version = 1
+policy_id = "bm25-dictionary-policy-v1"
+
+# Owner-reviewed Korean names which are not reliably recovered from Latin-script tags.
+seeds = [
+  "도커",
+  "랭그래프",
+]
+
+# Longer alias evidence can mask a reviewed seed under Kiwi's longest-match rule.
+deny = [
+  "도커라이즈",
+]

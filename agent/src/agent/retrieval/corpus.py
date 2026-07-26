@@ -463,6 +463,12 @@ class PublishedCorpus:
     def fingerprint(self) -> str:
         return self._fingerprint
 
+    @property
+    def index_root(self) -> Path:
+        """Return the verified artifact root paired with this corpus mirror."""
+
+        return self._index_root
+
     def doc_ids(self) -> Sequence[DocId]:
         return self._doc_ids
 

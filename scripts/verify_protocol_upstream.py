@@ -16,12 +16,40 @@ from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = REPO_ROOT / "protocol/agent-protocol.lock.json"
-ALLOWED_REPOSITORIES = frozenset(
-    {
-        "https://github.com/ibbybuilds/aegra",
-        "https://github.com/langchain-ai/agent-protocol",
-    }
-)
+LOCK_V1_REPOSITORIES = {
+    "protocol": "https://github.com/langchain-ai/agent-protocol",
+    "aegra": "https://github.com/ibbybuilds/aegra",
+}
+LOCK_V1_ARTIFACTS: dict[str, dict[str, tuple[str, str | None]]] = {
+    "protocol": {
+        "openapi": ("openapi.json", None),
+        "cddl": ("streaming/protocol.cddl", None),
+        "pythonBinding": (
+            "streaming/py/langchain_protocol/protocol.py",
+            "protocol/generated/python/protocol.py",
+        ),
+        "typescriptBinding": (
+            "streaming/js/protocol.ts",
+            "protocol/generated/typescript/protocol.ts",
+        ),
+    },
+    "aegra": {
+        "openapi": ("docs/openapi.json", None),
+        "route": (
+            "libs/aegra-api/src/aegra_api/api/event_streaming.py",
+            None,
+        ),
+        "wireBuilders": (
+            "libs/aegra-api/src/aegra_api/services/event_streaming/protocol.py",
+            None,
+        ),
+        "commands": (
+            "libs/aegra-api/src/aegra_api/services/event_streaming/commands.py",
+            None,
+        ),
+    },
+}
+ALLOWED_REPOSITORIES = frozenset(LOCK_V1_REPOSITORIES.values())
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
@@ -74,14 +102,45 @@ def _fetch(url: str) -> bytes:
     return payload
 
 
-def _artifacts(section: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
+def _artifacts(
+    section_name: str,
+    section: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any], str | None]]:
     artifacts = section.get("artifacts")
-    if not isinstance(artifacts, dict) or not artifacts:
-        raise UpstreamVerificationError("lock section has no artifacts")
-    for name, artifact in artifacts.items():
+    if not isinstance(artifacts, dict):
+        raise UpstreamVerificationError(f"{section_name} artifacts must be an object")
+
+    expected = LOCK_V1_ARTIFACTS[section_name]
+    actual_names = set(artifacts)
+    expected_names = set(expected)
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        raise UpstreamVerificationError(
+            f"{section_name} artifacts must exactly match lockVersion 1; "
+            f"missing={missing}, extra={extra}"
+        )
+
+    for name, (required_upstream_path, required_vendored_path) in expected.items():
+        artifact = artifacts[name]
         if not isinstance(artifact, dict):
-            raise UpstreamVerificationError(f"artifact {name!r} is not an object")
-        yield name, artifact
+            raise UpstreamVerificationError(
+                f"{section_name}.{name} artifact is not an object"
+            )
+        upstream_path = artifact.get("upstreamPath")
+        if upstream_path != required_upstream_path:
+            raise UpstreamVerificationError(
+                f"{section_name}.{name} must use upstreamPath "
+                f"{required_upstream_path!r}, got {upstream_path!r}"
+            )
+        if required_vendored_path is not None:
+            vendored_path = artifact.get("vendoredPath")
+            if vendored_path != required_vendored_path:
+                raise UpstreamVerificationError(
+                    f"{section_name}.{name} must use vendoredPath "
+                    f"{required_vendored_path!r}, got {vendored_path!r}"
+                )
+        yield name, artifact, required_vendored_path
 
 
 def _vendored_path(raw_path: str) -> Path:
@@ -100,6 +159,16 @@ def verify_upstream(
     fetch: Callable[[str], bytes] = _fetch,
 ) -> list[str]:
     """Return verified artifact labels or raise on the first mismatch."""
+    lock_version = lock.get("lockVersion")
+    if (
+        not isinstance(lock_version, int)
+        or isinstance(lock_version, bool)
+        or lock_version != 1
+    ):
+        raise UpstreamVerificationError(
+            f"lockVersion must be the integer 1, got {lock_version!r}"
+        )
+
     verified: list[str] = []
     for section_name in ("protocol", "aegra"):
         section = lock.get(section_name)
@@ -111,14 +180,19 @@ def verify_upstream(
             raise UpstreamVerificationError(
                 f"{section_name} repository and commit must be strings"
             )
+        required_repository = LOCK_V1_REPOSITORIES[section_name]
+        if repository != required_repository:
+            raise UpstreamVerificationError(
+                f"{section_name} must use repository {required_repository!r}, "
+                f"got {repository!r}"
+            )
 
-        for artifact_name, artifact in _artifacts(section):
+        for artifact_name, artifact, required_vendored_path in _artifacts(
+            section_name,
+            section,
+        ):
             upstream_path = artifact.get("upstreamPath")
             expected_digest = artifact.get("sha256")
-            if not isinstance(upstream_path, str) or not upstream_path:
-                raise UpstreamVerificationError(
-                    f"{section_name}.{artifact_name} has no upstreamPath"
-                )
             if (
                 not isinstance(expected_digest, str)
                 or SHA256_PATTERN.fullmatch(expected_digest) is None
@@ -135,18 +209,13 @@ def verify_upstream(
                     f"expected {expected_digest}, got {actual_digest}"
                 )
 
-            vendored = artifact.get("vendoredPath")
-            if vendored is not None:
-                if not isinstance(vendored, str) or not vendored:
-                    raise UpstreamVerificationError(
-                        f"{section_name}.{artifact_name} has an invalid vendoredPath"
-                    )
-                path = _vendored_path(vendored)
+            if required_vendored_path is not None:
+                path = _vendored_path(required_vendored_path)
                 try:
                     local = path.read_bytes()
                 except OSError as exc:
                     raise UpstreamVerificationError(
-                        f"cannot read vendored artifact {vendored}: {exc}"
+                        f"cannot read vendored artifact {required_vendored_path}: {exc}"
                     ) from exc
                 if local != upstream:
                     raise UpstreamVerificationError(

@@ -69,7 +69,8 @@ Aegra's Agent Protocol v2 event stream and generated Agent Streaming Protocol bi
 For Aegra 0.9.24 the concrete SSE path is
 `POST /threads/{thread_id}/stream/events` and requires
 `FF_V2_EVENT_STREAMING=true`; upstream currently documents `/stream`, so the pinned
-protocol lock records this dialect difference. `@assistant-ui/react-langgraph` 0.14.12
+protocol lock records this dialect difference as well as Aegra's limited command set and
+HITL `value` versus upstream `payload` field. `@assistant-ui/react-langgraph` 0.14.12
 remains a temporary migration fixture, not the production transport, because
 `unstable_createLangGraphStream` calls the legacy `runs.stream` surface.
 

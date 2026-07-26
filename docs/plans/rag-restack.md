@@ -78,7 +78,7 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `deepagents` | `==0.6.12` | `permissions=` is new in 0.6.0 |
 | `langchain` | `==1.3.14` | |
 | `langchain-quickjs` | `==0.3.4` | async execution only; owner/eval tier first |
-| `pyjwt` | `>=2.10` | replaces 130 LOC of hand-rolled base64url + HMAC |
+| `pyjwt` | `==2.13.0` | replaces 130 LOC of hand-rolled base64url + HMAC |
 | `@assistant-ui/react` | `0.14.27` | |
 | `@assistant-ui/react-langgraph` | `0.14.12` | **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
@@ -191,7 +191,10 @@ part of the contract; renaming one requires updating branch protection in the sa
   the current v2 event model as a draft dialect at
   `POST /threads/{thread_id}/stream/events`, while upstream documents
   `POST /threads/{thread_id}/stream`. This path difference is explicit compatibility data,
-  not hidden behind a misleading “fully conformant” label.
+  not hidden behind a misleading “fully conformant” label. Record wire differences too:
+  Aegra has no v2 WebSocket route, implements only `run.start` and `input.respond`
+  commands, and its HITL input event uses `value` where the pinned upstream binding expects
+  `payload`. Dialect translation happens in one tested transport boundary.
 - Path filters include root `pyproject.toml`, `uv.lock`, `aegra.json`, `Dockerfile`,
   `protocol/**`, `scripts/**`, `content/**`, `agent/**`, `eval/**`, and `web/**`. A
   `content/**` change must rebuild both the web artifacts and the agent mirror.
@@ -258,6 +261,10 @@ deepagents.
 - `aegra serve` against local Postgres; confirm the Alembic tables appear.
 - `scripts/smoke.py` on `langgraph_sdk.get_client`. **This becomes the permanent gate for
   every version bump.**
+- Register a deterministic fixture graph alongside the real graph for CI only. It always
+  emits one tool lifecycle, one nested namespace, and one interrupt, so protocol/HITL tests
+  do not depend on a model choosing a particular action. The optional live Korean smoke is
+  a separate check that may spend provider tokens.
 
 **Accept:** a **two-turn** Korean conversation with at least one tool call completes over
 Aegra 0.9.24's AP v2 `POST /threads/{thread_id}/stream/events`, using content-block
@@ -266,8 +273,12 @@ server lifetime, persist the last event/replay cursor, disconnect, reconnect, an
 no visible content is duplicated or lost. Separately restart the process and prove
 checkpoint/thread state restores; do not claim broker event replay survives a process
 restart unless a test demonstrates it. Verify store/memory namespace isolation and that a
-client-supplied `configurable.user_id` cannot change the trusted identity. Exercise
-interrupt/resume through `/threads/{thread_id}/commands`.
+client-supplied `configurable.user_id` cannot change the trusted identity used by the
+backend: Aegra preserves that forged field but separately injects
+`langgraph_auth_user`/`server_info.user.identity`, which must be authoritative. With P0's
+no-auth local server, prove resistance to the forged field but defer genuine cross-user
+isolation to P1's owner auth. Exercise `run.start` and `input.respond` through
+`/threads/{thread_id}/commands`.
 
 > The second turn is not decoration - it is the exact regression from Aegra issues #224
 > (fixed 0.7.5) and #352 (fixed 0.9.14), both deepagents multi-turn bugs. If it fails,
@@ -358,7 +369,8 @@ recall@10 goes 0.323 → 0.605; a nonsense query scores measurably below a real 
 - **Read the trusted identity from `configurable["langgraph_auth_user"]`, never
   `configurable["user_id"]`.** Aegra sets `user_id` with `setdefault`, so a client
   overrides it and reaches another user's memory namespace. Better still,
-  `runtime.server_info.user.identity` works inside middleware with no escape hatch.
+  `runtime.server_info.user.identity` works inside middleware with no escape hatch. The
+  static StoreBackend namespace callable reads this trusted runtime identity directly.
 - Add `agent/src/agent/auth.py` here with the existing owner token flow and a mandatory
   `AGENT_AUTH_SECRET` length check. P1 authentication is fail-closed and owner-only; P5
   extends it with the anonymous tier. Never deploy an Aegra graph with no auth file.
@@ -468,9 +480,11 @@ web/components/chat/
   `client.runs.stream`. Implement `AgentProtocolV2Transport` over the generated Agent
   Streaming Protocol TypeScript bindings and Aegra's
   `POST /threads/{thread_id}/stream/events`, with the HTTP commands sidecar for
-  resume/cancel/HITL. Keep the upstream `/stream` path in the compatibility matrix so a
-  future conformant Aegra release is a transport switch, not a rediscovery. The legacy
-  adapter is permitted only as a temporary comparison fixture during P3.
+  `run.start` and `input.respond`; run cancellation continues through the run-cancel API.
+  Translate the documented Aegra HITL `value` field to upstream `payload` at this boundary.
+  Keep the upstream `/stream` path in the compatibility matrix so a future conformant
+  Aegra release is a transport switch, not a rediscovery. The legacy adapter is permitted
+  only as a temporary comparison fixture during P3.
 - The transport maps content-block deltas, tool lifecycle, run lifecycle, checkpoints,
   tasks, nested-agent namespaces, replay cursors, and structured errors into assistant-ui
   runtime state. Unknown event kinds are logged and ignored without corrupting known state;
@@ -492,9 +506,10 @@ web/components/chat/
 **Accept:** a full multi-turn Korean conversation against deployed Aegra over AP v2;
 reload and a forced mid-stream reconnect restore the thread without duplicate text; tool,
 QuickJS, and nested-subagent events render from committed protocol fixtures; HITL
-resume/cancel uses the commands sidecar; desktop and 390 px mobile visual snapshots cover
-every required state; keyboard/a11y and Korean IME tests pass; no production import or
-network call uses the legacy `/runs/stream` transport.
+resume uses `input.respond`, cancellation uses the run-cancel endpoint, and both are
+fixture-tested; desktop and 390 px mobile visual snapshots cover every required state;
+keyboard/a11y and Korean IME tests pass; no production import or network call uses the
+legacy `/runs/stream` transport.
 
 ### ✅ Basic chat works end to end here
 

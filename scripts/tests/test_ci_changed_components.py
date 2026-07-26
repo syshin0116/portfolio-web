@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -75,6 +77,56 @@ class DetectionTests(unittest.TestCase):
     def test_bad_sha_fails_closed(self) -> None:
         with self.assertRaisesRegex(changes.ChangeDetectionError, "full lowercase"):
             changes.changed_paths("main", "b" * 40)
+
+    def test_cross_component_rename_reports_source_and_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+
+            def git(*args: str) -> str:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                return result.stdout.strip()
+
+            git("init", "--quiet")
+            git("config", "user.name", "CI Test")
+            git("config", "user.email", "ci-test@example.invalid")
+            git("config", "diff.renames", "true")
+            source = repository / "agent/retriever.py"
+            source.parent.mkdir()
+            source.write_text("METHOD = 'bm25'\n", encoding="utf-8")
+            git("add", "agent/retriever.py")
+            git("commit", "--quiet", "-m", "add agent file")
+            base = git("rev-parse", "HEAD")
+
+            destination = repository / "web/retriever.py"
+            destination.parent.mkdir()
+            source.rename(destination)
+            git("add", "--all")
+            git("commit", "--quiet", "-m", "move agent file to web")
+            head = git("rev-parse", "HEAD")
+
+            rename_detected_paths = git(
+                "diff",
+                "--name-only",
+                base,
+                head,
+            ).splitlines()
+            paths = changes.changed_paths(base, head, cwd=repository)
+
+        self.assertEqual(["web/retriever.py"], rename_detected_paths)
+        self.assertEqual(
+            {"agent/retriever.py", "web/retriever.py"},
+            set(paths),
+        )
+        self.assertEqual(
+            {"web": True, "agent": True, "eval": True},
+            changes.classify_paths(paths),
+        )
 
 
 if __name__ == "__main__":

@@ -52,7 +52,12 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
     return affected
 
 
-def changed_paths(base: str, head: str) -> list[str]:
+def changed_paths(
+    base: str,
+    head: str,
+    *,
+    cwd: Path | None = None,
+) -> list[str]:
     """Return NUL-safe names changed between two exact commits."""
     for label, value in (("base", base), ("head", head)):
         if SHA_PATTERN.fullmatch(value) is None:
@@ -61,9 +66,10 @@ def changed_paths(base: str, head: str) -> list[str]:
             )
     try:
         result = subprocess.run(
-            ["git", "diff", "--name-only", "-z", base, head],
+            ["git", "diff", "--no-renames", "--name-only", "-z", base, head],
             check=True,
             capture_output=True,
+            cwd=cwd,
         )
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.decode(errors="replace").strip()

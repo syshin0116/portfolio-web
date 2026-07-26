@@ -1,0 +1,148 @@
+{
+  "fixture_version": 1,
+  "name": "HITL request and correlated response",
+  "description": "An interrupt is approved through input.respond and the run completes.",
+  "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+  "wire_profile": "official-generated-snake-case",
+  "records": [
+    {
+      "kind": "stream_request",
+      "connection": "initial",
+      "payload": {
+        "channels": ["input", "lifecycle"],
+        "namespaces": [[]]
+      }
+    },
+    {
+      "kind": "command",
+      "payload": {
+        "id": 20,
+        "method": "run.start",
+        "params": {
+          "assistant_id": "agent",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "검색 도구 실행을 승인받아 진행해줘."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "command_response",
+      "payload": {
+        "type": "success",
+        "id": 20,
+        "result": {
+          "run_id": "run-hitl-001"
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-hitl-001",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-hitl-001",
+        "seq": 1,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031500001,
+          "data": {
+            "event": "running",
+            "graph_name": "agent"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-hitl-002",
+        "event": "input.requested"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-hitl-002",
+        "seq": 2,
+        "method": "input.requested",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031500002,
+          "data": {
+            "interrupt_id": "interrupt-approve-001",
+            "payload": {
+              "action": "approve_tool",
+              "tool_name": "search_blog"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "command",
+      "payload": {
+        "id": 21,
+        "method": "input.respond",
+        "params": {
+          "namespace": [],
+          "interrupt_id": "interrupt-approve-001",
+          "response": {
+            "action": "approve"
+          },
+          "update": {
+            "approval_recorded": true
+          },
+          "goto": "tools"
+        }
+      }
+    },
+    {
+      "kind": "command_response",
+      "payload": {
+        "type": "success",
+        "id": 21,
+        "result": {
+          "run_id": "run-hitl-002"
+        },
+        "meta": {
+          "applied_through_seq": 2
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-hitl-003",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-hitl-003",
+        "seq": 3,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031500003,
+          "data": {
+            "event": "completed",
+            "graph_name": "agent"
+          }
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "coverage": ["hitl", "hitl_update_goto", "run_lifecycle"]
+  }
+}

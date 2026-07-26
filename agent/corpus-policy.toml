@@ -1,0 +1,9 @@
+schema_version = 1
+
+# Owner-reviewed Nuartz-public legacy documents whose first line is not a
+# frontmatter opener. DocIds are exact, content-relative POSIX paths.
+no_frontmatter_allowlist = [
+  "Projects/Hostit/Hostit 개요.md",
+  "wiki/index.md",
+  "wiki/log.md",
+]

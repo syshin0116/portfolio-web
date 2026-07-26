@@ -1,8 +1,8 @@
 ---
-title: "ADR-0005: Rebuild the chat UI on assistant-ui with the react-langgraph adapter"
+title: "ADR-0005: Rebuild the chat UI on assistant-ui with an Agent Protocol v2 transport"
 description: >
   Replace chat-section.tsx and the vendored prompt-kit layer with assistant-ui 0.14.27
-  and @assistant-ui/react-langgraph, accepting the loss of branch switching.
+  and a typed Agent Protocol v2 transport, accepting the loss of branch switching.
 when_to_read: >
   Before changing the chat frontend, picking an assistant-ui adapter, or wondering
   why the branch picker always shows 1/1.
@@ -18,7 +18,7 @@ refs: [../research/aegra-native-stack.md, ../plans/rag-restack.md, 0004-adopt-ae
 template: adr
 ---
 
-# ADR-0005: Rebuild the chat UI on assistant-ui with the react-langgraph adapter
+# ADR-0005: Rebuild the chat UI on assistant-ui with an Agent Protocol v2 transport
 
 > **status: accepted.** An earlier draft the same day proposed repairing the existing UI
 > and deferring assistant-ui. It was `proposed` so the owner could decide; the owner chose
@@ -57,14 +57,18 @@ Two findings de-risked this substantially:
 
 | Option | Pros | Cons |
 |---|---|---|
-| A. `@assistant-ui/react` + `@assistant-ui/react-langgraph` | Purpose-built for an Agent Protocol server; one SDK call; thread list, HITL, tool UI, edit/regenerate all native | No branch support at all; four `unstable_` APIs on the happy path |
-| B. `@assistant-ui/react` + `@assistant-ui/react-langchain` | Wraps the existing `useStream` | **Wrong tool.** 0.0.19 is for LangChain.js runnables, not an Agent Protocol server. Near-dead |
-| C. Repair `@langchain/react` v1 drift, keep prompt-kit | ~200 LOC in one file | Keeps a 1,769-LOC vendored layer as a personal maintenance burden; still no thread list; still no branch switching (v1 `MessageMetadata` carries only `parentCheckpointId` and `optimisticStatus`) |
+| A. `@assistant-ui/react` + typed Agent Protocol v2 transport | Uses Aegra's current thread stream; content blocks, replay, nested agents, tool/run lifecycle, and commands are explicit | Own the protocol-to-runtime reducer until upstream ships one |
+| B. `@assistant-ui/react-langgraph` | One legacy SDK call; useful migration fixture | Calls `runs.stream`; does not exercise the latest AP v2 thread-centric protocol |
+| C. `@assistant-ui/react-langchain` | Wraps the existing `useStream` | **Wrong tool.** It targets LangChain.js runnables, not an Agent Protocol server |
+| D. Repair `@langchain/react` v1 drift, keep prompt-kit | ~200 LOC in one file | Keeps a 1,769-LOC vendored layer; no native AP v2 UI contract or thread list |
 
 ## Decision
 
-Adopt **A**: `@assistant-ui/react` 0.14.27 with `@assistant-ui/react-langgraph` 0.14.12 and
-`@langchain/langgraph-sdk` 1.9.28, wired through `unstable_createLangGraphStream`.
+Adopt assistant-ui as the component/runtime layer, with a typed custom transport over
+Aegra's Agent Protocol v2 thread-centric streaming endpoints and generated Agent Streaming
+Protocol bindings. `@assistant-ui/react-langgraph` 0.14.12 remains a temporary migration
+fixture, not the production transport, because `unstable_createLangGraphStream` calls the
+legacy `runs.stream` surface.
 
 **Not `@assistant-ui/react-langchain`.** An earlier draft recommended it on the basis that
 it wraps `useStream`; that reasoning applied to keeping the old backend, and the package is
@@ -97,6 +101,9 @@ Exact pins, no `^`.
 - Four `unstable_` APIs sit on the recommended happy path.
 - Nobody upstream has run assistant-ui against Aegra. Aegra's listed frontends are Agent
   Chat UI, LangGraph Studio, and CopilotKit.
+- The application owns a protocol-to-runtime reducer until assistant-ui ships a native
+  Agent Protocol v2 adapter. That adds code, but makes replay, nested-agent namespaces,
+  content blocks, tool lifecycle, and HITL commands explicit and fixture-testable.
 - Two silent-failure traps: omitting `getCheckpointId` makes Edit and Regenerate simply not
   render (reads as a missing feature, not missing config), and when
   `unstable_threadListAdapter` is set, `create` and `delete` are silently ignored so
@@ -115,6 +122,8 @@ Exact pins, no `^`.
       the wrong read here.
 - [ ] Async `onRequest` token hook with a 60s margin. Capturing the token once at mount
       401s mid-conversation.
+- [ ] Pin the upstream Agent Protocol schema revision, generate TypeScript bindings, and
+      replay committed AP v2 fixtures in CI.
 - [ ] Decide whether to rebuild branch switching or accept the loss.
 
 ## Revisit when
@@ -123,9 +132,14 @@ Exact pins, no `^`.
 - The `unstable_` APIs stabilise or break; either is a reason to re-read this.
 - assistant-ui appears on Aegra's integration list, or vice versa - it would mean someone
   else is carrying the compatibility risk.
+- assistant-ui ships a stable native Agent Protocol v2 transport, at which point delete the
+  local reducer after fixture parity passes.
 
 ## Changelog
 
 - 2026-07-26: created as `proposed` recommending repair-and-defer with the
   `react-langchain` adapter; replaced the same day with this `accepted` decision, which
   also corrects the adapter choice to `react-langgraph`.
+- 2026-07-26: amended the production transport from the legacy react-langgraph stream
+  adapter to typed Agent Protocol v2 thread streaming after “latest Agent Protocol” became
+  an explicit project requirement.

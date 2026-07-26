@@ -27,4 +27,4 @@ with the plan's phase section plus its linked research, rather than the whole fi
 
 | Plan | Covers | Status |
 |---|---|---|
-| [rag-restack.md](rag-restack.md) | Deploy the agent to GCP, repair the chat UI, open the chatbot publicly, add a code interpreter; Aegra and assistant-ui as deferred gates | draft, not started |
+| [rag-restack.md](rag-restack.md) | Rebuild on Aegra and assistant-ui, prove basic chat, evaluate retrieval plus bounded QuickJS/subagent capabilities, harden, then open anonymous testing to every visitor | draft, not started |

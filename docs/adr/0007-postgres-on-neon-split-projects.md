@@ -21,7 +21,7 @@ template: adr
 # ADR-0007: Postgres stays on Neon, split into two projects
 
 > **status: accepted.** The provider decision is settled. The region move and the split
-> are scheduled for plan phase P3 (the Cloud Run deploy) and must land before P6 (going
+> are scheduled for plan phase P2 (the Cloud Run deploy) and must land before P6 (going
 > public).
 
 ## Context

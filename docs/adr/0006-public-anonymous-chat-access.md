@@ -74,7 +74,8 @@ Capabilities are tiered:
 | Persistent `/memories/` | no (thread-scoped only) | yes | yes |
 | Model selection | no - server-pinned | limited | yes |
 | `/store`, `/crons`, `/assistants`, `/models` | denied | limited | yes |
-| Code interpreter | not yet - owner tier first, see plan phase P5 | | owner first |
+| Code interpreter | off by default; enable only if P4.5 gain and P5 budget/abuse gates pass | owner/eval experiment first | owner first |
+| Dynamic subagents | off by default; bounded tier only after P4.5/P5 gates | owner/eval experiment first | bounded |
 | Thread retention | ~14 days, GC'd | persistent | persistent |
 
 **Rollout is gated on plan phase P3.** Nothing in that phase is optional.

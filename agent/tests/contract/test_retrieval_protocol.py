@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
 from pathlib import Path
 
@@ -178,3 +179,31 @@ def test_protocol_module_when_imports_are_inspected_uses_only_stdlib() -> None:
     )
 
     assert imported_roots <= sys.stdlib_module_names | {"__future__"}
+
+
+def test_protocol_import_when_site_packages_are_disabled_stays_runtime_independent() -> (
+    None
+):
+    source_root = Path(__file__).parents[2] / "src"
+    script = "\n".join(
+        (
+            "import sys",
+            f"sys.path.insert(0, {str(source_root)!r})",
+            "from agent.retrieval.protocol import DocId",
+            "assert DocId('AI/post.md') == 'AI/post.md'",
+            "assert 'agent.graph' not in sys.modules",
+            "assert 'deepagents' not in sys.modules",
+            "assert 'rank_bm25' not in sys.modules",
+        )
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, (
+        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )

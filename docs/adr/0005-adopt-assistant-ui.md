@@ -1,8 +1,8 @@
 ---
 title: "ADR-0005: Rebuild the chat UI on assistant-ui with an Agent Protocol v2 transport"
 description: >
-  Replace chat-section.tsx and the vendored prompt-kit layer with assistant-ui 0.14.27
-  and a typed Agent Protocol v2 transport, accepting the loss of branch switching.
+  Replace chat-section.tsx and the vendored prompt-kit layer with assistant-ui's native
+  LangGraph runtime over the official Agent Protocol v2 ThreadStream SDK.
 when_to_read: >
   Before changing the chat frontend, picking an assistant-ui adapter, or wondering
   why the branch picker always shows 1/1.
@@ -12,7 +12,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-26"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs: [../research/aegra-native-stack.md, ../plans/rag-restack.md, 0004-adopt-aegra.md]
 template: adr
@@ -42,42 +42,82 @@ constraint is to be native to Aegra, LangGraph, and assistant-ui together. That 
 comparison: the question is no longer "repair or replace" but "which client is native to an
 Agent Protocol server".
 
-Two findings de-risked this substantially:
+Three findings de-risked this substantially:
 
-- **`@assistant-ui/react-langgraph` makes exactly one SDK call**, `client.runs.stream(...)`.
-  `load`, `create`, `delete`, `getCheckpointId`, and the thread-list adapter are all
-  callbacks you supply. So the "unverified against Aegra" surface is much smaller than it
-  looks.
-- **Aegra's `/runs/stream` emits the legacy event names the adapter parses** -
-  `messages/partial` / `messages/complete` / `updates`
-  (`services/graph_streaming.py:204-205,412`). Agent Protocol v2's content-block format is
-  on a different endpoint and does not affect this one.
+- `@assistant-ui/react-langgraph` exposes `useLangGraphRuntime({ stream, load, ... })`, so
+  assistant-ui can own the UI/runtime while the application supplies an official
+  thread-centric Agent Protocol v2 stream callback. The legacy
+  `unstable_createLangGraphStream` helper is not required.
+- `@langchain/langgraph-sdk` 1.9.28 has the required native pieces:
+  `Client.threads.stream`, `ThreadStream.submitRun/respondInput`, `MessageAssembler`, and
+  a dedicated lifecycle watcher connection.
+- Aegra's AP v2 stream filter is security-relevant. Client-side projection is too late if
+  open LangGraph `values` or nested messages already crossed the browser network boundary.
 
 ## Considered options
 
 | Option | Pros | Cons |
 |---|---|---|
-| A. `@assistant-ui/react` + typed Agent Protocol v2 transport | Uses Aegra's current thread stream; content blocks, replay, nested agents, tool/run lifecycle, and commands are explicit | Own the protocol-to-runtime reducer until upstream ships one |
-| B. `@assistant-ui/react-langgraph` | One legacy SDK call; useful migration fixture | Calls `runs.stream`; does not exercise the latest AP v2 thread-centric protocol |
+| A. `useLangGraphRuntime` + official SDK `ThreadStream` | Native assistant-ui runtime and official AP v2 client/assembler; no hand-written SSE parser | A small, security-sensitive SDK-event-to-runtime projection remains local |
+| B. `unstable_createLangGraphStream` | Small adapter surface | Calls legacy `runs.stream`; does not exercise the latest AP v2 thread-centric protocol |
 | C. `@assistant-ui/react-langchain` | Wraps the existing `useStream` | **Wrong tool.** It targets LangChain.js runnables, not an Agent Protocol server |
 | D. Repair `@langchain/react` v1 drift, keep prompt-kit | ~200 LOC in one file | Keeps a 1,769-LOC vendored layer; no native AP v2 UI contract or thread list |
 
 ## Decision
 
-Adopt assistant-ui as the component/runtime layer, with a typed custom transport over
-Aegra's Agent Protocol v2 event stream and generated Agent Streaming Protocol bindings.
-For Aegra 0.9.24 the concrete SSE path is
-`POST /threads/{thread_id}/stream/events` and requires
-`FF_V2_EVENT_STREAMING=true`; upstream currently documents `/stream`, so the pinned
-protocol lock records this dialect difference as well as Aegra's limited command set and
-HITL `value` versus upstream `payload` field. `@assistant-ui/react-langgraph` 0.14.12
-remains a temporary migration fixture, not the production transport, because
-`unstable_createLangGraphStream` calls the legacy `runs.stream` surface.
+Adopt `@assistant-ui/react` 0.14.28 and
+`@assistant-ui/react-langgraph` 0.14.13 through native `useLangGraphRuntime`.
+The runtime callback uses the official `@langchain/langgraph-sdk` 1.9.28
+`Client.threads.stream` / `ThreadStream` / `MessageAssembler` surface with
+`streamProtocol: "v2"`. `submitRun` and `respondInput` still send Aegra's supported
+`run.start` and `input.respond` wire commands, but avoid the older SDK methods' implicit
+wildcard `values` projection. There is no hand-written SSE parser, generated TypeScript
+transport facade, or production `runs.stream` call.
 
-Operations absent from the v2 command dispatcher use one isolated Aegra REST compatibility
-bridge: run cancellation, state/checkpoint fork for Edit and Regenerate, and thread
-history. They are not described as v2 commands, and each fallback has fixture parity tests
-so it can be deleted independently when Aegra implements the corresponding command.
+The browser opens these two physically separate SSE connections:
+
+| Connection | Channels | Namespace/depth | Consumer |
+|---|---|---|---|
+| root content pump | `messages`, `lifecycle`, `input`, `tools`, `custom` | `namespaces: [[]]`, `depth: 0` | local assistant-ui projection |
+| SDK lifecycle watcher | `lifecycle`, `input` only | wildcard, managed by `ThreadStream` outside the content union | SDK lifecycle/interrupt bookkeeping |
+
+The application calls `subscribe()` exactly once. The second connection is
+`ThreadStream`'s dedicated `openEventStream` watcher, not a second subscription whose
+filters could union nested messages into the content pump. The root content pump never
+subscribes to `values` or `updates`; nested answer text and open Deep Agents
+todo/file/scratch state therefore do not cross that stream boundary. Retrieval inspection
+is a bounded root `custom` event and is explicitly live-run-only; reload shows that past
+inspection detail is unavailable rather than reconstructing it from tool output.
+
+The local message reducer never displays system/tool content or internal
+chain-of-thought. That is a presentation guarantee, not a network guarantee: a root
+`messages` event can still carry provider reasoning/thinking content blocks across the
+browser SSE connection before the reducer replaces or drops them.
+
+Run cancellation, thread metadata, history, and state use the official SDK clients. Edit,
+Regenerate, branch mutation, and delete remain visibly unavailable where Aegra cannot
+perform them with the required atomicity; this implementation does not add a custom REST
+facade to imitate missing AP v2 commands.
+
+This decision is **WEB-A owner preview only**. `threads.getState/getHistory` can still
+return the graph's open checkpoint state to browser JavaScript before the adapter reduces
+it to visible human/assistant text. In addition, the SDK's wildcard lifecycle watcher also
+subscribes to `input`; a future nested `input.requested` payload or tool argument may be
+sensitive even though the current bounded fixture is not. Finally, the root `messages`
+channel can carry reasoning/thinking content even though the UI never displays it. UI
+sanitization is not a network security boundary. Anonymous WEB-B is prohibited until:
+
+1. the SDK/server can root-filter the watcher and return a server-side safe state/history
+   projection, or the graph exposes only reviewed bounded HITL/state schemas through a
+   separately proven public endpoint; **and**
+2. upstream/server-side suppression or redaction prevents reasoning blocks from entering
+   browser-bound messages, or the selected model path is separately proven not to emit
+   reasoning on the wire.
+
+The PostgreSQL integration's `rawPrivateStateObserved=false` assertion proves that the
+current fixture sentinel does not appear on either AP v2 SSE connection. It is a regression
+proof for this state-channel leak, not a claim that every future input payload is safe or
+that provider chain-of-thought cannot reach the browser.
 
 **Not `@assistant-ui/react-langchain`.** An earlier draft recommended it on the basis that
 it wraps `useStream`; that reasoning applied to keeping the old backend, and the package is
@@ -93,37 +133,29 @@ Exact pins, no `^`.
 
 **Positive**
 
-- ~2,800 LOC of bespoke UI deleted, including ~893 that was already dead.
+- The bespoke prompt-kit and custom SSE/Agent Protocol transport are deleted.
 - A thread list and thread persistence across reload, neither of which exists today.
-- Tool rendering becomes `makeAssistantToolUI` per tool.
-  `blog-search-result.tsx` already contains the card markup and was never imported - this
-  is its first wiring.
-- Edit and Regenerate work server-side via checkpoint forking.
+- AP v2 content blocks are assembled by the official `MessageAssembler`.
+- Root-only stream filters prevent open graph state and nested transcript text from
+  traversing the primary browser SSE connection.
+- HITL, cancellation, error routing, identity disposal, Korean IME, citations, responsive
+  layout, reduced motion, and focus restoration are fixture- or browser-testable seams.
 
 **Trade-offs**
 
-- **Branch switching is lost.** `@assistant-ui/react-langgraph` has zero branch support -
-  no `branch` references anywhere in its dist - so `BranchPickerPrimitive` renders but
-  always shows 1/1. The current `BranchSwitcher` works today. Rebuilding it means custom
-  work on `client.threads.getHistory`.
-- A rebuild of the landing-page hero with **zero frontend test coverage** as a safety net.
+- **Branch switching, Edit, Regenerate, and delete are disabled**, not emulated over a
+  partially compatible mutation surface.
 - Four `unstable_` APIs sit on the recommended happy path.
-- Nobody upstream has run assistant-ui against Aegra. Aegra's listed frontends are Agent
-  Chat UI, LangGraph Studio, and CopilotKit.
-- The application owns a protocol-to-runtime reducer until assistant-ui ships a native
-  Agent Protocol v2 adapter. That adds code, but makes replay, nested-agent namespaces,
-  content blocks, tool lifecycle, and HITL commands explicit and fixture-testable.
-- A small Aegra REST bridge remains for cancel, checkpoint fork/state, and history because
-  Aegra 0.9.24's v2 command sidecar implements only `run.start` and `input.respond`.
-- Two silent-failure traps: omitting `getCheckpointId` makes Edit and Regenerate simply not
-  render (reads as a missing feature, not missing config), and when
-  `unstable_threadListAdapter` is set, `create` and `delete` are silently ignored so
-  metadata must be stamped in `initialize()`.
+- The application still owns a bounded AP v2-to-assistant-ui projection until an upstream
+  adapter exists.
+- State/history reads, the SDK's wildcard input watcher, and root-message reasoning
+  exposure keep this preview owner-only.
+- `unstable_threadListAdapter` means metadata must be stamped in `initialize()`.
 
 **Follow-ups**
 
-- [ ] Build on a preview URL first. `chat-section.tsx` stays live until cutover.
-- [ ] **Verify the Korean IME guard with a Playwright test**, do not assume it. The native
+- [ ] Build and verify on a deployed owner preview URL before merging.
+- [ ] **Verify the Korean IME guard in a real browser**, do not assume it. The native
       composer guards Enter with both `e.nativeEvent.isComposing` and a `compositionRef`,
       but this is the single highest-risk regression for a Korean-language chat.
 - [ ] Keep `remark-breaks` in the markdown pipeline - the agent's Korean prose relies on
@@ -133,9 +165,11 @@ Exact pins, no `^`.
       the wrong read here.
 - [ ] Async `onRequest` token hook with a 60s margin. Capturing the token once at mount
       401s mid-conversation.
-- [ ] Pin the upstream Agent Protocol schema revision, generate TypeScript bindings, and
-      replay committed AP v2 fixtures in CI.
-- [ ] Decide whether to rebuild branch switching or accept the loss.
+- [x] Pin the SDK/protocol dependencies and replay committed plus actual Aegra AP v2
+      fixtures, including an isolated PostgreSQL 17 integration.
+- [ ] Add a public-safe state/history projection and root-filtered or schema-bounded input
+      watcher, plus upstream reasoning suppression/redaction or a model-level
+      no-reasoning-wire proof, before WEB-B anonymous access.
 
 ## Revisit when
 
@@ -154,3 +188,6 @@ Exact pins, no `^`.
 - 2026-07-26: amended the production transport from the legacy react-langgraph stream
   adapter to typed Agent Protocol v2 thread streaming after “latest Agent Protocol” became
   an explicit project requirement.
+- 2026-07-28: replaced the proposed hand-written AP v2 transport with native
+  `useLangGraphRuntime` over the official SDK `ThreadStream`/`MessageAssembler`, constrained
+  the content pump to root-only channels, and recorded the owner-only WEB-A boundary.

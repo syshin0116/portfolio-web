@@ -25,11 +25,12 @@ template: plan
 
 # Plan: rebuild the agent on Aegra, get basic chat working, then evaluate
 
-> **Status: in progress.** The P0 native runtime mechanics, P1 owner-auth boundary, and
-> repository-side Cloud Run delivery automation are implemented. The external
-> GCP/Neon bootstrap and first live deployment, provider-backed Korean chat, UI,
-> evaluation, and public-access phases remain. Phases are written to be dispatched to
-> separate agents. Read [How to dispatch](#how-to-dispatch) first.
+> **Status: in progress.** The P0 native runtime mechanics, P1 owner-auth boundary,
+> repository-side Cloud Run delivery automation, and P3 native assistant-ui
+> implementation are implemented or in review. The external GCP/Neon bootstrap, first
+> live deployment, provider-backed Korean chat, evaluation, and public-access phases
+> remain. Phases are written to be dispatched to separate agents. Read
+> [How to dispatch](#how-to-dispatch) first.
 
 > **Read [ADR-0008](../adr/0008-chatbot-is-a-rag-evaluation-testbed.md) before touching
 > anything here.** The purpose is comparing retrieval methods; the chat is an inspection
@@ -83,7 +84,7 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `langchain-quickjs` | `==0.3.4` | async execution only; owner/eval tier first |
 | `pyjwt` | `==2.13.0` | replaces 130 LOC of hand-rolled base64url + HMAC |
 | `@assistant-ui/react` | `0.14.28` | |
-| `@assistant-ui/react-langgraph` | `0.14.13` | **not** `react-langchain` |
+| `@assistant-ui/react-langgraph` | `0.14.13` | native `useLangGraphRuntime`; **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
 
 **Already dropped:** `chromadb` (zero call sites).
@@ -147,6 +148,20 @@ agent/
     ├── contract/                  # every registered Retriever
     ├── security/                  # publication and identity boundaries
     └── integration/               # Aegra graph/stream/restart smoke
+web/
+└── components/assistant/
+    ├── chat-section.tsx           # owner-preview entry and configuration boundary
+    ├── chat-shell.tsx             # assistant-ui primitives + responsive shell
+    ├── agent-runtime-provider.tsx # native useLangGraphRuntime composition
+    └── runtime/
+        ├── native-client.ts        # official AP v2 ThreadStream + MessageAssembler
+        ├── thread-adapter.ts       # official SDK metadata/state/history adapter
+        ├── inspection.ts           # bounded live-only retrieval projection
+        ├── interrupt-projection.ts # bounded HITL UI schema
+        ├── token-broker.ts         # identity-scoped token/cancellation lifecycle
+        ├── ime.ts                  # native + ref Korean composition guard
+        ├── focus-restoration.ts
+        └── error-state.ts
 eval/
 ├── pyproject.toml                 # uv workspace member; depends on agent
 ├── src/blogeval/
@@ -538,7 +553,8 @@ the process settings split the guard, or measured memory leaves inadequate headr
 
 ## P3 - assistant-ui `~3 days`
 
-Preview URL first; `chat-section.tsx` stays live until cutover.
+Preview URL first. The native implementation is WEB-A owner-only until the WEB-B public
+state/input network boundary below is satisfied.
 
 ### P3.1 UI contract
 
@@ -547,36 +563,32 @@ instead of trying to fit every control into the hero. Desktop uses a three-zone 
 mobile uses one conversation surface with sheets for threads and run detail.
 
 ```text
-web/components/chat/
-├── chat-entry.tsx                 # home-page compact entry + open focused mode
-├── chat-shell.tsx                 # desktop/mobile responsive layout
-├── thread-list.tsx                # create, rename, delete, retention state
-├── conversation.tsx              # assistant-ui Thread
-├── composer.tsx                  # Korean IME, stop, retry, attachments policy
-├── capability-bar.tsx            # active retrieval/mode; no fake system messages
-├── run-timeline.tsx              # retrieval/tool/QuickJS/subagent lifecycle
-├── source-card.tsx               # title, excerpt, path, open post
-├── quickjs-card.tsx              # code, bounded output, timeout/truncation
-├── subagent-card.tsx             # specialist, status, evidence, cost/latency
-├── interrupt-card.tsx            # approve/reject/edit
-├── error-state.tsx               # 401/403/409/429/5xx/reconnect mapping
+web/components/assistant/
+├── chat-section.tsx               # owner-preview gate
+├── chat-shell.tsx                 # assistant-ui Thread/ThreadList primitives
+├── agent-runtime-provider.tsx     # native runtime + thread adapter
 └── runtime/
-    ├── agent-protocol-v2.ts       # typed transport + reducer
-    ├── aegra-rest.ts              # cancel/state/history compatibility bridge
-    ├── thread-adapter.ts
-    ├── auth.ts
-    └── protocol-types.ts          # generated; schema lock identifies source
+    ├── native-client.ts           # official SDK ThreadStream/MessageAssembler
+    ├── thread-adapter.ts          # official SDK metadata/state/history
+    ├── inspection.ts              # exact syshin.rag.inspection.v1 projection
+    ├── interrupt-projection.ts    # bounded HITL projection
+    ├── token-broker.ts            # refresh, identity disposal, cancellation snapshot
+    ├── ime.ts
+    ├── focus-restoration.ts
+    └── error-state.ts
 ```
 
-- Default visitor view: short explanation that this is a RAG evaluation testbed, two or
-  three Korean example prompts, privacy/AI disclaimer, and a clear “new conversation”
-  action. No sign-in prompt is shown for anonymous testing.
+- WEB-A signed-out view explains that the preview is owner-only. WEB-B later replaces this
+  with anonymous testing, example prompts, privacy/AI copy, and a clear new-conversation
+  action only after P5/P6 gates pass.
 - Message answers render citations inline and a source list below. Retrieval method and
   corpus revision are visible in a compact run-details disclosure, not mixed into prose.
-- Tool activity collapses into a timeline by default. Retrieval shows query/method/hit
-  count; QuickJS shows code and bounded output; each subagent shows its name, purpose,
-  status, evidence count, latency, and budget usage. Internal chain-of-thought is never
-  displayed.
+- Tool activity collapses into a timeline by default. Retrieval shows the exact bounded
+  query/method/hit/stage/source fields emitted by the server. QuickJS or subagent-specific
+  cards appear only after a reviewed protocol event exists; generic tool/nested lifecycle
+  must not be relabelled as a capability the run did not prove. Internal chain-of-thought
+  is never displayed. This is only a UI guarantee: root `messages` events may already
+  have carried reasoning/thinking blocks to the browser.
 - Capability controls reflect server-authorized tier. Anonymous users cannot reveal hidden
   owner controls. Changing retrieval/capability settings creates explicit run config and
   never injects a fake system message into checkpoint history.
@@ -593,51 +605,56 @@ web/components/chat/
 
 ### P3.2 Runtime implementation
 
-- `npx assistant-ui@latest init` inside `web/`, then `npx shadcn@latest add
-  @assistant-ui/thread @assistant-ui/thread-list`.
-- Keep assistant-ui as the component/runtime layer, but do **not** make
-  `unstable_createLangGraphStream` the production transport: it calls legacy
-  `client.runs.stream`. Implement `AgentProtocolV2Transport` over the generated Agent
-  Streaming Protocol TypeScript bindings and Aegra's
-  `POST /threads/{thread_id}/stream/events`, with the HTTP commands sidecar for
-  `run.start` and `input.respond`; run cancellation continues through the run-cancel API.
-  Translate the documented Aegra HITL `value` field to upstream `payload` at this boundary.
-  Keep the upstream `/stream` path in the compatibility matrix so a future conformant
-  Aegra release is a transport switch, not a rediscovery. The legacy adapter is permitted
-  only as a temporary comparison fixture during P3.
-- Isolate operations missing from Aegra's v2 command dispatcher in `aegra-rest.ts`:
-  cancellation uses `POST /threads/{thread_id}/runs/{run_id}/cancel`; checkpoint
-  state/fork and Edit/Regenerate use the `/state` and `/state/checkpoint` routes; branch
-  history/load uses `/history`. These are an explicit Aegra compatibility bridge, not AP v2
-  commands. Fixture-test their response mapping and delete each fallback when Aegra adds
-  the corresponding command.
-- The transport maps content-block deltas, tool lifecycle, run lifecycle, checkpoints,
-  tasks, nested-agent namespaces, replay cursors, and structured errors into assistant-ui
-  runtime state. Unknown event kinds are logged and ignored without corrupting known state;
-  schema drift fails CI before deploy.
+- Use assistant-ui's native `useLangGraphRuntime`, but do **not** use
+  `unstable_createLangGraphStream`: it calls legacy `client.runs.stream`. Supply a stream
+  callback backed by the official `@langchain/langgraph-sdk` 1.9.28
+  `Client.threads.stream`, `ThreadStream`, and `MessageAssembler`.
+- Call `ThreadStream.submitRun/respondInput`. These emit Aegra's supported
+  `run.start`/`input.respond` wire commands without the older SDK methods' implicit
+  wildcard `values` projection.
+- Open exactly one application content subscription:
+  `channels=[messages,lifecycle,input,tools,custom]`, `namespaces=[[]]`, `depth=0`.
+  Never subscribe to `values` or `updates`, and never union nested messages into this
+  connection. The SDK separately opens a physical lifecycle watcher connection with only
+  `channels=[lifecycle,input]`; it is outside the content union.
+- Use bounded local projections for root messages, citations, inspection events, and HITL.
+  The local reducer drops system/tool/reasoning/open-state fields from UI state. Inspection detail is
+  `delivery=live-run-only`; reload must say the exact detail is unavailable.
+- Use the official SDK client for cancellation, metadata, state, and history. Do not add a
+  custom REST facade. Keep Edit/Regenerate/branch mutation/delete visibly disabled until
+  the backend supports their required semantics.
+- **WEB-B network gate:** `threads.getState/getHistory` currently returns open checkpoint
+  state to browser JavaScript before local reduction. The SDK lifecycle watcher's wildcard
+  `input` can also carry a future sensitive nested interrupt payload. Root `messages` can
+  carry provider reasoning/thinking blocks before the local reducer hides them.
+  Owner-only WEB-A may accept these limitations; anonymous access may not. Before WEB-B,
+  require a server-side safe state/history projection plus a root-filterable watcher, or a
+  separately proven public endpoint whose graph-level HITL/state schemas are bounded;
+  also require upstream/server-side reasoning suppression/redaction or a separately proven
+  model path that emits no reasoning on the browser wire.
 - In `load()`, read `state.interrupts` **first** - Aegra returns interrupts as a top-level
   field, so the quickstart's `state.tasks[0].interrupts` is the wrong read here.
-- **Pass `getCheckpointId`.** Omitting it silently hides Edit and Regenerate, which reads
-  as a missing feature rather than missing config.
 - Async `onRequest` token hook with a 60s margin. Capturing the token once at mount 401s
   mid-conversation.
 - `remarkPlugins={[remarkGfm, remarkBreaks]}` with components memoised at module scope.
   **remark-breaks is load-bearing for Korean.**
 - **Korean IME: verify with a Playwright test, do not assume.** Highest-risk regression.
-- Then cut over and delete the named legacy server modules and tests asserting those
-  internals, plus the vendored prompt-kit and `chat-section.tsx`. Do not use an LOC target
-  as deletion scope. Explicitly retain `agent/src/agent/retrieval/**`, the rebuilt graph,
-  auth/identity code, and their tests.
+- Cut over and delete the named legacy browser transport modules and vendored prompt-kit.
+  Do not use an LOC target as deletion scope. Explicitly retain
+  `agent/src/agent/retrieval/**`, the rebuilt graph, auth/identity code, and their tests.
 
-**Accept:** a full multi-turn Korean conversation against deployed Aegra over AP v2;
-reload and a forced mid-stream reconnect restore the thread without duplicate text; tool,
-QuickJS, and nested-subagent events render from committed protocol fixtures; HITL
-resume uses `input.respond`, cancellation uses the run-cancel endpoint, and both are
-fixture-tested; desktop and 390 px mobile visual snapshots cover every required state;
-keyboard/a11y and Korean IME tests pass; no production import or network call uses the
-legacy `/runs/stream` transport. Edit/Regenerate and history either pass against the
-documented REST compatibility bridge or are visibly disabled; they never silently render
-and fail.
+**Accept:** a full multi-turn Korean conversation against deployed owner-authenticated
+Aegra over AP v2; reload restores visible messages while truthfully marking prior
+inspection detail unavailable; the two SSE connections match the exact channel filters
+above; the actual JavaScript SDK ↔ Aegra ↔ isolated PostgreSQL 17 fixture proves
+`rawPrivateStateObserved=false`, canonical inspection, HITL, tool/nested lifecycle,
+message assembly, persistence, and connection return. This sentinel assertion is a
+state-channel regression, not a general proof that future input payloads are public-safe
+or that chain-of-thought cannot traverse a root message event.
+Desktop, 768 px, 390 px, and 320 px browser evidence covers console/network/a11y,
+reduced-motion, focus restoration, and Korean IME. No production import or network call
+uses legacy `/runs/stream`; unsupported mutations are visibly disabled. WEB-B remains
+blocked on safe state/history, the input watcher, and reasoning-wire suppression or proof.
 
 ### ✅ Basic chat works end to end here
 

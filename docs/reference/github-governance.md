@@ -231,9 +231,9 @@ The identities run weekly on Monday in `Asia/Seoul`, staggered at 04:00, 04:10,
 04:20, and 04:40. Bun, uv, and Actions allow three version PRs; the npm bridge
 allows zero version PRs. Bun and uv use the reviewed 7-day default, 14-day
 major, 7-day minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day
-default cooldown. Routine minor/patch updates are grouped per ecosystem.
-Security updates are not grouped or cooled, so one vulnerable package is not
-held behind unrelated upgrades.
+default cooldown. Routine minor/patch updates are grouped for Bun, uv, and
+Actions; the npm bridge opens no version PRs. Security updates are not grouped
+or cooled, so one vulnerable package is not held behind unrelated upgrades.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
 LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
 `@langchain/*`, Next.js, NextAuth, `@auth/*`, React/React DOM and their type
@@ -297,6 +297,7 @@ they have been applied.
 - [GitHub deployment branch policy API](https://docs.github.com/en/rest/deployments/branch-policies)
 - [Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
 - [Dependabot supported ecosystems and lockfiles](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)
+- [Dependabot security-only ecosystem configuration](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-security-updates#overriding-the-default-behavior-with-a-configuration-file)
 - [GitHub vulnerability-alert status API](https://docs.github.com/en/rest/repos/repos#check-if-vulnerability-alerts-are-enabled-for-a-repository)
 - [GitHub Dependabot security-update status API](https://docs.github.com/en/rest/repos/repos#check-if-automated-security-fixes-are-enabled-for-a-repository)
 - [GitHub repository security-and-analysis response](https://docs.github.com/en/rest/repos/repos#get-a-repository)

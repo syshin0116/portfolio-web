@@ -959,7 +959,7 @@ runs:
                     "next-auth",
                 ]
             ),
-            groups["npm:/web:web-routine"]["exclude_patterns"],
+            groups["bun:/web:web-routine"]["exclude_patterns"],
         )
         self.assertEqual(
             sorted(
@@ -973,7 +973,7 @@ runs:
                     "langsmith",
                 ]
             ),
-            groups["pip:/agent:agent-routine"]["exclude_patterns"],
+            groups["uv:/agent:agent-routine"]["exclude_patterns"],
         )
 
     def test_dependabot_group_pattern_mutation_is_rejected(self) -> None:
@@ -1053,18 +1053,18 @@ runs:
 
     def test_dependabot_update_removal_duplicate_and_extra_are_rejected(self) -> None:
         original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
-        npm_start = original.index('  - package-ecosystem: "npm"')
-        pip_start = original.index('  - package-ecosystem: "pip"')
+        bun_start = original.index('  - package-ecosystem: "bun"')
+        uv_start = original.index('  - package-ecosystem: "uv"')
         actions_start = original.index('  - package-ecosystem: "github-actions"')
-        npm_update = original[npm_start:pip_start].rstrip()
+        bun_update = original[bun_start:uv_start].rstrip()
         mutations = {
             "removal": original[:actions_start].rstrip() + "\n",
-            "duplicate": original.rstrip() + "\n\n" + npm_update + "\n",
+            "duplicate": original.rstrip() + "\n\n" + bun_update + "\n",
             "extra": (
                 original.rstrip()
                 + "\n\n"
-                + npm_update.replace(
-                    'package-ecosystem: "npm"',
+                + bun_update.replace(
+                    'package-ecosystem: "bun"',
                     'package-ecosystem: "docker"',
                     1,
                 )
@@ -1102,20 +1102,20 @@ runs:
     def test_dependabot_group_removal_duplicate_and_extra_are_rejected(self) -> None:
         original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
         groups_start = original.index("    groups:\n      web-routine:")
-        pip_start = original.index('\n  - package-ecosystem: "pip"')
-        group_block = original[groups_start + len("    groups:\n") : pip_start].rstrip()
+        uv_start = original.index('\n  - package-ecosystem: "uv"')
+        group_block = original[groups_start + len("    groups:\n") : uv_start].rstrip()
         mutations = {
             "removal": (
-                original[:groups_start] + "    groups: {}\n" + original[pip_start + 1 :]
+                original[:groups_start] + "    groups: {}\n" + original[uv_start + 1 :]
             ),
             "duplicate": (
-                original[:pip_start] + "\n" + group_block + original[pip_start:]
+                original[:uv_start] + "\n" + group_block + original[uv_start:]
             ),
             "extra": (
-                original[:pip_start]
+                original[:uv_start]
                 + "\n"
                 + group_block.replace("web-routine:", "web-extra:", 1)
-                + original[pip_start:]
+                + original[uv_start:]
             ),
         }
         policy = governance.load_policy()

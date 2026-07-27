@@ -138,7 +138,7 @@ EXPECTED_DEPENDABOT = {
     "version": 2,
     "updates": [
         {
-            "package_ecosystem": "npm",
+            "package_ecosystem": "bun",
             "directory": "/web",
             "schedule": {
                 "interval": "weekly",
@@ -170,7 +170,7 @@ EXPECTED_DEPENDABOT = {
             ],
         },
         {
-            "package_ecosystem": "pip",
+            "package_ecosystem": "uv",
             "directory": "/agent",
             "schedule": {
                 "interval": "weekly",

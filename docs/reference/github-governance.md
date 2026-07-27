@@ -217,10 +217,12 @@ production or spend-bearing preview.
 
 ## Dependabot and scheduled audit
 
-Dependabot version 2 has exactly three update identities: npm at `/web`, pip at
-`/agent`, and GitHub Actions at `/`. They run weekly on Monday in
-`Asia/Seoul`, staggered at 04:00, 04:20, and 04:40, with three open PRs per
-ecosystem. npm and pip use the reviewed 7-day default, 14-day major, 7-day
+Dependabot version 2 has exactly three update identities: Bun at `/web`, uv at
+`/agent`, and GitHub Actions at `/`. The native ecosystems are required so
+Dependabot updates `web/bun.lock` and `agent/uv.lock` with their manifests
+instead of opening predictably red manifest-only PRs. They run weekly on Monday
+in `Asia/Seoul`, staggered at 04:00, 04:20, and 04:40, with three open PRs per
+ecosystem. Bun and uv use the reviewed 7-day default, 14-day major, 7-day
 minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day default
 cooldown. Routine minor/patch updates are grouped per ecosystem. Security
 updates are not grouped or cooled, so one vulnerable package is not held behind
@@ -240,10 +242,9 @@ update state is checked through both the dedicated
 `automated-security-fixes` endpoint and the admin-only repository security
 summary so one stale or incomplete surface cannot appear green by itself. A
 missing summary fails closed rather than assuming the caller lacks permission.
-At the time this contract was recorded, vulnerability alerts were disabled and
-the security-update API and repository summary both reported security updates
-disabled. Those are two intentional rollout gaps; this PR detects them but does
-not change the external settings.
+Vulnerability alerts and automated security updates are enabled. The live
+verifier confirms both the dedicated endpoint and the repository security
+summary, so disabling or pausing either feature is external policy drift.
 
 [`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs
 weekly and manually. It verifies both lockfiles, runs Bun's high/critical audit,
@@ -286,6 +287,7 @@ they have been applied.
 - [GitHub deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
 - [GitHub deployment branch policy API](https://docs.github.com/en/rest/deployments/branch-policies)
 - [Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
+- [Dependabot supported ecosystems and lockfiles](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)
 - [GitHub vulnerability-alert status API](https://docs.github.com/en/rest/repos/repos#check-if-vulnerability-alerts-are-enabled-for-a-repository)
 - [GitHub Dependabot security-update status API](https://docs.github.com/en/rest/repos/repos#check-if-automated-security-fixes-are-enabled-for-a-repository)
 - [GitHub repository security-and-analysis response](https://docs.github.com/en/rest/repos/repos#get-a-repository)

@@ -468,7 +468,7 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.140.4"
+version = "0.140.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -477,9 +477,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/24/da8da082a850c9732dd5a5b3ccdfe51844750e42f83c430b0d8e241eab2e/fastapi-0.140.4.tar.gz", hash = "sha256:4a040c5d047486a62c497eb6e926a6d6b281efb7f99b8b50288489ba1fa0a468", size = 421514, upload-time = "2026-07-27T15:46:48.011Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/f9/51e0ce9abbbca78ca57ac9a0cac1851387b3ac4650d1559bd69eeeff11c0/fastapi-0.140.5.tar.gz", hash = "sha256:db294174362b7f65911cb51855e20e8ff0b5eb588407c611fe77d498938f3ea8", size = 421569, upload-time = "2026-07-27T16:02:55.196Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/77/2915c0cc8b602f3d611294920171c67ce396b43cda5fa63f3e4b465d635e/fastapi-0.140.4-py3-none-any.whl", hash = "sha256:6a1f8ec2f01ae47c96dc991d49660ce4f31f50ed0d7c9df80c5e57037bfe1240", size = 130958, upload-time = "2026-07-27T15:46:49.175Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/7f/121bf6fb72e845013a83f96e697bbd24c6fbe41503fff8c6f83f02e300ae/fastapi-0.140.5-py3-none-any.whl", hash = "sha256:82e7a988a801d8d71e712cb7d12ebb5c87c2e74bccb104f5741cce46a742f806", size = 131034, upload-time = "2026-07-27T16:02:53.555Z" },
 ]
 
 [[package]]
@@ -2232,7 +2232,7 @@ requires-dist = [
     { name = "aegra-api", specifier = "==0.9.24" },
     { name = "aegra-cli", specifier = "==0.9.24" },
     { name = "deepagents", specifier = "==0.6.12" },
-    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi", specifier = ">=0.139.2" },
     { name = "kiwipiepy", specifier = "==0.23.2" },
     { name = "kiwipiepy-model", specifier = "==0.23.0" },
     { name = "langchain", specifier = "==1.3.14" },

@@ -303,6 +303,7 @@ async def test_unauthorized_quickjs_fails_before_spending_budget():
         depth=0,
         allow_subagents=False,
         allowed_subagents=frozenset(),
+        input_token_counter=_zero_input_tokens,
         quickjs_tool_name="eval",
         allow_quickjs=False,
     )
@@ -1244,6 +1245,8 @@ def test_snapshot_is_observational_and_finalize_is_frozen_terminal_and_idempoten
     with pytest.raises(RunBudgetExceededError, match="finalized"):
         budget.reserve_tool()
     with pytest.raises(RunBudgetExceededError, match="finalized"):
+        budget.reserve_quickjs()
+    with pytest.raises(RunBudgetExceededError, match="finalized"):
         budget.exhaust()
 
 
@@ -1283,7 +1286,7 @@ def test_open_model_and_task_reservations_are_visible_and_prevent_finalization()
 
     with pytest.raises(
         RunBudgetUnsettledError,
-        match="1 model and 1 task",
+        match="1 model, 0 QuickJS, and 1 task",
     ):
         budget.finalize()
     with pytest.raises(RunBudgetExceededError, match="terminal"):
@@ -1299,6 +1302,32 @@ def test_open_model_and_task_reservations_are_visible_and_prevent_finalization()
     assert finalized.provider_output_tokens is None
     assert finalized.provider_cache_read_input_tokens is None
     assert finalized.provider_cache_write_input_tokens is None
+    assert finalized.finalized is True
+
+
+def test_open_quickjs_reservation_is_visible_and_prevents_finalization():
+    budget = RunBudget(clock=lambda: 0.0)
+    reservation = budget.reserve_quickjs()
+
+    observation = budget.snapshot()
+    assert observation.quickjs_calls == 1
+    assert observation.quickjs_in_flight == 1
+    assert observation.quickjs_output_bytes == 4_096
+    assert observation.finalized is False
+
+    with pytest.raises(
+        RunBudgetUnsettledError,
+        match="0 model, 1 QuickJS, and 0 task",
+    ):
+        budget.finalize()
+    with pytest.raises(RunBudgetExceededError, match="terminal"):
+        budget.reserve_quickjs()
+
+    budget.settle_quickjs(reservation, actual_output_bytes=7)
+    finalized = budget.finalize()
+    assert finalized.quickjs_calls == 1
+    assert finalized.quickjs_in_flight == 0
+    assert finalized.quickjs_output_bytes == 7
     assert finalized.finalized is True
 
 
@@ -1381,6 +1410,7 @@ def test_exhaustion_is_terminal_but_open_reservations_can_be_cleaned_up():
     operations = (
         budget.remaining_seconds,
         budget.reserve_tool,
+        budget.reserve_quickjs,
         lambda: budget.reserve_task(depth=1),
         lambda: budget.reserve_model(input_tokens=0),
     )

@@ -29,9 +29,13 @@ out of the retrieval leaderboard.
   is tag
   [`langchain-quickjs==0.3.4`](https://github.com/langchain-ai/deepagents/tree/langchain-quickjs%3D%3D0.3.4/libs/partners/quickjs)
   at commit `196a0870fcf8a7f29d1fb37886dd323b190f9c16`.
+- `quickjs-rs==0.2.5` is also a direct exact dependency, not merely a
+  transitive resolution. Runtime contract tests verify both installed package
+  metadata versions and the concrete native `Runtime`/`ThreadWorker` classes.
 - `BoundedQuickJSMiddleware` subclasses the native
-  `CodeInterpreterMiddleware`. It retains the single native registry and calls
-  only the native tool's async coroutine.
+  `CodeInterpreterMiddleware`. It retains the exact middleware/registry
+  instance, calls only the native tool's async coroutine, and exposes an
+  idempotent async close that explicitly stops every runtime and worker.
 - Deep Agents remains the planner and subagent layer. LangChain middleware
   supplies QuickJS, and LangGraph/Aegra owns graph execution and persistence.
 - The replacement `StructuredTool` has no synchronous function. A synchronous
@@ -48,6 +52,12 @@ Client context, metadata, configurable fields, model output, and checkpoint
 state cannot grant the capability. Reserved client keys such as `quickjs`,
 `code_interpreter`, and `capability_*` fail closed.
 
+The 2×2 experiment may force dynamic subagents on or off only through the
+server-owned exact-boolean `create_graph(dynamic_subagents_enabled=...)`
+argument. `None` preserves the normal permission policy, `False` forces the
+axis off, and `True` still requires `admin`/`eval`; integers, strings, client
+config, and environment variables cannot select this axis.
+
 The middleware and tool node remain topology-stable across Aegra access
 contexts. When unauthorized, both the QuickJS middleware and shared budget
 middleware remove `eval` before model binding, omit its system prompt, and
@@ -55,8 +65,8 @@ reject a forged tool call before reserving or executing it. Anonymous and
 ordinary signed-in users therefore cannot observe or execute the capability.
 
 QuickJS middleware precedes `RunBudgetMiddleware`. This ordering is
-load-bearing: the budget must estimate input tokens after the bounded QuickJS
-prompt has been appended.
+load-bearing: Anthropic's exact input counter must see the same prompt and tool
+payload delivered to generation after the bounded QuickJS prompt is appended.
 
 ## Sandbox
 
@@ -67,7 +77,14 @@ Every call uses native `mode="call"` with:
 - `capture_console=False`;
 - no filesystem, environment, network, module loader, import source, Python
   callable, LangChain tool, or `task` bridge;
-- only the guest's data-oriented JavaScript built-ins.
+- only deterministic guest data-oriented JavaScript built-ins.
+
+Every accepted source is prefixed inside its fresh guest context with a
+fail-closed hardening prelude. `Date`, `performance`, `crypto`, `Temporal`,
+`Math.random`, `WeakRef`, and `FinalizationRegistry` are unavailable through
+non-writable, non-configurable bindings; `Math` is frozen and its global
+binding cannot be replaced. Tests attempt immediate and promise-delayed
+redefinition in the real guest.
 
 Declarative children have no `eval` tool or QuickJS middleware. Their shared
 budget middleware also explicitly denies the tool name, so a child capability
@@ -129,8 +146,11 @@ sequence or JSON escape.
 
 The Aegra async graph factory constructs a fresh middleware/native registry and
 one non-serializable `RunBudget` for every access. Call mode ignores snapshot
-input, evicts the native slot after the agent turn, and never writes
-`_quickjs_snapshot_payload` to checkpoints.
+input and never writes `_quickjs_snapshot_payload` to checkpoints. Its
+`finally` path awaits idempotent registry closure after normal completion,
+exceptions, and cancellation; slots must be empty and captured worker threads
+dead before the factory exits. Cleanup failure is propagated on an otherwise
+normal exit but logged without masking an already-active graph exception.
 
 P4.5 evaluates QuickJS as an independent on/off axis. Public enablement remains
 out of scope until the capability dataset shows a material gain and the P5/P6

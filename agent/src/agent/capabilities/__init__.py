@@ -10,6 +10,7 @@ from agent.capabilities.budget import (
     RunBudgetUnsettledError,
 )
 from agent.capabilities.quickjs import (
+    QUICKJS_SYSTEM_PROMPT,
     QUICKJS_TOOL_NAME,
     BoundedQuickJSMiddleware,
     quickjs_allowed,
@@ -33,6 +34,7 @@ __all__ = [
     "BudgetSnapshot",
     "InputTokenCountError",
     "InputTokenCounter",
+    "QUICKJS_SYSTEM_PROMPT",
     "QUICKJS_TOOL_NAME",
     "QuickJSReservation",
     "RunBudget",

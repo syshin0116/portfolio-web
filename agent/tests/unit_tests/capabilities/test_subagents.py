@@ -10,6 +10,7 @@ from langgraph.store.memory import InMemoryStore
 from pydantic import Field
 
 from agent.capabilities.budget import RunBudget
+from agent.capabilities.quickjs import QUICKJS_SYSTEM_PROMPT
 from agent.capabilities.subagents import (
     SUBAGENT_NAMES,
     SUBAGENT_SKILLS,
@@ -162,11 +163,22 @@ async def test_compiled_subagents_enforce_real_state_and_backend_isolation():
             "glob",
             "grep",
             "execute",
+            "fetch",
+            "http",
+            "network",
+            "shell",
+            "python",
+            "process",
+            "env",
         }.isdisjoint(tool_names)
         system_text = str(request.system_message.content)
         assert "Exactly one server-owned skill" in system_text
         assert "blog-retrieval" in system_text
         assert "/blog-retrieval/SKILL.md" in system_text
+        assert QUICKJS_SYSTEM_PROMPT.strip() not in system_text
+        assert "QuickJS" not in system_text
+        assert "tools.eval" not in system_text
+        assert "task()" not in system_text
 
     snapshot = budget.snapshot()
     assert (snapshot.model_calls, snapshot.charged_tokens) == (4, 40)

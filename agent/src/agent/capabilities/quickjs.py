@@ -34,6 +34,39 @@ QUICKJS_MAX_SNAPSHOT_BYTES = 64 * 1024
 QUICKJS_RESULT_SCHEMA = "syshin.quickjs.result.v1"
 
 _NATIVE_TRUNCATION = re.compile(r"… \[truncated \d+ chars\]$")
+_QUICKJS_HARDENING_PRELUDE = """\
+(() => {
+  const deterministicMath = globalThis.Math;
+  Object.defineProperty(deterministicMath, "random", {
+    value: undefined,
+    writable: false,
+    configurable: false,
+    enumerable: false
+  });
+  Object.freeze(deterministicMath);
+  Object.defineProperty(globalThis, "Math", {
+    value: deterministicMath,
+    writable: false,
+    configurable: false,
+    enumerable: false
+  });
+  for (const name of [
+    "Date",
+    "performance",
+    "crypto",
+    "Temporal",
+    "WeakRef",
+    "FinalizationRegistry"
+  ]) {
+    Object.defineProperty(globalThis, name, {
+      value: undefined,
+      writable: false,
+      configurable: false,
+      enumerable: false
+    });
+  }
+})();
+"""
 _ALLOWED_STATUSES = frozenset(
     {
         "ok",
@@ -56,8 +89,10 @@ for ordinary prose.
 - No state persists across calls.
 - No filesystem, environment, network, module loader, console, Python/host callable,
   LangChain tool, or subagent/task bridge is available.
-- Use only JavaScript's pure-data built-ins such as arrays, objects, strings, Math, and
-  JSON.
+- Use only deterministic JavaScript pure-data built-ins such as arrays, objects,
+  strings, deterministic Math functions, and JSON. Host time and entropy are
+  unavailable: Date, performance, crypto, Temporal, Math.random, weak references, and
+  finalizers cannot be used or redefined.
 - Source is capped at {QUICKJS_MAX_SOURCE_BYTES} UTF-8 bytes and serialized output at
   {QUICKJS_MAX_OUTPUT_BYTES} UTF-8 bytes.
 - Each call has a {QUICKJS_TIMEOUT_SECONDS:.1f}s native execution deadline, a
@@ -229,6 +264,7 @@ class BoundedQuickJSMiddleware(CodeInterpreterMiddleware):
         if not isinstance(enabled, bool):
             raise TypeError("enabled must be a boolean")
         self._enabled = enabled
+        self._close_task: asyncio.Task[None] | None = None
         super().__init__(
             memory_limit=QUICKJS_MEMORY_LIMIT_BYTES,
             timeout=QUICKJS_TIMEOUT_SECONDS,
@@ -268,7 +304,10 @@ class BoundedQuickJSMiddleware(CodeInterpreterMiddleware):
                 )
             try:
                 async with asyncio.timeout(QUICKJS_OUTER_TIMEOUT_SECONDS):
-                    native_message = await native_coroutine(runtime, code)
+                    native_message = await native_coroutine(
+                        runtime,
+                        f"{_QUICKJS_HARDENING_PRELUDE}\n{code}",
+                    )
             except asyncio.CancelledError:
                 raise
             except TimeoutError:
@@ -305,6 +344,19 @@ class BoundedQuickJSMiddleware(CodeInterpreterMiddleware):
                 metadata=dict(native_tool.metadata or {}),
             )
         ]
+
+    @property
+    def enabled(self) -> bool:
+        """Return the immutable server authorization used at construction."""
+        return self._enabled
+
+    async def aclose(self) -> None:
+        """Idempotently close every native runtime and worker without blocking."""
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                asyncio.to_thread(self._registry.close)
+            )
+        await asyncio.shield(self._close_task)
 
     def wrap_model_call(
         self,
@@ -343,6 +395,7 @@ __all__ = [
     "QUICKJS_PERMISSIONS",
     "QUICKJS_RESULT_SCHEMA",
     "QUICKJS_STACK_LIMIT_BYTES",
+    "QUICKJS_SYSTEM_PROMPT",
     "QUICKJS_TIMEOUT_SECONDS",
     "QUICKJS_TOOL_NAME",
     "BoundedQuickJSMiddleware",

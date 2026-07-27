@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+from importlib.metadata import version
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from aegra_api.services.graph_factory import build_server_runtime
 from langchain_core.messages import ToolMessage
+from langchain_quickjs import CodeInterpreterMiddleware
 from langgraph.prebuilt import ToolRuntime
-from langgraph.runtime import Runtime
 from langgraph.store.memory import InMemoryStore
+from quickjs_rs import Runtime as QuickJSRuntime
 
 from agent.capabilities.quickjs import (
     QUICKJS_MAX_OUTPUT_BYTES,
@@ -66,7 +68,7 @@ async def middleware():
     try:
         yield instance
     finally:
-        await instance.aafter_agent({}, Runtime())
+        await instance.aclose()
 
 
 async def _eval(
@@ -161,6 +163,36 @@ async def test_native_tool_is_async_only_and_does_not_retain_call_state(middlewa
     assert second["status"] == "ok"
 
 
+async def test_exact_native_stack_is_imported_and_used_at_runtime(middleware):
+    assert version("langchain-quickjs") == "0.3.4"
+    assert version("quickjs-rs") == "0.2.5"
+    assert isinstance(middleware, CodeInterpreterMiddleware)
+
+    result = _payload(await _eval(middleware, "21 * 2"))
+    assert result["output"] == "42"
+    slots = list(middleware._registry._slots.values())
+    assert len(slots) == 1
+    assert isinstance(slots[0].runtime, QuickJSRuntime)
+    assert type(slots[0].worker).__module__ == "quickjs_rs.threading"
+
+
+async def test_aclose_is_idempotent_and_stops_every_native_worker():
+    instance = BoundedQuickJSMiddleware(enabled=True)
+    result = _payload(await _eval(instance, "21 * 2"))
+    assert result["output"] == "42"
+    slots = list(instance._registry._slots.values())
+    assert len(slots) == 1
+    worker_thread = slots[0].worker._thread
+    assert worker_thread is not None
+    assert worker_thread.is_alive()
+
+    await asyncio.gather(instance.aclose(), instance.aclose())
+    await instance.aclose()
+
+    assert instance._registry._slots == {}
+    assert not worker_thread.is_alive()
+
+
 async def test_pure_data_builtins_work_without_any_host_bridge(middleware):
     result = _payload(
         await _eval(
@@ -171,6 +203,105 @@ async def test_pure_data_builtins_work_without_any_host_bridge(middleware):
 
     assert result["status"] == "ok"
     assert result["output"] == "[2,4,6]"
+
+
+async def test_host_clock_entropy_and_gc_observers_are_non_redefinable(middleware):
+    result = _payload(
+        await _eval(
+            middleware,
+            """\
+JSON.stringify(await (async () => {
+  const attempts = {};
+  const tryDefine = (label, target, name, value) => {
+    try {
+      Object.defineProperty(target, name, {
+        value,
+        writable: true,
+        configurable: true
+      });
+      attempts[label] = "changed";
+    } catch (_error) {
+      attempts[label] = "blocked";
+    }
+  };
+  tryDefine("Date", globalThis, "Date", () => 1);
+  tryDefine("performance", globalThis, "performance", {now: () => 1});
+  tryDefine("Math", globalThis, "Math", {random: () => 1});
+  tryDefine("random", Math, "random", () => 1);
+  tryDefine("crypto", globalThis, "crypto", {getRandomValues: () => 1});
+  tryDefine("WeakRef", globalThis, "WeakRef", () => 1);
+  await Promise.resolve();
+  return {
+    attempts,
+    configurable: {
+      Date: Object.getOwnPropertyDescriptor(globalThis, "Date").configurable,
+      performance:
+        Object.getOwnPropertyDescriptor(globalThis, "performance").configurable,
+      Math: Object.getOwnPropertyDescriptor(globalThis, "Math").configurable,
+      random: Object.getOwnPropertyDescriptor(Math, "random").configurable
+    },
+    types: {
+      Date: typeof Date,
+      performance: typeof performance,
+      random: typeof Math.random,
+      crypto: typeof crypto,
+      Temporal: typeof Temporal,
+      WeakRef: typeof WeakRef,
+      FinalizationRegistry: typeof FinalizationRegistry
+    }
+  };
+})())
+""",
+        )
+    )
+
+    assert result["status"] == "ok"
+    output = json.loads(result["output"])
+    assert output["attempts"] == {
+        "Date": "blocked",
+        "performance": "blocked",
+        "Math": "blocked",
+        "random": "blocked",
+        "crypto": "blocked",
+        "WeakRef": "blocked",
+    }
+    assert output["configurable"] == {
+        "Date": False,
+        "performance": False,
+        "Math": False,
+        "random": False,
+    }
+    assert output["types"] == {
+        "Date": "undefined",
+        "performance": "undefined",
+        "random": "undefined",
+        "crypto": "undefined",
+        "Temporal": "undefined",
+        "WeakRef": "undefined",
+        "FinalizationRegistry": "undefined",
+    }
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "Date.now()",
+        "performance.now()",
+        "Math.random()",
+        "crypto.getRandomValues(new Uint8Array(1))",
+        "new WeakRef({})",
+    ],
+    ids=["date", "performance", "random", "crypto", "weakref"],
+)
+async def test_direct_clock_or_entropy_access_is_redacted(middleware, source):
+    result = _payload(await _eval(middleware, source))
+
+    assert result == {
+        "output": "",
+        "schema": RESULT_SCHEMA,
+        "status": "invalid_result",
+        "truncated": False,
+    }
 
 
 async def test_host_secrets_filesystem_env_network_and_callables_are_unreachable(

@@ -2256,6 +2256,7 @@ dependencies = [
     { name = "langsmith" },
     { name = "numpy" },
     { name = "pyjwt" },
+    { name = "quickjs-rs" },
     { name = "rank-bm25" },
 ]
 
@@ -2288,6 +2289,7 @@ requires-dist = [
     { name = "langsmith", specifier = "==0.10.10" },
     { name = "numpy", specifier = "==2.4.4" },
     { name = "pyjwt", specifier = "==2.13.0" },
+    { name = "quickjs-rs", specifier = "==0.2.5" },
     { name = "rank-bm25", specifier = "==0.2.2" },
 ]
 

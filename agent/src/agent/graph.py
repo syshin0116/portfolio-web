@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -153,7 +154,9 @@ def create_graph(
     budget: RunBudget | None = None,
     model: BaseChatModel | None = None,
     input_token_counter: InputTokenCounter | None = None,
+    dynamic_subagents_enabled: bool | None = None,
     quickjs_enabled: bool | None = None,
+    quickjs_middleware: BoundedQuickJSMiddleware | None = None,
 ):
     """Compile one topology-stable Deep Agent around a run-local budget.
 
@@ -167,8 +170,24 @@ def create_graph(
     selected_model = model or _bounded_model(model_spec)
     run_budget = budget or RunBudget()
     exact_input_counter = input_token_counter or count_anthropic_input_tokens
-    allow_subagents = dynamic_subagents_allowed(runtime)
+    if (
+        dynamic_subagents_enabled is not None
+        and type(dynamic_subagents_enabled) is not bool
+    ):
+        raise TypeError("dynamic_subagents_enabled must be a boolean")
+    allow_subagents = dynamic_subagents_allowed(runtime) and (
+        dynamic_subagents_enabled is not False
+    )
     allow_quickjs = quickjs_allowed(runtime, server_enabled=quickjs_enabled)
+    if quickjs_middleware is None:
+        quickjs_middleware = BoundedQuickJSMiddleware(enabled=allow_quickjs)
+    elif (
+        not isinstance(quickjs_middleware, BoundedQuickJSMiddleware)
+        or quickjs_middleware.enabled is not allow_quickjs
+    ):
+        raise ValueError(
+            "quickjs_middleware must match server-side QuickJS authorization"
+        )
     system_prompt = SYSTEM_PROMPT
     if allow_subagents:
         system_prompt = f"{system_prompt}\n\n{SUBAGENT_ROOT_PROMPT}"
@@ -178,7 +197,7 @@ def create_graph(
         tools=TOOLS,
         system_prompt=system_prompt,
         middleware=[
-            BoundedQuickJSMiddleware(enabled=allow_quickjs),
+            quickjs_middleware,
             RunBudgetMiddleware(
                 run_budget,
                 depth=0,
@@ -209,6 +228,26 @@ def create_graph(
     )
 
 
+async def _await_quickjs_cleanup(middleware: BoundedQuickJSMiddleware) -> None:
+    """Finish native cleanup even if the graph task receives another cancel."""
+    cleanup = asyncio.create_task(middleware.aclose())
+    interrupted: asyncio.CancelledError | None = None
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError as error:
+            interrupted = error
+
+    try:
+        cleanup.result()
+    except BaseException:
+        if interrupted is None:
+            raise
+        logger.exception("QuickJS cleanup failed while graph cancellation was pending")
+    if interrupted is not None:
+        raise interrupted
+
+
 @asynccontextmanager
 async def graph(
     config: RunnableConfig,
@@ -216,10 +255,28 @@ async def graph(
 ) -> AsyncIterator[Any]:
     """Aegra 0.9.24 factory: one non-serializable ledger per run/access call."""
     budget = RunBudget()
-    compiled = create_graph(runtime=runtime, config=config, budget=budget)
+    quickjs_middleware = BoundedQuickJSMiddleware(enabled=quickjs_allowed(runtime))
+    active_error: BaseException | None = None
     try:
+        compiled = create_graph(
+            runtime=runtime,
+            config=config,
+            budget=budget,
+            quickjs_middleware=quickjs_middleware,
+        )
         yield compiled
+    except BaseException as error:
+        active_error = error
+        raise
     finally:
+        try:
+            await _await_quickjs_cleanup(quickjs_middleware)
+        except BaseException:
+            if active_error is None:
+                raise
+            logger.exception(
+                "QuickJS cleanup failed; preserving the active graph exception"
+            )
         snapshot = budget.snapshot()
         logger.debug(
             (

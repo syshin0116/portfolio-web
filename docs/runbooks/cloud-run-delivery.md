@@ -38,10 +38,12 @@ half-configured deployment.
 | Agent Production | `agent` | `agent-migrate` | `agent-grants` | `agent-runtime` | `agent-prod-migrator` |
 
 `agent-image-builder` is the only user-managed identity with repository-scoped
-`roles/artifactregistry.writer`. The Google-managed Cloud Run service agent is the only
-explicit repository reader. Each deployer has `roles/run.developer` only on its own
-service and two jobs, plus `actAs` only on that environment's runtime and migration
-identities. No deployer can read Secret Manager payloads or write images.
+`roles/artifactregistry.writer`. The Google-managed Cloud Run service agent and the two
+deployers have repository-scoped `roles/artifactregistry.reader`; Cloud Run requires the
+deploying principal to read the selected image metadata, while only the service agent
+pulls it at runtime. Each deployer has `roles/run.developer` only on its own service and
+two jobs, plus `actAs` only on that environment's runtime and migration identities. No
+deployer can read Secret Manager payloads or write images.
 
 The services intentionally allow unauthenticated Cloud Run invocation because browsers at
 the Vercel site must reach them. Aegra's outer bearer-token middleware remains the
@@ -74,7 +76,8 @@ The builder value is identical in both environments. Provider and deployer value
 environment-specific. The reusable workflow validates the exact reviewed project,
 provider, and builder addresses before requesting an OIDC token.
 
-Set this environment secret in both environments:
+Set this GitHub **Environment secret** (not a repository or organization secret) in both
+`Agent Preview` and `Agent Production`:
 
 ```text
 AGENT_SMOKE_BEARER_TOKEN

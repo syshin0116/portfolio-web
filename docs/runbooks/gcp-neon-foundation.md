@@ -62,8 +62,8 @@ After this foundation is reviewed and applied, the target is:
 - evaluation publication isolated in a separate `Evaluation Publication` environment
   that is not accepted by either GCP workload-identity provider and carries no GCP or
   deployment secrets;
-- an Artifact Registry writer binding only for the builder and a reader binding only for
-  the Google-managed Cloud Run service agent;
+- an Artifact Registry writer binding only for the builder and reader bindings only for
+  the deployers plus the Google-managed Cloud Run service agent;
 - resource-scoped Cloud Run developer access only for the matching deployer;
 - no user-managed service-account keys.
 
@@ -89,8 +89,8 @@ principal set, project-level
 `serviceAccountUser`/`serviceAccountTokenCreator`/`secretAccessor`/Secret Manager admin,
 extra members in the managed resource roles, and direct token-creator bindings. If it
 finds drift, remediate the exact binding in a separately reviewed plan. At the repository
-scope, the complete direct policy must be exactly builder writer plus Cloud Run service
-agent reader.
+scope, the complete direct policy must be exactly builder writer plus the two deployer and
+Cloud Run service-agent readers.
 
 The policy API does not expand Google Group membership. A reviewed `group:` binding proves
 only that the exact policy binding was reviewed, not that directory membership is unchanged;
@@ -369,7 +369,7 @@ unreviewed modules, `moved` and `removed` blocks, provisioners, `local-exec`,
 `remote-exec`, external providers/data, `terraform_remote_state`, and other executable
 resource types after HCL comments and line breaks are parsed. The seven deeply nested
 Cloud Run service/job resources are additionally covered by a byte-exact SHA-256 pin over
-`cloud_run.tf`; the total reviewed inventory is 31 resources.
+`cloud_run.tf`; the total reviewed inventory is 32 resources.
 
 The only reviewed Terraform test file is
 `infra/gcp/tests/foundation.tftest.hcl`; static verification pins its exact SHA-256.

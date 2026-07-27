@@ -825,24 +825,24 @@ verify_live_contract() {
     jq -cn \
       --arg builder "serviceAccount:${BUILDER_SA}" \
       --arg cloud_run "serviceAccount:${CLOUD_RUN_SERVICE_AGENT}" \
+      --arg preview_deployer "serviceAccount:${PREVIEW_DEPLOYER_SA}" \
+      --arg production_deployer "serviceAccount:${PRODUCTION_DEPLOYER_SA}" \
       '[
         {role: "roles/artifactregistry.reader", member: $cloud_run},
+        {role: "roles/artifactregistry.reader", member: $preview_deployer},
+        {role: "roles/artifactregistry.reader", member: $production_deployer},
         {role: "roles/artifactregistry.writer", member: $builder}
       ]'
   )"
   assert_policy_binding_pairs_exactly \
     "$repository_policy" \
     "$expected_pairs" \
-    "Artifact Registry IAM must contain only the image builder writer and Cloud Run service-agent reader"
+    "Artifact Registry IAM must contain only the builder writer and reviewed image readers"
   for deployer in "$PREVIEW_DEPLOYER_SA" "$PRODUCTION_DEPLOYER_SA"; do
     assert_member_has_no_direct_roles \
       "$project_policy" \
       "serviceAccount:${deployer}" \
       "${deployer} must not hold any direct project-level role"
-    assert_member_has_no_direct_roles \
-      "$repository_policy" \
-      "serviceAccount:${deployer}" \
-      "${deployer} must not hold any direct Artifact Registry role"
     assert_policy_lacks_member \
       "$project_policy" \
       "roles/run.admin" \

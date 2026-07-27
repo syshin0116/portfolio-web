@@ -12,13 +12,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts/deploy_cloud_run.sh"
 SOURCE_SHA = "1" * 40
 IMAGE_DIGEST = (
-    "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
-    + "2" * 64
+    "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:" + "2" * 64
 )
 
 
 class CloudRunDeliveryTests(unittest.TestCase):
-    def _fixture(self, directory: str, *, fail_protocol: bool = False) -> dict[str, str]:
+    def _fixture(
+        self, directory: str, *, fail_protocol: bool = False
+    ) -> dict[str, str]:
         root = Path(directory)
         binary = root / "bin"
         binary.mkdir()
@@ -220,7 +221,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertEqual(f"agent-g{SOURCE_SHA[:10]}", state["serving"])
         self.assertFalse(state["smoke"])
 
-    def test_failed_post_traffic_protocol_smoke_restores_previous_revision(self) -> None:
+    def test_failed_post_traffic_protocol_smoke_restores_previous_revision(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             environment = self._fixture(directory, fail_protocol=True)
             result = subprocess.run(

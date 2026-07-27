@@ -34,7 +34,7 @@ PREVIEW_CONDITION_LINE = (
     "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
     "assertion.ref && assertion.job_workflow_ref == "
     "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + "
-    "assertion.ref\"\n"
+    'assertion.ref"\n'
 )
 PRODUCTION_CONDITION_LINE = (
     "  production_wif_attribute_condition = "
@@ -1368,7 +1368,7 @@ class LiveShellGuardTests(unittest.TestCase):
             verifier,
         )
 
-    def test_project_key_scan_checks_accounts_outside_the_managed_four(self) -> None:
+    def test_project_key_scan_checks_accounts_outside_the_managed_seven(self) -> None:
         legacy_account = "legacy@festive-ally-503605-v7.iam.gserviceaccount.com"
         inventory = json.dumps(
             [

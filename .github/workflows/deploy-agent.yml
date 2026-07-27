@@ -12,6 +12,7 @@ on:
       - "content/**"
       - "scripts/build_index.py"
       - "scripts/deploy_cloud_run.sh"
+      - "scripts/smoke.py"
       - ".github/workflows/agent-delivery.yml"
       - ".github/workflows/deploy-agent.yml"
   workflow_dispatch:
@@ -39,6 +40,9 @@ jobs:
   delivery:
     name: agent/production
     if: vars.AGENT_CLOUD_RUN_ENABLED == 'true'
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/agent-delivery.yml
     with:
       environment: Agent Production

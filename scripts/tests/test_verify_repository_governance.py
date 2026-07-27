@@ -30,8 +30,7 @@ EVAL_PUBLICATION_VARIABLES_PAGE = (
     "environments/Evaluation%20Publication/variables?per_page=100&page=1"
 )
 AGENT_PRODUCTION_BRANCH_POLICIES_PAGE = (
-    "environments/Agent%20Production/deployment-branch-policies"
-    "?per_page=100&page=1"
+    "environments/Agent%20Production/deployment-branch-policies?per_page=100&page=1"
 )
 LEGACY_MAIN_PROTECTION = "branches/main/protection"
 
@@ -328,6 +327,47 @@ class LocalGovernanceTests(unittest.TestCase):
             ),
             errors,
         )
+
+    def test_agent_delivery_permission_chain_rejects_oidc_downgrade(self) -> None:
+        cases = (
+            ".github/workflows/preview-agent.yml",
+            ".github/workflows/deploy-agent.yml",
+            ".github/workflows/agent-delivery.yml",
+        )
+        reviewed_permissions = (
+            "    permissions:\n      contents: read\n      id-token: write\n"
+        )
+        downgraded_permissions = (
+            "    permissions:\n      contents: read\n      id-token: none\n"
+        )
+        for relative in cases:
+            with (
+                self.subTest(workflow=relative),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = copy_local_governance_fixture(directory)
+                workflow = root / relative
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(
+                    reviewed_permissions,
+                    downgraded_permissions,
+                    1,
+                )
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(
+                    "permissions are" in error
+                    and governance.AGENT_DELIVERY_WORKFLOW in error
+                    if relative == governance.AGENT_DELIVERY_WORKFLOW
+                    else relative in error and "permissions are" in error
+                    for error in errors
+                ),
+                errors,
+            )
 
     def assert_agent_ci_job_mutation_rejected(
         self,

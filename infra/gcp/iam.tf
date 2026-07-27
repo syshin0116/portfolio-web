@@ -94,6 +94,16 @@ resource "google_artifact_registry_repository_iam_member" "builder_writer" {
   member     = "serviceAccount:${google_service_account.builder.email}"
 }
 
+resource "google_artifact_registry_repository_iam_member" "deployer_reader" {
+  for_each = local.deployer_service_accounts
+
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.agent.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${each.value}"
+}
+
 resource "google_artifact_registry_repository_iam_member" "cloud_run_reader" {
   project    = var.project_id
   location   = var.region

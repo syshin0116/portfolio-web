@@ -14,6 +14,7 @@ on:
       - "content/**"
       - "scripts/build_index.py"
       - "scripts/deploy_cloud_run.sh"
+      - "scripts/smoke.py"
       - ".github/workflows/agent-delivery.yml"
       - ".github/workflows/preview-agent.yml"
 permissions: {}
@@ -30,6 +31,9 @@ jobs:
       && vars.AGENT_CLOUD_RUN_ENABLED == 'true'
       && github.actor != 'dependabot[bot]'
       && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/agent-delivery.yml
     with:
       environment: Agent Preview

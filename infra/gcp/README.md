@@ -18,11 +18,13 @@ payload, secret version, Neon project, or Neon credential.
   migration URL resource per environment;
 - production and preview Cloud Run services fixed to one instance/one Uvicorn worker;
 - same-image migration and real-Neon runtime-grant jobs for each service;
-- repository writer only for the builder and reader only for the Cloud Run service agent.
+- repository writer only for the builder and readers only for the deployers plus the
+  Cloud Run service agent.
 
 The existing `agent-runtime` resource remains the production runtime. Deployers have no
-project-wide Cloud Run role, Artifact Registry role, or Secret Manager payload access.
-They receive `roles/run.developer` only on the exact service and two jobs they operate.
+project-wide Cloud Run role, Artifact Registry write, or Secret Manager payload access.
+They receive repository-scoped Artifact Registry read and `roles/run.developer` only on
+the exact service and two jobs they operate.
 The services are publicly invokable at the Cloud Run layer so Vercel-hosted browsers can
 reach them; fail-closed Aegra bearer authentication protects APv2 operations.
 
@@ -35,15 +37,15 @@ members fail. Every sensitive, custom-role, group/domain/principal-set, and dire
 state-bucket binding must match an explicit reviewed JSON record by exact scope, role, and
 member. Custom roles additionally pin the digest of the full included-permission set, and
 conditional bindings pin their condition digest. The verifier also rejects extra direct
-members for the managed roles and direct project, ancestor, or repository roles on the
-four workload identities. That rejection covers exact service-account members plus
+members for the managed roles and direct project or ancestor roles on the seven
+user-managed workload identities. That rejection covers exact service-account members plus
 project, containing-folder, and containing-organization `ServiceAccount` principal sets;
-those encompassing sets cannot be allowlisted as reviewed. Before builder and Cloud Run
-image-pull identities exist, it requires repository-level reader and writer roles to be
-empty. An unreadable policy or role and any other failure require a separate reviewed IAM
-remediation; they are never ignored or overwritten blindly. Google Group membership is
-not expanded by the policy API, so any reviewed `group:` binding also requires a separately
-reviewed directory-membership export.
+those encompassing sets cannot be allowlisted as reviewed. The complete repository policy
+must contain only the builder writer and the two deployer plus Cloud Run service-agent
+readers. An unreadable policy or role and any other failure require a separate reviewed
+IAM remediation; they are never ignored or overwritten blindly. Google Group membership
+is not expanded by the policy API, so any reviewed `group:` binding also requires a
+separately reviewed directory-membership export.
 
 The OIDC providers pin the immutable repository and owner numeric IDs, environment, event,
 caller `workflow_ref`, and called `job_workflow_ref`. Production additionally pins
@@ -53,8 +55,8 @@ manual digest deployment or revision rollback.
 The existing `github` pool deliberately retains exactly the enabled `github-preview` and
 `github-production` providers. Splitting environments into separate pools requires a
 reviewed state/import and federation migration plan; it is not an in-place hardening edit.
-GitHub environment reviewers, self-review, and the canonical Production branch set
-`{main}` live only in `.github/repository-governance.json`. When that manifest and
+GitHub environment reviewers, self-review, and the canonical agent/Vercel production
+branch sets `{main}` live only in `.github/repository-governance.json`. When that manifest and
 `scripts/verify_repository_governance.py` are present, the live foundation verifier
 requires `uv` and `gh`, then delegates without duplicating the rules:
 
@@ -112,10 +114,12 @@ uv run --no-project --with python-hcl2==7.3.1 \
   python scripts/ops_foundation_contract.py static --repo-root .
 ```
 
-It exact-compares the parsed bodies of all 16 resources, every local, check, output,
+It exact-compares the parsed bodies of the foundation resources, every local, check, output,
 variable, provider/data/backend block, and import target/live object ID. It rejects
 unreviewed modules, `moved` and `removed` blocks, every provisioner, external
-provider/data, `terraform_remote_state`, and executable escape resources. The reviewed
+provider/data, `terraform_remote_state`, and executable escape resources. The seven
+deeply nested Cloud Run resources are protected by a byte-exact hash of `cloud_run.tf`;
+the reviewed inventory totals 32 resources. The reviewed
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
 Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
 uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or

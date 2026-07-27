@@ -263,10 +263,13 @@ run "foundation_security_contract" {
     condition = (
       google_artifact_registry_repository_iam_member.builder_writer.role == "roles/artifactregistry.writer"
       && google_artifact_registry_repository_iam_member.builder_writer.member == "serviceAccount:agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && length(google_artifact_registry_repository_iam_member.deployer_reader) == 2
+      && google_artifact_registry_repository_iam_member.deployer_reader["preview"].member == "serviceAccount:agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.deployer_reader["production"].member == "serviceAccount:agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.role == "roles/artifactregistry.reader"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
     )
-    error_message = "Only the builder writes images and only the Cloud Run service agent is the explicit reader."
+    error_message = "Only the builder writes images; deployers and the Cloud Run service agent have read-only access."
   }
 
   assert {

@@ -31,7 +31,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "e917596b49334e2809f0a9879072b33c00dc1587a7ad63c1d4419fd24c5aa4b4"
+        "98f257881e80f4334af4d19c38aa53a2744c0d11d4c028e1ac1c7c66b95ea573"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -520,6 +520,14 @@ EXPECTED_RESOURCE_CONFIGS = {
         "repository": "${google_artifact_registry_repository.agent.repository_id}",
         "role": "roles/artifactregistry.writer",
         "member": "serviceAccount:${google_service_account.builder.email}",
+    },
+    ("google_artifact_registry_repository_iam_member", "deployer_reader"): {
+        "for_each": "${local.deployer_service_accounts}",
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "role": "roles/artifactregistry.reader",
+        "member": "serviceAccount:${each.value}",
     },
     ("google_artifact_registry_repository_iam_member", "cloud_run_reader"): {
         "project": "${var.project_id}",

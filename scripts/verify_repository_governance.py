@@ -188,6 +188,17 @@ EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
 EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
     "88dd92e98edaeb66d0f24f067ec8439759995fac6539e913bff8020d574218e8"
 )
+AGENT_DELIVERY_WORKFLOW = ".github/workflows/agent-delivery.yml"
+AGENT_DELIVERY_CALLERS = (
+    ".github/workflows/preview-agent.yml",
+    ".github/workflows/deploy-agent.yml",
+)
+AGENT_DELIVERY_CALL_JOB = "delivery"
+AGENT_DELIVERY_PERMISSION_JOBS = ("build", "deploy", "rollback")
+AGENT_DELIVERY_PERMISSIONS = {
+    "contents": "read",
+    "id-token": "write",
+}
 AGENT_CI_SERVICES = {
     "postgres": {
         "image": (
@@ -1117,6 +1128,94 @@ def _job_condition(job: MappingNode, *, context: str) -> str | None:
     if value.startswith("${{") and value.endswith("}}"):
         value = value[3:-2].strip()
     return value
+
+
+def _job_permissions(job: MappingNode, *, context: str) -> JsonObject:
+    permissions = _mapping_value(job, "permissions")
+    if not isinstance(permissions, MappingNode):
+        raise GovernanceError(f"{context} permissions must be a mapping")
+    normalized = _node_to_data(permissions)
+    if not isinstance(normalized, dict):
+        raise GovernanceError(f"{context} permissions must be an object")
+    return normalized
+
+
+def validate_agent_delivery_permission_chain(
+    root: Path,
+    documents: dict[Path, YamlDocument],
+) -> list[str]:
+    """Require OIDC permission at both ends of every reusable-workflow call."""
+    errors: list[str] = []
+    repository_root = root.resolve()
+
+    for relative in AGENT_DELIVERY_CALLERS:
+        path = (repository_root / relative).resolve()
+        document = documents.get(path)
+        if document is None:
+            errors.append(f"agent delivery caller is missing or invalid: {relative}")
+            continue
+        try:
+            job = _workflow_jobs(document).get(AGENT_DELIVERY_CALL_JOB)
+            if job is None:
+                errors.append(
+                    f"{relative} must contain job {AGENT_DELIVERY_CALL_JOB!r}"
+                )
+                continue
+            uses = _mapping_value(job, "uses")
+            actual_uses = (
+                _scalar_value(uses, context=f"{relative}:delivery uses")
+                if uses is not None
+                else None
+            )
+            expected_uses = f"./{AGENT_DELIVERY_WORKFLOW}"
+            if actual_uses != expected_uses:
+                errors.append(
+                    f"{relative}:delivery must call {expected_uses!r}, "
+                    f"found {actual_uses!r}"
+                )
+            actual_permissions = _job_permissions(
+                job,
+                context=f"{relative}:delivery",
+            )
+            if not _json_exact(actual_permissions, AGENT_DELIVERY_PERMISSIONS):
+                errors.append(
+                    f"{relative}:delivery permissions are "
+                    f"{actual_permissions!r}; expected "
+                    f"{AGENT_DELIVERY_PERMISSIONS!r}"
+                )
+        except GovernanceError as exc:
+            errors.append(f"{relative}:delivery permission contract: {exc}")
+
+    reusable_path = (repository_root / AGENT_DELIVERY_WORKFLOW).resolve()
+    reusable = documents.get(reusable_path)
+    if reusable is None:
+        errors.append(
+            f"agent delivery reusable workflow is missing or invalid: "
+            f"{AGENT_DELIVERY_WORKFLOW}"
+        )
+        return errors
+    try:
+        jobs = _workflow_jobs(reusable)
+        for job_name in AGENT_DELIVERY_PERMISSION_JOBS:
+            job = jobs.get(job_name)
+            if job is None:
+                errors.append(
+                    f"{AGENT_DELIVERY_WORKFLOW} must contain job {job_name!r}"
+                )
+                continue
+            actual_permissions = _job_permissions(
+                job,
+                context=f"{AGENT_DELIVERY_WORKFLOW}:{job_name}",
+            )
+            if not _json_exact(actual_permissions, AGENT_DELIVERY_PERMISSIONS):
+                errors.append(
+                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} permissions are "
+                    f"{actual_permissions!r}; expected "
+                    f"{AGENT_DELIVERY_PERMISSIONS!r}"
+                )
+    except GovernanceError as exc:
+        errors.append(f"{AGENT_DELIVERY_WORKFLOW} permission contract: {exc}")
+    return errors
 
 
 def _simple_shell_words(run: Node, *, context: str) -> tuple[str, ...]:
@@ -2451,6 +2550,11 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         errors.append(f"local: invalid eval workflow contract: {exc}")
     errors.extend(
         f"local: {error}" for error in validate_publication_docker_context(root)
+    )
+
+    errors.extend(
+        f"local: {error}"
+        for error in validate_agent_delivery_permission_chain(root, documents)
     )
 
     required_files = (

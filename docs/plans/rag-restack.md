@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-07-26"
+updated: "2026-07-27"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -207,9 +207,10 @@ part of the contract; renaming one requires updating branch protection in the sa
 
 ### Preview and production
 
-- Vercel continues to create the web preview. `preview-agent.yml` is opt-in through an
-  explicit trusted label/environment approval because every preview can spend model tokens.
-  It builds the exact PR SHA, deploys a separate Cloud Run preview service with owner-only
+- Vercel continues to create the web preview. `preview-agent.yml` is triggered only by an
+  explicit trusted label because every preview can spend model tokens. That label is an
+  opt-in trigger, not a routine reviewer or an environment-approval rule. The workflow
+  builds the exact PR SHA, deploys a separate Cloud Run preview service with owner-only
   auth and `max-instances=1`, posts the URL to the PR, and expires the service automatically.
 - GitHub authenticates to GCP through Workload Identity Federation; no long-lived service
   account JSON key is stored. Build once, push an immutable Artifact Registry image tagged
@@ -225,10 +226,10 @@ part of the contract; renaming one requires updating branch protection in the sa
   reassignment to that known digest, not a rebuild. Database migrations must be backward
   compatible with one previous application revision; destructive migrations require a
   separate ADR and backup/restore rehearsal.
-- Use GitHub environments `preview` and `production`. Production holds secrets and requires
-  owner approval for the first public release, auth/schema changes, or a migration; routine
-  content-only releases may promote automatically after all gates once that policy is
-  explicitly enabled.
+- Use GitHub environments `Preview` and `Production` exactly. Reviewers, self-review, and
+  deployment branches are defined only in `.github/repository-governance.json` and checked
+  by `scripts/verify_repository_governance.py`; workflow or infrastructure verifiers must
+  not restate them. The central contract keeps the exact Production branch set `{main}`.
 
 ### Staying current without surprise upgrades
 
@@ -441,8 +442,15 @@ if auth registration or its secret is missing.
 - **Two Neon free projects in a US region** ([ADR-0007](../adr/0007-postgres-on-neon-split-projects.md)):
   one for the agent, one for Auth.js. Zero code changes - both sides read `DATABASE_URL`.
   **Neon project regions are fixed at creation**, so this is only available now.
-- Use the **direct** endpoint, not `-pooler`: `checkpointer.setup()` issues
-  `CREATE INDEX CONCURRENTLY`, which Neon documents as direct-connection-only.
+- Set `RUN_MIGRATIONS_ON_STARTUP=false` on every Cloud Run revision. Before deployment, run
+  a separate one-shot job from the same immutable image digest with a separately held
+  direct Neon `DATABASE_URL` and the command `aegra db upgrade`; require success before
+  creating or updating the service revision. Never expose the direct credential to the
+  runtime.
+- Give the service only its pooled Neon URL. Aegra 0.9.24 compatibility with the pooled
+  endpoint across its async runtime and synchronous database paths is not yet verified;
+  exercise both in preview and treat any driver or pooler incompatibility as a cutover
+  blocker.
 - Deploy initially with `--memory 1Gi --no-cpu-throttling --timeout 3600
   --max-instances 1 --concurrency 20`, a **dedicated minimal service account**, and
   Postgres pool knobs turned down (Aegra opens up to ~50 connections by default). Cloud
@@ -454,11 +462,14 @@ if auth registration or its secret is missing.
 - Set the Anthropic organization spend cap. Grep startup logs for Aegra's
   data-not-isolated warning.
 
-**Accept:** `/health` 200 and `scripts/smoke.py` pass with owner preview credentials; the
-same streaming requests without credentials or with a forged subject receive 401/403;
-cold-start-to-first-token and full-image cold-start plus concurrency-20 memory are measured
-and recorded without approaching the 1 GiB limit. Do not continue if graph routes are
-anonymously reachable or the measured memory leaves inadequate headroom.
+**Accept:** the same-digest direct-URL `aegra db upgrade` job succeeds before deployment;
+the service starts with `RUN_MIGRATIONS_ON_STARTUP=false` and proves the pooled URL across
+the exercised async/sync database paths; `/health` 200 and `scripts/smoke.py` pass with
+owner preview credentials; the same streaming requests without credentials or with a
+forged subject receive 401/403; cold-start-to-first-token and full-image cold-start plus
+concurrency-20 memory are measured and recorded without approaching the 1 GiB limit. Do
+not continue if graph routes are anonymously reachable, pooled compatibility is unproven,
+or the measured memory leaves inadequate headroom.
 
 ---
 

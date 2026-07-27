@@ -30,6 +30,8 @@ PUBLICATION_SEMANTICS_WEB_PATHS = frozenset(
 )
 OPS_FOUNDATION_PATHS = frozenset(
     {
+        "scripts/ops_foundation_contract.py",
+        "scripts/tests/test_ops_foundation_contract.py",
         "scripts/tests/test_verify_ops_foundation.py",
         "scripts/verify_ops_foundation.sh",
     }

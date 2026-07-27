@@ -4,14 +4,6 @@ set -euo pipefail
 readonly PROJECT_ID="festive-ally-503605-v7"
 readonly EXPECTED_PROJECT_NUMBER="72919926064"
 readonly REGION="us-east4"
-readonly REPOSITORY="syshin0116/syshin0116.dev"
-readonly REQUIRED_REVIEWER_ID="99532836"
-readonly EXPECTED_PREVIEW_LIVE_CONDITION="assertion.repository_id == '1102380057' && assertion.repository_owner_id == '99532836' && assertion.event_name == 'pull_request' && assertion.environment == 'Preview'"
-readonly EXPECTED_PRODUCTION_LIVE_CONDITION="assertion.repository_id == '1102380057' && assertion.repository_owner_id == '99532836' && assertion.event_name == 'push' && assertion.ref == 'refs/heads/main' && assertion.environment == 'Production'"
-readonly EXPECTED_PREVIEW_TERRAFORM_CONDITION="preview_wif_attribute_condition = \"assertion.repository_id == '\${var.github_repository_id}' && assertion.repository_owner_id == '\${var.github_owner_id}' && assertion.event_name == 'pull_request' && assertion.environment == '\${var.github_preview_environment}'\""
-readonly EXPECTED_PRODUCTION_TERRAFORM_CONDITION="production_wif_attribute_condition = \"assertion.repository_id == '\${var.github_repository_id}' && assertion.repository_owner_id == '\${var.github_owner_id}' && assertion.event_name == 'push' && assertion.ref == 'refs/heads/main' && assertion.environment == '\${var.github_production_environment}'\""
-readonly EXPECTED_IAM_RESOURCE_DECLARATIONS=$'google_secret_manager_secret_iam_member.preview_runtime_accessor\ngoogle_secret_manager_secret_iam_member.runtime_accessor\ngoogle_service_account_iam_member.deployer_uses_runtime\ngoogle_service_account_iam_member.github_preview\ngoogle_service_account_iam_member.github_production'
-readonly EXPECTED_IAM_RESOURCE_TYPE_TOKENS=$'google_secret_manager_secret_iam_member\ngoogle_secret_manager_secret_iam_member\ngoogle_service_account_iam_member\ngoogle_service_account_iam_member\ngoogle_service_account_iam_member'
 readonly STATE_BUCKET="${PROJECT_ID}-tfstate"
 readonly STATE_OBJECT="syshin0116.dev/gcp/foundation/default.tfstate"
 readonly PRODUCTION_RUNTIME_SA="agent-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -23,6 +15,9 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 readonly REPO_ROOT
 readonly TERRAFORM_DIR="${REPO_ROOT}/infra/gcp"
+readonly CONTRACT_SCRIPT="${REPO_ROOT}/scripts/ops_foundation_contract.py"
+readonly GOVERNANCE_MANIFEST="${REPO_ROOT}/.github/repository-governance.json"
+readonly GOVERNANCE_VERIFIER="${REPO_ROOT}/scripts/verify_repository_governance.py"
 
 readonly REQUIRED_APIS=(
   artifactregistry.googleapis.com
@@ -91,61 +86,19 @@ require_exact_trimmed_line_once() {
   [[ "$match_count" == "1" ]] || fail "$description"
 }
 
-forbid_terraform_pattern() {
-  local pattern="$1"
-  local description="$2"
-
-  if grep -En -- "$pattern" "${TERRAFORM_DIR}"/*.tf >/dev/null; then
-    fail "$description"
-  fi
-}
-
-verify_exact_iam_resource_declarations() {
-  local actual_declarations
-  local actual_type_tokens
-
-  actual_declarations="$(
-    grep -Eh \
-      '^[[:space:]]*resource "google_[^"]*_iam_(member|binding|policy)" "[^"]+"[[:space:]]*\{' \
-      "${TERRAFORM_DIR}"/*.tf |
-      sed -E \
-        's/^[[:space:]]*resource "([^"]+)" "([^"]+)".*$/\1.\2/' |
-      LC_ALL=C sort
-  )"
-  [[ "$actual_declarations" == "$EXPECTED_IAM_RESOURCE_DECLARATIONS" ]] ||
-    fail "Terraform IAM resources must exactly match the reviewed additive-member allowlist"
-
-  actual_type_tokens="$(
-    grep -Eho \
-      'google_[[:alnum:]_]+_iam_(member|binding|policy)' \
-      "${TERRAFORM_DIR}"/*.tf |
-      LC_ALL=C sort
-  )"
-  [[ "$actual_type_tokens" == "$EXPECTED_IAM_RESOURCE_TYPE_TOKENS" ]] ||
-    fail "Terraform IAM resource type tokens must exactly match the reviewed allowlist"
-}
-
 verify_static_contract() {
+  require_command python3
+  python3 "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
+
+  if [[ -e "$GOVERNANCE_MANIFEST" && ! -f "$GOVERNANCE_VERIFIER" ]] ||
+    [[ -e "$GOVERNANCE_VERIFIER" && ! -f "$GOVERNANCE_MANIFEST" ]]; then
+    fail "canonical repository governance manifest and verifier must land together"
+  fi
+
   require_fragment \
     "${TERRAFORM_DIR}/main.tf" \
     "immutable_tags = true" \
     "Artifact Registry immutable tags are not enforced"
-  require_exact_trimmed_line_once \
-    "${TERRAFORM_DIR}/main.tf" \
-    "$EXPECTED_PREVIEW_TERRAFORM_CONDITION" \
-    "preview WIF CEL condition must exactly match the fail-closed contract"
-  require_exact_trimmed_line_once \
-    "${TERRAFORM_DIR}/main.tf" \
-    "$EXPECTED_PRODUCTION_TERRAFORM_CONDITION" \
-    "production WIF CEL condition must exactly match the fail-closed contract"
-  require_exact_trimmed_line_once \
-    "${TERRAFORM_DIR}/main.tf" \
-    "attribute_condition = local.preview_wif_attribute_condition" \
-    "preview provider must use only the reviewed CEL condition"
-  require_exact_trimmed_line_once \
-    "${TERRAFORM_DIR}/main.tf" \
-    "attribute_condition = local.production_wif_attribute_condition" \
-    "production provider must use only the reviewed CEL condition"
   require_fragment \
     "${TERRAFORM_DIR}/main.tf" \
     'account_id   = "agent-preview-runtime"' \
@@ -204,26 +157,6 @@ verify_static_contract() {
     "the project number must come from google_project.current"
   [[ "$(<"${TERRAFORM_DIR}/.terraform-version")" == "1.13.5" ]] ||
     fail "infra/gcp/.terraform-version must pin Terraform 1.13.5"
-
-  forbid_terraform_pattern \
-    'roles/run\.admin' \
-    "foundation deployers must not receive project-wide roles/run.admin"
-  forbid_terraform_pattern \
-    'roles/artifactregistry\.writer' \
-    "foundation deployers must not build or push images; add a separate builder later"
-  forbid_terraform_pattern \
-    'resource[[:space:]]+"google_service_account_key"' \
-    "user-managed service-account keys are forbidden"
-  forbid_terraform_pattern \
-    'resource[[:space:]]+"google_secret_manager_secret_version"' \
-    "Terraform must not manage secret payload versions"
-  forbid_terraform_pattern \
-    'private_key|private_key_data|service_account_key' \
-    "credential material must not enter Terraform configuration"
-  forbid_terraform_pattern \
-    'variable[[:space:]]+"project_number"|var\.project_number' \
-    "the project number must not be independently overridden"
-  verify_exact_iam_resource_declarations
 
   printf 'OK: credential-free Terraform security contract verified.\n'
 }
@@ -308,6 +241,169 @@ assert_policy_roles_exactly() {
     ' >/dev/null <<<"$policy_json" || fail "$description"
 }
 
+describe_iam_role() {
+  local role="$1"
+  local parent_type
+  local parent_id
+  local role_id
+  local extra
+
+  case "$role" in
+    roles/*)
+      gcloud iam roles describe "$role" --format=json
+      ;;
+    projects/*/roles/* | organizations/*/roles/*)
+      IFS=/ read -r parent_type parent_id extra role_id <<<"$role"
+      [[ "$extra" == "roles" && -n "$parent_id" && -n "$role_id" ]] ||
+        fail "invalid custom IAM role name: ${role}"
+      if [[ "$parent_type" == "projects" ]]; then
+        gcloud iam roles describe "$role_id" \
+          --project "$parent_id" \
+          --format=json
+      else
+        gcloud iam roles describe "$role_id" \
+          --organization "$parent_id" \
+          --format=json
+      fi
+      ;;
+    *)
+      fail "unsupported IAM role name in live policy: ${role}"
+      ;;
+  esac
+}
+
+role_permissions_for_policy() {
+  local policy_json="$1"
+  local role
+  local role_json
+  local permissions_json
+  local inventory="{}"
+
+  jq -e '
+    (.bindings // []) as $bindings
+    | ($bindings | type) == "array"
+    and all($bindings[]?; (.role | type) == "string")
+  ' >/dev/null <<<"$policy_json" ||
+    fail "live IAM policy bindings are not structurally valid"
+
+  while IFS= read -r role; do
+    [[ -n "$role" ]] || continue
+    role_json="$(describe_iam_role "$role")"
+    permissions_json="$(
+      jq -ce '
+        .includedPermissions
+        | select(type == "array")
+        | select(all(.[]; type == "string" and length > 0))
+      ' <<<"$role_json"
+    )" || fail "cannot resolve includedPermissions for IAM role ${role}"
+    inventory="$(
+      jq -cn \
+        --argjson inventory "$inventory" \
+        --arg role "$role" \
+        --argjson permissions "$permissions_json" \
+        '$inventory + {($role): $permissions}'
+    )"
+  done < <(
+    jq -r '[.bindings[]?.role] | unique[]' <<<"$policy_json"
+  )
+
+  printf '%s\n' "$inventory"
+}
+
+audit_iam_policy() {
+  local policy_json="$1"
+  local scope="$2"
+  local allowed_members_env="$3"
+  local role_permissions
+
+  role_permissions="$(role_permissions_for_policy "$policy_json")"
+  jq -cn \
+    --argjson policy "$policy_json" \
+    --argjson role_permissions "$role_permissions" \
+    '{policy: $policy, rolePermissions: $role_permissions}' |
+    python3 "$CONTRACT_SCRIPT" audit-policy \
+      --scope "$scope" \
+      --allowed-members-env "$allowed_members_env"
+}
+
+verify_ancestor_policies() {
+  local ancestors_json
+  local ancestor_type
+  local ancestor_id
+  local policy_json
+
+  ancestors_json="$(
+    gcloud projects get-ancestors "$PROJECT_ID" --format=json
+  )"
+  jq -e \
+    --arg project_id "$PROJECT_ID" \
+    --arg project_number "$EXPECTED_PROJECT_NUMBER" \
+    '
+      type == "array"
+      and length > 0
+      and all(.[];
+        (.type == "project" or .type == "folder" or .type == "organization")
+        and ((.id | tostring) | length > 0)
+      )
+      and ([.[] | select(.type == "project")] | length == 1)
+      and (
+        [.[] | select(
+          .type == "project"
+          and ((.id | tostring) == $project_id or (.id | tostring) == $project_number)
+        )] | length == 1
+      )
+    ' >/dev/null <<<"$ancestors_json" ||
+    fail "project ancestor inventory is unreadable or does not identify the reviewed project"
+
+  while IFS=$'\t' read -r ancestor_type ancestor_id; do
+    case "$ancestor_type" in
+      project)
+        ;;
+      folder)
+        policy_json="$(
+          gcloud resource-manager folders get-iam-policy \
+            "$ancestor_id" \
+            --format=json
+        )"
+        audit_iam_policy \
+          "$policy_json" \
+          "folder/${ancestor_id}" \
+          "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
+        ;;
+      organization)
+        policy_json="$(
+          gcloud organizations get-iam-policy \
+            "$ancestor_id" \
+            --format=json
+        )"
+        audit_iam_policy \
+          "$policy_json" \
+          "organization/${ancestor_id}" \
+          "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
+        ;;
+      *)
+        fail "unexpected ancestor type after validation: ${ancestor_type}"
+        ;;
+    esac
+  done < <(
+    jq -r '.[] | [.type, (.id | tostring)] | @tsv' <<<"$ancestors_json"
+  )
+}
+
+verify_canonical_repository_governance() {
+  if [[ -f "$GOVERNANCE_MANIFEST" && -f "$GOVERNANCE_VERIFIER" ]]; then
+    (
+      cd "$REPO_ROOT"
+      python3 "$GOVERNANCE_VERIFIER" --live
+    )
+  elif [[ -e "$GOVERNANCE_MANIFEST" || -e "$GOVERNANCE_VERIFIER" ]]; then
+    fail "canonical repository governance manifest and verifier must land together"
+  else
+    printf '%s\n' \
+      "INFO: canonical repository-governance files are not present on this branch; GitHub environment policy is intentionally not claimed here."
+  fi
+}
+
 verify_service_account_has_no_user_keys() {
   local service_account="$1"
   local user_key_count
@@ -341,24 +437,16 @@ verify_runtime_secret_policy() {
       --project "$PROJECT_ID" \
       --format=json
   )"
-  assert_exact_role_member \
-    "$policy_json" \
-    "roles/secretmanager.secretAccessor" \
-    "serviceAccount:${expected_runtime}" \
-    "${secret_name} must have exactly one environment-specific runtime accessor"
-  assert_policy_lacks_role \
-    "$policy_json" \
-    "roles/secretmanager.admin" \
-    "${secret_name} must not grant direct Secret Manager admin"
-  assert_policy_has_no_public_members \
-    "$policy_json" \
-    "${secret_name} must not grant any role to public principals"
+  python3 "$CONTRACT_SCRIPT" secret-policy \
+    --expected-member "serviceAccount:${expected_runtime}" \
+    <<<"$policy_json"
 }
 
 verify_live_contract() {
   local enabled_apis
   local artifact_json
   local bucket_json
+  local bucket_policy
   local project_json
   local project_number
   local state_object_json
@@ -368,18 +456,21 @@ verify_live_contract() {
   local preview_runtime_policy
   local preview_deployer_policy
   local production_deployer_policy
+  local pool_json
+  local listed_providers_json
   local preview_provider_json
   local production_provider_json
-  local preview_reviewer_ids
-  local production_reviewer_ids
-  local production_branches
   local service_account
   local deployer
   local secret_name
 
-  for command_name in gcloud gh jq; do
+  for command_name in gcloud jq python3; do
     require_command "$command_name"
   done
+  [[ -n "${OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS:-}" ]] ||
+    fail "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS must be a reviewed newline-separated live IAM allowlist"
+  [[ -n "${OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS:-}" ]] ||
+    fail "OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS must be a reviewed newline-separated direct bucket IAM allowlist"
 
   project_json="$(
     gcloud projects describe "$PROJECT_ID" --format=json
@@ -443,6 +534,16 @@ verify_live_contract() {
     >/dev/null <<<"$state_object_json" ||
     fail "remote Terraform state object path, generation, or size is invalid"
 
+  bucket_policy="$(
+    gcloud storage buckets get-iam-policy \
+      "gs://${STATE_BUCKET}" \
+      --format=json
+  )"
+  audit_iam_policy \
+    "$bucket_policy" \
+    "state-bucket" \
+    "OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS"
+
   for service_account in \
     "$PRODUCTION_RUNTIME_SA" \
     "$PREVIEW_RUNTIME_SA" \
@@ -454,9 +555,11 @@ verify_live_contract() {
   project_policy="$(
     gcloud projects get-iam-policy "$PROJECT_ID" --format=json
   )"
-  assert_policy_has_no_public_members \
+  audit_iam_policy \
     "$project_policy" \
-    "project IAM policy must not grant roles to public principals"
+    "project/${PROJECT_ID}" \
+    "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
+  verify_ancestor_policies
   for inherited_role in \
     "roles/iam.serviceAccountUser" \
     "roles/iam.serviceAccountTokenCreator" \
@@ -474,9 +577,10 @@ verify_live_contract() {
       --location "$REGION" \
       --format=json
   )"
-  assert_policy_has_no_public_members \
+  audit_iam_policy \
     "$repository_policy" \
-    "Artifact Registry policy must not grant roles to public principals"
+    "artifact-repository/agent" \
+    "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
   for repository_role in \
     "roles/artifactregistry.reader" \
     "roles/artifactregistry.writer"; do
@@ -583,6 +687,19 @@ verify_live_contract() {
     verify_runtime_secret_policy "$secret_name" "$PREVIEW_RUNTIME_SA"
   done
 
+  pool_json="$(
+    gcloud iam workload-identity-pools describe github \
+      --project "$PROJECT_ID" \
+      --location global \
+      --format=json
+  )"
+  listed_providers_json="$(
+    gcloud iam workload-identity-pools providers list \
+      --project "$PROJECT_ID" \
+      --location global \
+      --workload-identity-pool github \
+      --format=json
+  )"
   preview_provider_json="$(
     gcloud iam workload-identity-pools providers describe github-preview \
       --project "$PROJECT_ID" \
@@ -597,37 +714,17 @@ verify_live_contract() {
       --workload-identity-pool github \
       --format=json
   )"
-
-  jq -e \
-    --arg condition "$EXPECTED_PREVIEW_LIVE_CONDITION" \
-    '
-      .attributeCondition == $condition
-      and .oidc.issuerUri == "https://token.actions.githubusercontent.com"
-      and .attributeMapping == {
-        "attribute.environment": "assertion.environment",
-        "attribute.event_name": "assertion.event_name",
-        "attribute.ref": "assertion.ref",
-        "attribute.repository_id": "assertion.repository_id",
-        "attribute.repository_owner_id": "assertion.repository_owner_id",
-        "google.subject": "assertion.sub"
-      }
-    ' >/dev/null <<<"$preview_provider_json" ||
-    fail "preview provider condition, issuer, or attribute mapping is not exact"
-  jq -e \
-    --arg condition "$EXPECTED_PRODUCTION_LIVE_CONDITION" \
-    '
-      .attributeCondition == $condition
-      and .oidc.issuerUri == "https://token.actions.githubusercontent.com"
-      and .attributeMapping == {
-        "attribute.environment": "assertion.environment",
-        "attribute.event_name": "assertion.event_name",
-        "attribute.ref": "assertion.ref",
-        "attribute.repository_id": "assertion.repository_id",
-        "attribute.repository_owner_id": "assertion.repository_owner_id",
-        "google.subject": "assertion.sub"
-      }
-    ' >/dev/null <<<"$production_provider_json" ||
-    fail "production provider condition, issuer, or attribute mapping is not exact"
+  jq -cn \
+    --argjson pool "$pool_json" \
+    --argjson listed "$listed_providers_json" \
+    --argjson preview "$preview_provider_json" \
+    --argjson production "$production_provider_json" \
+    '{
+      pool: $pool,
+      listed: $listed,
+      described: [$preview, $production]
+    }' |
+    python3 "$CONTRACT_SCRIPT" wif-live
 
   preview_deployer_policy="$(
     gcloud iam service-accounts get-iam-policy \
@@ -666,27 +763,9 @@ verify_live_contract() {
     "roles/iam.workloadIdentityUser" \
     "production deployer must expose only its reviewed direct federation role"
 
-  preview_reviewer_ids="$(
-    gh api "repos/${REPOSITORY}/environments/Preview" \
-      --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | .reviewer.id] | unique | sort | map(tostring) | join("\n")'
-  )"
-  production_reviewer_ids="$(
-    gh api "repos/${REPOSITORY}/environments/Production" \
-      --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | .reviewer.id] | unique | sort | map(tostring) | join("\n")'
-  )"
-  [[ -z "$preview_reviewer_ids" ]] ||
-    fail "Preview must not require the sole repository owner to self-approve PR deployments"
-  [[ "$production_reviewer_ids" == "$REQUIRED_REVIEWER_ID" ]] ||
-    fail "Production required reviewers do not exactly match the repository owner"
+  verify_canonical_repository_governance
 
-  production_branches="$(
-    gh api "repos/${REPOSITORY}/environments/Production/deployment-branch-policies" \
-      --jq '[.branch_policies[]?.name] | join("\n")'
-  )"
-  grep -Fxq main <<<"$production_branches" ||
-    fail "Production does not restrict deployment to main"
-
-  printf 'OK: live GCP/GitHub foundation metadata and keyless constraints verified for project %s (%s).\n' \
+  printf 'OK: live GCP foundation metadata, ancestor IAM, and keyless constraints verified for project %s (%s).\n' \
     "$PROJECT_ID" "$project_number"
 }
 

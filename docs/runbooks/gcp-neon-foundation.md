@@ -55,16 +55,25 @@ After this foundation is reviewed and applied, the target is:
   event, `refs/heads/main`, and the `Production` environment;
 - no user-managed service-account keys.
 
-The live verifier additionally rejects public IAM members, any direct project or
+The live verifier reads direct policies at the project, every reported folder and
+organization ancestor, the Artifact Registry repository, the state bucket, service
+accounts, and each managed secret. It resolves every role, including project and
+organization custom roles, before classifying impersonation, secret read or mutation,
+Artifact Registry read or write, state-object access, and IAM-policy escalation. Sensitive
+members and every direct state-bucket member must match operator-supplied allowlists copied
+from a separately reviewed live inventory. Group, domain, and principal-set members
+therefore fail unless explicitly reviewed; public members always fail. An unreadable
+ancestor, role, or policy is a blocker.
+
+Terraform uses additive IAM member resources so an unreviewed apply cannot erase unrelated
+or Google-managed members. The verifier additionally rejects any direct project or
 repository role on the four workload identities, project-level
 `serviceAccountUser`/`serviceAccountTokenCreator`/`secretAccessor`/Secret Manager admin,
-extra members in the managed resource roles, and direct token-creator bindings. Terraform
-uses additive IAM member resources so an unreviewed apply cannot erase unrelated or
-Google-managed members. If the verifier finds drift, treat it as a blocker and remediate
-the exact binding in a separately reviewed plan. Until the follow-up creates the builder
-and Cloud Run image-pull identities, direct repository-level Artifact Registry reader and
-writer bindings must also be empty; a Google-managed member discovered there is reviewed,
-not silently removed.
+extra members in the managed resource roles, and direct token-creator bindings. If it
+finds drift, remediate the exact binding in a separately reviewed plan. Until the follow-up
+creates the builder and Cloud Run image-pull identities, direct repository-level Artifact
+Registry reader and writer bindings must also be empty; a Google-managed member discovered
+there is reviewed, not silently removed.
 
 There is no production deployment workflow in the repository yet. The production
 provider therefore cannot honestly bind `job_workflow_ref`; `push` + `main` +
@@ -72,9 +81,12 @@ provider therefore cannot honestly bind `job_workflow_ref`; `push` + `main` +
 workflow-ref claim and condition after its workflow path exists, then update both the
 Terraform exact-value test and live verifier.
 
-Preview has no required environment reviewer so pull-request deployments cannot deadlock
-on the sole owner approving their own change. Production keeps the owner review gate; its
-self-review setting is governed by the repository governance manifest.
+GitHub environment names are exactly `Preview` and `Production`. Their reviewers,
+self-review settings, and deployment branches are governed only by
+`.github/repository-governance.json` and
+`scripts/verify_repository_governance.py`; this foundation does not duplicate that policy.
+When those central files are present, `--live` delegates to their live verifier. The
+canonical Production deployment-branch set is `{main}`.
 
 ### Neon: verified repository state versus target
 
@@ -168,7 +180,9 @@ Production resource names:
 - `langsmith-api-key`.
 
 Preview resource names use the same suffixes with the `agent-preview-` prefix. Terraform
-manages resource metadata and exact runtime IAM only; it never manages secret versions.
+manages resource metadata and required additive runtime IAM members only; it never manages
+secret versions or claims that unrelated direct policy members do not exist. The
+post-apply live verifier is the acceptance gate for the effective direct policies.
 
 Inject each value out of band:
 
@@ -214,22 +228,35 @@ does not copy new Auth.js rows back into the old database.
 ## Agent cutover
 
 The target agent project starts empty. Do not copy test threads or legacy checkpoint
-tables. The repository does not yet contain the target Aegra schema/migration command;
-the legacy custom server's startup-created tables are not that contract.
+tables. Aegra 0.9.24 supplies the reviewed migration command `aegra db upgrade`, but this
+repository does not yet contain the one-shot deployment job that must run it. Runtime
+startup migration must be disabled with the non-secret setting
+`RUN_MIGRATIONS_ON_STARTUP=false`; a service revision is never the migration runner.
+
+The migration job uses the same immutable image digest as the service, receives a direct
+Neon `DATABASE_URL` only for the duration of the job, and must succeed before deployment.
+The service receives only the pooled runtime URL. Compatibility of that pooled URL with
+all Aegra 0.9.24 async runtime and synchronous database paths remains unverified external
+behavior, so preview evidence is a cutover blocker rather than an assumption.
 
 1. Confirm or create `syshin0116-agent-prod`.
 2. Create an isolated preview branch and credentials that cannot access the `production`
    branch.
-3. Land and test the target Aegra schema/migration contract in the application revision.
-4. Run that reviewed migration against preview with its direct endpoint.
+3. Land and test a one-shot migration job that runs `aegra db upgrade` from the exact image
+   digest selected for deployment.
+4. Give the preview migration job its separately held direct `DATABASE_URL`, run it, and
+   require success before creating or updating the service revision.
 5. Inject only the preview branch's pooled runtime endpoint into
-   `agent-preview-database-url`.
+   `agent-preview-database-url`, and set `RUN_MIGRATIONS_ON_STARTUP=false`.
 6. Record table names and migration revision only; never print a connection string.
-7. Deploy an immutable image digest with the matching runtime service account.
-8. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
+7. Deploy the same immutable image digest with the matching runtime service account.
+8. Prove the pooled endpoint works through every Aegra runtime database path exercised by
+   the preview smoke; stop the cutover on async/sync driver or pooler incompatibility.
+9. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
    persistence, and exact Agent Protocol v2 streaming.
-9. Apply the same migration to production through a separately held direct endpoint,
-   inject only its pooled runtime endpoint, and shift traffic after smoke tests pass.
+10. Run the same digest's migration job against production through a separately held
+    direct endpoint, inject only its pooled runtime endpoint, and shift traffic after
+    smoke tests pass.
 
 Rollback reassigns Cloud Run traffic to the previous healthy revision and restores the
 previous secret version. Database migrations must remain compatible with one previous
@@ -257,7 +284,9 @@ The follow-up deployment PR must:
    workflow paths exist;
 8. use GitHub OIDC and reviewed environments, with no JSON keys or long-lived cloud
    credentials;
-9. add preview, production, smoke, rollback, and concurrency gates in a separate PR.
+9. set `RUN_MIGRATIONS_ON_STARTUP=false` on both services and run the same-digest,
+   direct-URL `aegra db upgrade` job before each deployment;
+10. add preview, production, smoke, rollback, and concurrency gates in a separate PR.
 
 ## Verification
 
@@ -278,9 +307,18 @@ After an explicitly approved foundation apply, run the live metadata checks:
 scripts/verify_ops_foundation.sh --live
 ```
 
-The live verifier inspects API, IAM, key, bucket, repository, provider, secret-resource,
-and GitHub environment metadata only. It never reads secret payloads or Terraform state
-values.
+Before that command, populate `OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS` and
+`OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS` as newline-separated exact principals from
+a reviewed live IAM export. The first covers reviewed sensitive principals across the
+project, ancestors, and Artifact Registry; the second covers every direct state-bucket
+member. Do not invent either list from this document. Missing, incomplete, or stale input
+fails closed.
+
+The live verifier inspects API, direct IAM, role definitions, keys, bucket, repository,
+WIF provider, and secret-resource metadata only. It never reads secret payloads or
+Terraform state values. If the canonical repository-governance files are present, it also
+delegates GitHub environment verification to that verifier; otherwise it makes no GitHub
+environment claim.
 
 ## Deletion policy
 

@@ -103,6 +103,21 @@ run "foundation_security_contract" {
   }
 
   assert {
+    condition     = google_iam_workload_identity_pool.github.workload_identity_pool_id == "github" && !google_iam_workload_identity_pool.github.disabled
+    error_message = "The GitHub workload identity pool must keep the exact ID and remain enabled."
+  }
+
+  assert {
+    condition = (
+      google_iam_workload_identity_pool_provider.preview.workload_identity_pool_provider_id == "github-preview"
+      && google_iam_workload_identity_pool_provider.production.workload_identity_pool_provider_id == "github-production"
+      && !google_iam_workload_identity_pool_provider.preview.disabled
+      && !google_iam_workload_identity_pool_provider.production.disabled
+    )
+    error_message = "The exact Preview and Production WIF providers must remain enabled."
+  }
+
+  assert {
     condition     = google_iam_workload_identity_pool_provider.preview.attribute_condition == "assertion.repository_id == '1102380057' && assertion.repository_owner_id == '99532836' && assertion.event_name == 'pull_request' && assertion.environment == 'Preview'"
     error_message = "Preview federation must exactly pin repository, owner, pull_request, and Preview without alternate CEL branches."
   }
@@ -134,6 +149,14 @@ run "foundation_security_contract" {
       })
     )
     error_message = "Both WIF providers must expose only the reviewed GitHub OIDC claim mapping."
+  }
+
+  assert {
+    condition = (
+      try(length(google_iam_workload_identity_pool_provider.preview.oidc[0].allowed_audiences), 0) == 0
+      && try(length(google_iam_workload_identity_pool_provider.production.oidc[0].allowed_audiences), 0) == 0
+    )
+    error_message = "Both WIF providers must use Google's default audience."
   }
 
   assert {

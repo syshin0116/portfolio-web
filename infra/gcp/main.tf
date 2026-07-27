@@ -138,6 +138,7 @@ resource "google_iam_workload_identity_pool" "github" {
   workload_identity_pool_id = "github"
   display_name              = "GitHub Actions"
   description               = "GitHub Actions federation; no service-account keys."
+  disabled                  = false
 
   depends_on = [google_project_service.required]
 
@@ -151,6 +152,7 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-preview"
   display_name                       = "GitHub Preview"
+  disabled                           = false
 
   attribute_mapping = {
     "google.subject"                = "assertion.sub"
@@ -184,6 +186,7 @@ resource "google_iam_workload_identity_pool_provider" "production" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-production"
   display_name                       = "GitHub Production"
+  disabled                           = false
 
   attribute_mapping = {
     "google.subject"                = "assertion.sub"

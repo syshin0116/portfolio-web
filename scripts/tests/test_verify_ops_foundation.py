@@ -12,8 +12,11 @@ FIXTURE_FILES = (
     "infra/gcp/.terraform-version",
     "infra/gcp/backend.tf",
     "infra/gcp/iam.tf",
+    "infra/gcp/imports.tf",
     "infra/gcp/main.tf",
+    "infra/gcp/outputs.tf",
     "infra/gcp/state.tf",
+    "infra/gcp/variables.tf",
     "infra/gcp/versions.tf",
 )
 PREVIEW_CONDITION_LINE = (
@@ -47,6 +50,20 @@ class StaticVerifierMutationTests(unittest.TestCase):
         shutil.copyfile(
             REPO_ROOT / "scripts/verify_ops_foundation.sh",
             verifier,
+        )
+        shutil.copyfile(
+            REPO_ROOT / "scripts/ops_foundation_contract.py",
+            root / "scripts/ops_foundation_contract.py",
+        )
+        subprocess.run(
+            ["git", "init", "--quiet"],
+            cwd=root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "add", "infra/gcp"],
+            cwd=root,
+            check=True,
         )
         return root
 
@@ -161,7 +178,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "preview provider must use only the reviewed CEL condition",
+            "attribute_condition must exactly equal",
             result.stderr,
         )
 
@@ -187,9 +204,147 @@ resource "google_secret_manager_secret_iam_member" "unreviewed_accessor" {
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "Terraform IAM resources must exactly match",
+            "Terraform IAM/WIF declarations must exactly match",
             result.stderr,
         )
+
+    def test_tracked_nested_terraform_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            rogue_path = root / "infra/gcp/nested/rogue.tf"
+            rogue_path.parent.mkdir(parents=True)
+            rogue_path.write_text(
+                """
+resource "google_project_iam_member" "rogue" {
+  project = var.project_id
+  role    = "roles/owner"
+  member  = "allUsers"
+}
+""",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", "infra/gcp/nested/rogue.tf"],
+                cwd=root,
+                check=True,
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("tracked Terraform inventory mismatch", result.stderr)
+
+    def test_tracked_json_terraform_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            rogue_path = root / "infra/gcp/rogue.tf.json"
+            rogue_path.write_text(
+                """
+{
+  "resource": {
+    "google_project_iam_member": {
+      "rogue": {
+        "project": "${var.project_id}",
+        "role": "roles/owner",
+        "member": "allUsers"
+      }
+    }
+  }
+}
+""",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", "infra/gcp/rogue.tf.json"],
+                cwd=root,
+                check=True,
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("tracked Terraform inventory mismatch", result.stderr)
+
+    def test_module_block_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            main_path = root / "infra/gcp/main.tf"
+            main_path.write_text(
+                main_path.read_text(encoding="utf-8")
+                + """
+
+module "rogue" {
+  source = "./nested"
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Terraform module blocks are prohibited", result.stderr)
+
+    def test_third_weak_provider_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            main_path = root / "infra/gcp/main.tf"
+            main_path.write_text(
+                main_path.read_text(encoding="utf-8")
+                + """
+
+resource "google_iam_workload_identity_pool_provider" "weak" {
+  project                            = var.project_id
+  workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  workload_identity_pool_provider_id = "github-weak"
+
+  attribute_mapping = {
+    "google.subject" = "assertion.sub"
+  }
+
+  oidc {
+    issuer_uri = "https://token.actions.githubusercontent.com"
+  }
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "Terraform IAM/WIF declarations must exactly match",
+            result.stderr,
+        )
+
+    def test_custom_provider_audience_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            main_path = root / "infra/gcp/main.tf"
+            original = main_path.read_text(encoding="utf-8")
+            expected = (
+                "  oidc {\n"
+                '    issuer_uri = "https://token.actions.githubusercontent.com"\n'
+                "  }\n"
+            )
+            self.assertEqual(2, original.count(expected))
+            main_path.write_text(
+                original.replace(
+                    expected,
+                    "  oidc {\n"
+                    '    issuer_uri       = "https://token.actions.githubusercontent.com"\n'
+                    '    allowed_audiences = ["rogue"]\n'
+                    "  }\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("allowed_audiences must be absent", result.stderr)
 
 
 if __name__ == "__main__":

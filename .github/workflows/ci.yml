@@ -149,6 +149,7 @@ jobs:
           tests
           ../scripts/build_index.py
           ../scripts/ci_changed_components.py
+          ../scripts/ops_foundation_contract.py
           ../scripts/tests
       - if: needs.changes.outputs.agent == 'true'
         run: >-
@@ -157,6 +158,7 @@ jobs:
           tests
           ../scripts/build_index.py
           ../scripts/ci_changed_components.py
+          ../scripts/ops_foundation_contract.py
           ../scripts/tests
       - name: Build and audit the published corpus and BM25 artifacts
         if: needs.changes.outputs.agent == 'true'

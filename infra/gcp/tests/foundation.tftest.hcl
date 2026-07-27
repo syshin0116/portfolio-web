@@ -17,6 +17,14 @@ override_resource {
 }
 
 override_resource {
+  target          = google_project_iam_custom_role.cloud_run_delivery
+  override_during = plan
+  values = {
+    name = "projects/festive-ally-503605-v7/roles/cloudRunAgentDelivery"
+  }
+}
+
+override_resource {
   target          = google_service_account.runtime
   override_during = plan
   values = {
@@ -234,48 +242,38 @@ run "foundation_security_contract" {
     condition = (
       google_iam_workload_identity_pool_provider.preview.workload_identity_pool_provider_id == "github-preview"
       && google_iam_workload_identity_pool_provider.production.workload_identity_pool_provider_id == "github-production"
-      && !google_iam_workload_identity_pool_provider.preview.disabled
+      && google_iam_workload_identity_pool_provider.preview.disabled
       && !google_iam_workload_identity_pool_provider.production.disabled
     )
-    error_message = "The exact Preview and Production WIF providers must remain enabled."
+    error_message = "The legacy Preview provider must remain managed disabled and github-production must remain the sole active delivery provider."
   }
 
   assert {
-    condition     = google_iam_workload_identity_pool_provider.preview.attribute_condition == "assertion.repository_id == '1102380057' && assertion.repository_owner_id == '99532836' && assertion.event_name == 'pull_request' && assertion.environment == 'Agent Preview' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + assertion.ref && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + assertion.ref"
-    error_message = "Preview federation must exactly pin repository, owner, event, environment, caller, and reusable workflow."
+    condition     = google_iam_workload_identity_pool_provider.preview.attribute_condition == "attribute.repository_id == '__legacy_provider_disabled__'"
+    error_message = "The retained legacy provider condition must be inert even before its disabled state is evaluated."
   }
 
   assert {
-    condition     = google_iam_workload_identity_pool_provider.production.attribute_condition == "assertion.repository_id == '1102380057' && assertion.repository_owner_id == '99532836' && assertion.event_name in ['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && assertion.environment == 'Agent Production' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@refs/heads/main'"
-    error_message = "Production federation must exactly pin repository, owner, event, main, environment, caller, and reusable workflow."
+    condition     = google_iam_workload_identity_pool_provider.production.attribute_condition == "attribute.repository_id == '1102380057' && attribute.repository_owner_id == '99532836' && attribute.delivery_role in ['preview-builder', 'preview-deployer', 'production-builder', 'production-deployer']"
+    error_message = "Active federation must accept only mapped immutable repository/owner IDs and one of the four exact delivery roles."
   }
 
   assert {
     condition = (
       google_iam_workload_identity_pool_provider.preview.attribute_mapping
       == tomap({
-        "google.subject"                = "assertion.sub"
-        "attribute.environment"         = "assertion.environment"
-        "attribute.event_name"          = "assertion.event_name"
-        "attribute.job_workflow_ref"    = "assertion.job_workflow_ref"
-        "attribute.ref"                 = "assertion.ref"
-        "attribute.repository_id"       = "assertion.repository_id"
-        "attribute.repository_owner_id" = "assertion.repository_owner_id"
-        "attribute.workflow_ref"        = "assertion.workflow_ref"
+        "google.subject"          = "assertion.sub"
+        "attribute.repository_id" = "assertion.repository_id"
       })
       && google_iam_workload_identity_pool_provider.production.attribute_mapping
       == tomap({
         "google.subject"                = "assertion.sub"
-        "attribute.environment"         = "assertion.environment"
-        "attribute.event_name"          = "assertion.event_name"
-        "attribute.job_workflow_ref"    = "assertion.job_workflow_ref"
-        "attribute.ref"                 = "assertion.ref"
         "attribute.repository_id"       = "assertion.repository_id"
         "attribute.repository_owner_id" = "assertion.repository_owner_id"
-        "attribute.workflow_ref"        = "assertion.workflow_ref"
+        "attribute.delivery_role"       = "assertion.event_name == 'pull_request' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + assertion.ref ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@' + assertion.ref ? 'preview-builder' : assertion.environment == 'Agent Preview' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@' + assertion.ref ? 'preview-deployer' : 'invalid') : assertion.event_name in ['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@refs/heads/main' ? 'production-builder' : assertion.environment == 'Agent Production' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@refs/heads/main' ? 'production-deployer' : 'invalid') : 'invalid'"
       })
     )
-    error_message = "Both WIF providers must expose only the reviewed GitHub OIDC claim mapping."
+    error_message = "Every provider condition field must be mapped, and only the active provider may map the exact four machine-safe delivery roles."
   }
 
   assert {
@@ -289,11 +287,21 @@ run "foundation_security_contract" {
   assert {
     condition = (
       google_service_account_iam_member.github_preview.member
-      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.environment/Agent Preview"
+      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.delivery_role/preview-deployer"
       && google_service_account_iam_member.github_production.member
-      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.environment/Agent Production"
+      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.delivery_role/production-deployer"
+      && google_service_account_iam_member.github_builder.member
+      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.delivery_role/production-builder"
+      && google_service_account_iam_member.github_preview_builder.member
+      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.delivery_role/preview-builder"
+      && length(toset([
+        google_service_account_iam_member.github_preview.member,
+        google_service_account_iam_member.github_production.member,
+        google_service_account_iam_member.github_builder.member,
+        google_service_account_iam_member.github_preview_builder.member,
+      ])) == 4
     )
-    error_message = "WIF principal sets must derive the current project's numeric ID."
+    error_message = "Each builder/deployer must trust exactly one distinct delivery role, preventing cross-environment or cross-phase impersonation."
   }
 
   assert {
@@ -356,9 +364,8 @@ run "foundation_security_contract" {
       && google_artifact_registry_repository_iam_member.cloud_run_reader.role == "roles/artifactregistry.reader"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
       && google_artifact_registry_repository_iam_member.preview_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
-      && length(google_service_account_iam_member.github_builder) == 1
-      && google_service_account_iam_member.github_builder["production"].member == local.github_environment_principals.production
-      && google_service_account_iam_member.github_preview_builder.member == local.github_environment_principals.preview
+      && google_service_account_iam_member.github_builder.member == local.github_delivery_role_principals.production_builder
+      && google_service_account_iam_member.github_preview_builder.member == local.github_delivery_role_principals.preview_builder
     )
     error_message = "Preview and production builders, repositories, readers, and WIF principals must remain disjoint."
   }
@@ -384,6 +391,12 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
+      && length(service.template[0].containers[0].env) == 18
+      && {
+        for env in service.template[0].containers[0].env :
+        env.name => env.value
+        if try(env.value, null) != null
+      } == local.cloud_run_runtime_environment
       && length([
         for env in service.template[0].containers[0].env : env
         if try(env.value_source[0].secret_key_ref[0].version, null) != null
@@ -413,6 +426,7 @@ run "foundation_security_contract" {
         )
         && job.template[0].template[0].containers[0].args == tolist(["-m", "agent.migrate"])
         && job.template[0].template[0].max_retries == 0
+        && job.template[0].template[0].execution_environment == "EXECUTION_ENVIRONMENT_GEN2"
         && length([
           for env in job.template[0].template[0].containers[0].env : env
           if try(env.value_source[0].secret_key_ref[0].version, null) != null
@@ -434,6 +448,7 @@ run "foundation_security_contract" {
         )
         && job.template[0].template[0].containers[0].args == tolist(["-m", "agent.neon_grant_probe"])
         && job.template[0].template[0].max_retries == 0
+        && job.template[0].template[0].execution_environment == "EXECUTION_ENVIRONMENT_GEN2"
         && length([
           for env in job.template[0].template[0].containers[0].env : env
           if try(env.value_source[0].secret_key_ref[0].version, null) != null
@@ -455,13 +470,32 @@ run "foundation_security_contract" {
       length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 2
       && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 2
       && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 2
+      && toset(google_project_iam_custom_role.cloud_run_delivery.permissions) == toset([
+        "run.jobs.get",
+        "run.jobs.run",
+        "run.jobs.update",
+        "run.operations.get",
+        "run.revisions.get",
+        "run.services.get",
+        "run.services.update",
+      ])
       && alltrue([
         for environment, binding in google_cloud_run_v2_service_iam_member.deployer_service_update :
-        binding.role == "roles/run.developer"
+        binding.role == google_project_iam_custom_role.cloud_run_delivery.name
+        && binding.member == "serviceAccount:${local.cloud_run_environments[environment].deployer_service_account}"
+      ])
+      && alltrue([
+        for environment, binding in google_cloud_run_v2_job_iam_member.deployer_migration_job :
+        binding.role == google_project_iam_custom_role.cloud_run_delivery.name
+        && binding.member == "serviceAccount:${local.cloud_run_environments[environment].deployer_service_account}"
+      ])
+      && alltrue([
+        for environment, binding in google_cloud_run_v2_job_iam_member.deployer_grant_probe_job :
+        binding.role == google_project_iam_custom_role.cloud_run_delivery.name
         && binding.member == "serviceAccount:${local.cloud_run_environments[environment].deployer_service_account}"
       ])
     )
-    error_message = "Deployers must remain resource-scoped to their matching service and one-shot jobs."
+    error_message = "Deployers must keep only the exact seven-permission custom role on their matching service and one-shot jobs."
   }
 
   assert {

@@ -2,7 +2,7 @@
 title: "Native Aegra Cloud Run delivery runbook"
 description: >
   Bootstrap, deploy, smoke, and roll back the digest-pinned native Aegra image through
-  GitHub OIDC, environment-scoped identities, and Cloud Run revision traffic.
+  phase-scoped GitHub OIDC identities and Cloud Run revision traffic.
 when_to_read: >
   Before applying the Cloud Run Terraform, enabling agent delivery, changing its
   workflows or image, rotating agent database credentials, or rolling back a revision.
@@ -46,10 +46,25 @@ Each builder has repository-scoped `roles/artifactregistry.writer` only on its m
 repository. Each deployer and the Google-managed Cloud Run service agent have
 `roles/artifactregistry.reader` only on the matching repository; Cloud Run requires the
 deploying principal to read selected image metadata, while only the service agent pulls
-it at runtime. Each deployer has `roles/run.developer` only on its own service and two
-jobs, plus `actAs` only on that environment's runtime and migration identities. No
-deployer can read Secret Manager payloads or write images, and preview code cannot write
-or select a production image.
+it at runtime. Each deployer receives the project custom role
+`cloudRunAgentDelivery` only on its own service and two jobs. That role contains exactly
+`run.services.get`, `run.services.update`, `run.revisions.get`, `run.jobs.get`,
+`run.jobs.update`, `run.jobs.run`, and `run.operations.get`. It intentionally excludes
+create, delete, IAM-policy mutation, and `run.jobs.runWithOverrides`. Each deployer also
+has `actAs` only on that environment's runtime and migration identities. No deployer can
+read Secret Manager payloads or write images, and preview code cannot write or select a
+production image.
+
+The `github` workload-identity pool has one canonical active provider,
+`github-production`. It explicitly maps the immutable numeric repository and owner claims,
+then maps exact caller/reusable-workflow claims onto four disjoint values of
+`attribute.delivery_role`: `preview-builder`, `preview-deployer`, `production-builder`,
+and `production-deployer`. Its provider condition references only those mapped attributes,
+so every condition field satisfies the Google WIF provider contract. Each service account
+accepts only its matching value. The old `github-preview` provider remains
+Terraform-managed with `disabled=true`, an inert condition over its mapped repository ID,
+no usable delivery-role mapping, and `prevent_destroy`; it is retained only to make
+retirement explicit and non-destructive.
 
 The services intentionally allow unauthenticated Cloud Run invocation because browsers at
 the Vercel site must reach them. Aegra's outer bearer-token middleware remains the
@@ -60,6 +75,14 @@ Both services are fixed to one instance and one Uvicorn worker. This is a correc
 constraint, not a cost optimization: Aegra 0.9.24's same-thread mutation guard is
 process-local.
 
+Each service revision has exactly 18 environment entries: 13 reviewed plain values and
+five numeric-version secret references. The plain set includes
+`REDIS_BROKER_ENABLED=false` and `BG_JOB_MAX_RETRIES=0`, reserving the runtime boundary
+required by the bounded background-work preflight. The one-shot modules
+`agent.migrate` and `agent.neon_grant_probe` load through the side-effect-free
+`agent` package and do not import `agent.graph` or its runtime preflight, so their
+separate three-entry environment contract does not carry these service-only values.
+
 ## GitHub configuration
 
 Create two GitHub deployment environments in addition to the existing Vercel `Preview`
@@ -67,32 +90,25 @@ and `Production` environments:
 
 | Environment | Branch policy | Reviewer |
 |---|---|---|
-| `Agent Preview` | no branch restriction | none |
+| `Agent Preview` | no branch restriction | `syshin0116`, self-review allowed |
 | `Agent Production` | branch `main` only | `syshin0116`, self-review allowed |
 
-Normal production delivery deliberately pauses twice. The first approval releases the
-builder job; after it succeeds, inspect the exact candidate digest and build evidence.
-The second approval releases the separate deployer job to run migrations, smoke, and
-traffic promotion. GitHub applies environment protection rules to each job that
-references an environment, so these are two independent approvals, not one approval
-shared by the run. This keeps the registry-writer credential on a different runner from
-the deployer credential and smoke token. Production manual rollback has only the rollback
-job and therefore one approval; preview has no required reviewer. Do not collapse the two
-production jobs merely to remove a click without a new review of credential co-residency:
+Disable admin bypass on both environments. Each delivery has one approval boundary: the
+builder runs first without a GitHub environment, then the separate release job references
+the exact target environment once. The builder can write only to its isolated registry
+and receives neither a deployer identity nor a smoke token. The approved release job can
+read that registry and update only its service and jobs, but cannot write an image. This
+keeps the writer and deployer credentials on different runners without falsely claiming
+that one GitHub environment can require two independent approvals. Manual rollback also
+uses only the release job and therefore one approval:
 [GitHub deployment environments](https://docs.github.com/en/actions/concepts/workflows-and-actions/deployment-environments).
 
-Set these environment variables with the exact Terraform outputs:
-
-```text
-GCP_WORKLOAD_IDENTITY_PROVIDER
-GCP_BUILDER_SERVICE_ACCOUNT
-GCP_DEPLOYER_SERVICE_ACCOUNT
-```
-
-All three values are environment-specific. The reusable workflow validates the exact
-reviewed provider, builder, deployer, and repository mapping immediately before each OIDC
-authentication. A preview workflow therefore cannot substitute a production identity or
-repository even if an in-repository pull request changes workflow code.
+Both environments must contain **zero GitHub environment variables**. Identity and
+resource selection is repository-owned: immediately before OIDC authentication,
+`scripts/validate_agent_delivery_identity.sh` derives the canonical provider, exact
+service account, repository, service, and jobs from the fixed `target` plus the
+builder/deployer phase. A preview workflow therefore cannot substitute a production
+identity or repository even if an in-repository pull request changes workflow code.
 
 Set this GitHub **Environment secret** (not a repository or organization secret) in both
 `Agent Preview` and `Agent Production`:
@@ -101,14 +117,31 @@ Set this GitHub **Environment secret** (not a repository or organization secret)
 AGENT_SMOKE_BEARER_TOKEN
 ```
 
-It must be a short-lived owner bearer token accepted by `agent.auth`; it is never printed.
-Rotate or replace it before expiry. Do not store `AGENT_AUTH_SECRET`, a database URL, or a
-service-account JSON key in GitHub.
+It must be an owner HS256 bearer token accepted by `agent.auth`; it is never printed.
+The token requires `sub`, `iss=syshin0116.dev`, `aud=agent-api`, `iat`, and `exp`.
+Long-lived static JWTs are forbidden. Immediately before approving each release, replace
+the target environment secret with a newly minted token whose total lifetime is at most
+two hours and whose remaining lifetime is at least 65 minutes. The approved release
+rechecks those public claims after approval and before GCP authentication; the live APv2
+smoke remains the signature and authorization proof.
 
-The WIF providers require the exact caller workflow (`preview-agent.yml` or
-`deploy-agent.yml`) and the exact called reusable workflow (`agent-delivery.yml`) at the
-same ref. Preview additionally accepts only the `pull_request` event. Production accepts
-only `push` or explicitly approved `workflow_dispatch` at `refs/heads/main`.
+There is currently no repository-owned per-release token mint. That is an honest
+automation gap: an operator must rotate the environment secret immediately before every
+approved preview, production deploy, or rollback. If the pre-auth check or live smoke
+reports expiry, do not reuse or lengthen the token. Mint a new bounded token, replace only
+the matching environment secret, and rerun the workflow. A deploy fails before promotion;
+a rollback smoke failure restores the prior serving revision. Do not store
+`AGENT_AUTH_SECRET`, a database URL, a long-lived JWT, or a service-account JSON key in
+GitHub. A later public-auth change may replace this prerequisite with a narrowly scoped
+per-release mint.
+
+The canonical active WIF provider requires the exact caller workflow
+(`preview-agent.yml` or `deploy-agent.yml`) and the exact called reusable workflow
+(`agent-image-build.yml` for builders or `agent-release.yml` for deployers) at the same
+reviewed ref. Preview additionally accepts only the `pull_request` event. Production
+accepts only `push` or `workflow_dispatch` at `refs/heads/main`. Only deployer claims
+carry and must match `Agent Preview` or `Agent Production`; a builder claim with an
+environment is rejected.
 
 ## Secret Manager payloads
 
@@ -273,26 +306,64 @@ reducing a boundary, inventory revision digests again and first repeat the dry r
 `agent-preview`. Fork pull requests never receive the deployment job. `deploy-agent.yml`
 deploys reviewed `main` pushes to `agent`.
 
-The reusable workflow:
+The caller owns the only concurrency group for its target, with
+`cancel-in-progress=false`; the reusable workflows declare no nested concurrency group.
+After environment approval and before any GCP authentication, the release gate binds the
+exact target/environment/mode tuple, source SHA, isolated-registry digest or rollback
+revision, and fresh bounded smoke token. Preview requires the still-open same-repository
+pull request to have the exact built head SHA. Production deploy requires `main` to equal
+the checked-out SHA both before and after the exact `ci/check`, `protocol/compat`, and
+`wiki/verify` GitHub Actions check-runs complete successfully. Duplicate names, another
+GitHub App, pending/failure, a different check SHA, or a moved `main` fails closed.
+Emergency rollback is deliberately different: it requires `workflow_dispatch`,
+`refs/heads/main`, the current checked-out `main` SHA, environment approval, and an exact
+production revision name, but it does not require green candidate checks. This keeps a
+reviewed rollback usable when current `main` CI is red.
 
-1. validates and authenticates the environment's dedicated builder through WIF;
+The caller composes two reusable workflows. `agent-image-build.yml`:
+
+1. validates and authenticates the target's dedicated builder through WIF;
 2. builds and pushes a fresh run/attempt-scoped tag with provenance and SBOM attestations,
    rejecting tag reuse as a delivery path;
-3. passes only the registry-resolved digest to the deployer;
-4. updates and executes the same-digest migration job;
-5. updates and executes the same-digest real-Neon grant/denial job;
-6. creates a uniquely named no-traffic service revision from the commit SHA, GitHub run
-   ID, and run attempt, then checks the exact digest, one-instance, one-worker, and
-   numeric-secret contract;
-7. health-checks the tagged no-traffic revision and proves APv2 rejects missing auth;
-8. moves 100% traffic to that revision;
-9. runs the two-turn APv2 protocol smoke against the service URL.
+3. emits only the registry-resolved digest.
 
-Any failure after revision creation restores 100% traffic to the previously ready
-revision. The workflow never rebuilds to roll back. The temporary `smoke` revision tag is
-removed before every deploy or rollback, removed again after checks, and verified absent.
-A tag-cleanup failure is itself a failed delivery; traffic restoration is still attempted
-and cleanup errors are not swallowed.
+It uses the root frozen uv workspace and the Dockerfile-specific context allowlist.
+`ci/agent` also builds and inspects the real Linux amd64 delivery image, so a lock,
+workspace-member, context, corpus, or architecture error fails before release.
+
+After owner approval, `agent-release.yml` passes that digest to
+`scripts/deploy_cloud_run.sh`, which:
+
+1. updates the same-digest migration job;
+2. reads the exact Cloud Run v2 Job resource back, verifies its full runtime contract and
+   `etag`, and only then calls REST v2 `jobs.run` with that same `etag`;
+3. repeats update → v2 read-back verification → execution for the real-Neon grant/denial
+   job;
+4. polls each returned operation and accepts only one immutable successful Execution
+   whose exact template matches the verified digest/job and whose failed, cancelled,
+   running, and retried counts are zero;
+5. creates a uniquely named no-traffic service revision from the commit SHA, GitHub run
+   ID, and run attempt, then checks the exact digest, one-instance, one-worker, and
+   numeric-secret contract through the Cloud Run v2 Service and Revision resources;
+6. requires exactly one untagged 100% old revision plus one 0%-traffic `smoke` tag bound to
+   the new revision, then runs health, unauthenticated-401, and the full owner-auth
+   two-turn APv2 protocol smoke against that tagged URL;
+7. only after every protocol gate passes, moves 100% traffic to the new revision, removes
+   the tag, revalidates the exact serving revision, and performs health plus a cheap
+   unauthenticated APv2 routing check without a second paid full smoke.
+
+All metadata reads use `https://run.googleapis.com/v2/...` with a short-lived access token
+kept out of arguments and logs. Redirects, non-JSON responses, unexpected status,
+oversized bodies, v1-shaped or hybrid resources, incomplete reconciliation, and any
+contract mismatch fail before job execution or traffic change.
+
+A failure before a traffic-shift attempt removes the temporary tag and leaves the existing
+100% target untouched. Once a shift has been attempted, every error, `TERM`, or `INT`
+restores and verifies the previously serving revision. The workflow never rebuilds to
+roll back. The temporary `smoke` revision tag is removed before every deploy or rollback,
+removed again after checks, and verified absent. A tag-cleanup failure is itself a failed
+delivery; required traffic restoration is still attempted and cleanup errors are not
+swallowed.
 
 ## Secret rotation
 
@@ -321,6 +392,9 @@ whose numeric secret references remain unchanged.
 
 Dispatch **Deploy agent** on `main`, select `rollback`, and provide an exact existing
 `agent-...` revision name. The `Agent Production` environment approval is still required.
+The gate requires a manual `workflow_dispatch`, the checked-out SHA to remain current
+`main`, and the exact revision input, but intentionally permits rollback while the three
+deployment candidate checks are red.
 Before shifting traffic, the workflow requires the target revision itself—not merely the
 service's latest template—to be Ready and owned by `agent`, and to retain the exact
 production runtime service account, production-repository digest,
@@ -339,6 +413,10 @@ Restore a prior secret version only as a separately reviewed operation.
 - Terraform has not been applied by this repository change.
 - No GCP or Neon resource/payload has been created or changed.
 - The real Neon runtime and migration credentials still need grant/denial acceptance.
-- GitHub `Agent Preview` / `Agent Production` environments, their variables, reviewer
-  policy, and smoke tokens still need external configuration.
+- GitHub `Agent Preview` / `Agent Production` environments, their reviewer policy, zero
+  variable inventory, and sole `AGENT_SMOKE_BEARER_TOKEN` secret still need external
+  configuration and read-only live verification.
 - The first provider-backed Korean two-turn APv2 smoke is still a live deployment gate.
+- Anonymous visitor access remains a later reviewed production release after ADR-0006's
+  isolation, concurrency, retention, and spend gates. An unreviewed preview build never
+  becomes the public guest path.

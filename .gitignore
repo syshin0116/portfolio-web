@@ -21,6 +21,7 @@ node_modules
 # misc
 .DS_Store
 *.pem
+gha-creds-*.json
 
 # obsidian vault settings (local only)
 content/.obsidian

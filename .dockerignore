@@ -48,6 +48,7 @@ eval/results/**
 **/*.jks
 **/*.keystore
 **/*credentials*.json
+**/gha-creds-*.json
 **/*service-account*.json
 **/*service_account*.json
 **/application_default_credentials.json

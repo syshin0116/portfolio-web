@@ -1,0 +1,135 @@
+name: Agent release
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: Exact isolated delivery target.
+        required: true
+        type: string
+      environment:
+        description: Exact reviewer-gated GitHub release environment.
+        required: true
+        type: string
+      mode:
+        description: Deploy the supplied digest or roll traffic back.
+        required: true
+        type: string
+      source_sha:
+        description: Exact source commit baked into the reviewed candidate.
+        required: true
+        type: string
+      pull_request_number:
+        description: Exact preview PR number; zero for production.
+        required: false
+        default: 0
+        type: number
+      image_digest:
+        description: Fresh immutable image from the build workflow.
+        required: false
+        default: ""
+        type: string
+      rollback_revision:
+        description: Exact existing revision for rollback mode.
+        required: false
+        default: ""
+        type: string
+
+permissions: {}
+
+jobs:
+  release:
+    name: Release reviewed agent candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    permissions:
+      checks: read
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - name: Revalidate exact release candidate after approval
+        env:
+          AGENT_SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
+          CANDIDATE_EVENT_NAME: ${{ github.event_name }}
+          CANDIDATE_ENVIRONMENT: ${{ inputs.environment }}
+          CANDIDATE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+          CANDIDATE_MODE: ${{ inputs.mode }}
+          CANDIDATE_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          CANDIDATE_REF: ${{ github.ref }}
+          CANDIDATE_REPOSITORY: ${{ github.repository }}
+          CANDIDATE_ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
+          CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha }}
+          CANDIDATE_TARGET: ${{ inputs.target }}
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_args=(
+            --target "$CANDIDATE_TARGET"
+            --environment "$CANDIDATE_ENVIRONMENT"
+            --mode "$CANDIDATE_MODE"
+            --repository "$CANDIDATE_REPOSITORY"
+            --source-sha "$CANDIDATE_SOURCE_SHA"
+            --event-name "$CANDIDATE_EVENT_NAME"
+            --ref "$CANDIDATE_REF"
+            --image-digest "$CANDIDATE_IMAGE_DIGEST"
+            --rollback-revision "$CANDIDATE_ROLLBACK_REVISION"
+          )
+          if [[ "$CANDIDATE_TARGET" == "preview" ]]; then
+            candidate_args+=(
+              --pull-request-number "$CANDIDATE_PULL_REQUEST_NUMBER"
+            )
+          fi
+          python3 scripts/validate_agent_release_candidate.py \
+            "${candidate_args[@]}"
+      - name: Select exact deployer identity
+        id: delivery_identity
+        env:
+          DELIVERY_ENVIRONMENT: ${{ inputs.environment }}
+          DELIVERY_ROLE: deployer
+          DELIVERY_TARGET: ${{ inputs.target }}
+        shell: bash
+        run: scripts/validate_agent_delivery_identity.sh >>"$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ steps.delivery_identity.outputs.workload_identity_provider }}
+          service_account: ${{ steps.delivery_identity.outputs.service_account }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          version: "577.0.0"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.29"
+          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
+          enable-cache: false
+      - name: Execute fail-closed deployment
+        if: inputs.mode == 'deploy'
+        env:
+          CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
+          DELIVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DELIVERY_RUN_ID: ${{ github.run_id }}
+          GCP_PROJECT_ID: festive-ally-503605-v7
+          GCP_REGION: us-east4
+          GRANT_PROBE_JOB: ${{ steps.delivery_identity.outputs.grant_probe_job }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          MIGRATION_JOB: ${{ steps.delivery_identity.outputs.migration_job }}
+          SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: scripts/deploy_cloud_run.sh deploy
+      - name: Execute fail-closed rollback
+        if: inputs.mode == 'rollback'
+        env:
+          CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
+          GCP_PROJECT_ID: festive-ally-503605-v7
+          GCP_REGION: us-east4
+          ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
+          SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
+        run: scripts/deploy_cloud_run.sh rollback "$ROLLBACK_REVISION"

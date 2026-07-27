@@ -117,9 +117,9 @@ class PathClassificationTests(unittest.TestCase):
 
     def test_root_runtime_and_scripts_run_agent_and_eval(self) -> None:
         for path in (
-            ".dockerignore",
             "aegra.json",
             "Dockerfile",
+            "Dockerfile.dockerignore",
             "pyproject.toml",
             "uv.lock",
             "scripts/build_index.py",
@@ -137,8 +137,10 @@ class PathClassificationTests(unittest.TestCase):
             "scripts/tests/test_agent_delivery_identity.py",
             "scripts/tests/test_deploy_cloud_run.py",
             "scripts/tests/test_ops_foundation_contract.py",
+            "scripts/tests/test_validate_agent_release_candidate.py",
             "scripts/verify_ops_foundation.sh",
             "scripts/tests/test_verify_ops_foundation.py",
+            "scripts/validate_agent_release_candidate.py",
             "scripts/validate_agent_delivery_identity.sh",
         ):
             with self.subTest(path=path):

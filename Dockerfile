@@ -1,5 +1,6 @@
 ARG PYTHON_IMAGE="python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de"
-ARG UV_IMAGE="ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
+ARG UV_VERSION="0.11.29"
+ARG UV_IMAGE="ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
 
 FROM ${UV_IMAGE} AS uv
 FROM ${PYTHON_IMAGE} AS builder
@@ -11,18 +12,27 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never
 
 COPY --from=uv /uv /uvx /usr/local/bin/
-WORKDIR /app/agent
-
-COPY agent/pyproject.toml agent/uv.lock ./
-RUN test -n "${VCS_REF}" \
-    && uv sync --frozen --no-dev --no-install-project
-
-COPY agent/src ./src
-COPY agent/skills ./skills
-COPY agent/bm25-policy.toml agent/corpus-policy.toml ./
-RUN uv sync --frozen --no-dev --no-editable
-
 WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+COPY agent/pyproject.toml ./agent/pyproject.toml
+COPY eval/pyproject.toml ./eval/pyproject.toml
+RUN test -n "${VCS_REF}" \
+    && uv sync \
+      --frozen \
+      --package syshin0116-dev-agent \
+      --no-dev \
+      --no-install-project
+
+COPY agent/src ./agent/src
+COPY agent/skills ./agent/skills
+COPY agent/bm25-policy.toml agent/corpus-policy.toml ./agent/
+RUN uv sync \
+      --frozen \
+      --package syshin0116-dev-agent \
+      --no-dev \
+      --no-editable
+
 COPY content ./content
 COPY scripts/build_index.py ./scripts/build_index.py
 RUN /opt/agent-venv/bin/python scripts/build_index.py \

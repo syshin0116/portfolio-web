@@ -32,6 +32,16 @@ EVAL_PUBLICATION_VARIABLES_PAGE = (
 AGENT_PRODUCTION_BRANCH_POLICIES_PAGE = (
     "environments/Agent%20Production/deployment-branch-policies?per_page=100&page=1"
 )
+AGENT_PREVIEW_SECRETS_PAGE = "environments/Agent%20Preview/secrets?per_page=100&page=1"
+AGENT_PREVIEW_VARIABLES_PAGE = (
+    "environments/Agent%20Preview/variables?per_page=100&page=1"
+)
+AGENT_PRODUCTION_SECRETS_PAGE = (
+    "environments/Agent%20Production/secrets?per_page=100&page=1"
+)
+AGENT_PRODUCTION_VARIABLES_PAGE = (
+    "environments/Agent%20Production/variables?per_page=100&page=1"
+)
 LEGACY_MAIN_PROTECTION = "branches/main/protection"
 
 
@@ -156,13 +166,24 @@ def desired_live_responses() -> dict[str, object]:
         },
         "environments/Agent%20Preview": {
             "name": "Agent Preview",
-            "can_admins_bypass": True,
-            "protection_rules": [],
+            "can_admins_bypass": False,
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [
+                        {
+                            "type": "User",
+                            "reviewer": {"login": "syshin0116"},
+                        }
+                    ],
+                }
+            ],
             "deployment_branch_policy": None,
         },
         "environments/Agent%20Production": {
             "name": "Agent Production",
-            "can_admins_bypass": True,
+            "can_admins_bypass": False,
             "protection_rules": [
                 {
                     "type": "required_reviewers",
@@ -224,6 +245,22 @@ def desired_live_responses() -> dict[str, object]:
             "total_count": 0,
             "variables": [],
         },
+        AGENT_PREVIEW_SECRETS_PAGE: {
+            "total_count": 1,
+            "secrets": [{"name": "AGENT_SMOKE_BEARER_TOKEN"}],
+        },
+        AGENT_PREVIEW_VARIABLES_PAGE: {
+            "total_count": 0,
+            "variables": [],
+        },
+        AGENT_PRODUCTION_SECRETS_PAGE: {
+            "total_count": 1,
+            "secrets": [{"name": "AGENT_SMOKE_BEARER_TOKEN"}],
+        },
+        AGENT_PRODUCTION_VARIABLES_PAGE: {
+            "total_count": 0,
+            "variables": [],
+        },
         AGENT_PRODUCTION_BRANCH_POLICIES_PAGE: {
             "total_count": 1,
             "branch_policies": [{"name": "main", "type": "branch"}],
@@ -235,6 +272,8 @@ def copy_local_governance_fixture(directory: str) -> Path:
     root = Path(directory)
     shutil.copytree(REPO_ROOT / ".github", root / ".github")
     shutil.copy2(REPO_ROOT / ".dockerignore", root / ".dockerignore")
+    shutil.copy2(REPO_ROOT / "Dockerfile", root / "Dockerfile")
+    shutil.copy2(REPO_ROOT / "pyproject.toml", root / "pyproject.toml")
     dockerfile = root / governance.PUBLICATION_DOCKERFILE
     dockerfile.parent.mkdir(parents=True)
     shutil.copy2(REPO_ROOT / governance.PUBLICATION_DOCKERFILE, dockerfile)
@@ -248,6 +287,12 @@ def copy_local_governance_fixture(directory: str) -> Path:
     shutil.copy2(
         REPO_ROOT / governance.AGENT_DELIVERY_IDENTITY_SCRIPT,
         identity_validator,
+    )
+    candidate_validator = root / governance.AGENT_RELEASE_CANDIDATE_SCRIPT
+    candidate_validator.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        REPO_ROOT / governance.AGENT_RELEASE_CANDIDATE_SCRIPT,
+        candidate_validator,
     )
     return root
 
@@ -335,17 +380,7 @@ class LocalGovernanceTests(unittest.TestCase):
         )
 
     def test_agent_delivery_permission_chain_rejects_oidc_downgrade(self) -> None:
-        cases = (
-            ".github/workflows/preview-agent.yml",
-            ".github/workflows/deploy-agent.yml",
-            ".github/workflows/agent-delivery.yml",
-        )
-        reviewed_permissions = (
-            "    permissions:\n      contents: read\n      id-token: write\n"
-        )
-        downgraded_permissions = (
-            "    permissions:\n      contents: read\n      id-token: none\n"
-        )
+        cases = tuple(governance.AGENT_DELIVERY_WORKFLOW_AST_SHA256)
         for relative in cases:
             with (
                 self.subTest(workflow=relative),
@@ -354,11 +389,7 @@ class LocalGovernanceTests(unittest.TestCase):
                 root = copy_local_governance_fixture(directory)
                 workflow = root / relative
                 original = workflow.read_text(encoding="utf-8")
-                mutated = original.replace(
-                    reviewed_permissions,
-                    downgraded_permissions,
-                    1,
-                )
+                mutated = original.replace("id-token: write", "id-token: none", 1)
                 self.assertNotEqual(original, mutated)
                 workflow.write_text(mutated, encoding="utf-8")
 
@@ -366,10 +397,7 @@ class LocalGovernanceTests(unittest.TestCase):
 
             self.assertTrue(
                 any(
-                    "permissions are" in error
-                    and governance.AGENT_DELIVERY_WORKFLOW in error
-                    if relative == governance.AGENT_DELIVERY_WORKFLOW
-                    else relative in error and "permissions are" in error
+                    relative in error and "exact workflow AST differs" in error
                     for error in errors
                 ),
                 errors,
@@ -381,49 +409,49 @@ class LocalGovernanceTests(unittest.TestCase):
         mutations = (
             (
                 "builder",
-                "${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}",
-                "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}",
-                "validate the exact provider, builder, and deployer",
+                ".github/workflows/agent-image-build.yml",
+                "${{ steps.delivery_identity.outputs.service_account }}",
+                "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
             ),
             (
                 "deployer",
-                "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}",
+                ".github/workflows/agent-release.yml",
+                "${{ steps.delivery_identity.outputs.service_account }}",
                 "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
-                "validate the exact provider, builder, and deployer",
             ),
             (
                 "provider",
-                "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
+                ".github/workflows/agent-image-build.yml",
+                "${{ steps.delivery_identity.outputs.workload_identity_provider }}",
                 "projects/72919926064/locations/global/"
                 "workloadIdentityPools/github/providers/github-production",
-                "validate the exact provider, builder, and deployer",
             ),
             (
                 "tag-reuse",
+                ".github/workflows/agent-image-build.yml",
                 "docker buildx build \\\n",
                 'docker buildx imagetools inspect "$image_tag" \\\n',
-                "pre-existing tags are forbidden",
             ),
             (
                 "environment-gate",
+                ".github/workflows/agent-release.yml",
                 "    environment: ${{ inputs.environment }}",
                 "    environment: Agent Preview",
-                "independent approvals",
             ),
             (
                 "deploy-order",
+                ".github/workflows/preview-agent.yml",
                 "    needs:\n      - build",
-                "    needs:\n      - rollback",
-                "separately approved build job",
+                "    needs:\n      - unrelated",
             ),
         )
-        for label, old, new, expected in mutations:
+        for label, relative, old, new in mutations:
             with (
                 self.subTest(mutation=label),
                 tempfile.TemporaryDirectory() as directory,
             ):
                 root = copy_local_governance_fixture(directory)
-                workflow = root / governance.AGENT_DELIVERY_WORKFLOW
+                workflow = root / relative
                 original = workflow.read_text(encoding="utf-8")
                 mutated = original.replace(old, new, 1)
                 self.assertNotEqual(original, mutated)
@@ -432,7 +460,10 @@ class LocalGovernanceTests(unittest.TestCase):
                 errors = governance.validate_local(root, governance.load_policy())
 
             self.assertTrue(
-                any(expected in error for error in errors),
+                any(
+                    relative in error and "exact workflow AST differs" in error
+                    for error in errors
+                ),
                 errors,
             )
 
@@ -453,7 +484,31 @@ class LocalGovernanceTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "exact reviewed environment identity validator" in error
+                "exact reviewed target/phase identity selector" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_agent_delivery_rejects_release_candidate_validator_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            validator = root / governance.AGENT_RELEASE_CANDIDATE_SCRIPT
+            original = validator.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "REQUIRED_PRODUCTION_CHECKS = frozenset("
+                '{"ci/check", "protocol/compat", "wiki/verify"})',
+                'REQUIRED_PRODUCTION_CHECKS = frozenset({"ci/check"})',
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            validator.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "exact reviewed post-approval release candidate gate" in error
                 for error in errors
             ),
             errors,
@@ -619,7 +674,7 @@ class LocalGovernanceTests(unittest.TestCase):
             "    needs:\n"
             "      - changes\n"
             "    runs-on: ubuntu-latest\n"
-            "    timeout-minutes: 20\n"
+            "    timeout-minutes: 30\n"
         )
         env = (
             "    env:\n"
@@ -644,7 +699,7 @@ class LocalGovernanceTests(unittest.TestCase):
                 ),
             ),
             "timeout": (
-                (header, header.replace("timeout-minutes: 20", "timeout-minutes: 21")),
+                (header, header.replace("timeout-minutes: 30", "timeout-minutes: 31")),
             ),
             "container-and-uv-project": (
                 (
@@ -747,10 +802,13 @@ class LocalGovernanceTests(unittest.TestCase):
         )
         setup_uv = (
             "      - uses: "
-            "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 "
-            "# v8.3.2\n"
+            "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 "
+            "# v9.0.0\n"
             "        if: needs.changes.outputs.agent == 'true'\n"
             "        with:\n"
+            '          version: "0.11.29"\n'
+            "          checksum: "
+            "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829\n"
             "          enable-cache: true\n"
             "          cache-dependency-glob: uv.lock\n"
         )
@@ -930,7 +988,7 @@ runs:
 
                 self.assertTrue(
                     any(
-                        "exact run-step inventory differs" in error for error in errors
+                        "job 'agent' exact job AST differs" in error for error in errors
                     ),
                     errors,
                 )
@@ -963,7 +1021,7 @@ runs:
 
                 self.assertTrue(
                     any(
-                        "exact run-step inventory differs" in error for error in errors
+                        "job 'agent' exact job AST differs" in error for error in errors
                     ),
                     errors,
                 )
@@ -971,20 +1029,26 @@ runs:
     def test_agent_ci_requires_exact_frozen_uv_run_inventory(self) -> None:
         mutations = {
             "variable-executable": (
-                "uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q",
+                "uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q agent/tests",
                 "$UV run --frozen --package syshin0116-dev-agent "
-                "--all-extras pytest -q",
+                "--all-extras pytest -q agent/tests",
             ),
             "command-variable-executable": (
-                "uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q",
+                "uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q agent/tests",
                 'command "$UV" run --frozen --package syshin0116-dev-agent '
+                "--all-extras pytest -q agent/tests",
+            ),
+            "unscoped-pytest": (
+                "--all-extras pytest -q agent/tests",
                 "--all-extras pytest -q",
             ),
             "deleted-pytest": (
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: >-\n"
                 "          uv run --frozen --package syshin0116-dev-agent "
-                "--all-extras pytest -q\n",
+                "--all-extras pytest -q agent/tests\n",
                 "",
             ),
             "renamed-child-command": (
@@ -995,14 +1059,14 @@ runs:
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: >-\n"
                 "          uv run --frozen --package syshin0116-dev-agent "
-                "--all-extras pytest -q\n",
+                "--all-extras pytest -q agent/tests\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: uv run --frozen "
                 "--package syshin0116-dev-agent python -V\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: >-\n"
                 "          uv run --frozen --package syshin0116-dev-agent "
-                "--all-extras pytest -q\n",
+                "--all-extras pytest -q agent/tests\n",
             ),
         }
         for label, (old, new) in mutations.items():
@@ -1018,7 +1082,7 @@ runs:
 
                 self.assertTrue(
                     any(
-                        "exact run-step inventory differs" in error for error in errors
+                        "job 'agent' exact job AST differs" in error for error in errors
                     ),
                     errors,
                 )
@@ -1029,13 +1093,14 @@ runs:
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: >-\n"
                 "          uv run --frozen --package syshin0116-dev-agent "
-                "--all-extras pytest -q\n",
+                "--all-extras pytest -q agent/tests\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: 'U=uv; \"$U\" run --all-extras pytest -q'\n"
+                '        run: \'U=uv; "$U" run --all-extras '
+                "pytest -q agent/tests'\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: >-\n"
                 "          uv run --frozen --package syshin0116-dev-agent "
-                "--all-extras pytest -q\n",
+                "--all-extras pytest -q agent/tests\n",
             ),
             "step-shell": (
                 "        run: uv lock --check\n",
@@ -1059,8 +1124,12 @@ runs:
                 "      UV_PROJECT: ../web\n",
             ),
             "job-shell": (
-                "      run:\n        working-directory: agent\n",
-                "      run:\n        working-directory: agent\n        shell: python\n",
+                "    timeout-minutes: 30\n    services:\n",
+                "    timeout-minutes: 30\n"
+                "    defaults:\n"
+                "      run:\n"
+                "        shell: python\n"
+                "    services:\n",
             ),
         }
         for label, (old, new) in mutations.items():
@@ -1076,10 +1145,9 @@ runs:
 
                 self.assertTrue(
                     any(
-                        "exact run-step inventory differs" in error
-                        or "forbidden execution metadata" in error
+                        "job 'agent' exact job AST differs" in error
                         or "env must remain exactly" in error
-                        or "inherited shell changes are forbidden" in error
+                        or "defaults are forbidden" in error
                         for error in errors
                     ),
                     errors,
@@ -1099,22 +1167,8 @@ runs:
             ),
         }
         for label, (old, new) in mutations.items():
-            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
-                root = copy_local_governance_fixture(directory)
-                workflow = root / ".github/workflows/ci.yml"
-                original = workflow.read_text(encoding="utf-8")
-                mutated = original.replace(old, new, 1)
-                self.assertNotEqual(original, mutated)
-                workflow.write_text(mutated, encoding="utf-8")
-
-                errors = governance.validate_local(root, governance.load_policy())
-
-                self.assertTrue(
-                    any(
-                        "exact run-step inventory differs" in error for error in errors
-                    ),
-                    errors,
-                )
+            with self.subTest(label=label):
+                self.assert_agent_ci_job_mutation_rejected(((old, new),))
 
     def test_policy_rejects_an_overbroad_main_ruleset(self) -> None:
         policy = json.loads(json.dumps(governance.load_policy()))
@@ -1926,7 +1980,7 @@ runs:
             ),
             (
                 "setup-uv",
-                "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990",
+                "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9",
                 "astral-sh/setup-uv@" + "b" * 40,
             ),
         )
@@ -1947,6 +2001,61 @@ runs:
                 ),
                 errors,
             )
+
+    def test_repository_wide_uv_toolchain_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "root-required-version",
+                "pyproject.toml",
+                'required-version = "==0.11.29"',
+                'required-version = ">=0.11.29"',
+                "tool.uv.required-version must equal",
+            ),
+            (
+                "docker-version",
+                "Dockerfile",
+                'ARG UV_VERSION="0.11.29"',
+                'ARG UV_VERSION="0.11.28"',
+                "UV_VERSION ARG must remain exact",
+            ),
+            (
+                "ci-unpinned-version",
+                ".github/workflows/ci.yml",
+                '          version: "0.11.29"\n',
+                "",
+                "version must equal",
+            ),
+            (
+                "protocol-wrong-checksum",
+                ".github/workflows/protocol-compat.yml",
+                governance.UV_CHECKSUM,
+                "0" * 64,
+                "checksum must equal",
+            ),
+            (
+                "release-wrong-action",
+                ".github/workflows/agent-release.yml",
+                governance.SETUP_UV_ACTION,
+                "astral-sh/setup-uv@" + "b" * 40,
+                "must use exact action",
+            ),
+        )
+        for label, relative, old, new, expected in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                path = root / relative
+                original = path.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                path.write_text(mutated, encoding="utf-8")
+                documents, reference_errors = (
+                    governance.validate_repository_yaml_references(root)
+                )
+                self.assertEqual([], reference_errors)
+
+                errors = governance.validate_uv_toolchain_contract(root, documents)
+
+            self.assertTrue(any(expected in error for error in errors), errors)
 
     def test_dependabot_groups_match_the_exact_policy(self) -> None:
         policy = governance.load_policy()
@@ -3506,7 +3615,64 @@ class LiveGovernanceTests(unittest.TestCase):
 
                 self.assertTrue(
                     any(
-                        f"contains 1 {collection}; expected 0" in error
+                        f"{collection} differ exactly" in error
+                        and "actual_count=1" in error
+                        and "expected_count=0" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+                self.assertNotIn("MUST_NOT_APPEAR_IN_OUTPUT", "\n".join(errors))
+
+    def test_agent_environment_inventories_are_exact_without_name_leakage(
+        self,
+    ) -> None:
+        cases = (
+            (AGENT_PREVIEW_SECRETS_PAGE, "secrets", [], 0, 1),
+            (
+                AGENT_PREVIEW_SECRETS_PAGE,
+                "secrets",
+                [
+                    {"name": "AGENT_SMOKE_BEARER_TOKEN"},
+                    {"name": "MUST_NOT_APPEAR_IN_OUTPUT"},
+                ],
+                2,
+                1,
+            ),
+            (
+                AGENT_PREVIEW_VARIABLES_PAGE,
+                "variables",
+                [{"name": "MUST_NOT_APPEAR_IN_OUTPUT"}],
+                1,
+                0,
+            ),
+            (AGENT_PRODUCTION_SECRETS_PAGE, "secrets", [], 0, 1),
+            (
+                AGENT_PRODUCTION_VARIABLES_PAGE,
+                "variables",
+                [{"name": "MUST_NOT_APPEAR_IN_OUTPUT"}],
+                1,
+                0,
+            ),
+        )
+        for endpoint, collection, inventory, actual_count, expected_count in cases:
+            with self.subTest(endpoint=endpoint, collection=collection):
+                responses = desired_live_responses()
+                responses[endpoint] = {
+                    "total_count": actual_count,
+                    collection: inventory,
+                }
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        f"{collection} differ exactly" in error
+                        and f"actual_count={actual_count}" in error
+                        and f"expected_count={expected_count}" in error
                         for error in errors
                     ),
                     errors,

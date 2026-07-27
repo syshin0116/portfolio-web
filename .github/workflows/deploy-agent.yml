@@ -7,14 +7,20 @@ on:
     paths:
       - ".dockerignore"
       - "Dockerfile"
+      - "Dockerfile.dockerignore"
       - "aegra.json"
       - "agent/**"
       - "content/**"
+      - "eval/pyproject.toml"
+      - "pyproject.toml"
+      - "uv.lock"
       - "scripts/build_index.py"
       - "scripts/deploy_cloud_run.sh"
       - "scripts/smoke.py"
+      - "scripts/validate_agent_release_candidate.py"
       - "scripts/validate_agent_delivery_identity.sh"
-      - ".github/workflows/agent-delivery.yml"
+      - ".github/workflows/agent-image-build.yml"
+      - ".github/workflows/agent-release.yml"
       - ".github/workflows/deploy-agent.yml"
   workflow_dispatch:
     inputs:
@@ -38,17 +44,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  delivery:
-    name: agent/production
-    if: vars.AGENT_CLOUD_RUN_ENABLED == 'true'
+  build:
+    name: agent/production-build
+    if: >-
+      vars.AGENT_CLOUD_RUN_ENABLED == 'true'
+      && (github.event_name != 'workflow_dispatch' || inputs.mode == 'deploy')
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/agent-delivery.yml
+    uses: ./.github/workflows/agent-image-build.yml
     with:
+      target: production
+      source_sha: ${{ github.sha }}
+
+  release:
+    name: agent/production-release
+    needs:
+      - build
+    if: >-
+      always()
+      && vars.AGENT_CLOUD_RUN_ENABLED == 'true'
+      && (
+        needs.build.result == 'success'
+        || (
+          github.event_name == 'workflow_dispatch'
+          && inputs.mode == 'rollback'
+          && needs.build.result == 'skipped'
+        )
+      )
+    permissions:
+      checks: read
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/agent-release.yml
+    with:
+      target: production
       environment: Agent Production
-      service: agent
-      migration_job: agent-migrate
-      grant_probe_job: agent-grants
       mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'deploy' }}
+      image_digest: ${{ needs.build.outputs.image_digest || '' }}
       rollback_revision: ${{ inputs.rollback_revision || '' }}
+      source_sha: ${{ github.sha }}

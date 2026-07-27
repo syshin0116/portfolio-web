@@ -1,6 +1,7 @@
 locals {
-  preview_wif_attribute_condition    = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'pull_request' && assertion.environment == '${var.github_preview_environment}' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + assertion.ref && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + assertion.ref"
-  production_wif_attribute_condition = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name in ['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && assertion.environment == '${var.github_production_environment}' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@refs/heads/main'"
+  disabled_preview_wif_attribute_condition = "attribute.repository_id == '__legacy_provider_disabled__'"
+  delivery_role_mapping                    = "assertion.event_name == 'pull_request' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + assertion.ref ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@' + assertion.ref ? 'preview-builder' : assertion.environment == '${var.github_preview_environment}' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@' + assertion.ref ? 'preview-deployer' : 'invalid') : assertion.event_name in ['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@refs/heads/main' ? 'production-builder' : assertion.environment == '${var.github_production_environment}' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@refs/heads/main' ? 'production-deployer' : 'invalid') : 'invalid'"
+  delivery_wif_attribute_condition         = "attribute.repository_id == '${var.github_repository_id}' && attribute.repository_owner_id == '${var.github_owner_id}' && attribute.delivery_role in ['preview-builder', 'preview-deployer', 'production-builder', 'production-deployer']"
 
   required_services = toset([
     "artifactregistry.googleapis.com",
@@ -285,21 +286,15 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-preview"
-  display_name                       = "GitHub Preview"
-  disabled                           = false
+  display_name                       = "Legacy GitHub Preview (disabled)"
+  disabled                           = true
 
   attribute_mapping = {
-    "google.subject"                = "assertion.sub"
-    "attribute.environment"         = "assertion.environment"
-    "attribute.event_name"          = "assertion.event_name"
-    "attribute.job_workflow_ref"    = "assertion.job_workflow_ref"
-    "attribute.ref"                 = "assertion.ref"
-    "attribute.repository_id"       = "assertion.repository_id"
-    "attribute.repository_owner_id" = "assertion.repository_owner_id"
-    "attribute.workflow_ref"        = "assertion.workflow_ref"
+    "google.subject"          = "assertion.sub"
+    "attribute.repository_id" = "assertion.repository_id"
   }
 
-  attribute_condition = local.preview_wif_attribute_condition
+  attribute_condition = local.disabled_preview_wif_attribute_condition
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -346,21 +341,17 @@ resource "google_iam_workload_identity_pool_provider" "production" {
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-production"
-  display_name                       = "GitHub Production"
+  display_name                       = "GitHub Agent Delivery"
   disabled                           = false
 
   attribute_mapping = {
     "google.subject"                = "assertion.sub"
-    "attribute.environment"         = "assertion.environment"
-    "attribute.event_name"          = "assertion.event_name"
-    "attribute.job_workflow_ref"    = "assertion.job_workflow_ref"
-    "attribute.ref"                 = "assertion.ref"
     "attribute.repository_id"       = "assertion.repository_id"
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
-    "attribute.workflow_ref"        = "assertion.workflow_ref"
+    "attribute.delivery_role"       = local.delivery_role_mapping
   }
 
-  attribute_condition = local.production_wif_attribute_condition
+  attribute_condition = local.delivery_wif_attribute_condition
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"

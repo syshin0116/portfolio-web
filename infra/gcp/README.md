@@ -14,8 +14,9 @@ mutable aliases such as `latest` are forbidden.
   with active 90-day/30-version and 14-day/20-version cleanup floors respectively;
 - distinct production/preview runtime, migrator, deployer, and image-builder service
   accounts;
-- separate GitHub OIDC providers for exact `Agent Preview` and `Agent Production`
-  caller/reusable workflow paths;
+- one canonical active GitHub OIDC provider that maps exact caller/reusable-workflow
+  claims to four disjoint builder/deployer roles, plus the managed but disabled legacy
+  preview provider;
 - environment-specific act-as, service/job update, and secret-access bindings;
 - five disjoint empty runtime Secret Manager resources plus one separately scoped
   migration URL resource per environment;
@@ -26,8 +27,11 @@ mutable aliases such as `latest` are forbidden.
 
 The existing `agent-runtime` resource remains the production runtime. Deployers have no
 project-wide Cloud Run role, Artifact Registry write, or Secret Manager payload access.
-They receive repository-scoped Artifact Registry read and `roles/run.developer` only on
-the exact service and two jobs they operate.
+They receive repository-scoped Artifact Registry read plus the project custom role
+`cloudRunAgentDelivery` only on the exact service and two jobs they operate. Its complete
+permission set is `run.services.get`, `run.services.update`, `run.revisions.get`,
+`run.jobs.get`, `run.jobs.update`, `run.jobs.run`, and `run.operations.get`; it excludes
+delete, create, IAM-policy mutation, and job overrides.
 Repository tags are intentionally mutable because Artifact Registry cannot delete tagged
 versions when immutable tags are enabled. Delivery never trusts or reuses a pre-existing
 tag: each run attempt pushes a fresh run/attempt-scoped tag, resolves it in the same job,
@@ -36,6 +40,9 @@ retention floors; run the documented dry-run review before the first foundation 
 that enables deletion.
 The services are publicly invokable at the Cloud Run layer so Vercel-hosted browsers can
 reach them; fail-closed Aegra bearer authentication protects APv2 operations.
+Public Cloud Run invocation is only transport reachability, not anonymous product access.
+Guest subjects remain disabled until ADR-0006's gates pass and a reviewed production
+release enables them; an Agent Preview release is never the public guest path.
 
 IAM member resources are deliberately additive: changing them to authoritative
 role-level bindings without a reviewed live plan could remove unrelated or
@@ -57,23 +64,40 @@ remediation; they are never ignored or overwritten blindly. Google Group members
 is not expanded by the policy API, so any reviewed `group:` binding also requires a
 separately reviewed directory-membership export.
 
-The OIDC providers pin the immutable repository and owner numeric IDs, environment, event,
-caller `workflow_ref`, and called `job_workflow_ref`. Production additionally pins
-`refs/heads/main`; it accepts `push` plus an environment-approved `workflow_dispatch` for
-manual digest deployment or revision rollback.
+The canonical active `github-production` provider explicitly maps the immutable repository
+and owner numeric IDs. Its `delivery_role` mapping pins event, caller `workflow_ref`, and
+called `job_workflow_ref`, and resolves to exactly one of `preview-builder`,
+`preview-deployer`, `production-builder`, or `production-deployer`. The provider condition
+uses only the mapped numeric IDs and that mapped role allowlist. Builders call
+`agent-image-build.yml` without a GitHub environment. Deployers call `agent-release.yml`
+and must carry the exact target environment. Production additionally pins
+`refs/heads/main`; it accepts `push` plus `workflow_dispatch` for manual build-and-deploy
+or revision rollback.
 
-The existing `github` pool deliberately retains exactly the enabled `github-preview` and
-`github-production` providers. Splitting environments into separate pools requires a
-reviewed state/import and federation migration plan; it is not an in-place hardening edit.
+The existing `github` pool deliberately retains both provider resource IDs, but only
+`github-production` is active. `github-preview` is Terraform-managed with
+`disabled=true`, an inert condition, no delivery-role mapping, and `prevent_destroy`.
+Removing or re-enabling it requires a separately reviewed federation migration; the staged
+hardening plan must not destroy it.
 GitHub environment reviewers, self-review, and the canonical agent/Vercel production
 branch sets `{main}` live only in `.github/repository-governance.json`. When that manifest and
 `scripts/verify_repository_governance.py` are present, the live foundation verifier
 requires `uv` and `gh`, then delegates without duplicating the rules:
 
 ```sh
-uv run --no-project --with pyyaml==6.0.3 \
+uv run --frozen --package syshin0116-dev-agent \
   python scripts/verify_repository_governance.py --live
 ```
+
+Both `Agent Preview` and `Agent Production` require `syshin0116`, allow self-review,
+forbid admin bypass, contain exactly `AGENT_SMOKE_BEARER_TOKEN`, and contain zero
+environment variables. The image build job references no environment and receives no
+smoke token; only the release job crosses this single approval boundary.
+That secret must be replaced immediately before each approval with an owner JWT whose
+total lifetime is at most two hours and whose remaining lifetime is at least 65 minutes.
+The release gate validates those public claims before GCP authentication and never logs
+the token. There is no automatic mint yet; a stale secret is an explicit deployment
+blocker, not a reason to create a long-lived JWT.
 
 No user-managed service-account key is permitted.
 
@@ -138,7 +162,7 @@ scripts/verify_ops_foundation.sh --terraform-test
 The static verifier runs:
 
 ```sh
-uv run --no-project --with python-hcl2==7.3.1 \
+uv run --frozen --package syshin0116-dev-agent \
   python scripts/ops_foundation_contract.py static --repo-root .
 ```
 
@@ -147,7 +171,7 @@ variable, provider/data/backend block, and import target/live object ID. It reje
 unreviewed modules, `moved` and `removed` blocks, every provisioner, external
 provider/data, `terraform_remote_state`, and executable escape resources. The seven
 deeply nested Cloud Run resources are protected by a byte-exact hash of `cloud_run.tf`;
-the reviewed inventory totals 38 resources. The reviewed
+the reviewed inventory totals 39 resources. The reviewed
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
 Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
 uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or
@@ -160,6 +184,16 @@ contents. `--terraform-test` validates Terraform's JSON event stream and require
 exact reviewed service, foundation-only, and jobs-only runs with summary
 `3 passed, 0 failed, 0 errored, 0 skipped`; a green zero-test command is rejected.
 Formatting, fresh initialization, and validation remain separate gates.
+
+Application CI also resolves the agent from the root frozen uv workspace and builds the
+actual delivery Dockerfile for Linux amd64 through its Dockerfile-specific allowlist.
+This rejects workspace-lock, excluded-context, baked-corpus, or target-architecture drift
+as required pre-merge evidence. Do not approve `Agent Preview` until `ci/agent` has passed
+for the same pull-request head; the release workflow rechecks the live PR head but does
+not itself wait on Application CI. Production deploy additionally requires the current
+`main` SHA's exact `ci/check`, `protocol/compat`, and `wiki/verify` check-runs after
+approval. Manual rollback remains usable on red CI but requires
+`workflow_dispatch`, current `main`, environment approval, and an exact revision.
 
 Run `scripts/verify_ops_foundation.sh --static` before review and `--live` only after an
 explicitly approved apply. Live mode requires

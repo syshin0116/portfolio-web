@@ -72,6 +72,7 @@ locals {
 
   cloud_run_runtime_environment = {
     AEGRA_CONFIG              = "/app/aegra.json"
+    BG_JOB_MAX_RETRIES        = "0"
     ENV_MODE                  = "PRODUCTION"
     FF_V2_EVENT_STREAMING     = "true"
     HOST                      = "0.0.0.0"
@@ -79,6 +80,7 @@ locals {
     LANGGRAPH_MIN_POOL_SIZE   = "1"
     MODEL                     = "anthropic:claude-sonnet-4-6"
     PORT                      = "8080"
+    REDIS_BROKER_ENABLED      = "false"
     RUN_MIGRATIONS_ON_STARTUP = "false"
     SQLALCHEMY_MAX_OVERFLOW   = "0"
     SQLALCHEMY_POOL_SIZE      = "2"
@@ -211,9 +213,10 @@ resource "google_cloud_run_v2_job" "migration" {
 
   template {
     template {
-      service_account = each.value.migrator_service_account
-      max_retries     = 0
-      timeout         = "900s"
+      service_account       = each.value.migrator_service_account
+      max_retries           = 0
+      timeout               = "900s"
+      execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
 
       containers {
         name    = "migration"
@@ -275,9 +278,10 @@ resource "google_cloud_run_v2_job" "grant_probe" {
 
   template {
     template {
-      service_account = each.value.runtime_service_account
-      max_retries     = 0
-      timeout         = "600s"
+      service_account       = each.value.runtime_service_account
+      max_retries           = 0
+      timeout               = "600s"
+      execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
 
       containers {
         name    = "grant-probe"
@@ -346,7 +350,7 @@ resource "google_cloud_run_v2_service_iam_member" "deployer_service_update" {
   project  = var.project_id
   location = each.value.location
   name     = each.value.name
-  role     = "roles/run.developer"
+  role     = google_project_iam_custom_role.cloud_run_delivery.name
   member   = "serviceAccount:${local.cloud_run_environments[each.key].deployer_service_account}"
 }
 
@@ -356,7 +360,7 @@ resource "google_cloud_run_v2_job_iam_member" "deployer_migration_job" {
   project  = var.project_id
   location = each.value.location
   name     = each.value.name
-  role     = "roles/run.developer"
+  role     = google_project_iam_custom_role.cloud_run_delivery.name
   member   = "serviceAccount:${local.cloud_run_environments[each.key].deployer_service_account}"
 }
 
@@ -366,6 +370,6 @@ resource "google_cloud_run_v2_job_iam_member" "deployer_grant_probe_job" {
   project  = var.project_id
   location = each.value.location
   name     = each.value.name
-  role     = "roles/run.developer"
+  role     = google_project_iam_custom_role.cloud_run_delivery.name
   member   = "serviceAccount:${local.cloud_run_environments[each.key].deployer_service_account}"
 }

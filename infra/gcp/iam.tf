@@ -16,11 +16,34 @@ locals {
   migrator_service_accounts = {
     for name, account in google_service_account.migrator : name => account.email
   }
-  github_environment_principals = {
-    preview    = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.environment/${var.github_preview_environment}"
-    production = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.environment/${var.github_production_environment}"
+  github_delivery_role_principals = {
+    preview_builder     = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.delivery_role/preview-builder"
+    preview_deployer    = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.delivery_role/preview-deployer"
+    production_builder  = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.delivery_role/production-builder"
+    production_deployer = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.delivery_role/production-deployer"
   }
   cloud_run_image_pull_principal = "serviceAccount:service-${data.google_project.current.number}@serverless-robot-prod.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_custom_role" "cloud_run_delivery" {
+  project     = var.project_id
+  role_id     = "cloudRunAgentDelivery"
+  title       = "Cloud Run agent delivery"
+  description = "Update and verify only existing agent services and jobs, then run jobs without overrides."
+  stage       = "GA"
+  permissions = [
+    "run.jobs.get",
+    "run.jobs.run",
+    "run.jobs.update",
+    "run.operations.get",
+    "run.revisions.get",
+    "run.services.get",
+    "run.services.update",
+  ]
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_service_account_iam_member" "deployer_uses_runtime" {
@@ -69,29 +92,25 @@ resource "google_secret_manager_secret_iam_member" "migrator_accessor" {
 resource "google_service_account_iam_member" "github_preview" {
   service_account_id = google_service_account.deployer["preview"].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = local.github_environment_principals.preview
+  member             = local.github_delivery_role_principals.preview_deployer
 }
 
 resource "google_service_account_iam_member" "github_production" {
   service_account_id = google_service_account.deployer["production"].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = local.github_environment_principals.production
+  member             = local.github_delivery_role_principals.production_deployer
 }
 
 resource "google_service_account_iam_member" "github_builder" {
-  for_each = {
-    production = local.github_environment_principals.production
-  }
-
   service_account_id = google_service_account.builder.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = each.value
+  member             = local.github_delivery_role_principals.production_builder
 }
 
 resource "google_service_account_iam_member" "github_preview_builder" {
   service_account_id = google_service_account.preview_builder.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = local.github_environment_principals.preview
+  member             = local.github_delivery_role_principals.preview_builder
 }
 
 resource "google_artifact_registry_repository_iam_member" "builder_writer" {

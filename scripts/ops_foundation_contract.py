@@ -31,7 +31,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "685fe53cbff9a6e9c0221c7580f1906f656de532e63cccd8ef2221e8f3d3820d"
+        "162070773663e20b5021eabe455133a990946460ccf5eacb94fef3252c48f3b9"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -39,7 +39,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "d0b580b5b08ab01641a92430c087c37ccd6303b462c337a473c9d2190bc1513b"
+        "8c3289f31abdfb4fb789c4c918603c160f0c353eb570b262b46327654c2ac7fe"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
@@ -84,68 +84,64 @@ EXPECTED_TOP_LEVEL_KEYS = {
     "infra/gcp/versions.tf": frozenset({"data", "provider", "terraform"}),
 }
 EXPECTED_DATA = frozenset({("google_project", "current")})
-EXPECTED_ATTRIBUTE_MAPPING = {
-    "attribute.environment": "assertion.environment",
-    "attribute.event_name": "assertion.event_name",
-    "attribute.job_workflow_ref": "assertion.job_workflow_ref",
-    "attribute.ref": "assertion.ref",
+EXPECTED_LEGACY_ATTRIBUTE_MAPPING = {
     "attribute.repository_id": "assertion.repository_id",
-    "attribute.repository_owner_id": "assertion.repository_owner_id",
-    "attribute.workflow_ref": "assertion.workflow_ref",
     "google.subject": "assertion.sub",
 }
+EXPECTED_LIVE_DELIVERY_ROLE_MAPPING = (
+    "assertion.event_name == 'pull_request' && assertion.workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
+    "assertion.ref ? (assertion.job_workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@' + "
+    "assertion.ref ? 'preview-builder' : assertion.environment == "
+    "'Agent Preview' && assertion.job_workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@' + "
+    "assertion.ref ? 'preview-deployer' : 'invalid') : assertion.event_name in "
+    "['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && "
+    "assertion.workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@"
+    "refs/heads/main' ? (assertion.job_workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@"
+    "refs/heads/main' ? 'production-builder' : assertion.environment == "
+    "'Agent Production' && assertion.job_workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@"
+    "refs/heads/main' ? 'production-deployer' : 'invalid') : 'invalid'"
+)
+EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING = EXPECTED_LIVE_DELIVERY_ROLE_MAPPING.replace(
+    "'Agent Preview'", "'${var.github_preview_environment}'"
+).replace("'Agent Production'", "'${var.github_production_environment}'")
+EXPECTED_SOURCE_DELIVERY_ATTRIBUTE_MAPPING = {
+    "attribute.delivery_role": "${local.delivery_role_mapping}",
+    "attribute.repository_id": "assertion.repository_id",
+    "attribute.repository_owner_id": "assertion.repository_owner_id",
+    "google.subject": "assertion.sub",
+}
+EXPECTED_LIVE_ATTRIBUTE_MAPPINGS = {
+    "github-preview": EXPECTED_LEGACY_ATTRIBUTE_MAPPING,
+    "github-production": {
+        "attribute.delivery_role": EXPECTED_LIVE_DELIVERY_ROLE_MAPPING,
+        "attribute.repository_id": "assertion.repository_id",
+        "attribute.repository_owner_id": "assertion.repository_owner_id",
+        "google.subject": "assertion.sub",
+    },
+}
 EXPECTED_SOURCE_CONDITIONS = {
-    "preview": (
-        "assertion.repository_id == '${var.github_repository_id}' && "
-        "assertion.repository_owner_id == '${var.github_owner_id}' && "
-        "assertion.event_name == 'pull_request' && "
-        "assertion.environment == '${var.github_preview_environment}' && "
-        "assertion.workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
-        "assertion.ref && "
-        "assertion.job_workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + "
-        "assertion.ref"
-    ),
-    "production": (
-        "assertion.repository_id == '${var.github_repository_id}' && "
-        "assertion.repository_owner_id == '${var.github_owner_id}' && "
-        "assertion.event_name in ['push', 'workflow_dispatch'] && "
-        "assertion.ref == 'refs/heads/main' && "
-        "assertion.environment == '${var.github_production_environment}' && "
-        "assertion.workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@"
-        "refs/heads/main' && "
-        "assertion.job_workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@"
-        "refs/heads/main'"
+    "disabled_preview": "attribute.repository_id == '__legacy_provider_disabled__'",
+    "delivery": (
+        "attribute.repository_id == '${var.github_repository_id}' && "
+        "attribute.repository_owner_id == '${var.github_owner_id}' && "
+        "attribute.delivery_role in ['preview-builder', 'preview-deployer', "
+        "'production-builder', 'production-deployer']"
     ),
 }
 EXPECTED_LIVE_CONDITIONS = {
-    "github-preview": (
-        "assertion.repository_id == '1102380057' && "
-        "assertion.repository_owner_id == '99532836' && "
-        "assertion.event_name == 'pull_request' && "
-        "assertion.environment == 'Agent Preview' && "
-        "assertion.workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
-        "assertion.ref && "
-        "assertion.job_workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + "
-        "assertion.ref"
-    ),
+    "github-preview": EXPECTED_SOURCE_CONDITIONS["disabled_preview"],
     "github-production": (
-        "assertion.repository_id == '1102380057' && "
-        "assertion.repository_owner_id == '99532836' && "
-        "assertion.event_name in ['push', 'workflow_dispatch'] && "
-        "assertion.ref == 'refs/heads/main' && "
-        "assertion.environment == 'Agent Production' && "
-        "assertion.workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@"
-        "refs/heads/main' && "
-        "assertion.job_workflow_ref == "
-        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@"
-        "refs/heads/main'"
+        EXPECTED_SOURCE_CONDITIONS["delivery"]
+        .replace("${var.github_repository_id}", "1102380057")
+        .replace("${var.github_owner_id}", "99532836")
+        .replace("${var.github_preview_environment}", "Agent Preview")
+        .replace("${var.github_production_environment}", "Agent Production")
     ),
 }
 EXPECTED_PROVIDER_IDS = {
@@ -301,22 +297,26 @@ EXPECTED_VARIABLES = {
         ],
     },
     "github_preview_environment": {
-        "description": "Exact GitHub environment claim accepted by the preview provider.",
+        "description": (
+            "Exact GitHub environment claim accepted only for the preview "
+            "deployer role."
+        ),
         "type": "string",
         "default": "Agent Preview",
         "validation": [
             {
                 "condition": '${var.github_preview_environment == "Agent Preview"}',
                 "error_message": (
-                    "The preview provider must remain bound to the exact Agent "
-                    "Preview environment."
+                    "The preview deployer role must remain bound to the exact "
+                    "Agent Preview environment."
                 ),
             }
         ],
     },
     "github_production_environment": {
         "description": (
-            "Exact GitHub environment claim accepted by the production provider."
+            "Exact GitHub environment claim accepted only for the production "
+            "deployer role."
         ),
         "type": "string",
         "default": "Agent Production",
@@ -326,8 +326,8 @@ EXPECTED_VARIABLES = {
                     '${var.github_production_environment == "Agent Production"}'
                 ),
                 "error_message": (
-                    "The production provider must remain bound to the exact "
-                    "Agent Production environment."
+                    "The production deployer role must remain bound to the "
+                    "exact Agent Production environment."
                 ),
             }
         ],
@@ -553,6 +553,26 @@ EXPECTED_RESOURCE_CONFIGS = {
         "display_name": "${each.value.display_name}",
         "lifecycle": [{"prevent_destroy": True}],
     },
+    ("google_project_iam_custom_role", "cloud_run_delivery"): {
+        "project": "${var.project_id}",
+        "role_id": "cloudRunAgentDelivery",
+        "title": "Cloud Run agent delivery",
+        "description": (
+            "Update and verify only existing agent services and jobs, then run jobs "
+            "without overrides."
+        ),
+        "stage": "GA",
+        "permissions": [
+            "run.jobs.get",
+            "run.jobs.run",
+            "run.jobs.update",
+            "run.operations.get",
+            "run.revisions.get",
+            "run.services.get",
+            "run.services.update",
+        ],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
     ("google_secret_manager_secret", "runtime"): {
         "for_each": "${local.production_secret_names}",
         "project": "${var.project_id}",
@@ -592,10 +612,10 @@ EXPECTED_RESOURCE_CONFIGS = {
             "${google_iam_workload_identity_pool.github.workload_identity_pool_id}"
         ),
         "workload_identity_pool_provider_id": "github-preview",
-        "display_name": "GitHub Preview",
-        "disabled": False,
-        "attribute_mapping": EXPECTED_ATTRIBUTE_MAPPING,
-        "attribute_condition": "${local.preview_wif_attribute_condition}",
+        "display_name": "Legacy GitHub Preview (disabled)",
+        "disabled": True,
+        "attribute_mapping": EXPECTED_LEGACY_ATTRIBUTE_MAPPING,
+        "attribute_condition": ("${local.disabled_preview_wif_attribute_condition}"),
         "oidc": [{"issuer_uri": EXPECTED_ISSUER}],
         "lifecycle": [{"prevent_destroy": True}],
     },
@@ -605,10 +625,10 @@ EXPECTED_RESOURCE_CONFIGS = {
             "${google_iam_workload_identity_pool.github.workload_identity_pool_id}"
         ),
         "workload_identity_pool_provider_id": "github-production",
-        "display_name": "GitHub Production",
+        "display_name": "GitHub Agent Delivery",
         "disabled": False,
-        "attribute_mapping": EXPECTED_ATTRIBUTE_MAPPING,
-        "attribute_condition": "${local.production_wif_attribute_condition}",
+        "attribute_mapping": EXPECTED_SOURCE_DELIVERY_ATTRIBUTE_MAPPING,
+        "attribute_condition": "${local.delivery_wif_attribute_condition}",
         "oidc": [{"issuer_uri": EXPECTED_ISSUER}],
         "lifecycle": [{"prevent_destroy": True}],
     },
@@ -648,25 +668,22 @@ EXPECTED_RESOURCE_CONFIGS = {
     ("google_service_account_iam_member", "github_preview"): {
         "service_account_id": ('${google_service_account.deployer["preview"].name}'),
         "role": "roles/iam.workloadIdentityUser",
-        "member": "${local.github_environment_principals.preview}",
+        "member": "${local.github_delivery_role_principals.preview_deployer}",
     },
     ("google_service_account_iam_member", "github_production"): {
         "service_account_id": ('${google_service_account.deployer["production"].name}'),
         "role": "roles/iam.workloadIdentityUser",
-        "member": "${local.github_environment_principals.production}",
+        "member": "${local.github_delivery_role_principals.production_deployer}",
     },
     ("google_service_account_iam_member", "github_builder"): {
-        "for_each": {
-            "production": "${local.github_environment_principals.production}",
-        },
         "service_account_id": "${google_service_account.builder.name}",
         "role": "roles/iam.workloadIdentityUser",
-        "member": "${each.value}",
+        "member": "${local.github_delivery_role_principals.production_builder}",
     },
     ("google_service_account_iam_member", "github_preview_builder"): {
         "service_account_id": "${google_service_account.preview_builder.name}",
         "role": "roles/iam.workloadIdentityUser",
-        "member": "${local.github_environment_principals.preview}",
+        "member": "${local.github_delivery_role_principals.preview_builder}",
     },
     ("google_artifact_registry_repository_iam_member", "builder_writer"): {
         "project": "${var.project_id}",
@@ -736,10 +753,11 @@ EXPECTED_RESOURCE_CONFIGS = {
 EXPECTED_LOCALS_BY_FILE = {
     "infra/gcp/main.tf": [
         {
-            "preview_wif_attribute_condition": EXPECTED_SOURCE_CONDITIONS["preview"],
-            "production_wif_attribute_condition": EXPECTED_SOURCE_CONDITIONS[
-                "production"
-            ],
+            "disabled_preview_wif_attribute_condition": (
+                EXPECTED_SOURCE_CONDITIONS["disabled_preview"]
+            ),
+            "delivery_role_mapping": EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING,
+            "delivery_wif_attribute_condition": EXPECTED_SOURCE_CONDITIONS["delivery"],
             "required_services": (
                 "${toset([artifactregistry.googleapis.com, "
                 "cloudresourcemanager.googleapis.com, iam.googleapis.com, "
@@ -809,22 +827,38 @@ EXPECTED_LOCALS_BY_FILE = {
                 "${{for name , account in google_service_account.migrator : "
                 "name => account.email}}"
             ),
-            "github_environment_principals": {
-                "preview": (
+            "github_delivery_role_principals": {
+                "preview_builder": (
                     "principalSet://iam.googleapis.com/projects/"
                     "${data.google_project.current.number}/locations/global/"
                     "workloadIdentityPools/"
                     "${google_iam_workload_identity_pool.github."
-                    "workload_identity_pool_id}/attribute.environment/"
-                    "${var.github_preview_environment}"
+                    "workload_identity_pool_id}/attribute.delivery_role/"
+                    "preview-builder"
                 ),
-                "production": (
+                "preview_deployer": (
                     "principalSet://iam.googleapis.com/projects/"
                     "${data.google_project.current.number}/locations/global/"
                     "workloadIdentityPools/"
                     "${google_iam_workload_identity_pool.github."
-                    "workload_identity_pool_id}/attribute.environment/"
-                    "${var.github_production_environment}"
+                    "workload_identity_pool_id}/attribute.delivery_role/"
+                    "preview-deployer"
+                ),
+                "production_builder": (
+                    "principalSet://iam.googleapis.com/projects/"
+                    "${data.google_project.current.number}/locations/global/"
+                    "workloadIdentityPools/"
+                    "${google_iam_workload_identity_pool.github."
+                    "workload_identity_pool_id}/attribute.delivery_role/"
+                    "production-builder"
+                ),
+                "production_deployer": (
+                    "principalSet://iam.googleapis.com/projects/"
+                    "${data.google_project.current.number}/locations/global/"
+                    "workloadIdentityPools/"
+                    "${google_iam_workload_identity_pool.github."
+                    "workload_identity_pool_id}/attribute.delivery_role/"
+                    "production-deployer"
                 ),
             },
             "cloud_run_image_pull_principal": (
@@ -948,9 +982,22 @@ EXPECTED_OUTPUTS = {
         "value": '${try(google_cloud_run_v2_job.grant_probe["production"].name, null)}',
     },
     "preview_workload_identity_provider": {
+        "description": (
+            "Retained legacy provider; managed disabled and not trusted by any "
+            "service account."
+        ),
         "value": "${google_iam_workload_identity_pool_provider.preview.name}",
     },
     "production_workload_identity_provider": {
+        "description": (
+            "Canonical active provider for all four phase-specific delivery roles."
+        ),
+        "value": "${google_iam_workload_identity_pool_provider.production.name}",
+    },
+    "delivery_workload_identity_provider": {
+        "description": (
+            "Canonical active provider for preview/production builder/deployer roles."
+        ),
         "value": "${google_iam_workload_identity_pool_provider.production.name}",
     },
     "terraform_state_bucket": {
@@ -1563,6 +1610,13 @@ def _validate_enabled(resource: Mapping[str, Any], label: str) -> None:
         _fail(f"{label} must be enabled")
 
 
+def _validate_disabled(resource: Mapping[str, Any], label: str) -> None:
+    if resource.get("state") != "ACTIVE":
+        _fail(f"{label} must remain an ACTIVE managed resource")
+    if resource.get("disabled") is not True:
+        _fail(f"{label} must remain disabled")
+
+
 def validate_live_wif(document: Mapping[str, Any]) -> None:
     pool = _json_object(document.get("pool"), "pool")
     pool_name = pool.get("name")
@@ -1597,12 +1651,18 @@ def validate_live_wif(document: Mapping[str, Any]) -> None:
         _fail("described WIF provider set does not match the exact live list")
 
     for provider_id in sorted(expected_ids):
-        _validate_enabled(listed_by_id[provider_id], provider_id)
+        state_validator = (
+            _validate_disabled if provider_id == "github-preview" else _validate_enabled
+        )
+        state_validator(listed_by_id[provider_id], provider_id)
         provider = described_by_id[provider_id]
-        _validate_enabled(provider, provider_id)
+        state_validator(provider, provider_id)
         if provider.get("attributeCondition") != EXPECTED_LIVE_CONDITIONS[provider_id]:
             _fail(f"{provider_id} attributeCondition is not exact")
-        if provider.get("attributeMapping") != EXPECTED_ATTRIBUTE_MAPPING:
+        if (
+            provider.get("attributeMapping")
+            != EXPECTED_LIVE_ATTRIBUTE_MAPPINGS[provider_id]
+        ):
             _fail(f"{provider_id} attributeMapping is not exact")
         oidc = _json_object(provider.get("oidc"), f"{provider_id}.oidc")
         if oidc.get("issuerUri") != EXPECTED_ISSUER:

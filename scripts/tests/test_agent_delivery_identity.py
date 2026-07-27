@@ -8,99 +8,161 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = REPO_ROOT / "scripts/validate_agent_delivery_identity.sh"
 
-IDENTITIES = {
-    "Agent Preview": {
-        "BUILDER_SERVICE_ACCOUNT": (
+TARGETS = {
+    "preview": {
+        "environment": "Agent Preview",
+        "builder": (
             "agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
         ),
-        "DEPLOYER_SERVICE_ACCOUNT": (
+        "deployer": (
             "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
-        ),
-        "WORKLOAD_IDENTITY_PROVIDER": (
-            "projects/72919926064/locations/global/workloadIdentityPools/"
-            "github/providers/github-preview"
         ),
         "repository": (
             "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent"
         ),
+        "service": "agent-preview",
+        "migration": "agent-preview-migrate",
+        "grant": "agent-preview-grants",
     },
-    "Agent Production": {
-        "BUILDER_SERVICE_ACCOUNT": (
+    "production": {
+        "environment": "Agent Production",
+        "builder": (
             "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
         ),
-        "DEPLOYER_SERVICE_ACCOUNT": (
+        "deployer": (
             "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
         ),
-        "WORKLOAD_IDENTITY_PROVIDER": (
-            "projects/72919926064/locations/global/workloadIdentityPools/"
-            "github/providers/github-production"
-        ),
         "repository": ("us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent"),
+        "service": "agent",
+        "migration": "agent-migrate",
+        "grant": "agent-grants",
     },
 }
+PROVIDER = (
+    "projects/72919926064/locations/global/workloadIdentityPools/"
+    "github/providers/github-production"
+)
 
 
-def _environment(name: str) -> dict[str, str]:
-    values = IDENTITIES[name]
+def _environment(target: str, role: str) -> dict[str, str]:
     environment = os.environ.copy()
     environment.update(
         {
-            "BUILDER_SERVICE_ACCOUNT": values["BUILDER_SERVICE_ACCOUNT"],
-            "DELIVERY_ENVIRONMENT": name,
-            "DEPLOYER_SERVICE_ACCOUNT": values["DEPLOYER_SERVICE_ACCOUNT"],
-            "WORKLOAD_IDENTITY_PROVIDER": values["WORKLOAD_IDENTITY_PROVIDER"],
+            "DELIVERY_ROLE": role,
+            "DELIVERY_TARGET": target,
         }
     )
+    environment.pop("DELIVERY_ENVIRONMENT", None)
+    if role == "deployer":
+        environment["DELIVERY_ENVIRONMENT"] = TARGETS[target]["environment"]
     return environment
 
 
 class AgentDeliveryIdentityTests(unittest.TestCase):
-    def test_each_exact_environment_mapping_selects_only_its_repository(self) -> None:
-        for name, values in IDENTITIES.items():
-            with self.subTest(environment=name):
+    def test_preview_build_and_release_pin_pr_head_not_synthetic_merge_sha(
+        self,
+    ) -> None:
+        preview = (REPO_ROOT / ".github/workflows/preview-agent.yml").read_text(
+            encoding="utf-8"
+        )
+        builder = (REPO_ROOT / ".github/workflows/agent-image-build.yml").read_text(
+            encoding="utf-8"
+        )
+        release = (REPO_ROOT / ".github/workflows/agent-release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            2,
+            preview.count("source_sha: ${{ github.event.pull_request.head.sha }}"),
+        )
+        self.assertNotIn("source_sha: ${{ github.sha }}", preview)
+        self.assertIn("ref: ${{ inputs.source_sha }}", builder)
+        self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", builder)
+        self.assertIn("ref: ${{ inputs.source_sha }}", release)
+        self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", release)
+
+    def test_caller_only_concurrency_never_cancels_an_approved_release(self) -> None:
+        preview = (REPO_ROOT / ".github/workflows/preview-agent.yml").read_text(
+            encoding="utf-8"
+        )
+        production = (REPO_ROOT / ".github/workflows/deploy-agent.yml").read_text(
+            encoding="utf-8"
+        )
+        release = (REPO_ROOT / ".github/workflows/agent-release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "concurrency:\n  group: agent-preview\n  cancel-in-progress: false",
+            preview,
+        )
+        self.assertIn(
+            "concurrency:\n  group: agent-production\n  cancel-in-progress: false",
+            production,
+        )
+        self.assertNotIn("\n    concurrency:\n", release)
+
+    def test_release_candidate_tuple_is_checked_before_gcp_auth(self) -> None:
+        release = (REPO_ROOT / ".github/workflows/agent-release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        gate = release.index("python3 scripts/validate_agent_release_candidate.py")
+        auth = release.index("google-github-actions/auth@")
+        self.assertLess(gate, auth)
+        for argument in (
+            '--environment "$CANDIDATE_ENVIRONMENT"',
+            '--image-digest "$CANDIDATE_IMAGE_DIGEST"',
+            '--mode "$CANDIDATE_MODE"',
+            '--rollback-revision "$CANDIDATE_ROLLBACK_REVISION"',
+            '--source-sha "$CANDIDATE_SOURCE_SHA"',
+        ):
+            self.assertIn(argument, release)
+
+    def test_each_builder_is_secretless_and_selects_only_its_repository(self) -> None:
+        for target, values in TARGETS.items():
+            with self.subTest(target=target):
                 result = subprocess.run(
                     [str(VALIDATOR)],
                     cwd=REPO_ROOT,
-                    env=_environment(name),
+                    env=_environment(target, "builder"),
                     check=False,
                     capture_output=True,
                     text=True,
                 )
 
                 self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(
-                    f"image_repository={values['repository']}\n",
-                    result.stdout,
+                self.assertIn(f"workload_identity_provider={PROVIDER}\n", result.stdout)
+                self.assertIn(f"service_account={values['builder']}\n", result.stdout)
+                self.assertIn(
+                    f"image_repository={values['repository']}\n", result.stdout
+                )
+                self.assertNotIn("cloud_run_service=", result.stdout)
+
+    def test_each_deployer_selects_exact_runtime_resources(self) -> None:
+        for target, values in TARGETS.items():
+            with self.subTest(target=target):
+                result = subprocess.run(
+                    [str(VALIDATOR)],
+                    cwd=REPO_ROOT,
+                    env=_environment(target, "deployer"),
+                    check=False,
+                    capture_output=True,
+                    text=True,
                 )
 
-    def test_every_cross_environment_identity_fails_closed(self) -> None:
-        for name in IDENTITIES:
-            other = "Agent Production" if name == "Agent Preview" else "Agent Preview"
-            for variable in (
-                "BUILDER_SERVICE_ACCOUNT",
-                "DEPLOYER_SERVICE_ACCOUNT",
-                "WORKLOAD_IDENTITY_PROVIDER",
-            ):
-                with self.subTest(environment=name, variable=variable):
-                    environment = _environment(name)
-                    environment[variable] = IDENTITIES[other][variable]
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn(f"workload_identity_provider={PROVIDER}\n", result.stdout)
+                self.assertIn(f"service_account={values['deployer']}\n", result.stdout)
+                self.assertIn(f"cloud_run_service={values['service']}\n", result.stdout)
+                self.assertIn(f"migration_job={values['migration']}\n", result.stdout)
+                self.assertIn(f"grant_probe_job={values['grant']}\n", result.stdout)
+                self.assertNotIn("image_repository=", result.stdout)
 
-                    result = subprocess.run(
-                        [str(VALIDATOR)],
-                        cwd=REPO_ROOT,
-                        env=environment,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
-
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertEqual("", result.stdout)
-                    self.assertIn("does not match", result.stderr)
-
-    def test_unknown_environment_fails_closed(self) -> None:
-        environment = _environment("Agent Preview")
-        environment["DELIVERY_ENVIRONMENT"] = "Preview"
+    def test_builder_rejects_any_release_environment(self) -> None:
+        environment = _environment("preview", "builder")
+        environment["DELIVERY_ENVIRONMENT"] = "Agent Preview"
 
         result = subprocess.run(
             [str(VALIDATOR)],
@@ -113,7 +175,47 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", result.stdout)
-        self.assertIn("unexpected agent delivery environment", result.stderr)
+        self.assertIn("must not receive", result.stderr)
+
+    def test_every_cross_environment_deployer_fails_closed(self) -> None:
+        for target in TARGETS:
+            other = "production" if target == "preview" else "preview"
+            with self.subTest(target=target):
+                environment = _environment(target, "deployer")
+                environment["DELIVERY_ENVIRONMENT"] = TARGETS[other]["environment"]
+                result = subprocess.run(
+                    [str(VALIDATOR)],
+                    cwd=REPO_ROOT,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", result.stdout)
+                self.assertIn("does not match", result.stderr)
+
+    def test_unknown_target_or_role_fails_closed(self) -> None:
+        for mutation in (
+            {"DELIVERY_TARGET": "staging"},
+            {"DELIVERY_ROLE": "operator"},
+        ):
+            with self.subTest(mutation=mutation):
+                environment = _environment("preview", "builder")
+                environment.update(mutation)
+                result = subprocess.run(
+                    [str(VALIDATOR)],
+                    cwd=REPO_ROOT,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", result.stdout)
+                self.assertIn("unexpected agent delivery", result.stderr)
 
 
 if __name__ == "__main__":

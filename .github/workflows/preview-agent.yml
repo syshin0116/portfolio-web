@@ -9,24 +9,30 @@ on:
     paths:
       - ".dockerignore"
       - "Dockerfile"
+      - "Dockerfile.dockerignore"
       - "aegra.json"
       - "agent/**"
       - "content/**"
+      - "eval/pyproject.toml"
+      - "pyproject.toml"
+      - "uv.lock"
       - "scripts/build_index.py"
       - "scripts/deploy_cloud_run.sh"
       - "scripts/smoke.py"
+      - "scripts/validate_agent_release_candidate.py"
       - "scripts/validate_agent_delivery_identity.sh"
-      - ".github/workflows/agent-delivery.yml"
+      - ".github/workflows/agent-image-build.yml"
+      - ".github/workflows/agent-release.yml"
       - ".github/workflows/preview-agent.yml"
 permissions: {}
 
 concurrency:
-  group: agent-preview-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: agent-preview
+  cancel-in-progress: false
 
 jobs:
-  delivery:
-    name: agent/preview
+  build:
+    name: agent/preview-build
     if: >-
       github.event_name == 'pull_request'
       && vars.AGENT_CLOUD_RUN_ENABLED == 'true'
@@ -35,10 +41,25 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/agent-delivery.yml
+    uses: ./.github/workflows/agent-image-build.yml
     with:
+      target: preview
+      source_sha: ${{ github.event.pull_request.head.sha }}
+
+  release:
+    name: agent/preview-release
+    needs:
+      - build
+    if: needs.build.result == 'success'
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    uses: ./.github/workflows/agent-release.yml
+    with:
+      target: preview
       environment: Agent Preview
-      service: agent-preview
-      migration_job: agent-preview-migrate
-      grant_probe_job: agent-preview-grants
       mode: deploy
+      image_digest: ${{ needs.build.outputs.image_digest }}
+      pull_request_number: ${{ github.event.pull_request.number }}
+      source_sha: ${{ github.event.pull_request.head.sha }}

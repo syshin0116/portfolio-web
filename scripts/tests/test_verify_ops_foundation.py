@@ -10,8 +10,18 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 
+from scripts.ops_foundation_contract import (
+    EXPECTED_SOURCE_CONDITIONS,
+    EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "agent/pyproject.toml",
+    "agent/src/agent/__init__.py",
+    "eval/pyproject.toml",
     "infra/gcp/.terraform-version",
     "infra/gcp/backend.tf",
     "infra/gcp/cloud_run.tf",
@@ -24,33 +34,37 @@ FIXTURE_FILES = (
     "infra/gcp/variables.tf",
     "infra/gcp/versions.tf",
 )
-PREVIEW_CONDITION_LINE = (
-    "  preview_wif_attribute_condition    = "
-    "\"assertion.repository_id == '${var.github_repository_id}' && "
-    "assertion.repository_owner_id == '${var.github_owner_id}' && "
-    "assertion.event_name == 'pull_request' && "
-    "assertion.environment == '${var.github_preview_environment}' && "
-    "assertion.workflow_ref == "
-    "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
-    "assertion.ref && assertion.job_workflow_ref == "
-    "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + "
-    'assertion.ref"\n'
+DISABLED_PREVIEW_CONDITION_LINE = (
+    "  disabled_preview_wif_attribute_condition = "
+    f'"{EXPECTED_SOURCE_CONDITIONS["disabled_preview"]}"\n'
 )
-PRODUCTION_CONDITION_LINE = (
-    "  production_wif_attribute_condition = "
-    "\"assertion.repository_id == '${var.github_repository_id}' && "
-    "assertion.repository_owner_id == '${var.github_owner_id}' && "
-    "assertion.event_name in ['push', 'workflow_dispatch'] && "
-    "assertion.ref == 'refs/heads/main' && "
-    "assertion.environment == '${var.github_production_environment}' && "
-    "assertion.workflow_ref == "
-    "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' "
-    "&& assertion.job_workflow_ref == "
-    "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@refs/heads/main'\"\n"
+DELIVERY_CONDITION_LINE = (
+    "  delivery_wif_attribute_condition         = "
+    f'"{EXPECTED_SOURCE_CONDITIONS["delivery"]}"\n'
+)
+DELIVERY_ROLE_MAPPING_LINE = (
+    "  delivery_role_mapping                    = "
+    f'"{EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING}"\n'
 )
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
+    def test_broad_cloud_run_developer_role_is_absent(self) -> None:
+        reviewed_paths = (
+            REPO_ROOT / "DECISIONS.md",
+            REPO_ROOT / "infra/gcp/README.md",
+            REPO_ROOT / "docs/runbooks/cloud-run-delivery.md",
+            REPO_ROOT / "docs/runbooks/gcp-neon-foundation.md",
+            *(REPO_ROOT / "infra/gcp").glob("*.tf"),
+        )
+
+        for path in reviewed_paths:
+            with self.subTest(path=path.relative_to(REPO_ROOT)):
+                self.assertNotIn(
+                    "roles/run" + ".developer",
+                    path.read_text(encoding="utf-8"),
+                )
+
     def _fixture(self, directory: str) -> Path:
         root = Path(directory)
         for relative_path in FIXTURE_FILES:
@@ -111,6 +125,28 @@ class StaticVerifierMutationTests(unittest.TestCase):
             result = self._run(self._fixture(directory))
 
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_builder_role_arms_are_lazy_before_optional_environment_claims(
+        self,
+    ) -> None:
+        self.assertIn(
+            "assertion.workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
+            "assertion.ref ? (assertion.job_workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@' + "
+            "assertion.ref ? 'preview-builder' : assertion.environment == ",
+            EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING,
+        )
+        self.assertIn(
+            "assertion.workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@"
+            "refs/heads/main' ? (assertion.job_workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@"
+            "refs/heads/main' ? 'production-builder' : assertion.environment == ",
+            EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING,
+        )
+        self.assertNotIn("environment", EXPECTED_SOURCE_CONDITIONS["delivery"])
+        self.assertNotIn("assertion.", EXPECTED_SOURCE_CONDITIONS["delivery"])
 
     def test_static_rejects_ignored_destructive_override_before_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -558,6 +594,11 @@ printf '%s\n' \
                 "  for_each = local.deployers",
                 "  for_each = {}",
             ),
+            "cloud_run_delivery_role_extra_permission": (
+                "infra/gcp/iam.tf",
+                '    "run.jobs.run",',
+                '    "run.jobs.run",\n    "run.jobs.runWithOverrides",',
+            ),
             "production_secrets": (
                 "infra/gcp/main.tf",
                 "  for_each = local.production_secret_names",
@@ -749,9 +790,9 @@ output "unreviewed_sensitive_value" {
             self.assertEqual(
                 [
                     "run",
-                    "--no-project",
-                    "--with",
-                    "pyyaml==6.0.3",
+                    "--frozen",
+                    "--package",
+                    "syshin0116-dev-agent",
                     "python",
                     str(governance.resolve()),
                     "--live",
@@ -770,18 +811,21 @@ output "unreviewed_sensitive_value" {
                 "assertion.event_name == 'pull_request' && ",
                 "",
             ),
-            "changed_grouping": lambda line: line.replace(
-                "assertion.repository_id == '${var.github_repository_id}' && "
-                "assertion.repository_owner_id == '${var.github_owner_id}'",
-                "(assertion.repository_id == '${var.github_repository_id}' && "
-                "assertion.repository_owner_id == '${var.github_owner_id}')",
+            "builder_requires_environment": lambda line: line.replace(
+                "(assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@' + assertion.ref ? 'preview-builder'",
+                "(assertion.environment == '${var.github_preview_environment}' && "
+                "assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@' + assertion.ref ? 'preview-builder'",
             ),
         }
 
         for name, mutation in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = self._fixture(directory)
-                self._mutate_condition(root, PREVIEW_CONDITION_LINE, mutation)
+                self._mutate_condition(root, DELIVERY_ROLE_MAPPING_LINE, mutation)
                 result = self._run(root)
 
                 self.assertNotEqual(0, result.returncode)
@@ -807,12 +851,53 @@ output "unreviewed_sensitive_value" {
                 "(assertion.event_name in ['push', 'workflow_dispatch'] && "
                 "assertion.ref == 'refs/heads/main')",
             ),
+            "builder_requires_environment": lambda line: line.replace(
+                "(assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@refs/heads/main' ? 'production-builder'",
+                "(assertion.environment == '${var.github_production_environment}' && "
+                "assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@refs/heads/main' ? 'production-builder'",
+            ),
         }
 
         for name, mutation in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = self._fixture(directory)
-                self._mutate_condition(root, PRODUCTION_CONDITION_LINE, mutation)
+                self._mutate_condition(root, DELIVERY_ROLE_MAPPING_LINE, mutation)
+                result = self._run(root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "Terraform locals configuration is not exact",
+                    result.stderr,
+                )
+
+    def test_provider_condition_raw_or_unmapped_fields_fail_closed(self) -> None:
+        mutations: dict[str, Callable[[str], str]] = {
+            "raw_repository_id": lambda line: line.replace(
+                "attribute.repository_id",
+                "assertion.repository_id",
+                1,
+            ),
+            "raw_owner_id": lambda line: line.replace(
+                "attribute.repository_owner_id",
+                "assertion.repository_owner_id",
+                1,
+            ),
+            "raw_environment": lambda line: line.replace(
+                "attribute.delivery_role in ",
+                "assertion.environment == '${var.github_production_environment}' && "
+                "attribute.delivery_role in ",
+                1,
+            ),
+        }
+
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = self._fixture(directory)
+                self._mutate_condition(root, DELIVERY_CONDITION_LINE, mutation)
                 result = self._run(root)
 
                 self.assertNotEqual(0, result.returncode)
@@ -826,13 +911,16 @@ output "unreviewed_sensitive_value" {
             root = self._fixture(directory)
             main_path = root / "infra/gcp/main.tf"
             original = main_path.read_text(encoding="utf-8")
-            expected = "  attribute_condition = local.preview_wif_attribute_condition\n"
+            expected = (
+                "  attribute_condition = "
+                "local.disabled_preview_wif_attribute_condition\n"
+            )
             self.assertEqual(1, original.count(expected))
             main_path.write_text(
                 original.replace(
                     expected,
                     "  attribute_condition = "
-                    '"(${local.preview_wif_attribute_condition}) || true"\n',
+                    '"(${local.disabled_preview_wif_attribute_condition}) || true"\n',
                     1,
                 ),
                 encoding="utf-8",

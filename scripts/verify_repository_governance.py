@@ -11,6 +11,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tomllib
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -122,13 +123,19 @@ EXPECTED_ENVIRONMENTS = {
         ],
     },
     "Agent Preview": {
-        "can_admins_bypass": True,
+        "can_admins_bypass": False,
         "deployment_branch_policy": None,
         "branch_policies": [],
-        "protection_rules": [],
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "prevent_self_review": False,
+                "reviewers": [{"type": "User", "login": "syshin0116"}],
+            },
+        ],
     },
     "Agent Production": {
-        "can_admins_bypass": True,
+        "can_admins_bypass": False,
         "deployment_branch_policy": {
             "protected_branches": False,
             "custom_branch_policies": True,
@@ -166,271 +173,75 @@ EXPECTED_ENVIRONMENTS = {
         ],
     },
 }
-SECRETLESS_ENVIRONMENTS = frozenset({"Evaluation Publication"})
+EXPECTED_ENVIRONMENT_SECRETS = {
+    "Evaluation Publication": frozenset(),
+    "Agent Preview": frozenset({"AGENT_SMOKE_BEARER_TOKEN"}),
+    "Agent Production": frozenset({"AGENT_SMOKE_BEARER_TOKEN"}),
+}
+EXPECTED_ENVIRONMENT_VARIABLES = {
+    "Evaluation Publication": frozenset(),
+    "Agent Preview": frozenset(),
+    "Agent Production": frozenset(),
+}
 EXPECTED_AUTOMATED_SECURITY_FIXES = {
     "enabled": True,
     "paused": False,
 }
 EXPECTED_DEPENDABOT_SECURITY_UPDATES_STATUS = "enabled"
+UV_VERSION = "0.11.29"
+UV_REQUIRED_VERSION = f"=={UV_VERSION}"
+UV_CHECKSUM = "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
+SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+EXPECTED_SETUP_UV_WORKFLOW_COUNTS = {
+    ".github/workflows/agent-release.yml": 1,
+    ".github/workflows/ci.yml": 4,
+    ".github/workflows/dependency-audit.yml": 1,
+    ".github/workflows/protocol-compat.yml": 1,
+}
+AGENT_DOCKER_UV_IMAGE = (
+    "ghcr.io/astral-sh/uv:${UV_VERSION}@"
+    "sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
+)
 AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
 AGENT_CI_JOB = "agent"
-AGENT_CI_WORKING_DIRECTORY = "agent"
-AGENT_CI_CHANGED_CONDITION = "needs.changes.outputs.agent == 'true'"
+AGENT_CI_JOB_AST_SHA256 = (
+    "283b88b111253264ab6edffd8e65a196a697a94045a7ca26eba99a062d65b1ad"
+)
 AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
     "AGENT_AUTH_SECRET": "ci-only-agent-secret-ci-only-agent-secret",
 }
 EVAL_CI_JOB = "eval"
 EVAL_CI_JOB_AST_SHA256 = (
-    "3bc77abb21cf296e9554ba70cb05fb05786f69fa36ab137f849dbd9ee7bf63ed"
+    "a72121cf99a476cbe0222e65a3f2062da86980ba5b080996a583f4503ae97995"
 )
 EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
 EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
     "88dd92e98edaeb66d0f24f067ec8439759995fac6539e913bff8020d574218e8"
 )
-AGENT_DELIVERY_WORKFLOW = ".github/workflows/agent-delivery.yml"
-AGENT_DELIVERY_CALLERS = (
-    ".github/workflows/preview-agent.yml",
-    ".github/workflows/deploy-agent.yml",
-)
-AGENT_DELIVERY_CALL_JOB = "delivery"
-AGENT_DELIVERY_PERMISSION_JOBS = ("build", "deploy", "rollback")
-AGENT_DELIVERY_PERMISSIONS = {
-    "contents": "read",
-    "id-token": "write",
+AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
+    ".github/workflows/agent-image-build.yml": (
+        "379244ec5d1185963d4cd2c5d4f20b7833b155f44b400c3ab5ae70058f4e6e55"
+    ),
+    ".github/workflows/agent-release.yml": (
+        "e5d766231219d038bac360fbc7a4521f4635bf44228aa9938eaeb6cf58917f2a"
+    ),
+    ".github/workflows/preview-agent.yml": (
+        "00a0fbf026830fe40ed100f26480ccfa709583730952e47bdc84c1e17d286927"
+    ),
+    ".github/workflows/deploy-agent.yml": (
+        "161fab99414dce2574687eae0d620c62545ac3ba860737aedde08707c766d373"
+    ),
 }
-AGENT_DELIVERY_AUTH_ACTION = (
-    "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093"
-)
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
 AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
-    "ddd15599a7b7363bf24221d2eb0874499868ba9775877f873b6b766ef8b34279"
+    "5769654d9b37a91cdc71a5d6d55a34b94f330d766ee02f998489d5057f4cdeaa"
 )
-AGENT_DELIVERY_IDENTITY_ENV = {
-    "BUILDER_SERVICE_ACCOUNT": "${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}",
-    "DELIVERY_ENVIRONMENT": "${{ inputs.environment }}",
-    "DEPLOYER_SERVICE_ACCOUNT": "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}",
-    "WORKLOAD_IDENTITY_PROVIDER": "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
-}
-AGENT_DELIVERY_ENVIRONMENT = "${{ inputs.environment }}"
-AGENT_DELIVERY_BUILD_ENV = {
-    "DELIVERY_RUN_ATTEMPT": "${{ github.run_attempt }}",
-    "DELIVERY_RUN_ID": "${{ github.run_id }}",
-    "IMAGE_REPOSITORY": ("${{ steps.delivery_identity.outputs.image_repository }}"),
-    "SOURCE_SHA": "${{ github.sha }}",
-}
-AGENT_DELIVERY_BUILD_SCRIPT = """\
-set -euo pipefail
-[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-[[ "$DELIVERY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-[[ "$DELIVERY_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-gcloud auth configure-docker us-east4-docker.pkg.dev --quiet
-image_tag="${IMAGE_REPOSITORY}:git-${SOURCE_SHA}-run-${DELIVERY_RUN_ID}-attempt-${DELIVERY_RUN_ATTEMPT}"
-metadata_file="$RUNNER_TEMP/agent-image-metadata.json"
-docker buildx build \\
-  --platform linux/amd64 \\
-  --provenance=mode=max \\
-  --sbom=true \\
-  --build-arg "VCS_REF=${SOURCE_SHA}" \\
-  --tag "$image_tag" \\
-  --metadata-file "$metadata_file" \\
-  --push \\
-  .
-digest="$(jq -er '."containerimage.digest"' "$metadata_file")"
-[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-image_digest="${IMAGE_REPOSITORY}@${digest}"
-docker buildx imagetools inspect "$image_digest" >/dev/null
-printf 'image_digest=%s\\n' "$image_digest" >>"$GITHUB_OUTPUT"
-"""
-AGENT_CI_SERVICES = {
-    "postgres": {
-        "image": (
-            "postgres:17@sha256:"
-            "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d"
-        ),
-        "env": {
-            "POSTGRES_DB": "aegra_ci",
-            "POSTGRES_HOST_AUTH_METHOD": "trust",
-            "POSTGRES_USER": "postgres",
-        },
-        "ports": ["5432:5432"],
-        "options": (
-            '--health-cmd "pg_isready -U postgres -d aegra_ci" '
-            "--health-interval 10s --health-timeout 5s --health-retries 5"
-        ),
-    },
-}
+AGENT_RELEASE_CANDIDATE_SCRIPT = "scripts/validate_agent_release_candidate.py"
+AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
+    "a8c0dc770b0314d9b08843c16abae6bac24b405e51ac75e3dd14c6775e2006d3"
+)
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
-AGENT_LOCK_COMMAND = ("uv", "lock", "--check")
-AGENT_SYNC_COMMAND = (
-    "uv",
-    "sync",
-    "--frozen",
-    "--package",
-    "syshin0116-dev-agent",
-    "--all-extras",
-    "--dev",
-)
-AGENT_RUN_COMMANDS = (
-    (
-        "uv",
-        "run",
-        "--frozen",
-        "--package",
-        "syshin0116-dev-agent",
-        "ruff",
-        "check",
-        "src",
-        "tests",
-        "../scripts/build_index.py",
-        "../scripts/ci_changed_components.py",
-        "../scripts/verify_repository_governance.py",
-        "../scripts/tests",
-    ),
-    (
-        "uv",
-        "run",
-        "--frozen",
-        "--package",
-        "syshin0116-dev-agent",
-        "ruff",
-        "format",
-        "--check",
-        "src",
-        "tests",
-        "../scripts/build_index.py",
-        "../scripts/ci_changed_components.py",
-        "../scripts/verify_repository_governance.py",
-        "../scripts/tests",
-    ),
-    (
-        "uv",
-        "run",
-        "--frozen",
-        "--package",
-        "syshin0116-dev-agent",
-        "python",
-        "../scripts/build_index.py",
-        "--expect-document-count",
-        "335",
-    ),
-    (
-        "uv",
-        "run",
-        "--frozen",
-        "--package",
-        "syshin0116-dev-agent",
-        "--all-extras",
-        "pytest",
-        "-q",
-    ),
-)
-AGENT_RUN_STEP_INVENTORY = (
-    (
-        "Fail closed if change detection failed",
-        "needs.changes.result != 'success'",
-        ("exit", "1"),
-    ),
-    (
-        "Report an unaffected component",
-        "needs.changes.outputs.agent != 'true'",
-        (
-            "echo",
-            "No agent-affecting paths changed; "
-            "ci/agent reports success without rebuilding.",
-        ),
-    ),
-    (
-        "Verify the workspace lockfile is current",
-        AGENT_CI_CHANGED_CONDITION,
-        AGENT_LOCK_COMMAND,
-    ),
-    (None, AGENT_CI_CHANGED_CONDITION, AGENT_SYNC_COMMAND),
-    (None, AGENT_CI_CHANGED_CONDITION, AGENT_RUN_COMMANDS[0]),
-    (None, AGENT_CI_CHANGED_CONDITION, AGENT_RUN_COMMANDS[1]),
-    (
-        "Build and audit the published corpus and BM25 artifacts",
-        AGENT_CI_CHANGED_CONDITION,
-        AGENT_RUN_COMMANDS[2],
-    ),
-    (None, AGENT_CI_CHANGED_CONDITION, AGENT_RUN_COMMANDS[3]),
-)
-EXPECTED_AGENT_CI_JOB = {
-    "name": "ci/agent",
-    "if": "always()",
-    "needs": ["changes"],
-    "runs-on": "ubuntu-latest",
-    "timeout-minutes": "20",
-    "services": AGENT_CI_SERVICES,
-    "defaults": {
-        "run": {
-            "working-directory": AGENT_CI_WORKING_DIRECTORY,
-        }
-    },
-    "env": AGENT_CI_ENV,
-    "steps": [
-        {
-            "uses": ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"),
-            "with": {
-                "persist-credentials": "false",
-            },
-        },
-        {
-            "name": "Fail closed if change detection failed",
-            "if": "needs.changes.result != 'success'",
-            "run": "exit 1",
-        },
-        {
-            "name": "Report an unaffected component",
-            "if": "needs.changes.outputs.agent != 'true'",
-            "run": (
-                'echo "No agent-affecting paths changed; '
-                'ci/agent reports success without rebuilding."'
-            ),
-        },
-        {
-            "uses": ("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"),
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "with": {
-                "python-version": "3.12",
-            },
-        },
-        {
-            "uses": ("astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990"),
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "with": {
-                "enable-cache": "true",
-                "cache-dependency-glob": "uv.lock",
-            },
-        },
-        {
-            "name": "Verify the workspace lockfile is current",
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "run": " ".join(AGENT_LOCK_COMMAND),
-        },
-        {
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "run": " ".join(AGENT_SYNC_COMMAND),
-        },
-        {
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "run": " ".join(AGENT_RUN_COMMANDS[0]),
-        },
-        {
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "run": " ".join(AGENT_RUN_COMMANDS[1]),
-        },
-        {
-            "name": "Build and audit the published corpus and BM25 artifacts",
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "run": " ".join(AGENT_RUN_COMMANDS[2]),
-        },
-        {
-            "if": AGENT_CI_CHANGED_CONDITION,
-            "run": " ".join(AGENT_RUN_COMMANDS[3]),
-        },
-    ],
-}
 EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
     {
         "uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
@@ -439,12 +250,10 @@ EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
         },
     },
     {
-        "uses": "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990",
+        "uses": SETUP_UV_ACTION,
         "with": {
-            "version": "0.11.29",
-            "checksum": (
-                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
-            ),
+            "version": UV_VERSION,
+            "checksum": UV_CHECKSUM,
             "enable-cache": "true",
             "cache-dependency-glob": "uv.lock",
         },
@@ -1187,49 +996,24 @@ def validate_agent_delivery_permission_chain(
     root: Path,
     documents: dict[Path, YamlDocument],
 ) -> list[str]:
-    """Require exact OIDC permissions, identities, and fresh-image provenance."""
+    """Pin the complete split build/release chain and its selector script."""
     errors: list[str] = []
     repository_root = root.resolve()
 
-    for relative in AGENT_DELIVERY_CALLERS:
+    for relative, expected_sha256 in AGENT_DELIVERY_WORKFLOW_AST_SHA256.items():
         path = (repository_root / relative).resolve()
         document = documents.get(path)
         if document is None:
-            errors.append(f"agent delivery caller is missing or invalid: {relative}")
+            errors.append(f"agent delivery workflow is missing or invalid: {relative}")
             continue
-        try:
-            job = _workflow_jobs(document).get(AGENT_DELIVERY_CALL_JOB)
-            if job is None:
-                errors.append(
-                    f"{relative} must contain job {AGENT_DELIVERY_CALL_JOB!r}"
-                )
-                continue
-            uses = _mapping_value(job, "uses")
-            actual_uses = (
-                _scalar_value(uses, context=f"{relative}:delivery uses")
-                if uses is not None
-                else None
+        actual_sha256 = _canonical_ast_sha256(_node_to_data(document.root))
+        if actual_sha256 != expected_sha256:
+            errors.append(
+                f"{relative}: exact workflow AST differs; "
+                f"expected_sha256={expected_sha256}, "
+                f"actual_sha256={actual_sha256}"
             )
-            expected_uses = f"./{AGENT_DELIVERY_WORKFLOW}"
-            if actual_uses != expected_uses:
-                errors.append(
-                    f"{relative}:delivery must call {expected_uses!r}, "
-                    f"found {actual_uses!r}"
-                )
-            actual_permissions = _job_permissions(
-                job,
-                context=f"{relative}:delivery",
-            )
-            if not _json_exact(actual_permissions, AGENT_DELIVERY_PERMISSIONS):
-                errors.append(
-                    f"{relative}:delivery permissions are "
-                    f"{actual_permissions!r}; expected "
-                    f"{AGENT_DELIVERY_PERMISSIONS!r}"
-                )
-        except GovernanceError as exc:
-            errors.append(f"{relative}:delivery permission contract: {exc}")
 
-    reusable_path = (repository_root / AGENT_DELIVERY_WORKFLOW).resolve()
     identity_script_path = repository_root / AGENT_DELIVERY_IDENTITY_SCRIPT
     try:
         identity_script_sha256 = hashlib.sha256(
@@ -1244,127 +1028,24 @@ def validate_agent_delivery_permission_chain(
     ):
         errors.append(
             f"{AGENT_DELIVERY_IDENTITY_SCRIPT} must be the exact reviewed "
-            "environment identity validator"
+            "target/phase identity selector"
         )
-
-    reusable = documents.get(reusable_path)
-    if reusable is None:
-        errors.append(
-            f"agent delivery reusable workflow is missing or invalid: "
-            f"{AGENT_DELIVERY_WORKFLOW}"
-        )
-        return errors
+    candidate_script_path = repository_root / AGENT_RELEASE_CANDIDATE_SCRIPT
     try:
-        jobs = _workflow_jobs(reusable)
-        for job_name in AGENT_DELIVERY_PERMISSION_JOBS:
-            job = jobs.get(job_name)
-            if job is None:
-                errors.append(
-                    f"{AGENT_DELIVERY_WORKFLOW} must contain job {job_name!r}"
-                )
-                continue
-            actual_permissions = _job_permissions(
-                job,
-                context=f"{AGENT_DELIVERY_WORKFLOW}:{job_name}",
-            )
-            if not _json_exact(actual_permissions, AGENT_DELIVERY_PERMISSIONS):
-                errors.append(
-                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} permissions are "
-                    f"{actual_permissions!r}; expected "
-                    f"{AGENT_DELIVERY_PERMISSIONS!r}"
-                )
-            environment_node = _mapping_value(job, "environment")
-            actual_environment = (
-                _scalar_value(
-                    environment_node,
-                    context=f"{AGENT_DELIVERY_WORKFLOW}:{job_name} environment",
-                )
-                if environment_node is not None
-                else None
-            )
-            if actual_environment != AGENT_DELIVERY_ENVIRONMENT:
-                errors.append(
-                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} must remain a "
-                    "separate exact environment-gated job; production build "
-                    "and deploy intentionally require independent approvals"
-                )
-            if job_name == "deploy":
-                needs_node = _mapping_value(job, "needs")
-                actual_needs = (
-                    _node_to_data(needs_node) if needs_node is not None else None
-                )
-                if actual_needs != ["build"]:
-                    errors.append(
-                        f"{AGENT_DELIVERY_WORKFLOW}:deploy must wait only for "
-                        "the separately approved build job"
-                    )
-            steps_node = _mapping_value(job, "steps")
-            if not isinstance(steps_node, SequenceNode):
-                errors.append(
-                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} steps must be a list"
-                )
-                continue
-            steps = _node_to_data(steps_node)
-            expected_identity_step: JsonObject = {
-                "name": "Validate exact environment identities",
-                "env": AGENT_DELIVERY_IDENTITY_ENV,
-                "shell": "bash",
-                "run": (
-                    f'{AGENT_DELIVERY_IDENTITY_SCRIPT} >>"$GITHUB_OUTPUT"'
-                    if job_name == "build"
-                    else f"{AGENT_DELIVERY_IDENTITY_SCRIPT} >/dev/null"
-                ),
-            }
-            if job_name == "build":
-                expected_identity_step["id"] = "delivery_identity"
-            expected_auth_step = {
-                "uses": AGENT_DELIVERY_AUTH_ACTION,
-                "with": {
-                    "workload_identity_provider": (
-                        "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
-                    ),
-                    "service_account": (
-                        "${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}"
-                        if job_name == "build"
-                        else "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}"
-                    ),
-                    "create_credentials_file": "true",
-                    "export_environment_variables": "true",
-                },
-            }
-            if (
-                not isinstance(steps, list)
-                or len(steps) < 3
-                or not _json_exact(steps[1], expected_identity_step)
-                or not _json_exact(steps[2], expected_auth_step)
-            ):
-                errors.append(
-                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} must validate the "
-                    "exact provider, builder, and deployer immediately before "
-                    "the reviewed OIDC auth step"
-                )
-
-            if job_name == "build":
-                image_steps = [
-                    step
-                    for step in steps
-                    if isinstance(step, dict) and step.get("id") == "image"
-                ]
-                expected_image_step = {
-                    "name": "Build fresh and resolve the registry digest",
-                    "id": "image",
-                    "env": AGENT_DELIVERY_BUILD_ENV,
-                    "shell": "bash",
-                    "run": AGENT_DELIVERY_BUILD_SCRIPT,
-                }
-                if image_steps != [expected_image_step]:
-                    errors.append(
-                        f"{AGENT_DELIVERY_WORKFLOW}:build must always build a "
-                        "new run/attempt-scoped tag and pass only its same-job "
-                        "immutable registry digest; pre-existing tags are forbidden"
-                    )
-    except GovernanceError as exc:
-        errors.append(f"{AGENT_DELIVERY_WORKFLOW} permission contract: {exc}")
+        candidate_script_sha256 = hashlib.sha256(
+            candidate_script_path.read_bytes()
+        ).hexdigest()
+    except OSError:
+        candidate_script_sha256 = None
+    if (
+        not candidate_script_path.is_file()
+        or candidate_script_path.is_symlink()
+        or candidate_script_sha256 != AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256
+    ):
+        errors.append(
+            f"{AGENT_RELEASE_CANDIDATE_SCRIPT} must be the exact reviewed "
+            "post-approval release candidate gate"
+        )
     return errors
 
 
@@ -1386,7 +1067,7 @@ def _simple_shell_words(run: Node, *, context: str) -> tuple[str, ...]:
 
 
 def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
-    """Require one immutable, lock-checked uv resolution in the ci/agent job."""
+    """Pin the root-workspace agent CI job, including its real image build."""
     errors: list[str] = []
     for inherited_key in ("defaults", "env"):
         if _mapping_value(document.root, inherited_key) is not None:
@@ -1401,44 +1082,19 @@ def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
 
     context = f"{AGENT_CI_WORKFLOW}: job {AGENT_CI_JOB!r}"
     actual_agent_job = _node_to_data(agent)
-    if not _json_exact(actual_agent_job, EXPECTED_AGENT_CI_JOB):
+    actual_sha256 = _canonical_ast_sha256(actual_agent_job)
+    if actual_sha256 != AGENT_CI_JOB_AST_SHA256:
         errors.append(
             f"{context} exact job AST differs; "
-            f"expected={EXPECTED_AGENT_CI_JOB!r}, actual={actual_agent_job!r}"
+            f"expected_sha256={AGENT_CI_JOB_AST_SHA256}, "
+            f"actual_sha256={actual_sha256}"
         )
 
     defaults = _mapping_value(agent, "defaults")
-    if not isinstance(defaults, MappingNode):
-        errors.append(f"{context} defaults must be a mapping")
-    elif {key for key, _, _ in _mapping_items(defaults)} != {"run"}:
-        errors.append(f"{context} defaults may contain only the run mapping")
-    run_defaults = (
-        _mapping_value(defaults, "run") if isinstance(defaults, MappingNode) else None
-    )
-    if not isinstance(run_defaults, MappingNode):
-        errors.append(f"{context} defaults.run must be a mapping")
-    elif {key for key, _, _ in _mapping_items(run_defaults)} != {"working-directory"}:
+    if defaults is not None:
         errors.append(
-            f"{context} defaults.run may contain only working-directory; "
-            "inherited shell changes are forbidden"
-        )
-    working_directory = (
-        _mapping_value(run_defaults, "working-directory")
-        if isinstance(run_defaults, MappingNode)
-        else None
-    )
-    actual_working_directory = (
-        _scalar_value(
-            working_directory,
-            context=f"{context} defaults.run.working-directory",
-        )
-        if working_directory is not None
-        else None
-    )
-    if actual_working_directory != AGENT_CI_WORKING_DIRECTORY:
-        errors.append(
-            f"{context} defaults.run.working-directory must remain "
-            f"{AGENT_CI_WORKING_DIRECTORY!r}, found {actual_working_directory!r}"
+            f"{context} defaults are forbidden; every command must resolve "
+            "from the repository workspace root"
         )
 
     agent_env = _mapping_value(agent, "env")
@@ -1451,45 +1107,6 @@ def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
             f"found {actual_agent_env!r}"
         )
 
-    steps = _mapping_value(agent, "steps")
-    if not isinstance(steps, SequenceNode):
-        return [*errors, f"{context} steps must be a list"]
-
-    run_step_inventory: list[tuple[str | None, str | None, tuple[str, ...]]] = []
-    for index, step in enumerate(steps.value):
-        step_context = f"{context} step[{index}]"
-        if not isinstance(step, MappingNode):
-            errors.append(f"{step_context} must be a mapping")
-            continue
-        run = _mapping_value(step, "run")
-        if run is None:
-            continue
-        step_keys = {key for key, _, _ in _mapping_items(step)}
-        unexpected_step_keys = step_keys - {"name", "if", "run"}
-        if unexpected_step_keys:
-            errors.append(
-                f"{step_context} run step has forbidden execution metadata: "
-                f"{sorted(unexpected_step_keys)!r}"
-            )
-        try:
-            words = _simple_shell_words(run, context=step_context)
-            name_node = _mapping_value(step, "name")
-            name = (
-                _scalar_value(name_node, context=f"{step_context} name")
-                if name_node is not None
-                else None
-            )
-            condition = _job_condition(step, context=step_context)
-        except GovernanceError as exc:
-            errors.append(str(exc))
-            continue
-        run_step_inventory.append((name, condition, words))
-    if tuple(run_step_inventory) != AGENT_RUN_STEP_INVENTORY:
-        errors.append(
-            f"{context} exact run-step inventory differs; "
-            f"expected={AGENT_RUN_STEP_INVENTORY!r}, "
-            f"actual={tuple(run_step_inventory)!r}"
-        )
     return errors
 
 
@@ -1572,6 +1189,110 @@ def validate_dependency_audit_agent_setup(document: YamlDocument) -> list[str]:
         f"expected={EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP!r}, "
         f"actual={actual_setup!r}"
     ]
+
+
+def validate_uv_toolchain_contract(
+    root: Path,
+    documents: dict[Path, YamlDocument],
+) -> list[str]:
+    """Pin uv across project metadata, workflows, and the agent image."""
+    errors: list[str] = []
+    repository_root = root.resolve()
+
+    pyproject_path = repository_root / "pyproject.toml"
+    try:
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        required_version = pyproject["tool"]["uv"]["required-version"]
+    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError) as exc:
+        errors.append(f"pyproject.toml: cannot read tool.uv.required-version: {exc}")
+    else:
+        if required_version != UV_REQUIRED_VERSION:
+            errors.append(
+                "pyproject.toml: tool.uv.required-version must equal "
+                f"{UV_REQUIRED_VERSION!r}, got {required_version!r}"
+            )
+
+    actual_counts: Counter[str] = Counter()
+    for path, document in documents.items():
+        if not path.is_relative_to(repository_root / ".github/workflows"):
+            continue
+        relative = path.relative_to(repository_root).as_posix()
+        try:
+            jobs = _workflow_jobs(document)
+        except GovernanceError as exc:
+            errors.append(str(exc))
+            continue
+        for job_name, job in jobs.items():
+            steps = _mapping_value(job, "steps")
+            if steps is None:
+                continue
+            if not isinstance(steps, SequenceNode):
+                errors.append(f"{relative}: job {job_name!r} steps must be a list")
+                continue
+            for index, step in enumerate(steps.value):
+                if not isinstance(step, MappingNode):
+                    continue
+                data = _node_to_data(step)
+                uses = data.get("uses")
+                if not isinstance(uses, str) or not uses.startswith(
+                    "astral-sh/setup-uv@"
+                ):
+                    continue
+                actual_counts[relative] += 1
+                context = f"{relative}: job {job_name!r} setup-uv step {index}"
+                if uses != SETUP_UV_ACTION:
+                    errors.append(
+                        f"{context} must use exact action {SETUP_UV_ACTION!r}, "
+                        f"got {uses!r}"
+                    )
+                with_values = data.get("with")
+                if not isinstance(with_values, dict):
+                    errors.append(f"{context} must define setup-uv inputs")
+                    continue
+                if with_values.get("version") != UV_VERSION:
+                    errors.append(
+                        f"{context} version must equal {UV_VERSION!r}, "
+                        f"got {with_values.get('version')!r}"
+                    )
+                if with_values.get("checksum") != UV_CHECKSUM:
+                    errors.append(
+                        f"{context} checksum must equal {UV_CHECKSUM!r}, "
+                        f"got {with_values.get('checksum')!r}"
+                    )
+
+    if dict(sorted(actual_counts.items())) != EXPECTED_SETUP_UV_WORKFLOW_COUNTS:
+        errors.append(
+            "setup-uv workflow call inventory must remain exact; "
+            f"expected={EXPECTED_SETUP_UV_WORKFLOW_COUNTS!r}, "
+            f"actual={dict(sorted(actual_counts.items()))!r}"
+        )
+
+    dockerfile_path = repository_root / "Dockerfile"
+    try:
+        dockerfile_lines = dockerfile_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        errors.append(f"Dockerfile: cannot read agent image toolchain: {exc}")
+    else:
+        version_args = [
+            line for line in dockerfile_lines if line.startswith("ARG UV_VERSION")
+        ]
+        expected_version_arg = f'ARG UV_VERSION="{UV_VERSION}"'
+        if version_args != [expected_version_arg]:
+            errors.append(
+                "Dockerfile: UV_VERSION ARG must remain exact; "
+                f"expected={[expected_version_arg]!r}, actual={version_args!r}"
+            )
+        image_args = [
+            line for line in dockerfile_lines if line.startswith("ARG UV_IMAGE")
+        ]
+        expected_image_arg = f'ARG UV_IMAGE="{AGENT_DOCKER_UV_IMAGE}"'
+        if image_args != [expected_image_arg]:
+            errors.append(
+                "Dockerfile: UV_IMAGE ARG must bind the reviewed uv version and "
+                f"digest; expected={[expected_image_arg]!r}, actual={image_args!r}"
+            )
+
+    return errors
 
 
 def validate_required_job_graph(
@@ -2568,6 +2289,9 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
 
     documents, reference_errors = validate_repository_yaml_references(root)
     errors.extend(reference_errors)
+    errors.extend(
+        f"local: {error}" for error in validate_uv_toolchain_contract(root, documents)
+    )
     workflow_paths = {path.resolve() for path in workflows}
 
     repository = policy.get("repository")
@@ -3514,18 +3238,34 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
                     f"external: environment {name!r} protection rules are "
                     f"{actual_protection!r}; expected {expected_protection!r}"
                 )
-        if name in SECRETLESS_ENVIRONMENTS:
-            for collection in ("secrets", "variables"):
+        expected_inventories = {
+            "secrets": EXPECTED_ENVIRONMENT_SECRETS.get(name),
+            "variables": EXPECTED_ENVIRONMENT_VARIABLES.get(name),
+        }
+        for collection, expected_inventory in expected_inventories.items():
+            if expected_inventory is not None:
                 inventory = _single_page_items(
                     api_get,
                     f"environments/{encoded_name}/{collection}?per_page=100&page=1",
                     collection_key=collection,
                     require_total_count=True,
                 )
-                if inventory:
+                inventory_names = [
+                    item.get("name")
+                    for item in inventory
+                    if isinstance(item, dict) and isinstance(item.get("name"), str)
+                ]
+                if len(inventory_names) != len(inventory) or len(
+                    inventory_names
+                ) != len(set(inventory_names)):
+                    raise GovernanceError(
+                        f"environment {name!r} {collection} inventory is invalid"
+                    )
+                if frozenset(inventory_names) != expected_inventory:
                     errors.append(
-                        f"external: environment {name!r} contains "
-                        f"{len(inventory)} {collection}; expected 0"
+                        f"external: environment {name!r} {collection} differ "
+                        f"exactly; actual_count={len(inventory_names)}, "
+                        f"expected_count={len(expected_inventory)}"
                     )
         expected_deployment = expected["deployment_branch_policy"]
         if actual.get("deployment_branch_policy") != expected_deployment:

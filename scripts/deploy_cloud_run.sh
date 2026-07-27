@@ -5,6 +5,8 @@ readonly MODE="${1:-}"
 readonly REQUESTED_ROLLBACK_REVISION="${2:-}"
 readonly EXPECTED_PROJECT_ID="festive-ally-503605-v7"
 readonly EXPECTED_REGION="us-east4"
+readonly CLOUD_RUN_API_ORIGIN="https://run.googleapis.com"
+readonly CLOUD_RUN_API_MAX_BYTES="1048576"
 
 require_command() {
   command -v "$1" >/dev/null || {
@@ -21,227 +23,753 @@ require_value() {
   }
 }
 
+cloud_run_api_request() (
+  set -euo pipefail
+  local auth_config
+  local body
+  local content_type
+  local -a curl_arguments
+  local method="$1"
+  local metadata
+  local request
+  local request_document="${3:-}"
+  local redirects
+  local resource_path="$2"
+  local size
+  local status
+  local temp_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+  local token
+
+  if [[ "$method" == "GET" ]]; then
+    [[ "$resource_path" =~ ^(services/agent(-preview)?|services/agent(-preview)?/revisions/agent(-preview)?-[a-z0-9-]+|jobs/agent(-preview)?-(migrate|grants)|operations/[A-Za-z0-9._~-]+)$ ]]
+  elif [[ "$method" == "POST" ]]; then
+    [[ "$resource_path" =~ ^jobs/agent(-preview)?-(migrate|grants):run$ ]]
+  else
+    false
+  fi || {
+    printf 'refusing non-canonical Cloud Run REST resource path\n' >&2
+    exit 1
+  }
+  if [[ "$method" == "GET" ]]; then
+    [[ -z "$request_document" ]] || {
+      printf 'Cloud Run REST GET must not carry a request body\n' >&2
+      exit 1
+    }
+  else
+    if [[ -z "$request_document" || "${#request_document}" -gt 4096 ]] ||
+      ! jq -e 'type == "object"' >/dev/null <<<"$request_document"; then
+      printf 'Cloud Run REST POST requires a bounded JSON object\n' >&2
+      exit 1
+    fi
+  fi
+  [[ -d "$temp_root" && ! -L "$temp_root" ]] || {
+    printf 'Cloud Run REST temporary directory is not a real directory\n' >&2
+    exit 1
+  }
+
+  auth_config="$(mktemp "${temp_root%/}/cloud-run-auth.XXXXXX")"
+  body="$(mktemp "${temp_root%/}/cloud-run-body.XXXXXX")"
+  request="$(mktemp "${temp_root%/}/cloud-run-request.XXXXXX")"
+  chmod 600 "$auth_config" "$body" "$request"
+  trap 'rm -f -- "$auth_config" "$body" "$request"' EXIT
+
+  token="$(gcloud auth print-access-token --quiet)"
+  [[ "${#token}" -ge 20 && "${#token}" -le 4096 ]] &&
+    [[ "$token" =~ ^[A-Za-z0-9._~-]+$ ]] || {
+    printf 'gcloud returned an invalid access token shape\n' >&2
+    exit 1
+  }
+  printf 'header = "Authorization: Bearer %s"\n' "$token" >"$auth_config"
+  unset token
+
+  curl_arguments=(
+    --config "$auth_config"
+    --silent
+    --show-error
+    --fail-with-body
+    --request "$method"
+    --header "Accept: application/json"
+    --proto "=https"
+    --proto-redir "=https"
+    --max-redirs 0
+    --max-time 20
+    --max-filesize "$CLOUD_RUN_API_MAX_BYTES"
+    --output "$body"
+    --write-out $'%{http_code}\n%{content_type}\n%{size_download}\n%{num_redirects}'
+  )
+  if [[ "$method" == "POST" ]]; then
+    printf '%s' "$request_document" >"$request"
+    curl_arguments+=(
+      --header "Content-Type: application/json"
+      --data-binary "@${request}"
+    )
+  fi
+
+  metadata="$(
+    curl "${curl_arguments[@]}" \
+      "${CLOUD_RUN_API_ORIGIN}/v2/projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/${resource_path}"
+  )"
+  status="$(sed -n '1p' <<<"$metadata")"
+  content_type="$(sed -n '2p' <<<"$metadata")"
+  size="$(sed -n '3p' <<<"$metadata")"
+  redirects="$(sed -n '4p' <<<"$metadata")"
+
+  [[ "$status" == "200" ]] || {
+    printf 'Cloud Run REST %s returned HTTP %s\n' "$method" "$status" >&2
+    exit 1
+  }
+  [[ "$content_type" =~ ^application/json([[:space:]]*";"[[:space:]]*charset=[Uu][Tt][Ff]-8)?$ ]] || {
+    printf 'Cloud Run REST %s returned a non-JSON content type\n' "$method" >&2
+    exit 1
+  }
+  [[ "$size" =~ ^[0-9]+$ && "$size" -gt 0 && "$size" -le "$CLOUD_RUN_API_MAX_BYTES" ]] || {
+    printf 'Cloud Run REST %s returned an invalid response size\n' "$method" >&2
+    exit 1
+  }
+  [[ "$redirects" == "0" ]] || {
+    printf 'Cloud Run REST %s attempted a redirect\n' "$method" >&2
+    exit 1
+  }
+  jq -e 'type == "object"' "$body" >/dev/null || {
+    printf 'Cloud Run REST %s returned an invalid JSON object\n' "$method" >&2
+    exit 1
+  }
+  cat "$body"
+)
+
+cloud_run_api_get() {
+  cloud_run_api_request "GET" "$1"
+}
+
+cloud_run_api_run_job() {
+  local etag="$2"
+  local request_document
+
+  request_document="$(jq -cn --arg etag "$etag" '{etag:$etag}')"
+  cloud_run_api_request "POST" "jobs/${1}:run" "$request_document"
+}
+
 service_json() {
-  gcloud run services describe "$CLOUD_RUN_SERVICE" \
-    --project "$GCP_PROJECT_ID" \
-    --region "$GCP_REGION" \
-    --format=json
+  cloud_run_api_get "services/${CLOUD_RUN_SERVICE}"
 }
 
 revision_json() {
   local revision="$1"
-  gcloud run revisions describe "$revision" \
-    --project "$GCP_PROJECT_ID" \
-    --region "$GCP_REGION" \
-    --format=json
+  cloud_run_api_get "services/${CLOUD_RUN_SERVICE}/revisions/${revision}"
+}
+
+job_json() {
+  local job="$1"
+  cloud_run_api_get "jobs/${job}"
+}
+
+operation_json() {
+  local operation_id="$1"
+  cloud_run_api_get "operations/${operation_id}"
 }
 
 serving_revision() {
   service_json |
     jq -er '
-      [
-        .status.traffic[]
-        | select((.tag // "") == "" and (.percent // 0) == 100)
-        | .revisionName
-      ]
-      | unique
-      | if length == 1 then .[0] else error("expected exactly one 100% serving revision") end
+      (.trafficStatuses // .traffic) as $traffic
+      | if (
+          ($traffic | length) == 1
+          and (($traffic[0].tag // "") == "")
+          and (($traffic[0].percent // 0) == 100)
+          and (($traffic[0].revision | type) == "string")
+        )
+        then ($traffic[0].revision | split("/")[-1])
+        else error("expected exactly one untagged 100% serving revision")
+        end
     '
 }
 
 service_url() {
-  service_json | jq -er '.status.url'
+  service_json | jq -er '.uri | select(type == "string" and startswith("https://"))'
+}
+
+runtime_expectations() {
+  case "$CLOUD_RUN_SERVICE" in
+    agent-preview)
+      readonly EXPECTED_IMAGE_PREFIX="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
+      readonly EXPECTED_RUNTIME_SERVICE_ACCOUNT="agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+      readonly EXPECTED_RUNTIME_SECRETS='[
+        {"name":"AGENT_AUTH_SECRET","secret":"agent-preview-auth-secret"},
+        {"name":"ANTHROPIC_API_KEY","secret":"agent-preview-anthropic-api-key"},
+        {"name":"DATABASE_URL","secret":"agent-preview-database-url"},
+        {"name":"LANGCHAIN_API_KEY","secret":"agent-preview-langsmith-api-key"},
+        {"name":"OPENAI_API_KEY","secret":"agent-preview-openai-api-key"}
+      ]'
+      readonly EXPECTED_MIGRATOR_SERVICE_ACCOUNT="agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
+      readonly EXPECTED_MIGRATION_SECRET="agent-preview-migration-database-url"
+      readonly EXPECTED_MIGRATION_JOB="agent-preview-migrate"
+      readonly EXPECTED_GRANT_JOB="agent-preview-grants"
+      ;;
+    agent)
+      readonly EXPECTED_IMAGE_PREFIX="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
+      readonly EXPECTED_RUNTIME_SERVICE_ACCOUNT="agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+      readonly EXPECTED_RUNTIME_SECRETS='[
+        {"name":"AGENT_AUTH_SECRET","secret":"agent-auth-secret"},
+        {"name":"ANTHROPIC_API_KEY","secret":"anthropic-api-key"},
+        {"name":"DATABASE_URL","secret":"agent-database-url"},
+        {"name":"LANGCHAIN_API_KEY","secret":"langsmith-api-key"},
+        {"name":"OPENAI_API_KEY","secret":"openai-api-key"}
+      ]'
+      readonly EXPECTED_MIGRATOR_SERVICE_ACCOUNT="agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
+      readonly EXPECTED_MIGRATION_SECRET="agent-migration-database-url"
+      readonly EXPECTED_MIGRATION_JOB="agent-migrate"
+      readonly EXPECTED_GRANT_JOB="agent-grants"
+      ;;
+  esac
+  readonly EXPECTED_PLAIN_ENV='{
+    "AEGRA_CONFIG":"/app/aegra.json",
+    "BG_JOB_MAX_RETRIES":"0",
+    "ENV_MODE":"PRODUCTION",
+    "FF_V2_EVENT_STREAMING":"true",
+    "HOST":"0.0.0.0",
+    "LANGGRAPH_MAX_POOL_SIZE":"4",
+    "LANGGRAPH_MIN_POOL_SIZE":"1",
+    "MODEL":"anthropic:claude-sonnet-4-6",
+    "PORT":"8080",
+    "REDIS_BROKER_ENABLED":"false",
+    "RUN_MIGRATIONS_ON_STARTUP":"false",
+    "SQLALCHEMY_MAX_OVERFLOW":"0",
+    "SQLALCHEMY_POOL_SIZE":"2"
+  }'
+}
+
+verify_runtime_template() {
+  local document="$1"
+  local expected_image="${2:-}"
+  local selector="$3"
+  local template
+
+  template="$(jq -ce "$selector | select(type == \"object\")" <<<"$document")"
+  jq -e \
+    --arg expected_image "$expected_image" \
+    --arg expected_image_prefix "$EXPECTED_IMAGE_PREFIX" \
+    --arg expected_runtime_service_account "$EXPECTED_RUNTIME_SERVICE_ACCOUNT" \
+    --argjson expected_plain_env "$EXPECTED_PLAIN_ENV" \
+    --argjson expected_runtime_secrets "$EXPECTED_RUNTIME_SECRETS" \
+    '
+      def numeric_secret_version:
+        type == "string" and test("^[1-9][0-9]*$");
+      def absent_or_empty_array:
+        . == null or . == [];
+      def absent_or_empty_object:
+        . == null or . == {};
+      def absent_or_empty_string:
+        . == null or . == "";
+      def absent_or_false:
+        . == null or . == false;
+      def expected_digest($image):
+        ($image | type) == "string"
+        and (
+          if $expected_image == ""
+          then ($image | startswith($expected_image_prefix))
+            and (($image | ltrimstr($expected_image_prefix)) | test("^[0-9a-f]{64}$"))
+          else $image == $expected_image
+          end
+        );
+
+      .serviceAccount == $expected_runtime_service_account
+      and .timeout == "300s"
+      and .executionEnvironment == "EXECUTION_ENVIRONMENT_GEN2"
+      and .maxInstanceRequestConcurrency == 8
+      and (.scaling.minInstanceCount // 0) == 0
+      and .scaling.maxInstanceCount == 1
+      and (.volumes | absent_or_empty_array)
+      and (.encryptionKey | absent_or_empty_string)
+      and (.encryptionKeyShutdownDuration | absent_or_empty_string)
+      and (
+        .encryptionKeyRevocationAction == null
+        or .encryptionKeyRevocationAction
+          == "ENCRYPTION_KEY_REVOCATION_ACTION_UNSPECIFIED"
+      )
+      and (.nodeSelector | absent_or_empty_object)
+      and (.serviceMesh | absent_or_empty_object)
+      and (.vpcAccess | absent_or_empty_object)
+      and (.healthCheckDisabled | absent_or_false)
+      and (.gpuZonalRedundancyDisabled | absent_or_false)
+      and (.sessionAffinity | absent_or_false)
+      and (.containers | type == "array" and length == 1)
+      and .containers[0].name == "agent"
+      and expected_digest(.containers[0].image)
+      and .containers[0].command == ["uvicorn"]
+      and .containers[0].args == [
+        "aegra_api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "1"
+      ]
+      and .containers[0].ports == [{"name":"http1","containerPort":8080}]
+      and .containers[0].resources.limits == {"cpu":"1","memory":"1Gi"}
+      and .containers[0].resources.cpuIdle == true
+      and .containers[0].resources.startupCpuBoost == true
+      and (
+        (.containers[0].resources | keys | sort)
+        == ["cpuIdle","limits","startupCpuBoost"]
+      )
+      and (.containers[0].sourceCode | absent_or_empty_object)
+      and (.containers[0].volumeMounts | absent_or_empty_array)
+      and (.containers[0].workingDir | absent_or_empty_string)
+      and (.containers[0].readinessProbe | absent_or_empty_object)
+      and (.containers[0].dependsOn | absent_or_empty_array)
+      and (.containers[0].baseImageUri | absent_or_empty_string)
+      and (.containers[0].sandboxLauncher | absent_or_false)
+      and (
+        .containers[0].startupProbe as $probe
+        | ($probe.initialDelaySeconds // 0) == 0
+          and $probe.timeoutSeconds == 5
+          and $probe.periodSeconds == 5
+          and $probe.failureThreshold == 24
+          and ($probe.successThreshold // 1) == 1
+          and $probe.httpGet.path == "/ready"
+          and $probe.httpGet.port == 8080
+          and ($probe.httpGet.httpHeaders // []) == []
+          and ((
+            $probe | keys
+              - [
+                  "failureThreshold",
+                  "httpGet",
+                  "initialDelaySeconds",
+                  "periodSeconds",
+                  "successThreshold",
+                  "timeoutSeconds"
+                ]
+          ) == [])
+          and ((
+            $probe.httpGet | keys
+              - ["httpHeaders","path","port"]
+          ) == [])
+      )
+      and (
+        .containers[0].livenessProbe as $probe
+        | ($probe.initialDelaySeconds // 0) == 0
+          and $probe.timeoutSeconds == 5
+          and $probe.periodSeconds == 30
+          and $probe.failureThreshold == 3
+          and ($probe.successThreshold // 1) == 1
+          and $probe.httpGet.path == "/live"
+          and $probe.httpGet.port == 8080
+          and ($probe.httpGet.httpHeaders // []) == []
+          and ((
+            $probe | keys
+              - [
+                  "failureThreshold",
+                  "httpGet",
+                  "initialDelaySeconds",
+                  "periodSeconds",
+                  "successThreshold",
+                  "timeoutSeconds"
+                ]
+          ) == [])
+          and ((
+            $probe.httpGet | keys
+              - ["httpHeaders","path","port"]
+          ) == [])
+      )
+      and (
+        (.containers[0].env // []) as $env
+        | ($env | length) == 18
+          and ([$env[].name] | length) == ([$env[].name] | unique | length)
+          and (
+            [
+              $env[]
+              | select(has("value") and (has("valueSource") | not))
+              | {key:.name, value:.value}
+            ] | from_entries
+          ) == $expected_plain_env
+          and (
+            [
+              $env[]
+              | select(has("valueSource") and (has("value") | not))
+              | {
+                  name:.name,
+                  secret:.valueSource.secretKeyRef.secret
+                }
+            ] | sort_by(.name)
+          ) == ($expected_runtime_secrets | sort_by(.name))
+          and all(
+            $env[]
+            | select(has("valueSource"));
+            (.valueSource | keys) == ["secretKeyRef"]
+            and (.valueSource.secretKeyRef | keys | sort) == ["secret","version"]
+            and (.valueSource.secretKeyRef.version | numeric_secret_version)
+          )
+      )
+    ' >/dev/null <<<"$template" || {
+    printf 'Cloud Run runtime contract drifted from the exact Terraform template.\n' >&2
+    return 1
+  }
 }
 
 verify_service_contract() {
   local document
+  local expected_image="${1:-}"
   document="$(service_json)"
-  jq -e \
-    --arg expected_service "$CLOUD_RUN_SERVICE" \
-    '
-      (.metadata.name == $expected_service)
-      and (
-        .spec.template.metadata.annotations["autoscaling.knative.dev/maxScale"] == "1"
-        or .template.scaling.maxInstanceCount == 1
-      )
-      and (
-        .spec.template.spec.containerConcurrency == 8
-        or .template.maxInstanceRequestConcurrency == 8
-      )
-      and (
-        .spec.template.spec.containers[0].command == ["uvicorn"]
-        or .template.containers[0].command == ["uvicorn"]
-      )
-      and (
-        .spec.template.spec.containers[0].args
-        // .template.containers[0].args
-      ) == [
-        "aegra_api.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8080",
-        "--workers",
-        "1"
-      ]
-      and (
-        [
-          (
-            .spec.template.spec.containers[0].env
-            // .template.containers[0].env
-            // []
-          )[]
-          | (
-              .valueFrom.secretKeyRef.key
-              // .valueSource.secretKeyRef.version
-              // empty
-            )
-        ] as $secret_versions
-        | ($secret_versions | length) == 5
-          and all(
-            $secret_versions[];
-            type == "string" and test("^[1-9][0-9]*$")
-          )
-      )
-    ' >/dev/null <<<"$document" || {
-    printf 'Cloud Run service contract drifted from runtime or numeric secret pins.\n' >&2
-    return 1
-  }
-}
 
-verify_revision_digest() {
-  local revision="$1"
-  local document
-  document="$(revision_json "$revision")"
   jq -e \
-    --arg expected_image "$IMAGE_DIGEST" \
+    --arg expected_name "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}" \
     '
-      (
-        .status.imageDigest
-        // .spec.containers[0].image
-        // .template.containers[0].image
-      ) == $expected_image
+      def absent_or_empty_array:
+        . == null or . == [];
+      def absent_or_empty_object:
+        . == null or . == {};
+      def absent_or_false:
+        . == null or . == false;
+
+      .name == $expected_name
+      and .ingress == "INGRESS_TRAFFIC_ALL"
+      and (.binaryAuthorization | absent_or_empty_object)
+      and (.scaling | absent_or_empty_object)
+      and (.invokerIamDisabled | absent_or_false)
+      and (.defaultUriDisabled | absent_or_false)
+      and (.iapEnabled | absent_or_false)
+      and (.multiRegionSettings | absent_or_empty_object)
+      and (.customAudiences | absent_or_empty_array)
+      and (.buildConfig | absent_or_empty_object)
+      and .reconciling == false
+      and .terminalCondition.state == "CONDITION_SUCCEEDED"
+      and (.generation | type) == "string"
+      and (.generation | test("^[1-9][0-9]*$"))
+      and .observedGeneration == .generation
+      and (.latestReadyRevision | type) == "string"
+      and (.latestCreatedRevision | type) == "string"
+      and ((.trafficStatuses // .traffic) | type) == "array"
     ' >/dev/null <<<"$document" || {
-    printf 'Cloud Run revision does not run the selected immutable digest.\n' >&2
+    printf 'Cloud Run service is not a reconciled canonical REST v2 resource.\n' >&2
     return 1
   }
+  verify_runtime_template "$document" "$expected_image" ".template"
 }
 
 verify_revision_contract() {
   local revision="$1"
+  local expected_image="${2:-}"
   local document
-  local expected_image_prefix
-  local expected_runtime_service_account
-  local expected_secret_names
+  document="$(revision_json "$revision")"
 
-  case "$CLOUD_RUN_SERVICE" in
-    agent-preview)
-      expected_image_prefix="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
-      expected_runtime_service_account="agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-      expected_secret_names="$(
-        jq -cn '[
-          "agent-preview-anthropic-api-key",
-          "agent-preview-auth-secret",
-          "agent-preview-database-url",
-          "agent-preview-langsmith-api-key",
-          "agent-preview-openai-api-key"
-        ]'
-      )"
+  jq -e \
+    --arg expected_name "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}/revisions/${revision}" \
+    --arg expected_service "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}" \
+    '
+      .name == $expected_name
+      and .service == $expected_service
+      and .reconciling == false
+      and any(
+        .conditions[]?;
+        .type == "Ready" and .state == "CONDITION_SUCCEEDED"
+      )
+    ' >/dev/null <<<"$document" || {
+    printf 'Cloud Run revision %s is not a ready canonical REST v2 resource.\n' \
+      "$revision" >&2
+    return 1
+  }
+  verify_runtime_template "$document" "$expected_image" "."
+}
+
+verify_job_contract() {
+  local document="${2:-}"
+  local expected_args
+  local expected_container_name
+  local expected_job="$1"
+  local expected_secret
+  local expected_service_account
+  local expected_timeout
+
+  case "$expected_job" in
+    "$EXPECTED_MIGRATION_JOB")
+      expected_args='["-m","agent.migrate"]'
+      expected_container_name="migration"
+      expected_secret="$EXPECTED_MIGRATION_SECRET"
+      expected_service_account="$EXPECTED_MIGRATOR_SERVICE_ACCOUNT"
+      expected_timeout="900s"
       ;;
-    agent)
-      expected_image_prefix="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
-      expected_runtime_service_account="agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-      expected_secret_names="$(
-        jq -cn '[
-          "agent-auth-secret",
-          "agent-database-url",
-          "anthropic-api-key",
-          "langsmith-api-key",
-          "openai-api-key"
-        ]'
+    "$EXPECTED_GRANT_JOB")
+      expected_args='["-m","agent.neon_grant_probe"]'
+      expected_container_name="grant-probe"
+      expected_secret="$(
+        jq -r '.[] | select(.name == "DATABASE_URL") | .secret' \
+          <<<"$EXPECTED_RUNTIME_SECRETS"
       )"
+      expected_service_account="$EXPECTED_RUNTIME_SERVICE_ACCOUNT"
+      expected_timeout="600s"
+      ;;
+    *)
+      printf 'unexpected job contract selector\n' >&2
+      return 1
       ;;
   esac
 
-  document="$(revision_json "$revision")"
+  if [[ -z "$document" ]]; then
+    document="$(job_json "$expected_job")"
+  fi
   jq -e \
-    --arg expected_image_prefix "$expected_image_prefix" \
-    --arg expected_revision "$revision" \
-    --arg expected_runtime_service_account "$expected_runtime_service_account" \
-    --arg expected_service "$CLOUD_RUN_SERVICE" \
-    --argjson expected_secret_names "$expected_secret_names" \
+    --arg expected_container_name "$expected_container_name" \
+    --arg expected_image "$IMAGE_DIGEST" \
+    --arg expected_name "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/jobs/${expected_job}" \
+    --arg expected_secret "$expected_secret" \
+    --arg expected_service_account "$expected_service_account" \
+    --arg expected_timeout "$expected_timeout" \
+    --argjson expected_args "$expected_args" \
     '
-      .metadata.name == $expected_revision
+      def numeric_secret_version:
+        type == "string" and test("^[1-9][0-9]*$");
+      def absent_or_empty_array:
+        . == null or . == [];
+      def absent_or_empty_object:
+        . == null or . == {};
+      def absent_or_empty_string:
+        . == null or . == "";
+      def absent_or_false:
+        . == null or . == false;
+
+      .name == $expected_name
+      and .reconciling == false
+      and .terminalCondition.state == "CONDITION_SUCCEEDED"
+      and (.generation | type) == "string"
+      and (.generation | test("^[1-9][0-9]*$"))
+      and .observedGeneration == .generation
+      and (.etag | type) == "string"
+      and (.etag | length) >= 1
+      and (.etag | length) <= 1024
+      and (.binaryAuthorization | absent_or_empty_object)
+      and (.template.taskCount // 1) == 1
+      and (.template.parallelism // 1) == 1
+      and .template.template.serviceAccount == $expected_service_account
+      and .template.template.timeout == $expected_timeout
+      and .template.template.executionEnvironment == "EXECUTION_ENVIRONMENT_GEN2"
+      and .template.template.maxRetries == 0
+      and (.template.template.volumes | absent_or_empty_array)
+      and (.template.template.encryptionKey | absent_or_empty_string)
+      and (.template.template.vpcAccess | absent_or_empty_object)
+      and (.template.template.nodeSelector | absent_or_empty_object)
+      and (.template.template.gpuZonalRedundancyDisabled | absent_or_false)
+      and (.template.template.containers | type == "array" and length == 1)
+      and .template.template.containers[0].name == $expected_container_name
+      and .template.template.containers[0].image == $expected_image
+      and .template.template.containers[0].command == ["python"]
+      and .template.template.containers[0].args == $expected_args
+      and .template.template.containers[0].resources.limits == {
+        "cpu":"1",
+        "memory":"1Gi"
+      }
       and (
-        .metadata.labels["serving.knative.dev/service"] == $expected_service
-        or (
-          (.service // "")
-          | endswith("/services/" + $expected_service)
-        )
+        (
+          .template.template.containers[0].resources
+          | keys
+          - ["cpuIdle","limits","startupCpuBoost"]
+        ) == []
       )
-      and any(
-        .status.conditions[]?;
-        .type == "Ready"
-        and (.status == "True" or .state == "CONDITION_SUCCEEDED")
+      and (
+        .template.template.containers[0].resources.cpuIdle
+        | absent_or_false
       )
       and (
-        .spec.serviceAccountName
-        // .spec.serviceAccount
-        // .serviceAccount
-      ) == $expected_runtime_service_account
-      and (
-        .metadata.annotations["autoscaling.knative.dev/maxScale"] == "1"
-        or .scaling.maxInstanceCount == 1
+        .template.template.containers[0].resources.startupCpuBoost
+        | absent_or_false
       )
       and (
-        .spec.containerConcurrency == 8
-        or .maxInstanceRequestConcurrency == 8
+        .template.template.containers[0].sourceCode
+        | absent_or_empty_object
       )
-      and .spec.containers[0].command == ["uvicorn"]
-      and .spec.containers[0].args == [
-        "aegra_api.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8080",
-        "--workers",
-        "1"
-      ]
       and (
-        .spec.containers[0].image as $image
-        | ($image | type) == "string"
-          and ($image | startswith($expected_image_prefix))
+        .template.template.containers[0].ports
+        | absent_or_empty_array
+      )
+      and (
+        .template.template.containers[0].volumeMounts
+        | absent_or_empty_array
+      )
+      and (
+        .template.template.containers[0].workingDir
+        | absent_or_empty_string
+      )
+      and (
+        .template.template.containers[0].livenessProbe
+        | absent_or_empty_object
+      )
+      and (
+        .template.template.containers[0].startupProbe
+        | absent_or_empty_object
+      )
+      and (
+        .template.template.containers[0].readinessProbe
+        | absent_or_empty_object
+      )
+      and (
+        .template.template.containers[0].dependsOn
+        | absent_or_empty_array
+      )
+      and (
+        .template.template.containers[0].baseImageUri
+        | absent_or_empty_string
+      )
+      and (
+        .template.template.containers[0].sandboxLauncher
+        | absent_or_false
+      )
+      and (
+        (.template.template.containers[0].env // []) as $env
+        | ($env | length) == 3
+          and ([$env[].name] | sort) == [
+            "DATABASE_URL",
+            "ENV_MODE",
+            "RUN_MIGRATIONS_ON_STARTUP"
+          ]
           and (
-            $image
-            | ltrimstr($expected_image_prefix)
-            | test("^[0-9a-f]{64}$")
-          )
-      )
-      and (
-        [
-          .spec.containers[0].env[]?
-          | (
-              .valueFrom.secretKeyRef.name
-              // .valueSource.secretKeyRef.secret
-              // empty
-            ) as $secret
-          | (
-              .valueFrom.secretKeyRef.key
-              // .valueSource.secretKeyRef.version
-              // empty
-            ) as $version
-          | {secret: $secret, version: $version}
-        ] as $secrets
-        | ($secrets | length) == 5
-          and ([$secrets[].secret] | sort) == ($expected_secret_names | sort)
-          and all(
-            $secrets[].version;
-            type == "string" and test("^[1-9][0-9]*$")
-          )
+            [
+              $env[]
+              | select(has("value") and (has("valueSource") | not))
+              | {key:.name, value:.value}
+            ] | from_entries
+          ) == {
+            "ENV_MODE":"PRODUCTION",
+            "RUN_MIGRATIONS_ON_STARTUP":"false"
+          }
+          and (
+            [
+              $env[]
+              | select(has("valueSource") and (has("value") | not))
+            ] | length
+          ) == 1
+          and (
+            $env[]
+            | select(.name == "DATABASE_URL")
+            | .valueSource
+          ) as $source
+          | ($source | keys) == ["secretKeyRef"]
+            and ($source.secretKeyRef | keys | sort) == ["secret","version"]
+            and $source.secretKeyRef.secret == $expected_secret
+            and ($source.secretKeyRef.version | numeric_secret_version)
       )
     ' >/dev/null <<<"$document" || {
-    printf 'Cloud Run revision %s is not a ready, environment-matched immutable runtime contract.\n' \
-      "$revision" >&2
+    printf 'Cloud Run job %s drifted from the exact executable contract.\n' \
+      "$expected_job" >&2
+    return 1
+  }
+  jq -er '.etag' <<<"$document"
+}
+
+wait_for_job_operation() {
+  local attempt
+  local document="$1"
+  local execution_document
+  local expected_job="$2"
+  local max_attempts
+  local operation_id
+  local operation_name
+  local operation_prefix="projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/operations/"
+
+  case "$expected_job" in
+    "$EXPECTED_MIGRATION_JOB")
+      max_attempts=204
+      ;;
+    "$EXPECTED_GRANT_JOB")
+      max_attempts=144
+      ;;
+    *)
+      printf 'unexpected job operation selector\n' >&2
+      return 1
+      ;;
+  esac
+
+  operation_name="$(
+    jq -er \
+      --arg prefix "$operation_prefix" \
+      '
+        .name
+        | select(type == "string" and startswith($prefix))
+        | ltrimstr($prefix)
+        | select(test("^[A-Za-z0-9._~-]+$"))
+      ' <<<"$document"
+  )" || {
+    printf 'Cloud Run jobs.run returned a non-canonical operation name.\n' >&2
+    return 1
+  }
+  operation_id="$operation_name"
+  operation_name="${operation_prefix}${operation_id}"
+
+  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+    jq -e \
+      --arg expected_name "$operation_name" \
+      '.name == $expected_name and (.done // false) == true' \
+      >/dev/null <<<"$document" && break
+    if ((attempt == max_attempts)); then
+      printf 'Cloud Run job operation did not complete within its contract timeout.\n' \
+        >&2
+      return 1
+    fi
+    sleep 5
+    document="$(operation_json "$operation_id")"
+  done
+
+  jq -e \
+    --arg expected_job "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/jobs/${expected_job}" \
+    --arg expected_name "$operation_name" \
+    '
+      .name == $expected_name
+      and .done == true
+      and (has("error") | not)
+      and (.response | type) == "object"
+      and .response["@type"]
+        == "type.googleapis.com/google.cloud.run.v2.Execution"
+      and .response.job == $expected_job
+      and (
+        .response.name
+        | type == "string"
+          and startswith($expected_job + "/executions/")
+          and (ltrimstr($expected_job + "/executions/")
+            | test("^[a-z0-9][a-z0-9-]{0,62}$"))
+      )
+      and .response.reconciling == false
+      and (.response.generation | type) == "string"
+      and (.response.generation | test("^[1-9][0-9]*$"))
+      and .response.observedGeneration == .response.generation
+      and (.response.completionTime | type) == "string"
+      and (.response.completionTime | length) > 0
+      and .response.taskCount == 1
+      and .response.parallelism == 1
+      and .response.succeededCount == 1
+      and (.response.failedCount // 0) == 0
+      and (.response.cancelledCount // 0) == 0
+      and (.response.runningCount // 0) == 0
+      and (.response.retriedCount // 0) == 0
+      and any(
+        .response.conditions[]?;
+        .type == "Completed" and .state == "CONDITION_SUCCEEDED"
+      )
+    ' >/dev/null <<<"$document" || {
+    printf 'Cloud Run job operation did not return one successful immutable execution.\n' \
+      >&2
+    return 1
+  }
+
+  execution_document="$(
+    jq -ce '
+      .response
+      | {
+          name:.job,
+          reconciling:.reconciling,
+          terminalCondition:{state:"CONDITION_SUCCEEDED"},
+          generation:.generation,
+          observedGeneration:.observedGeneration,
+          etag:.etag,
+          template:{
+            taskCount:.taskCount,
+            parallelism:.parallelism,
+            template:.template
+          }
+        }
+    ' <<<"$document"
+  )"
+  verify_job_contract "$expected_job" "$execution_document" >/dev/null || {
+    printf 'Cloud Run immutable execution drifted from the verified job template.\n' \
+      >&2
     return 1
   }
 }
@@ -253,20 +781,19 @@ health_smoke() {
   local status
   local thread_id
 
-  live="$(curl --fail --silent --show-error \
+  live="$(curl --fail --silent --show-error --max-redirs 0 \
     --max-time 20 "${base_url%/}/live")"
-  ready="$(curl --fail --silent --show-error \
+  ready="$(curl --fail --silent --show-error --max-redirs 0 \
     --max-time 20 "${base_url%/}/ready")"
   jq -e '. == {"status":"alive"}' >/dev/null <<<"$live"
   jq -e '. == {"status":"ready"}' >/dev/null <<<"$ready"
 
-  thread_id="$(
-    python3 -c 'import uuid; print(uuid.uuid4())'
-  )"
+  thread_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
   status="$(
     curl --silent --show-error \
       --output /dev/null \
       --write-out '%{http_code}' \
+      --max-redirs 0 \
       --max-time 20 \
       --header 'Content-Type: application/json' \
       --request POST \
@@ -283,7 +810,7 @@ health_smoke() {
 protocol_smoke() {
   local base_url="$1"
   LIVE_SMOKE_TOKEN="$SMOKE_BEARER_TOKEN" \
-    uv run --no-project --with httpx==0.28.1 \
+    uv run --frozen --package syshin0116-dev-agent \
     python scripts/smoke.py \
       --base-url "$base_url" \
       --assistant-id agent \
@@ -294,16 +821,17 @@ protocol_smoke() {
 
 run_job_with_digest() {
   local job="$1"
+  local job_etag
+  local operation
+
   gcloud run jobs update "$job" \
     --project "$GCP_PROJECT_ID" \
     --region "$GCP_REGION" \
     --image "$IMAGE_DIGEST" \
     --quiet
-  gcloud run jobs execute "$job" \
-    --project "$GCP_PROJECT_ID" \
-    --region "$GCP_REGION" \
-    --wait \
-    --quiet
+  job_etag="$(verify_job_contract "$job")"
+  operation="$(cloud_run_api_run_job "$job" "$job_etag")"
+  wait_for_job_operation "$operation" "$job"
 }
 
 set_revision_traffic() {
@@ -315,11 +843,65 @@ set_revision_traffic() {
     --quiet
 }
 
+require_serving_revision() {
+  local expected_revision="$1"
+  local actual_revision
+
+  actual_revision="$(serving_revision)"
+  [[ "$actual_revision" == "$expected_revision" ]] || {
+    printf 'Cloud Run traffic resolved to %s instead of %s.\n' \
+      "$actual_revision" "$expected_revision" >&2
+    return 1
+  }
+}
+
+verified_smoke_url() {
+  local document
+  local expected_serving_revision="$1"
+  local expected_smoke_revision="$2"
+  document="$(service_json)"
+
+  jq -er \
+    --arg expected_serving_revision "$expected_serving_revision" \
+    --arg expected_smoke_revision "$expected_smoke_revision" \
+    '
+      (.trafficStatuses // .traffic) as $traffic
+      | [
+        $traffic[]
+        | select((.tag // "") == "")
+      ] as $serving
+      | [
+        $traffic[]
+        | select((.tag // "") == "smoke")
+      ] as $smoke
+      | if (
+          ($traffic | length) == 2
+          and ($serving | length) == 1
+          and (($serving[0].revision | split("/")[-1])
+            == $expected_serving_revision)
+          and (($serving[0].percent // 0) == 100)
+          and ($smoke | length) == 1
+          and (($smoke[0].revision | split("/")[-1])
+            == $expected_smoke_revision)
+          and (($smoke[0].percent // 0) == 0)
+          and ($smoke[0].uri | type) == "string"
+          and ($smoke[0].uri | startswith("https://"))
+        )
+        then $smoke[0].uri
+        else error("traffic does not match the exact smoke-stage shape")
+        end
+    ' <<<"$document" || {
+    printf 'Cloud Run smoke tag did not bind exactly to revision %s.\n' \
+      "$expected_smoke_revision" >&2
+    return 1
+  }
+}
+
 remove_smoke_tag() {
   local document
   document="$(service_json)"
 
-  if jq -e 'any(.status.traffic[]?; .tag == "smoke")' \
+  if jq -e 'any((.trafficStatuses // .traffic)[]?; .tag == "smoke")' \
     >/dev/null <<<"$document"; then
     gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
       --project "$GCP_PROJECT_ID" \
@@ -329,7 +911,8 @@ remove_smoke_tag() {
   fi
 
   service_json |
-    jq -e 'all(.status.traffic[]?; (.tag // "") != "smoke")' >/dev/null || {
+    jq -e 'all((.trafficStatuses // .traffic)[]?; (.tag // "") != "smoke")' \
+      >/dev/null || {
     printf 'Cloud Run smoke tag cleanup did not reach verified absence.\n' >&2
     return 1
   }
@@ -352,7 +935,7 @@ revision_belongs_to_service() {
 }
 
 validate_inputs() {
-  for command_name in curl gcloud jq python3 uv; do
+  for command_name in curl gcloud jq python3 sed uv; do
     require_command "$command_name"
   done
   for variable_name in \
@@ -374,6 +957,7 @@ validate_inputs() {
     printf 'unexpected Cloud Run service\n' >&2
     exit 1
   }
+  runtime_expectations
 }
 
 validate_deploy_inputs() {
@@ -398,68 +982,51 @@ validate_deploy_inputs() {
     printf 'SOURCE_SHA must be a full lowercase commit SHA.\n' >&2
     exit 1
   }
-  [[ "$MIGRATION_JOB" =~ ^agent(-preview)?-migrate$ ]] || {
-    printf 'unexpected migration job\n' >&2
+  [[ "$MIGRATION_JOB" == "$EXPECTED_MIGRATION_JOB" ]] || {
+    printf '%s service must use only its exact migration job\n' \
+      "$CLOUD_RUN_SERVICE" >&2
     exit 1
   }
-  [[ "$GRANT_PROBE_JOB" =~ ^agent(-preview)?-grants$ ]] || {
-    printf 'unexpected grant-probe job\n' >&2
+  [[ "$GRANT_PROBE_JOB" == "$EXPECTED_GRANT_JOB" ]] || {
+    printf '%s service must use only its exact grant-probe job\n' \
+      "$CLOUD_RUN_SERVICE" >&2
     exit 1
   }
-  case "$CLOUD_RUN_SERVICE" in
-    agent-preview)
-      [[ "$IMAGE_DIGEST" =~ ^us-east4-docker\.pkg\.dev/festive-ally-503605-v7/agent-preview/agent@sha256:[0-9a-f]{64}$ ]] || {
-        printf 'preview image digest is outside the isolated preview repository\n' >&2
-        exit 1
-      }
-      if [[ "$MIGRATION_JOB" != "agent-preview-migrate" ]] ||
-        [[ "$GRANT_PROBE_JOB" != "agent-preview-grants" ]]; then
-        printf 'preview service must use only preview one-shot jobs\n' >&2
-        exit 1
-      fi
-      ;;
-    agent)
-      [[ "$IMAGE_DIGEST" =~ ^us-east4-docker\.pkg\.dev/festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$ ]] || {
-        printf 'production image digest is outside the production repository\n' >&2
-        exit 1
-      }
-      if [[ "$MIGRATION_JOB" != "agent-migrate" ]] ||
-        [[ "$GRANT_PROBE_JOB" != "agent-grants" ]]; then
-        printf 'production service must use only production one-shot jobs\n' >&2
-        exit 1
-      fi
-      ;;
-  esac
+  [[ "$IMAGE_DIGEST" == "${EXPECTED_IMAGE_PREFIX}"* ]] &&
+    [[ "${IMAGE_DIGEST#"$EXPECTED_IMAGE_PREFIX"}" =~ ^[0-9a-f]{64}$ ]] || {
+    printf 'image digest is outside the selected isolated repository\n' >&2
+    exit 1
+  }
 }
 
 deploy() {
   local previous_revision
   local new_revision=""
   local smoke_url
-  local promoted="false"
+  local traffic_shift_attempted="false"
 
   validate_deploy_inputs
   verify_service_contract
+  remove_smoke_tag
   previous_revision="$(serving_revision)"
   revision_belongs_to_service "$previous_revision" || {
     printf 'current ready revision is outside the selected service.\n' >&2
     return 1
   }
-  # A stale public smoke URL is removed before jobs or revision creation.
-  remove_smoke_tag
 
   rollback_on_error() {
-    local status=$?
+    local status="$1"
     local cleanup_failed="false"
     local restore_failed="false"
-    trap - ERR
+    trap - ERR INT TERM
     if ! remove_smoke_tag; then
       cleanup_failed="true"
     fi
-    if [[ -n "$new_revision" || "$promoted" == "true" ]]; then
+    if [[ "$traffic_shift_attempted" == "true" ]]; then
       printf 'Deployment failed; restoring traffic to %s.\n' \
         "$previous_revision" >&2
-      if ! set_revision_traffic "$previous_revision"; then
+      if ! set_revision_traffic "$previous_revision" ||
+        ! require_serving_revision "$previous_revision"; then
         restore_failed="true"
       fi
     fi
@@ -471,9 +1038,10 @@ deploy() {
     fi
     exit "$status"
   }
-  trap rollback_on_error ERR
+  trap 'rollback_on_error $?' ERR
+  trap 'rollback_on_error 130' INT
+  trap 'rollback_on_error 143' TERM
 
-  # Schema first, then the least-privileged real-Neon grant/denial probe.
   run_job_with_digest "$MIGRATION_JOB"
   run_job_with_digest "$GRANT_PROBE_JOB"
 
@@ -486,38 +1054,39 @@ deploy() {
     --quiet
 
   new_revision="$(
-    service_json | jq -er '.status.latestCreatedRevisionName'
+    service_json |
+      jq -er '
+        .latestCreatedRevision
+        | select(type == "string" and length > 0)
+        | split("/")[-1]
+      '
   )"
   [[ "$new_revision" == "${CLOUD_RUN_SERVICE}-g${SOURCE_SHA:0:8}-r${DELIVERY_RUN_ID}-a${DELIVERY_RUN_ATTEMPT}" ]] || {
     printf 'Cloud Run created an unexpected revision name.\n' >&2
     return 1
   }
-  verify_revision_digest "$new_revision"
-  verify_revision_contract "$new_revision"
-  verify_service_contract
+  verify_revision_contract "$new_revision" "$IMAGE_DIGEST"
+  verify_service_contract "$IMAGE_DIGEST"
 
   gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
     --project "$GCP_PROJECT_ID" \
     --region "$GCP_REGION" \
     --set-tags "smoke=${new_revision}" \
     --quiet
-  smoke_url="$(
-    service_json |
-      jq -er '.status.traffic[] | select(.tag == "smoke") | .url'
-  )"
+  smoke_url="$(verified_smoke_url "$previous_revision" "$new_revision")"
   health_smoke "$smoke_url"
+  protocol_smoke "$smoke_url"
 
+  traffic_shift_attempted="true"
   set_revision_traffic "$new_revision"
-  promoted="true"
   remove_smoke_tag
+  require_serving_revision "$new_revision"
 
-  # This is intentionally after traffic shift: failure invokes revision rollback.
   health_smoke "$(service_url)"
-  protocol_smoke "$(service_url)"
-  [[ "$(serving_revision)" == "$new_revision" ]]
+  require_serving_revision "$new_revision"
   remove_smoke_tag
 
-  trap - ERR
+  trap - ERR INT TERM
   printf 'Cloud Run deployment passed: service=%s revision=%s\n' \
     "$CLOUD_RUN_SERVICE" "$new_revision"
 }
@@ -533,22 +1102,26 @@ rollback() {
     printf 'rollback revision is outside the selected service.\n' >&2
     exit 1
   }
-  previous_revision="$(serving_revision)"
-  verify_revision_contract "$REQUESTED_ROLLBACK_REVISION"
-  # Manual rollback never retains or creates a public smoke tag.
   remove_smoke_tag
+  previous_revision="$(serving_revision)"
+  revision_belongs_to_service "$previous_revision" || {
+    printf 'current serving revision is outside the selected service.\n' >&2
+    exit 1
+  }
+  verify_revision_contract "$REQUESTED_ROLLBACK_REVISION"
 
   rollback_on_error() {
-    local status=$?
+    local status="$1"
     local cleanup_failed="false"
     local restore_failed="false"
-    trap - ERR
+    trap - ERR INT TERM
     if ! remove_smoke_tag; then
       cleanup_failed="true"
     fi
     printf 'Rollback smoke failed; restoring traffic to %s.\n' \
       "$previous_revision" >&2
-    if ! set_revision_traffic "$previous_revision"; then
+    if ! set_revision_traffic "$previous_revision" ||
+      ! require_serving_revision "$previous_revision"; then
       restore_failed="true"
     fi
     if [[ "$cleanup_failed" == "true" ]]; then
@@ -559,13 +1132,17 @@ rollback() {
     fi
     exit "$status"
   }
-  trap rollback_on_error ERR
+  trap 'rollback_on_error $?' ERR
+  trap 'rollback_on_error 130' INT
+  trap 'rollback_on_error 143' TERM
 
   set_revision_traffic "$REQUESTED_ROLLBACK_REVISION"
+  require_serving_revision "$REQUESTED_ROLLBACK_REVISION"
   health_smoke "$(service_url)"
   protocol_smoke "$(service_url)"
   remove_smoke_tag
-  trap - ERR
+  require_serving_revision "$REQUESTED_ROLLBACK_REVISION"
+  trap - ERR INT TERM
   printf 'Cloud Run rollback passed: service=%s revision=%s\n' \
     "$CLOUD_RUN_SERVICE" "$REQUESTED_ROLLBACK_REVISION"
 }

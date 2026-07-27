@@ -118,7 +118,7 @@ async def iter_sse_frames(response: httpx.Response) -> AsyncIterator[SSEFrame]:
                 try:
                     payload = json.loads(raw_data)
                 except json.JSONDecodeError as exc:
-                    raise SmokeError(f"SSE data is not JSON: {raw_data!r}") from exc
+                    raise SmokeError("SSE data is not JSON") from exc
                 if not isinstance(payload, dict):
                     raise SmokeError("SSE data must be a protocol object")
                 yield SSEFrame(event=event, event_id=event_id, data=payload)
@@ -146,7 +146,7 @@ async def iter_sse_frames(response: httpx.Response) -> AsyncIterator[SSEFrame]:
         try:
             payload = json.loads(raw_data)
         except json.JSONDecodeError as exc:
-            raise SmokeError(f"SSE data is not JSON: {raw_data!r}") from exc
+            raise SmokeError("SSE data is not JSON") from exc
         if not isinstance(payload, dict):
             raise SmokeError("SSE data must be a protocol object")
         yield SSEFrame(event=event, event_id=event_id, data=payload)
@@ -204,8 +204,8 @@ class LiveSmoke:
             json=command,
         )
         if response.status_code != 200:
-            body = (await response.aread()).decode(errors="replace")[:500]
-            raise SmokeError(f"{method} returned HTTP {response.status_code}: {body}")
+            await response.aread()
+            raise SmokeError(f"{method} returned a non-200 HTTP status")
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -214,7 +214,7 @@ class LiveSmoke:
             raise SmokeError(f"{method} response must be an object")
         validate_protocol_response(payload, source=f"live:{method}")
         if payload["id"] != command_id:
-            raise SmokeError(f"{method} response id {payload['id']!r} != {command_id}")
+            raise SmokeError(f"{method} response id did not match the command")
         return payload
 
     def _normalize_sse_frame(
@@ -228,18 +228,13 @@ class LiveSmoke:
             normalized = frame.data
         validate_protocol_event(normalized, source="live:sse", record=index)
         if frame.event != frame.data["method"]:
-            raise SmokeError(
-                f"SSE event {frame.event!r} != envelope method {frame.data['method']!r}"
-            )
+            raise SmokeError("SSE event name did not match the envelope method")
         if self._profile.sse_id == "sequence":
             expected_id = str(frame.data["seq"])
         else:
             expected_id = frame.data["event_id"]
         if frame.event_id != expected_id:
-            raise SmokeError(
-                f"SSE id {frame.event_id!r} != expected {expected_id!r} "
-                f"for profile {self._profile.name}"
-            )
+            raise SmokeError("SSE id did not match the protocol envelope")
         return normalized
 
     async def _respond_to_interrupt(
@@ -262,7 +257,7 @@ class LiveSmoke:
             },
         )
         if response["type"] != "success":
-            raise SmokeError(f"input.respond failed: {response}")
+            raise SmokeError("input.respond did not succeed")
         self._responded_interrupts.add(key)
         return True
 
@@ -295,18 +290,13 @@ class LiveSmoke:
             json=body,
         ) as response:
             if response.status_code != 200:
-                body_bytes = await response.aread()
+                await response.aread()
                 ready.set()
-                raise SmokeError(
-                    f"stream returned HTTP {response.status_code}: "
-                    f"{body_bytes.decode(errors='replace')[:500]}"
-                )
+                raise SmokeError("stream returned a non-200 HTTP status")
             content_type = response.headers.get("content-type", "")
             if "text/event-stream" not in content_type:
                 ready.set()
-                raise SmokeError(
-                    f"stream content-type is {content_type!r}, expected text/event-stream"
-                )
+                raise SmokeError("stream did not return the required content type")
             ready.set()
 
             async for frame in iter_sse_frames(response):
@@ -417,7 +407,7 @@ class LiveSmoke:
             raise
         if response["type"] != "success":
             task.cancel()
-            raise SmokeError(f"run.start failed: {response}")
+            raise SmokeError("run.start did not succeed")
 
         first = await self._wait_stream(task)
         events = list(first.events)
@@ -441,7 +431,7 @@ class LiveSmoke:
             if not resumed.events:
                 raise SmokeError("reconnected stream produced no events")
             if min(event["seq"] for event in resumed.events) <= cursor:
-                raise SmokeError(f"reconnected stream replayed seq <= cursor {cursor}")
+                raise SmokeError("reconnected stream replayed an invalid sequence")
             if resumed.terminal is None:
                 raise SmokeError("reconnected stream did not reach root terminal")
             events.extend(resumed.events)
@@ -451,7 +441,7 @@ class LiveSmoke:
             terminal = first.terminal
 
         if terminal != "completed":
-            raise SmokeError(f"turn ended with lifecycle {terminal!r}")
+            raise SmokeError("turn did not end with the completed lifecycle")
         sequences = [event["seq"] for event in events]
         event_ids = [event["event_id"] for event in events]
         if sequences != sorted(set(sequences)):
@@ -495,9 +485,7 @@ class LiveSmoke:
             "permission_denied",
             "no_such_checkpoint",
         }:
-            raise SmokeError(
-                f"state.fork returned unexpected error code {response['error']!r}"
-            )
+            raise SmokeError("state.fork returned an unexpected error code")
 
 
 def _assemble_visible_text(events: list[dict[str, Any]]) -> str:
@@ -590,12 +578,7 @@ async def run_live(args: argparse.Namespace, lock: dict[str, Any]) -> None:
     if args.require_hitl and total_hitl == 0:
         raise SmokeError("two-turn smoke did not exercise input.requested/respond")
 
-    print(
-        f"live AP v2 smoke ok: profile={profile.name}, thread={thread_id}, "
-        f"events={len(first.events) + len(second.events)}, "
-        f"hitl_responses={total_hitl}"
-    )
-    print(f"visible text: turn1={first.visible_text!r}, turn2={second.visible_text!r}")
+    print(f"live AP v2 smoke ok: profile={profile.name}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -671,8 +654,17 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(run_live(args, lock))
         else:
             print("live smoke skipped: pass --base-url explicitly to contact a server")
-    except (ContractError, SmokeError, httpx.HTTPError) as exc:
-        print(f"AP v2 smoke failed: {exc}", file=sys.stderr)
+    except Exception as exc:
+        if args.base_url and args.token_env:
+            print(
+                "AP v2 authenticated live smoke failed; "
+                "server response details suppressed.",
+                file=sys.stderr,
+            )
+        elif isinstance(exc, (ContractError, SmokeError, httpx.HTTPError)):
+            print(f"AP v2 smoke failed: {exc}", file=sys.stderr)
+        else:
+            raise
         return 1
     return 0
 

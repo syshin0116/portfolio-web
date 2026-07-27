@@ -68,11 +68,18 @@ output "production_grant_probe_job" {
 }
 
 output "preview_workload_identity_provider" {
-  value = google_iam_workload_identity_pool_provider.preview.name
+  description = "Retained legacy provider; managed disabled and not trusted by any service account."
+  value       = google_iam_workload_identity_pool_provider.preview.name
 }
 
 output "production_workload_identity_provider" {
-  value = google_iam_workload_identity_pool_provider.production.name
+  description = "Canonical active provider for all four phase-specific delivery roles."
+  value       = google_iam_workload_identity_pool_provider.production.name
+}
+
+output "delivery_workload_identity_provider" {
+  description = "Canonical active provider for preview/production builder/deployer roles."
+  value       = google_iam_workload_identity_pool_provider.production.name
 }
 
 output "terraform_state_bucket" {

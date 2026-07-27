@@ -43,24 +43,24 @@ variable "github_owner_id" {
 }
 
 variable "github_preview_environment" {
-  description = "Exact GitHub environment claim accepted by the preview provider."
+  description = "Exact GitHub environment claim accepted only for the preview deployer role."
   type        = string
   default     = "Agent Preview"
 
   validation {
     condition     = var.github_preview_environment == "Agent Preview"
-    error_message = "The preview provider must remain bound to the exact Agent Preview environment."
+    error_message = "The preview deployer role must remain bound to the exact Agent Preview environment."
   }
 }
 
 variable "github_production_environment" {
-  description = "Exact GitHub environment claim accepted by the production provider."
+  description = "Exact GitHub environment claim accepted only for the production deployer role."
   type        = string
   default     = "Agent Production"
 
   validation {
     condition     = var.github_production_environment == "Agent Production"
-    error_message = "The production provider must remain bound to the exact Agent Production environment."
+    error_message = "The production deployer role must remain bound to the exact Agent Production environment."
   }
 }
 

@@ -17,6 +17,7 @@ ROOT_AGENT_PATHS = frozenset(
     {
         ".dockerignore",
         "Dockerfile",
+        "Dockerfile.dockerignore",
         "aegra.json",
         "pyproject.toml",
         "uv.lock",
@@ -42,7 +43,9 @@ OPS_FOUNDATION_PATHS = frozenset(
         "scripts/tests/test_agent_delivery_identity.py",
         "scripts/tests/test_deploy_cloud_run.py",
         "scripts/tests/test_ops_foundation_contract.py",
+        "scripts/tests/test_validate_agent_release_candidate.py",
         "scripts/tests/test_verify_ops_foundation.py",
+        "scripts/validate_agent_release_candidate.py",
         "scripts/validate_agent_delivery_identity.sh",
         "scripts/verify_ops_foundation.sh",
     }

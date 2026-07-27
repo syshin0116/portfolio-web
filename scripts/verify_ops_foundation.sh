@@ -4,7 +4,6 @@ set -euo pipefail
 readonly PROJECT_ID="festive-ally-503605-v7"
 readonly EXPECTED_PROJECT_NUMBER="72919926064"
 readonly REGION="us-east4"
-readonly HCL2_VERSION="7.3.1"
 readonly STATE_BUCKET="${PROJECT_ID}-tfstate"
 readonly STATE_OBJECT="syshin0116.dev/gcp/foundation/default.tfstate"
 readonly PRODUCTION_RUNTIME_SA="agent-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -16,6 +15,7 @@ readonly PREVIEW_BUILDER_SA="agent-preview-image-builder@${PROJECT_ID}.iam.gserv
 readonly PREVIEW_MIGRATOR_SA="agent-preview-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PRODUCTION_MIGRATOR_SA="agent-prod-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly CLOUD_RUN_SERVICE_AGENT="service-${EXPECTED_PROJECT_NUMBER}@serverless-robot-prod.iam.gserviceaccount.com"
+readonly CLOUD_RUN_DELIVERY_ROLE="projects/${PROJECT_ID}/roles/cloudRunAgentDelivery"
 readonly -a WORKLOAD_SERVICE_ACCOUNTS=(
   "$PRODUCTION_RUNTIME_SA"
   "$PREVIEW_RUNTIME_SA"
@@ -81,9 +81,7 @@ verify_disk_contract() {
 
 verify_static_contract() {
   require_command uv
-  uv run \
-    --no-project \
-    --with "python-hcl2==${HCL2_VERSION}" \
+  uv run --frozen --package syshin0116-dev-agent \
     python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
 
   if [[ -e "$GOVERNANCE_MANIFEST" && ! -f "$GOVERNANCE_VERIFIER" ]] ||
@@ -504,9 +502,7 @@ verify_canonical_repository_governance() {
     require_command gh
     (
       cd "$REPO_ROOT"
-      uv run \
-        --no-project \
-        --with pyyaml==6.0.3 \
+      uv run --frozen --package syshin0116-dev-agent \
         python "$GOVERNANCE_VERIFIER" --live
     )
   elif [[ -e "$GOVERNANCE_MANIFEST" || -e "$GOVERNANCE_VERIFIER" ]]; then
@@ -705,8 +701,9 @@ verify_cloud_run_service() {
   expected_pairs="$(
     jq -cn \
       --arg deployer "serviceAccount:${deployer_service_account}" \
+      --arg delivery_role "$CLOUD_RUN_DELIVERY_ROLE" \
       '[
-        {role: "roles/run.developer", member: $deployer},
+        {role: $delivery_role, member: $deployer},
         {role: "roles/run.invoker", member: "allUsers"}
       ]'
   )"
@@ -799,7 +796,8 @@ verify_cloud_run_job() {
   expected_pairs="$(
     jq -cn \
       --arg deployer "serviceAccount:${deployer_service_account}" \
-      '[{role: "roles/run.developer", member: $deployer}]'
+      --arg delivery_role "$CLOUD_RUN_DELIVERY_ROLE" \
+      '[{role: $delivery_role, member: $deployer}]'
   )"
   assert_policy_binding_pairs_exactly \
     "$policy_json" \
@@ -822,6 +820,7 @@ verify_live_contract() {
   local state_object_json
   local project_policy
   local repository_policy
+  local role_json
   local preview_repository_policy
   local preview_deployer_policy
   local production_deployer_policy
@@ -852,6 +851,28 @@ verify_live_contract() {
   )"
   [[ "$project_number" == "$EXPECTED_PROJECT_NUMBER" ]] ||
     fail "live project number does not match the reviewed project inventory"
+  role_json="$(
+    gcloud iam roles describe cloudRunAgentDelivery \
+      --project "$PROJECT_ID" \
+      --format=json
+  )"
+  jq -e \
+    --arg expected_name "$CLOUD_RUN_DELIVERY_ROLE" \
+    '
+      .name == $expected_name
+      and (.deleted // false) == false
+      and .stage == "GA"
+      and (.includedPermissions | sort) == [
+        "run.jobs.get",
+        "run.jobs.run",
+        "run.jobs.update",
+        "run.operations.get",
+        "run.revisions.get",
+        "run.services.get",
+        "run.services.update"
+      ]
+    ' >/dev/null <<<"$role_json" ||
+    fail "Cloud Run delivery custom role is not the exact seven-permission allowlist"
   ancestors_json="$(read_project_ancestors)"
 
   enabled_apis="$(
@@ -1152,13 +1173,13 @@ verify_live_contract() {
   assert_exact_role_member \
     "$preview_deployer_policy" \
     "roles/iam.workloadIdentityUser" \
-    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Preview" \
-    "preview deployer must trust only the Agent Preview environment principal set"
+    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.delivery_role/preview-deployer" \
+    "preview deployer must trust only the preview-deployer delivery role"
   assert_exact_role_member \
     "$production_deployer_policy" \
     "roles/iam.workloadIdentityUser" \
-    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Production" \
-    "production deployer must trust only the Agent Production environment principal set"
+    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.delivery_role/production-deployer" \
+    "production deployer must trust only the production-deployer delivery role"
   assert_policy_has_no_public_members \
     "$preview_deployer_policy" \
     "preview deployer IAM must not trust public principals"
@@ -1176,13 +1197,13 @@ verify_live_contract() {
   assert_exact_role_member \
     "$builder_policy" \
     "roles/iam.workloadIdentityUser" \
-    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Production" \
-    "production image builder must trust only the Agent Production environment"
+    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.delivery_role/production-builder" \
+    "production image builder must trust only the production-builder delivery role"
   assert_exact_role_member \
     "$preview_builder_policy" \
     "roles/iam.workloadIdentityUser" \
-    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Preview" \
-    "preview image builder must trust only the Agent Preview environment"
+    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.delivery_role/preview-builder" \
+    "preview image builder must trust only the preview-builder delivery role"
   assert_policy_has_no_public_members \
     "$builder_policy" \
     "production image builder IAM must not trust public principals"

@@ -1,47 +1,64 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for variable_name in \
-  BUILDER_SERVICE_ACCOUNT \
-  DELIVERY_ENVIRONMENT \
-  DEPLOYER_SERVICE_ACCOUNT \
-  WORKLOAD_IDENTITY_PROVIDER; do
+readonly project_id="festive-ally-503605-v7"
+readonly provider="projects/72919926064/locations/global/workloadIdentityPools/github/providers/github-production"
+
+for variable_name in DELIVERY_ROLE DELIVERY_TARGET; do
   [[ -n "${!variable_name:-}" ]] || {
-    printf 'missing required delivery identity: %s\n' "$variable_name" >&2
+    printf 'missing required delivery selector: %s\n' "$variable_name" >&2
     exit 1
   }
 done
 
-case "$DELIVERY_ENVIRONMENT" in
-  "Agent Preview")
-    readonly expected_builder="agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
-    readonly expected_deployer="agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
-    readonly expected_provider="projects/72919926064/locations/global/workloadIdentityPools/github/providers/github-preview"
-    readonly image_repository="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent"
+case "$DELIVERY_TARGET" in
+  preview)
+    readonly expected_environment="Agent Preview"
+    readonly builder="agent-preview-image-builder@${project_id}.iam.gserviceaccount.com"
+    readonly deployer="agent-preview-deployer@${project_id}.iam.gserviceaccount.com"
+    readonly image_repository="us-east4-docker.pkg.dev/${project_id}/agent-preview/agent"
+    readonly cloud_run_service="agent-preview"
+    readonly migration_job="agent-preview-migrate"
+    readonly grant_probe_job="agent-preview-grants"
     ;;
-  "Agent Production")
-    readonly expected_builder="agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
-    readonly expected_deployer="agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
-    readonly expected_provider="projects/72919926064/locations/global/workloadIdentityPools/github/providers/github-production"
-    readonly image_repository="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent"
+  production)
+    readonly expected_environment="Agent Production"
+    readonly builder="agent-image-builder@${project_id}.iam.gserviceaccount.com"
+    readonly deployer="agent-prod-deployer@${project_id}.iam.gserviceaccount.com"
+    readonly image_repository="us-east4-docker.pkg.dev/${project_id}/agent/agent"
+    readonly cloud_run_service="agent"
+    readonly migration_job="agent-migrate"
+    readonly grant_probe_job="agent-grants"
     ;;
   *)
-    printf 'unexpected agent delivery environment\n' >&2
+    printf 'unexpected agent delivery target\n' >&2
     exit 1
     ;;
 esac
 
-[[ "$BUILDER_SERVICE_ACCOUNT" == "$expected_builder" ]] || {
-  printf 'builder identity does not match the delivery environment\n' >&2
-  exit 1
-}
-[[ "$DEPLOYER_SERVICE_ACCOUNT" == "$expected_deployer" ]] || {
-  printf 'deployer identity does not match the delivery environment\n' >&2
-  exit 1
-}
-[[ "$WORKLOAD_IDENTITY_PROVIDER" == "$expected_provider" ]] || {
-  printf 'workload identity provider does not match the delivery environment\n' >&2
-  exit 1
-}
-
-printf 'image_repository=%s\n' "$image_repository"
+case "$DELIVERY_ROLE" in
+  builder)
+    [[ -z "${DELIVERY_ENVIRONMENT:-}" ]] || {
+      printf 'builder must not receive a GitHub deployment environment\n' >&2
+      exit 1
+    }
+    printf 'workload_identity_provider=%s\n' "$provider"
+    printf 'service_account=%s\n' "$builder"
+    printf 'image_repository=%s\n' "$image_repository"
+    ;;
+  deployer)
+    [[ "${DELIVERY_ENVIRONMENT:-}" == "$expected_environment" ]] || {
+      printf 'deployer environment does not match the delivery target\n' >&2
+      exit 1
+    }
+    printf 'workload_identity_provider=%s\n' "$provider"
+    printf 'service_account=%s\n' "$deployer"
+    printf 'cloud_run_service=%s\n' "$cloud_run_service"
+    printf 'migration_job=%s\n' "$migration_job"
+    printf 'grant_probe_job=%s\n' "$grant_probe_job"
+    ;;
+  *)
+    printf 'unexpected agent delivery role\n' >&2
+    exit 1
+    ;;
+esac

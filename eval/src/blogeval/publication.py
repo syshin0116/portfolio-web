@@ -7,12 +7,23 @@ import re
 import subprocess
 import tarfile
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from agent.retrieval.protocol import Corpus
+from agent.retrieval.registry import RetrieverRegistry
+
 from blogeval.datasets import QuerySet
 from blogeval.jsonio import StrictJsonError, load_canonical_json
+from blogeval.provenance import (
+    ProvenanceError,
+    RunProvenance,
+    collect_run_provenance,
+    parse_run_provenance,
+)
+from blogeval.registry import registry as default_registry
 from blogeval.runner import EvaluationError, verify_run_directory
 
 PUBLICATION_REPOSITORY = "syshin0116/syshin0116.dev"
@@ -64,6 +75,63 @@ class VerifiedPublicationCandidate:
     result_digest: str
     run_id: str
     workflow_run_id: str
+
+
+def _git_output(workspace_root: Path, *arguments: str) -> str:
+    command = ("git", "-C", str(workspace_root), *arguments)
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise PublicationError(f"cannot inspect publication checkout: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.strip()
+        suffix = f": {detail}" if detail else ""
+        raise PublicationError(f"cannot inspect publication checkout{suffix}")
+    return completed.stdout
+
+
+def _verify_checkout_identity(
+    workspace_root: Path,
+    *,
+    expected_commit: str,
+    recorded: RunProvenance,
+) -> None:
+    root = workspace_root.resolve()
+    if not root.is_dir():
+        raise PublicationError("publication workspace root must be a directory")
+    head = _git_output(root, "rev-parse", "--verify", "HEAD").strip()
+    if head != expected_commit:
+        raise PublicationError(
+            "publication verifier checkout does not match the expected commit"
+        )
+    status = _git_output(
+        root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        "agent/src/agent",
+        "eval/src/blogeval",
+        "uv.lock",
+    )
+    if status:
+        raise PublicationError(
+            "publication verifier source trees and uv.lock must be clean"
+        )
+    try:
+        local = collect_run_provenance(workspace_root=root)
+    except ProvenanceError as exc:
+        raise PublicationError(str(exc)) from exc
+    for field in ("agent_source_tree", "eval_source_tree", "workspace_lock"):
+        if getattr(local, field) != getattr(recorded, field):
+            raise PublicationError(
+                f"publication verifier {field} differs from the attested run"
+            )
 
 
 def _require_attestation(archive: Path, *, expected_commit: str) -> None:
@@ -164,8 +232,11 @@ def _text(candidate: dict[str, object], key: str) -> str:
 def verify_publication_candidate(
     archive: Path,
     *,
+    corpus: Corpus,
     dataset: QuerySet,
     expected_commit: str,
+    registry: RetrieverRegistry = default_registry,
+    workspace_root: Path,
 ) -> VerifiedPublicationCandidate:
     """Require cryptographic provenance, reviewed labels, and exact result bytes."""
 
@@ -210,9 +281,27 @@ def verify_publication_candidate(
             raise PublicationError("candidate workflow run ID must be decimal")
 
         try:
+            raw_run, _ = load_canonical_json(extracted / "result/run.json")
+        except StrictJsonError as exc:
+            raise PublicationError(str(exc)) from exc
+        if not isinstance(raw_run, Mapping):
+            raise PublicationError("candidate run must be a JSON object")
+        try:
+            recorded_provenance = parse_run_provenance(raw_run.get("provenance"))
+        except ProvenanceError as exc:
+            raise PublicationError(str(exc)) from exc
+        _verify_checkout_identity(
+            workspace_root,
+            expected_commit=expected_commit,
+            recorded=recorded_provenance,
+        )
+
+        try:
             verified = verify_run_directory(
                 extracted / "result",
+                corpus=corpus,
                 dataset=dataset,
+                registry=registry,
             )
         except EvaluationError as exc:
             raise PublicationError(str(exc)) from exc

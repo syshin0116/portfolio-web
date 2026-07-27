@@ -109,9 +109,10 @@ It must never be added to the GCP WIF provider conditions.
 As of 2026-07-28, the live repository has the `Evaluation Publication` environment with
 required reviewer `syshin0116`, `prevent_self_review=false`, admin bypass disabled, and
 one custom deployment branch policy for `main`. The frozen live verifier below passes,
-and separate GitHub API checks confirmed zero environment secrets and zero variables.
-The manual publication workflow has not been dispatched, and no evaluation result is
-claimed as published gold.
+including its fail-closed zero-count checks for environment secrets and variables; an
+independent direct GitHub API check also confirmed both inventories are empty. The manual
+publication workflow has not been dispatched, and no evaluation result is claimed as
+published gold.
 
 Delegation requires both `uv` and `gh` and runs the verifier exactly as:
 

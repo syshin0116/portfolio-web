@@ -94,6 +94,8 @@ jobs:
               test "$(printf "%s\n" "$run_json" | wc -l)" -eq 1
               run_directory="${run_json%/run.json}"
               blogeval verify-run \
+                --index-root /tmp/eval-index \
+                --content-tree-sha "$content_tree_sha" \
                 --dataset eval/querysets/known-item-alias-v1.json \
                 --run-directory "$run_directory"
               cp -R "$run_directory" /candidate/result

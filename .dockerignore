@@ -1,4 +1,7 @@
 # Common build-context exclusions. Dockerfile-specific allowlists may be stricter.
+**/Dockerfile*
+**/.dockerignore
+**/*.dockerignore
 **/.git
 **/.git/**
 **/.venv

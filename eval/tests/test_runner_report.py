@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from agent.retrieval.fingerprint import retriever_fingerprint
 from agent.retrieval.protocol import DocId, Hit, Retrieval
 from agent.retrieval.registry import RetrieverRegistry
 
+import blogeval.runner as runner_module
 from blogeval.jsonio import canonical_json_bytes, json_checksum
 from blogeval.runner import (
     EvaluationError,
@@ -64,6 +67,13 @@ def _tree_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _replace_complete_artifacts(artifacts, run) -> None:
+    payloads, manifest_payload, _ = runner_module._artifact_payloads(run)
+    for path, payload in payloads.items():
+        (artifacts.directory / path).write_bytes(payload)
+    artifacts.result_manifest.write_bytes(manifest_payload)
+
+
 def test_runner_writes_byte_reproducible_json_markdown_and_svg(
     tmp_path: Path,
     memory_corpus: MemoryCorpus,
@@ -78,8 +88,18 @@ def test_runner_writes_byte_reproducible_json_markdown_and_svg(
         registry=_registry(),
     )
 
-    first = write_run_artifacts(run, output_root=tmp_path / "first")
-    second = write_run_artifacts(run, output_root=tmp_path / "second")
+    first = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path / "first",
+        registry=_registry(),
+    )
+    second = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path / "second",
+        registry=_registry(),
+    )
 
     assert run.run_id.startswith("sha256:")
     assert _tree_digest(first.directory) == _tree_digest(second.directory)
@@ -88,7 +108,9 @@ def test_runner_writes_byte_reproducible_json_markdown_and_svg(
     assert (
         verify_run_directory(
             first.directory,
+            corpus=memory_corpus,
             dataset=known_dataset,
+            registry=_registry(),
         ).result_digest
         == first.result_digest
     )
@@ -189,11 +211,21 @@ def test_result_store_refuses_to_replace_same_run_id_with_different_bytes(
         cutoffs=(1,),
         registry=_registry(),
     )
-    artifacts = write_run_artifacts(run, output_root=tmp_path)
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=_registry(),
+    )
     artifacts.leaderboard_markdown.write_text("tampered\n", encoding="utf-8")
 
     with pytest.raises(EvaluationError, match="checksum/size mismatch"):
-        write_run_artifacts(run, output_root=tmp_path)
+        write_run_artifacts(
+            run,
+            corpus=memory_corpus,
+            output_root=tmp_path,
+            registry=_registry(),
+        )
 
 
 def test_verify_run_rejects_extra_and_partial_result_directories(
@@ -209,15 +241,30 @@ def test_verify_run_rejects_extra_and_partial_result_directories(
         cutoffs=(1,),
         registry=_registry(),
     )
-    artifacts = write_run_artifacts(run, output_root=tmp_path)
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=_registry(),
+    )
     extra = artifacts.directory / "extra.txt"
     extra.write_text("unexpected\n", encoding="utf-8")
     with pytest.raises(EvaluationError, match="file inventory mismatch"):
-        verify_run_directory(artifacts.directory, dataset=known_dataset)
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=_registry(),
+        )
     extra.unlink()
     artifacts.metrics_svg.unlink()
     with pytest.raises(EvaluationError, match="file inventory mismatch"):
-        verify_run_directory(artifacts.directory, dataset=known_dataset)
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=_registry(),
+        )
 
 
 def test_verify_run_recomputes_metrics_even_when_tamper_manifest_is_resealed(
@@ -233,7 +280,12 @@ def test_verify_run_recomputes_metrics_even_when_tamper_manifest_is_resealed(
         cutoffs=(1,),
         registry=_registry(),
     )
-    artifacts = write_run_artifacts(run, output_root=tmp_path)
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=_registry(),
+    )
     record = json.loads(artifacts.run_json.read_text(encoding="utf-8"))
     record["methods"][0]["metrics"]["metrics"]["mrr@1"] = 0.0
     artifacts.run_json.write_bytes(canonical_json_bytes(record))
@@ -256,7 +308,120 @@ def test_verify_run_recomputes_metrics_even_when_tamper_manifest_is_resealed(
     with pytest.raises(
         EvaluationError, match="do not regenerate from recorded rankings"
     ):
-        verify_run_directory(artifacts.directory, dataset=known_dataset)
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=_registry(),
+        )
+
+
+def test_verify_run_rejects_registration_identity_drift_with_old_fingerprint(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    registry = _registry()
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1,),
+        registry=registry,
+    )
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=registry,
+    )
+    method = run.methods[0]
+    forged_method = replace(
+        method,
+        implementation_id="attacker:replacement@1",
+        identity_config={"rankings": {"alpha": [], "beta": []}},
+    )
+    forged_run = replace(run, methods=(forged_method,))
+    assert forged_run.run_id == run.run_id
+    assert forged_method.fingerprint == method.fingerprint
+    _replace_complete_artifacts(artifacts, forged_run)
+
+    with pytest.raises(EvaluationError, match="implementation_id.*registration"):
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=registry,
+        )
+
+
+def test_verify_run_rejects_self_consistent_unregistered_method_identity(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    registry = _registry()
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1,),
+        registry=registry,
+    )
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=registry,
+    )
+    method = run.methods[0]
+    forged_method_id = "attacker-method"
+    forged_implementation_id = "attacker:method@1"
+    forged_config = {"rankings": {"alpha": [], "beta": []}}
+    forged_fingerprint = retriever_fingerprint(
+        method_id=forged_method_id,
+        implementation_id=forged_implementation_id,
+        config=forged_config,
+        corpus_fingerprint=known_dataset.corpus.fingerprint,
+    )
+    forged_method = replace(
+        method,
+        method_id=forged_method_id,
+        implementation_id=forged_implementation_id,
+        identity_config=forged_config,
+        fingerprint=forged_fingerprint,
+    )
+    forged_run_id = runner_module._run_id(
+        dataset=known_dataset,
+        cutoffs=run.cutoffs,
+        identities=(
+            {
+                "data_dependencies": list(forged_method.data_dependencies),
+                "evaluation_relation": forged_method.evaluation_relation,
+                "fingerprint": forged_fingerprint,
+                "method_id": forged_method_id,
+                "overlap_sources": list(forged_method.overlap_sources),
+            },
+        ),
+        provenance=run.provenance,
+    )
+    forged_run = replace(
+        run,
+        run_id=forged_run_id,
+        methods=(forged_method,),
+    )
+    assert forged_run.run_id != run.run_id
+    _replace_complete_artifacts(artifacts, forged_run)
+
+    with pytest.raises(EvaluationError, match="not registered"):
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=registry,
+        )
 
 
 def test_concurrent_identical_writers_commit_one_complete_directory(
@@ -275,14 +440,24 @@ def test_concurrent_identical_writers_commit_one_complete_directory(
     with ThreadPoolExecutor(max_workers=8) as executor:
         artifacts = tuple(
             executor.map(
-                lambda _: write_run_artifacts(run, output_root=tmp_path),
+                lambda _: write_run_artifacts(
+                    run,
+                    corpus=memory_corpus,
+                    output_root=tmp_path,
+                    registry=_registry(),
+                ),
                 range(16),
             )
         )
 
     assert len({item.result_digest for item in artifacts}) == 1
     assert len({item.directory for item in artifacts}) == 1
-    verified = verify_run_directory(artifacts[0].directory, dataset=known_dataset)
+    verified = verify_run_directory(
+        artifacts[0].directory,
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        registry=_registry(),
+    )
     assert verified.result_digest == artifacts[0].result_digest
     assert sorted(path.name for path in artifacts[0].directory.iterdir()) == [
         "leaderboard.md",

@@ -238,6 +238,22 @@ jobs:
           ruff format --check src tests
       - if: needs.changes.outputs.eval == 'true'
         run: uv run --frozen --package syshin0116-dev-eval pytest
+      - name: Build and inspect the Linux amd64 publication image
+        if: needs.changes.outputs.eval == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="blogeval-ci:$GITHUB_SHA"
+          docker build \
+            --file Dockerfile.publication \
+            --platform linux/amd64 \
+            --tag "$image_tag" \
+            ..
+          test "$(
+            docker image inspect \
+              --format '{{.Os}}/{{.Architecture}}' \
+              "$image_tag"
+          )" = "linux/amd64"
       - name: Build the pinned published corpus for the no-cost sweep
         if: needs.changes.outputs.eval == 'true'
         run: >-
@@ -279,6 +295,8 @@ jobs:
             run_directory="${run_json%/run.json}"
             uv run --frozen --package syshin0116-dev-eval \
               blogeval verify-run \
+              --index-root "$RUNNER_TEMP/eval-index" \
+              --content-tree-sha "$content_tree_sha" \
               --dataset querysets/known-item-alias-v1.json \
               --run-directory "$run_directory"
           done

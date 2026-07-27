@@ -144,6 +144,7 @@ EXPECTED_ENVIRONMENTS = {
         ],
     },
 }
+SECRETLESS_ENVIRONMENTS = frozenset({"Evaluation Publication"})
 EXPECTED_AUTOMATED_SECURITY_FIXES = {
     "enabled": True,
     "paused": False,
@@ -159,11 +160,11 @@ AGENT_CI_ENV = {
 }
 EVAL_CI_JOB = "eval"
 EVAL_CI_JOB_AST_SHA256 = (
-    "2ea64da7efc89544044730c68709becb6de72dd0ae65a7e987bf8a3c37a066e8"
+    "3bc77abb21cf296e9554ba70cb05fb05786f69fa36ab137f849dbd9ee7bf63ed"
 )
 EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
 EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
-    "3a1325950d8781c46bd2b7d018de30191776206e26e338e0b0573ada484a5ca2"
+    "c67bc5ebb4a96eb7fb3a8a35266b479b5cb15157d5d4ee8fba7abaca543906ba"
 )
 AGENT_CI_SERVICES = {
     "postgres": {
@@ -503,14 +504,6 @@ EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES = (
     "content",
     "eval/querysets",
 )
-PUBLICATION_DOCKER_DIRECTORY_SOURCES = frozenset(
-    {
-        "agent/src",
-        "eval/src",
-        "content",
-        "eval/querysets",
-    }
-)
 EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES = (
     "!pyproject.toml",
     "!uv.lock",
@@ -527,6 +520,30 @@ EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES = (
     "!eval/querysets/",
     "!eval/querysets/**",
     "!scripts/",
+    "!scripts/build_index.py",
+    "!content/",
+    "!content/**",
+)
+EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES = (
+    "**",
+    "!pyproject.toml",
+    "!uv.lock",
+    "!agent/",
+    "agent/**",
+    "!agent/pyproject.toml",
+    "!agent/src/",
+    "!agent/src/**",
+    "!agent/corpus-policy.toml",
+    "!agent/bm25-policy.toml",
+    "!eval/",
+    "eval/**",
+    "!eval/pyproject.toml",
+    "!eval/src/",
+    "!eval/src/**",
+    "!eval/querysets/",
+    "!eval/querysets/**",
+    "!scripts/",
+    "scripts/**",
     "!scripts/build_index.py",
     "!content/",
     "!content/**",
@@ -575,6 +592,9 @@ REQUIRED_PUBLICATION_DOCKER_DENY_RULES = (
     "**/.kube/config",
 )
 REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES = (
+    "**/Dockerfile*",
+    "**/.dockerignore",
+    "**/*.dockerignore",
     "**/.git",
     "**/.git/**",
     "**/.venv",
@@ -599,57 +619,6 @@ REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES = (
     "**/.coverage",
     "**/htmlcov",
     "**/htmlcov/**",
-)
-PUBLICATION_DOCKER_SENSITIVE_PROBES = (
-    ".env",
-    "agent/.env",
-    "content/private/.env.production",
-    "agent/src/generated/artifacts/result.json",
-    "content/artifacts/run.json",
-    "agent/src/private/server.pem",
-    "eval/src/private/client.key",
-    "content/private/client.p12",
-    "content/private/issuer.crt",
-    "content/private/credentials-production.json",
-    "content/private/service-account-eval.json",
-    "content/private/service_account_eval.json",
-    "agent/src/.npmrc",
-    "eval/src/.pypirc",
-    "content/private/.netrc",
-    "content/private/terraform.tfstate.backup",
-    "content/private/production.tfvars",
-    "content/private/.terraform/providers/index.json",
-    "agent/src/.aws/credentials",
-    "agent/src/.config/gcloud/application_default_credentials.json",
-    "content/private/.ssh/id_ed25519",
-    "content/private/id_rsa",
-    "agent/src/.docker/config.json",
-    "eval/src/.kube/config",
-)
-PUBLICATION_DOCKER_UNRELATED_PROBES = (
-    ".git/config",
-    "agent/.index/manifest.json",
-    "agent/src/agent/__pycache__/graph.cpython-312.pyc",
-    "content/node_modules/package/index.js",
-    "content/coverage/lcov.info",
-    "docs/rag-restack-plan.md",
-    "eval/results/run.json",
-    "scripts/verify_repository_governance.py",
-    "web/package.json",
-)
-ROOT_DOCKER_ARTIFACT_PROBES = (
-    ".git/config",
-    ".venv/bin/python",
-    "agent/.index/manifest.json",
-    "agent/src/agent/__pycache__/graph.cpython-312.pyc",
-    "agent/.pytest_cache/README.md",
-    "eval/.ruff_cache/CACHEDIR.TAG",
-    "eval/results/run.json",
-    "web/node_modules/next/package.json",
-    "web/.next/server/app.js",
-    "web/coverage/lcov.info",
-    "agent/.coverage",
-    "agent/htmlcov/index.html",
 )
 
 JsonObject = dict[str, Any]
@@ -858,37 +827,6 @@ def publication_dockerignore_rules(root: Path) -> tuple[str, ...]:
     return _dockerignore_rules(root / PUBLICATION_DOCKERIGNORE)
 
 
-def _dockerignore_pattern_matches(path: str, pattern: str) -> bool:
-    """Match the intentionally small, reviewed Docker ignore glob subset."""
-    normalized_pattern = pattern.removeprefix("/").rstrip("/")
-    candidates = [normalized_pattern]
-    if normalized_pattern.startswith("**/"):
-        candidates.append(normalized_pattern.removeprefix("**/"))
-    return any(fnmatch.fnmatchcase(path, candidate) for candidate in candidates)
-
-
-def docker_context_includes(path: str, rules: tuple[str, ...]) -> bool:
-    """Evaluate one repository-relative path with last-match-wins semantics."""
-    candidate = path.removeprefix("./")
-    if (
-        not candidate
-        or candidate.startswith("/")
-        or candidate.startswith("../")
-        or "/../" in candidate
-    ):
-        raise GovernanceError(
-            f"Docker context probe must be repository-relative: {path!r}"
-        )
-    normalized = candidate.strip("/")
-    included = True
-    for rule in rules:
-        negated = rule.startswith("!")
-        pattern = rule[1:] if negated else rule
-        if _dockerignore_pattern_matches(normalized, pattern):
-            included = negated
-    return included
-
-
 def publication_docker_copy_sources(root: Path) -> tuple[str, ...]:
     """Extract local build-context sources from the publication Dockerfile."""
     path = root / PUBLICATION_DOCKERFILE
@@ -935,17 +873,6 @@ def publication_docker_copy_sources(root: Path) -> tuple[str, ...]:
     return tuple(sources)
 
 
-def publication_docker_required_probes(source: str) -> tuple[str, ...]:
-    """Return paths proving a copied file or complete directory is included."""
-    if source in PUBLICATION_DOCKER_DIRECTORY_SOURCES:
-        return (
-            source,
-            f"{source}/__docker_context_contract_probe__",
-            f"{source}/nested/__docker_context_contract_probe__",
-        )
-    return (source,)
-
-
 def validate_publication_docker_context(root: Path) -> list[str]:
     """Require a fail-closed Docker context for evaluation publication."""
     errors: list[str] = []
@@ -968,17 +895,18 @@ def validate_publication_docker_context(root: Path) -> list[str]:
     ):
         if rule not in root_rules:
             errors.append(f".dockerignore required deny rule is missing: {rule!r}")
-    for probe in (
-        *PUBLICATION_DOCKER_SENSITIVE_PROBES,
-        *ROOT_DOCKER_ARTIFACT_PROBES,
-    ):
-        if docker_context_includes(probe, root_rules):
-            errors.append(f".dockerignore exposes common context path {probe!r}")
-
     if not rules or rules[0] != "**":
         errors.append(
             f"{PUBLICATION_DOCKERIGNORE} must start by excluding the complete "
             "context: '**'"
+        )
+    actual_scope_rules = rules[: len(EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES)]
+    if actual_scope_rules != EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES:
+        errors.append(
+            f"{PUBLICATION_DOCKERIGNORE} scope rules differ from the exact "
+            "reviewed traversal contract; "
+            f"expected={EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES!r}, "
+            f"actual={actual_scope_rules!r}"
         )
 
     allow_rules = tuple(rule for rule in rules if rule.startswith("!"))
@@ -1015,25 +943,6 @@ def validate_publication_docker_context(root: Path) -> list[str]:
             f"contract; expected={EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES!r}, "
             f"actual={sources!r}"
         )
-    for source in sources:
-        for probe in publication_docker_required_probes(source):
-            if not docker_context_includes(probe, rules):
-                errors.append(
-                    f"{PUBLICATION_DOCKERIGNORE} excludes publication COPY input "
-                    f"{probe!r}"
-                )
-    for probe in PUBLICATION_DOCKER_SENSITIVE_PROBES:
-        if docker_context_includes(probe, rules):
-            errors.append(
-                f"{PUBLICATION_DOCKERIGNORE} exposes sensitive publication "
-                f"context path {probe!r}"
-            )
-    for probe in PUBLICATION_DOCKER_UNRELATED_PROBES:
-        if docker_context_includes(probe, rules):
-            errors.append(
-                f"{PUBLICATION_DOCKERIGNORE} exposes unrelated publication "
-                f"context path {probe!r}"
-            )
     return errors
 
 
@@ -3329,6 +3238,19 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
                     f"external: environment {name!r} protection rules are "
                     f"{actual_protection!r}; expected {expected_protection!r}"
                 )
+        if name in SECRETLESS_ENVIRONMENTS:
+            for collection in ("secrets", "variables"):
+                inventory = _single_page_items(
+                    api_get,
+                    f"environments/{encoded_name}/{collection}?per_page=100&page=1",
+                    collection_key=collection,
+                    require_total_count=True,
+                )
+                if inventory:
+                    errors.append(
+                        f"external: environment {name!r} contains "
+                        f"{len(inventory)} {collection}; expected 0"
+                    )
         expected_deployment = expected["deployment_branch_policy"]
         if actual.get("deployment_branch_policy") != expected_deployment:
             errors.append(

@@ -68,6 +68,8 @@ run_directory="$(
   dirname "$(find eval/results -name run.json -type f -print -quit)"
 )"
 uv run --frozen --package syshin0116-dev-eval blogeval verify-run \
+  --index-root agent/.index \
+  --content-tree-sha "$content_tree_sha" \
   --dataset eval/querysets/known-item-alias-v1.json \
   --run-directory "$run_directory"
 ```
@@ -88,9 +90,11 @@ results/<content-tree-sha>/<run-id>/
 source-tree digests, root lock digest, runtime platform, and Python runtime in addition
 to the dataset, corpus, method fingerprints/data dependencies, and cutoffs. The result
 digest binds the exact four result payloads. `verify-run` rejects partial or extra files,
-checksum resealing, changed rankings or metrics, and Markdown/SVG projection drift. A
-staging directory plus an exclusive lock makes concurrent identical writers converge on
-one complete immutable result directory.
+checksum resealing, unregistered or registration-drifted method identities, changed
+rankings or metrics, and Markdown/SVG projection drift. Verification resolves every
+method fingerprint from the reviewed registry and the same checksummed corpus artifacts.
+A staging directory plus an exclusive lock makes concurrent identical writers converge
+on one complete immutable result directory.
 
 ## Publication boundary
 
@@ -112,25 +116,39 @@ Promotion into the retrieval-method catalogue requires all of these external che
 1. The repository `Evaluation Publication` environment exists with the exact governance
    policy (main branch only, `syshin0116` required reviewer,
    `prevent_self_review=false`, no admin bypass). On 2026-07-28, the frozen live
-   repository-governance verifier passed for those policy fields. Separate GitHub API
-   checks confirmed zero environment secrets and zero variables; the live verifier does
-   not inspect either inventory.
+   repository-governance verifier passed for those policy fields and its fail-closed
+   secret/variable inventory count checks. An independent direct GitHub API check also
+   confirmed zero environment secrets and zero variables. The verifier ignores and
+   never logs inventory entries; it only validates that both `total_count` and the
+   returned list length are zero.
 2. The reviewer approves the manual workflow for the intended main commit.
-3. Download the `blogeval-publication-candidate-<sha>` artifact and run:
+3. Download the `blogeval-publication-candidate-<sha>` artifact. In a clean worktree
+   checked out at that exact main commit, rebuild the verified corpus index before
+   running the verifier:
 
    ```bash
+   expected_commit=<40-character-main-commit>
+   test "$(git rev-parse HEAD)" = "$expected_commit"
+   uv run --frozen --package syshin0116-dev-agent \
+     python scripts/build_index.py --expect-document-count 335
+   content_tree_sha="$(git rev-parse HEAD:content)"
    uv run --frozen --package syshin0116-dev-eval \
      blogeval verify-publication \
      --archive blogeval-candidate.tar.gz \
+     --index-root agent/.index \
+     --content-tree-sha "$content_tree_sha" \
      --dataset eval/querysets/known-item-alias-v1.json \
-     --expected-commit <40-character-main-commit>
+     --expected-commit "$expected_commit" \
+     --workspace-root .
    ```
 
    This command directly requires `gh attestation verify` with the exact repository,
    signer workflow, main ref, source/signer commit, and GitHub-hosted runner policy. It
-   then checks the archive inventory, canonical candidate metadata, owner-reviewed
-   label/checksum, content tree, image/result digests, Linux x86_64 runtime, run ID, and
-   every regenerated result projection.
+   then requires `HEAD` to equal that commit, rejects dirty agent/eval source or
+   `uv.lock`, and matches their measured digests to the attested run. Finally it checks
+   the archive inventory, canonical candidate metadata, owner-reviewed label/checksum,
+   content tree, image/result digests, Linux x86_64 runtime, run ID, reviewed registry
+   identity, and every regenerated result projection.
 4. Only after that command succeeds may its result digest be copied into the catalogue.
 
 The currently committed 90-query set intentionally fails step 3 until its qrels receive

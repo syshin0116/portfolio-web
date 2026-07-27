@@ -15,10 +15,11 @@ from fcntl import LOCK_EX, LOCK_UN, flock
 from pathlib import Path
 from typing import cast
 
+from agent.retrieval.fingerprint import retriever_fingerprint
 from agent.retrieval.protocol import Corpus, DocId
 from agent.retrieval.registry import RetrieverRegistry
 
-from blogeval.datasets import QuerySet, validate_queryset_corpus
+from blogeval.datasets import DatasetError, QuerySet, validate_queryset_corpus
 from blogeval.jsonio import (
     StrictJsonError,
     canonical_json_bytes,
@@ -352,7 +353,13 @@ def _doc_ids(value: object, *, location: str) -> tuple[DocId, ...]:
     return tuple(result)
 
 
-def _parse_recorded_run(value: object, *, dataset: QuerySet) -> EvaluationRun:
+def _parse_recorded_run(
+    value: object,
+    *,
+    corpus: Corpus,
+    dataset: QuerySet,
+    registry: RetrieverRegistry,
+) -> EvaluationRun:
     raw = _mapping(
         value,
         location="run",
@@ -409,6 +416,12 @@ def _parse_recorded_run(value: object, *, dataset: QuerySet) -> EvaluationRun:
         if previous_method_id is not None and method_id <= previous_method_id:
             raise EvaluationError("run method IDs must be sorted and unique")
         previous_method_id = method_id
+        try:
+            registration = registry.retrievable[method_id]
+        except KeyError as exc:
+            raise EvaluationError(
+                f"{location}.method_id is not registered in the reviewed registry"
+            ) from exc
         fingerprint = _text(
             method["fingerprint"],
             location=f"{location}.fingerprint",
@@ -435,6 +448,11 @@ def _parse_recorded_run(value: object, *, dataset: QuerySet) -> EvaluationRun:
             raise EvaluationError(
                 f"{location}.data_lineage.dependencies must be sorted, unique, "
                 "and namespaced"
+            )
+        if dependencies != registration.data_dependencies:
+            raise EvaluationError(
+                f"{location}.data_lineage.dependencies differ from the "
+                "reviewed registration"
             )
         relation, overlap = _data_relation(dependencies, dataset)
         if lineage["evaluation_relation"] != relation:
@@ -513,12 +531,36 @@ def _parse_recorded_run(value: object, *, dataset: QuerySet) -> EvaluationRun:
             method["implementation_id"],
             location=f"{location}.implementation_id",
         )
+        if implementation_id != registration.implementation_id:
+            raise EvaluationError(
+                f"{location}.implementation_id differs from the reviewed registration"
+            )
+        try:
+            expected_identity_config = registration.identity_config(corpus)
+        except (OSError, TypeError, ValueError) as exc:
+            raise EvaluationError(
+                f"cannot resolve the reviewed identity for {method_id!r}: {exc}"
+            ) from exc
+        if identity_config != expected_identity_config:
+            raise EvaluationError(
+                f"{location}.identity_config differs from the reviewed registration"
+            )
+        expected_fingerprint = retriever_fingerprint(
+            method_id=method_id,
+            implementation_id=registration.implementation_id,
+            config=expected_identity_config,
+            corpus_fingerprint=dataset.corpus.fingerprint,
+        )
+        if fingerprint != expected_fingerprint:
+            raise EvaluationError(
+                f"{location}.fingerprint differs from the reviewed registration"
+            )
         methods.append(
             MethodResult(
                 method_id=method_id,
                 implementation_id=implementation_id,
-                fingerprint=fingerprint,
-                identity_config=identity_config,
+                fingerprint=expected_fingerprint,
+                identity_config=expected_identity_config,
                 data_dependencies=dependencies,
                 evaluation_relation=relation,
                 overlap_sources=overlap,
@@ -530,7 +572,7 @@ def _parse_recorded_run(value: object, *, dataset: QuerySet) -> EvaluationRun:
             {
                 "data_dependencies": list(dependencies),
                 "evaluation_relation": relation,
-                "fingerprint": fingerprint,
+                "fingerprint": expected_fingerprint,
                 "method_id": method_id,
                 "overlap_sources": list(overlap),
             }
@@ -641,10 +683,20 @@ def _inventory_run_directory(directory: Path) -> tuple[str, ...]:
 def verify_run_directory(
     directory: Path,
     *,
+    corpus: Corpus,
     dataset: QuerySet,
+    registry: RetrieverRegistry = default_registry,
 ) -> VerifiedRun:
-    """Verify exact files, checksums, rankings, metrics, and projections."""
+    """Verify registry identity, corpus, files, metrics, and projections."""
 
+    try:
+        validate_queryset_corpus(
+            dataset,
+            corpus,
+            content_tree_sha=dataset.corpus.git_tree_sha,
+        )
+    except DatasetError as exc:
+        raise EvaluationError(str(exc)) from exc
     expected_entries = tuple(sorted((*_RESULT_FILES, "manifest.json")))
     actual_entries = _inventory_run_directory(directory)
     if actual_entries != expected_entries:
@@ -707,7 +759,12 @@ def verify_run_directory(
         raise EvaluationError(str(exc)) from exc
     if run_payload != payloads["run.json"]:
         raise EvaluationError("run.json changed during result verification")
-    run = _parse_recorded_run(run_value, dataset=dataset)
+    run = _parse_recorded_run(
+        run_value,
+        corpus=corpus,
+        dataset=dataset,
+        registry=registry,
+    )
     regenerated, _, regenerated_digest = _artifact_payloads(run)
     if regenerated_digest != expected_digest:
         raise EvaluationError("result digest differs from regenerated run projections")
@@ -745,10 +802,26 @@ def _exclusive_result_lock(output_root: Path):
 def write_run_artifacts(
     run: EvaluationRun,
     *,
+    corpus: Corpus,
     output_root: Path,
+    registry: RetrieverRegistry = default_registry,
 ) -> RunArtifacts:
     """Stage and atomically commit one complete, immutable result directory."""
 
+    try:
+        validate_queryset_corpus(
+            run.dataset,
+            corpus,
+            content_tree_sha=run.dataset.corpus.git_tree_sha,
+        )
+    except DatasetError as exc:
+        raise EvaluationError(str(exc)) from exc
+    run = _parse_recorded_run(
+        run.as_dict(),
+        corpus=corpus,
+        dataset=run.dataset,
+        registry=registry,
+    )
     tree_directory = output_root / run.dataset.corpus.git_tree_sha
     run_slug = run.run_id.removeprefix("sha256:")
     directory = tree_directory / run_slug
@@ -781,7 +854,12 @@ def write_run_artifacts(
         _fsync_directory(staged)
         with _exclusive_result_lock(output_root):
             if os.path.lexists(directory):
-                verified = verify_run_directory(directory, dataset=run.dataset)
+                verified = verify_run_directory(
+                    directory,
+                    corpus=corpus,
+                    dataset=run.dataset,
+                    registry=registry,
+                )
                 if verified.result_digest != result_digest:
                     raise EvaluationError(
                         "refusing to replace a non-identical evaluation result"

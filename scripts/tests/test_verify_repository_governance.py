@@ -23,6 +23,12 @@ EVAL_PUBLICATION_BRANCH_POLICIES_PAGE = (
     "environments/Evaluation%20Publication/"
     "deployment-branch-policies?per_page=100&page=1"
 )
+EVAL_PUBLICATION_SECRETS_PAGE = (
+    "environments/Evaluation%20Publication/secrets?per_page=100&page=1"
+)
+EVAL_PUBLICATION_VARIABLES_PAGE = (
+    "environments/Evaluation%20Publication/variables?per_page=100&page=1"
+)
 LEGACY_MAIN_PROTECTION = "branches/main/protection"
 
 
@@ -178,6 +184,14 @@ def desired_live_responses() -> dict[str, object]:
             "total_count": 1,
             "branch_policies": [{"name": "main", "type": "branch"}],
         },
+        EVAL_PUBLICATION_SECRETS_PAGE: {
+            "total_count": 0,
+            "secrets": [],
+        },
+        EVAL_PUBLICATION_VARIABLES_PAGE: {
+            "total_count": 0,
+            "variables": [],
+        },
     }
 
 
@@ -201,50 +215,28 @@ class LocalGovernanceTests(unittest.TestCase):
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
 
-    def test_publication_docker_context_includes_every_copy_input(self) -> None:
+    def test_publication_docker_context_scope_and_copy_inputs_are_exact(self) -> None:
         rules = governance.publication_dockerignore_rules(REPO_ROOT)
         sources = governance.publication_docker_copy_sources(REPO_ROOT)
+        self.assertEqual(
+            governance.EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES,
+            rules[: len(governance.EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES)],
+        )
         self.assertEqual(
             governance.EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES,
             sources,
         )
-        for source in sources:
-            for probe in governance.publication_docker_required_probes(source):
-                with self.subTest(probe=probe):
-                    self.assertTrue(
-                        governance.docker_context_includes(probe, rules),
-                        probe,
-                    )
 
-    def test_publication_docker_context_excludes_sensitive_and_unrelated_paths(
-        self,
-    ) -> None:
-        rules = governance.publication_dockerignore_rules(REPO_ROOT)
-        probes = (
-            *governance.PUBLICATION_DOCKER_SENSITIVE_PROBES,
-            *governance.PUBLICATION_DOCKER_UNRELATED_PROBES,
-        )
-        for probe in probes:
-            with self.subTest(probe=probe):
-                self.assertFalse(
-                    governance.docker_context_includes(probe, rules),
-                    probe,
-                )
-
-    def test_root_docker_context_excludes_sensitive_and_build_artifact_paths(
+    def test_root_docker_context_has_no_exceptions_and_all_required_denies(
         self,
     ) -> None:
         rules = governance.root_dockerignore_rules(REPO_ROOT)
-        probes = (
-            *governance.PUBLICATION_DOCKER_SENSITIVE_PROBES,
-            *governance.ROOT_DOCKER_ARTIFACT_PROBES,
+        self.assertFalse(any(rule.startswith("!") for rule in rules))
+        required = (
+            *governance.REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES,
+            *governance.REQUIRED_PUBLICATION_DOCKER_DENY_RULES,
         )
-        for probe in probes:
-            with self.subTest(probe=probe):
-                self.assertFalse(
-                    governance.docker_context_includes(probe, rules),
-                    probe,
-                )
+        self.assertTrue(set(required).issubset(rules))
 
     def test_publication_docker_context_rejects_deleted_sensitive_rule(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -255,13 +247,6 @@ class LocalGovernanceTests(unittest.TestCase):
             self.assertNotEqual(original, mutated)
             dockerignore.write_text(mutated, encoding="utf-8")
 
-            rules = governance.publication_dockerignore_rules(root)
-            self.assertTrue(
-                governance.docker_context_includes(
-                    "content/private/server.pem",
-                    rules,
-                )
-            )
             errors = governance.validate_local(root, governance.load_policy())
 
         self.assertTrue(
@@ -269,6 +254,22 @@ class LocalGovernanceTests(unittest.TestCase):
                 "required terminal deny rule is missing: '**/*.pem'" in error
                 for error in errors
             ),
+            errors,
+        )
+
+    def test_publication_docker_context_rejects_deleted_parent_reclosure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            dockerignore = root / governance.PUBLICATION_DOCKERIGNORE
+            original = dockerignore.read_text(encoding="utf-8")
+            mutated = original.replace("agent/**\n", "", 1)
+            self.assertNotEqual(original, mutated)
+            dockerignore.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("scope rules differ" in error for error in errors),
             errors,
         )
 
@@ -281,8 +282,6 @@ class LocalGovernanceTests(unittest.TestCase):
             self.assertNotEqual(original, mutated)
             dockerignore.write_text(mutated, encoding="utf-8")
 
-            rules = governance.root_dockerignore_rules(root)
-            self.assertTrue(governance.docker_context_includes(".env", rules))
             errors = governance.validate_local(root, governance.load_policy())
 
         self.assertTrue(
@@ -379,6 +378,12 @@ class LocalGovernanceTests(unittest.TestCase):
                 (
                     "          diff --no-dereference --recursive \\\n",
                     "          diff \\\n",
+                ),
+            ),
+            "publication-linux-amd64-build": (
+                (
+                    "            --platform linux/amd64 \\\n",
+                    "            --platform linux/arm64 \\\n",
                 ),
             ),
             "condition": (
@@ -3314,6 +3319,52 @@ class LiveGovernanceTests(unittest.TestCase):
                     errors,
                 )
 
+    def test_evaluation_publication_inventory_must_remain_empty(self) -> None:
+        cases = (
+            (EVAL_PUBLICATION_SECRETS_PAGE, "secrets"),
+            (EVAL_PUBLICATION_VARIABLES_PAGE, "variables"),
+        )
+        for endpoint, collection in cases:
+            with self.subTest(collection=collection):
+                responses = desired_live_responses()
+                responses[endpoint] = {
+                    "total_count": 1,
+                    collection: [{"name": "MUST_NOT_APPEAR_IN_OUTPUT"}],
+                }
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        f"contains 1 {collection}; expected 0" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+                self.assertNotIn("MUST_NOT_APPEAR_IN_OUTPUT", "\n".join(errors))
+
+    def test_evaluation_publication_inventory_api_failure_fails_closed(self) -> None:
+        for endpoint in (
+            EVAL_PUBLICATION_SECRETS_PAGE,
+            EVAL_PUBLICATION_VARIABLES_PAGE,
+        ):
+            with self.subTest(endpoint=endpoint):
+                responses = desired_live_responses()
+                responses[endpoint] = governance.ApiResponse(
+                    payload={"message": "Forbidden"},
+                    headers={},
+                    status=403,
+                )
+
+                with self.assertRaisesRegex(
+                    governance.GovernanceError,
+                    "returned HTTP 403",
+                ):
+                    governance.verify_live(self.policy, responses.__getitem__)
+
     def test_production_reviewer_identity_drift_is_rejected(self) -> None:
         responses = desired_live_responses()
         production = json.loads(json.dumps(responses["environments/Production"]))
@@ -3483,6 +3534,47 @@ class LiveGovernanceTests(unittest.TestCase):
             "requires pagination",
         ):
             governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_evaluation_publication_inventory_pagination_fails_closed(self) -> None:
+        for endpoint in (
+            EVAL_PUBLICATION_SECRETS_PAGE,
+            EVAL_PUBLICATION_VARIABLES_PAGE,
+        ):
+            with self.subTest(endpoint=endpoint):
+                responses = desired_live_responses()
+                responses[endpoint] = governance.ApiResponse(
+                    payload=responses[endpoint],
+                    headers={
+                        "link": (
+                            '<https://api.github.test/inventory?page=2>; rel="next"'
+                        )
+                    },
+                )
+
+                with self.assertRaisesRegex(
+                    governance.GovernanceError,
+                    "requires pagination",
+                ):
+                    governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_evaluation_publication_inventory_total_count_fails_closed(self) -> None:
+        cases = (
+            (EVAL_PUBLICATION_SECRETS_PAGE, "secrets"),
+            (EVAL_PUBLICATION_VARIABLES_PAGE, "variables"),
+        )
+        for endpoint, collection in cases:
+            with self.subTest(collection=collection):
+                responses = desired_live_responses()
+                responses[endpoint] = {
+                    "total_count": 1,
+                    collection: [],
+                }
+
+                with self.assertRaisesRegex(
+                    governance.GovernanceError,
+                    "total_count is 1",
+                ):
+                    governance.verify_live(self.policy, responses.__getitem__)
 
 
 if __name__ == "__main__":

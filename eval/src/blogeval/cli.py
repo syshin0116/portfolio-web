@@ -74,6 +74,8 @@ def _parser() -> argparse.ArgumentParser:
         "verify-run",
         help="regenerate and verify a complete result directory",
     )
+    verify.add_argument("--index-root", type=Path, required=True)
+    verify.add_argument("--content-tree-sha", required=True)
     verify.add_argument("--dataset", type=Path, required=True)
     verify.add_argument("--run-directory", type=Path, required=True)
 
@@ -82,8 +84,11 @@ def _parser() -> argparse.ArgumentParser:
         help="require GitHub attestation and verify a publication candidate",
     )
     publication.add_argument("--archive", type=Path, required=True)
+    publication.add_argument("--index-root", type=Path, required=True)
+    publication.add_argument("--content-tree-sha", required=True)
     publication.add_argument("--dataset", type=Path, required=True)
     publication.add_argument("--expected-commit", required=True)
+    publication.add_argument("--workspace-root", type=Path, required=True)
     return parser
 
 
@@ -181,7 +186,11 @@ def _sweep(args: argparse.Namespace) -> int:
         cutoffs=cutoffs,
         require_publishable=args.require_publishable,
     )
-    artifacts = write_run_artifacts(run, output_root=args.output_root)
+    artifacts = write_run_artifacts(
+        run,
+        corpus=corpus,
+        output_root=args.output_root,
+    )
     print(
         json.dumps(
             {
@@ -200,8 +209,18 @@ def _sweep(args: argparse.Namespace) -> int:
 
 
 def _verify_run(args: argparse.Namespace) -> int:
+    corpus = PublishedCorpus(args.index_root)
     dataset = load_queryset(args.dataset)
-    verified = verify_run_directory(args.run_directory, dataset=dataset)
+    validate_queryset_corpus(
+        dataset,
+        corpus,
+        content_tree_sha=args.content_tree_sha,
+    )
+    verified = verify_run_directory(
+        args.run_directory,
+        corpus=corpus,
+        dataset=dataset,
+    )
     print(
         json.dumps(
             {
@@ -216,11 +235,19 @@ def _verify_run(args: argparse.Namespace) -> int:
 
 
 def _verify_publication(args: argparse.Namespace) -> int:
+    corpus = PublishedCorpus(args.index_root)
     dataset = load_queryset(args.dataset)
+    validate_queryset_corpus(
+        dataset,
+        corpus,
+        content_tree_sha=args.content_tree_sha,
+    )
     verified = verify_publication_candidate(
         args.archive,
+        corpus=corpus,
         dataset=dataset,
         expected_commit=args.expected_commit,
+        workspace_root=args.workspace_root,
     )
     print(
         json.dumps(

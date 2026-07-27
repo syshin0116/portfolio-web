@@ -151,6 +151,10 @@ def test_inspection_v1_fixture_round_trips_as_exact_canonical_payload() -> None:
             lambda payload: payload["sources"][0].update({"score": 10**10_000}),
             "finite number",
         ),
+        (
+            lambda payload: payload.update({"query_truncated": True}),
+            "only be true for an exact 1000-character prefix",
+        ),
     ],
     ids=[
         "system-prompt",
@@ -163,6 +167,7 @@ def test_inspection_v1_fixture_round_trips_as_exact_canonical_payload() -> None:
         "multiple-stages",
         "unpaired-surrogate",
         "numeric-overflow",
+        "false-query-truncation",
     ],
 )
 def test_inspection_v1_rejects_unbounded_hidden_or_untruthful_fields(

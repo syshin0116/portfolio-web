@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from langgraph.prebuilt import ToolRuntime
 
+from agent import inspection as inspection_module
 from agent.inspection import (
     INSPECTION_EVENT_NAME,
     MAX_EVENT_BYTES,
@@ -147,13 +148,24 @@ def test_build_retrieval_inspection_exposes_only_bounded_public_provenance() -> 
         assert forbidden not in serialized
 
 
+def test_raw_payload_emitter_is_not_a_public_production_boundary() -> None:
+    assert "emit_inspection_payload" not in inspection_module.__all__
+    assert "_emit_inspection_payload" not in inspection_module.__all__
+    assert not hasattr(inspection_module, "emit_inspection_payload")
+
+
 @pytest.mark.parametrize(
     ("query", "expected", "truncated"),
     [
         ("  도커\t검색\n", "  도커\t검색\n", False),
+        (" \t\n", " \t\n", False),
         ("가" * 1_001, "가" * 1_000, True),
     ],
-    ids=["outer-whitespace-is-executed-input", "explicit-prefix-truncation"],
+    ids=[
+        "outer-whitespace-is-executed-input",
+        "whitespace-only-is-executed-input",
+        "explicit-prefix-truncation",
+    ],
 )
 def test_build_retrieval_inspection_preserves_executed_query_prefix_exactly(
     query: str,

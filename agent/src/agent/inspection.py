@@ -8,7 +8,8 @@ HTTP or SSE transport.
 
 Only retrieval observations are accepted today. QuickJS and subagent variants
 remain absent until those capabilities can provide real status, timing, and
-budget measurements.
+budget measurements. V1 carries exactly one observed retriever stage and is
+best-effort live-run data; it does not claim durable custom-event replay.
 """
 
 from __future__ import annotations
@@ -119,6 +120,8 @@ def validate_retrieval_query(value: object) -> str:
 
     if not isinstance(value, str):
         raise InspectionContractError("query must be a string")
+    if not value:
+        raise InspectionContractError("query must not be empty")
     if "\x00" in value:
         raise InspectionContractError("query must not contain null bytes")
     _validate_unicode_scalar_text(value, field="query")
@@ -489,10 +492,12 @@ def normalize_retrieval_inspection(
         maximum=MAX_QUERY_CHARACTERS,
         require_trimmed=False,
     )
-    if not query.strip():
-        raise InspectionContractError("query must contain non-whitespace text")
     if not isinstance(payload["query_truncated"], bool):
         raise InspectionContractError("query_truncated must be a boolean")
+    if payload["query_truncated"] and len(query) != MAX_QUERY_CHARACTERS:
+        raise InspectionContractError(
+            "query_truncated can only be true for an exact 1000-character prefix"
+        )
     method_id = _identifier(
         payload["method_id"],
         field="method_id",

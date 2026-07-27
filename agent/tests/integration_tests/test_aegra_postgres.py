@@ -36,6 +36,7 @@ from agent.auth import (
     TOKEN_AUDIENCE,
     TOKEN_ISSUER,
 )
+from agent.inspection import INSPECTION_EVENT_NAME
 from agent.migrate import migrate_database
 
 POSTGRES_URL = os.environ.get("AEGRA_POSTGRES_TEST_URL")
@@ -216,6 +217,7 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
                         "tools",
                         "lifecycle",
                         "input",
+                        f"custom:{INSPECTION_EVENT_NAME}",
                     ]
                 },
             ) as stream_response,
@@ -313,6 +315,22 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
             and envelope["params"]["data"]["event"] == "interrupted"
             for envelope in observed
         )
+        inspection = [
+            envelope
+            for envelope in observed
+            if envelope["method"] == "custom"
+            and envelope["params"]["data"].get("name") == INSPECTION_EVENT_NAME
+        ]
+        assert len(inspection) == 1
+        assert inspection[0]["params"]["namespace"] == []
+        assert inspection[0]["params"]["data"]["payload"]["tool_call_id"] == (
+            "fixture-tool-call"
+        )
+        assert inspection[0]["params"]["data"]["payload"]["method_identity"] == {
+            "method_id": "fixture-retriever",
+            "implementation_id": "agent.tests.fixture:retrieve@1",
+            "fingerprint": "sha256:" + ("b" * 64),
+        }
         assert [envelope["seq"] for envelope in observed] == sorted(
             {envelope["seq"] for envelope in observed}
         )

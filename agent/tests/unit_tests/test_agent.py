@@ -29,6 +29,7 @@ from agent.graph import (
     create_graph,
     graph,
 )
+from agent.inspection import InspectionEventTransformer
 from agent.tools import TOOLS
 
 
@@ -40,6 +41,7 @@ def test_graph_entrypoint_is_compiled_for_aegra():
     assert isinstance(graph, CompiledStateGraph)
     assert graph.checkpointer is None
     assert graph.store is None
+    assert graph.stream_transformers[-1] is InspectionEventTransformer
 
 
 async def test_aegra_injects_request_scoped_persistence_into_static_graph(
@@ -111,6 +113,7 @@ def test_create_graph_for_selected_model_disables_general_purpose_dispatch(
     assert isinstance(compiled_graph, CompiledStateGraph)
     assert {tool.name for tool in TOOLS} <= _compiled_tool_names(compiled_graph)
     assert "task" not in _compiled_tool_names(compiled_graph)
+    assert compiled_graph.stream_transformers[-1] is InspectionEventTransformer
 
 
 def test_backend_uses_instances_for_all_routes():
@@ -158,6 +161,14 @@ def test_expected_blog_tools_are_registered():
         "read_post",
         "semantic_search",
     }
+    for ranked_tool in (
+        next(tool for tool in TOOLS if tool.name == "keyword_search"),
+        next(tool for tool in TOOLS if tool.name == "semantic_search"),
+    ):
+        assert set(ranked_tool.tool_call_schema.model_json_schema()["properties"]) == {
+            "query",
+            "top_k",
+        }
 
 
 def test_persistent_memory_namespace_uses_only_runtime_server_identity():

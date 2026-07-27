@@ -6,11 +6,18 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AnyMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph, add_messages
-from langgraph.prebuilt import ToolCallTransformer, ToolNode
+from langgraph.prebuilt import ToolCallTransformer, ToolNode, ToolRuntime
 from langgraph.types import interrupt
 from typing_extensions import TypedDict
 
 from agent.graph import _build_backend
+from agent.inspection import (
+    InspectionEventTransformer,
+    emit_inspection_payload,
+)
+
+FIXTURE_CORPUS_REVISION = "sha256:" + ("a" * 64)
+FIXTURE_METHOD_FINGERPRINT = "sha256:" + ("b" * 64)
 
 
 class FixtureState(TypedDict, total=False):
@@ -30,8 +37,58 @@ class MemoryFixtureState(TypedDict, total=False):
 
 
 @tool
-def fixture_lookup(query: str) -> str:
+def fixture_lookup(
+    query: str,
+    runtime: ToolRuntime = None,  # type: ignore[assignment]
+) -> str:
     """Return a deterministic lookup result."""
+    if runtime is not None and runtime.tool_call_id is not None:
+        emit_inspection_payload(
+            runtime,
+            {
+                "schema_version": 1,
+                "kind": "retrieval",
+                "tool_call_id": runtime.tool_call_id,
+                "query": query,
+                "query_truncated": False,
+                "method_id": "fixture-retriever",
+                "method_identity": {
+                    "method_id": "fixture-retriever",
+                    "implementation_id": "agent.tests.fixture:retrieve@1",
+                    "fingerprint": FIXTURE_METHOD_FINGERPRINT,
+                },
+                "hit_count": 1,
+                "corpus_revision": FIXTURE_CORPUS_REVISION,
+                "corpus_document_count": 1,
+                "sources": [
+                    {
+                        "doc_id": "AI/fixture.md",
+                        "title": "Fixture",
+                        "rank": 1,
+                        "score": 1.0,
+                        "provenance": {
+                            "kind": "published-corpus",
+                            "corpus_revision": FIXTURE_CORPUS_REVISION,
+                            "retriever_fingerprint": (FIXTURE_METHOD_FINGERPRINT),
+                        },
+                    }
+                ],
+                "sources_truncated": False,
+                "stages": [
+                    {
+                        "stage_id": "fixture-retriever",
+                        "implementation_id": "agent.tests.fixture:retrieve@1",
+                        "fingerprint": FIXTURE_METHOD_FINGERPRINT,
+                        "elapsed_ms": 1.0,
+                        "application": {
+                            "status": "applied",
+                            "input_count": 1,
+                            "output_count": 1,
+                        },
+                    }
+                ],
+            },
+        )
     return f"fixture-result:{query}"
 
 
@@ -116,7 +173,7 @@ builder.add_edge("fixture_tool", "nested_subgraph")
 builder.add_edge("nested_subgraph", "request_approval")
 builder.add_edge("request_approval", "finish")
 builder.add_edge("finish", END)
-graph = builder.compile(transformers=[ToolCallTransformer])
+graph = builder.compile(transformers=[ToolCallTransformer, InspectionEventTransformer])
 
 memory_builder = StateGraph(MemoryFixtureState)
 memory_builder.add_node("memory", exercise_persistent_memory)

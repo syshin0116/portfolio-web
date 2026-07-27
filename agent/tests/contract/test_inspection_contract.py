@@ -50,9 +50,7 @@ def test_inspection_v1_fixture_round_trips_as_exact_canonical_payload() -> None:
     ("mutate", "message"),
     [
         (
-            lambda payload: payload.update(
-                {"system_prompt": "NEVER_PUBLIC"}
-            ),
+            lambda payload: payload.update({"system_prompt": "NEVER_PUBLIC"}),
             "unknown fields",
         ),
         (
@@ -66,6 +64,10 @@ def test_inspection_v1_fixture_round_trips_as_exact_canonical_payload() -> None:
                 {"owner_id": "owner-secret"}
             ),
             "unknown fields",
+        ),
+        (
+            lambda payload: payload["sources"][0].update({"doc_id": "../private.md"}),
+            "canonical published DocId",
         ),
         (
             lambda payload: payload.update({"kind": "quickjs"}),
@@ -88,6 +90,7 @@ def test_inspection_v1_fixture_round_trips_as_exact_canonical_payload() -> None:
         "system-prompt",
         "raw-source-text",
         "owner-identity",
+        "noncanonical-source",
         "unimplemented-capability-kind",
         "foreign-provenance",
         "false-stage-application",
@@ -101,4 +104,35 @@ def test_inspection_v1_rejects_unbounded_hidden_or_untruthful_fields(
     mutate(payload)
 
     with pytest.raises(InspectionContractError, match=message):
+        normalize_retrieval_inspection(payload)
+
+
+def test_inspection_v1_caps_ranked_source_prefix_at_fifty() -> None:
+    payload = _fixture()
+    template = payload["sources"][0]
+    payload["hit_count"] = 51
+    payload["sources"] = [
+        {
+            **deepcopy(template),
+            "doc_id": f"AI/source-{rank:02d}.md",
+            "rank": rank,
+        }
+        for rank in range(1, 51)
+    ]
+    payload["sources_truncated"] = True
+    payload["stages"][0]["application"]["output_count"] = 51
+
+    normalized = normalize_retrieval_inspection(payload)
+
+    assert len(normalized["sources"]) == 50
+    assert normalized["sources_truncated"] is True
+
+    payload["sources"].append(
+        {
+            **deepcopy(template),
+            "doc_id": "AI/source-51.md",
+            "rank": 51,
+        }
+    )
+    with pytest.raises(InspectionContractError, match="at most 50"):
         normalize_retrieval_inspection(payload)

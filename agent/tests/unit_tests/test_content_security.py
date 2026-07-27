@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pytest
 from deepagents.backends import FilesystemBackend
+from langgraph.prebuilt import ToolRuntime
 
 from agent import tools
 from agent.graph import _build_backend
+from agent.inspection import INSPECTION_EVENT_NAME
 from agent.retrieval.corpus import CorpusManifestError, content_checksum
 from agent.retrieval.corpus_build import build_index
 from agent.retrieval.protocol import DocId
@@ -178,6 +180,70 @@ def test_every_curated_tool_excludes_non_published_sources(
         assert excluded not in listing
         assert excluded not in metadata
         assert "Published file not found" in tools.read_post.invoke({"path": excluded})
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "query", "method_id"),
+    [
+        ("keyword_search", "Docker", "exact-substring"),
+        ("semantic_search", "도커", "bm25"),
+    ],
+)
+def test_ranked_tool_emits_measured_native_inspection_from_trusted_runtime(
+    configured_runtime: ServingRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
+    query: str,
+    method_id: str,
+) -> None:
+    del configured_runtime
+    emitted: list[object] = []
+    runtime = ToolRuntime(
+        state={},
+        context=None,
+        config={},
+        stream_writer=emitted.append,
+        tool_call_id=f"call-{tool_name}",
+        store=None,
+    )
+    ticks = iter((1_000_000_000, 1_012_500_000))
+    monkeypatch.setattr(tools.time, "perf_counter_ns", lambda: next(ticks))
+
+    output = getattr(tools, tool_name).func(
+        query=query,
+        top_k=1,
+        runtime=runtime,
+    )
+
+    assert "Found 1 result(s)" in output
+    assert len(emitted) == 1
+    envelope = emitted[0]
+    assert isinstance(envelope, dict)
+    assert envelope["name"] == INSPECTION_EVENT_NAME
+    payload = envelope["payload"]
+    assert payload["tool_call_id"] == f"call-{tool_name}"
+    assert payload["query"] == query
+    assert payload["method_id"] == method_id
+    assert payload["method_identity"]["method_id"] == method_id
+    assert payload["method_identity"]["implementation_id"].endswith(
+        ("create@1", "create@2")
+    )
+    assert payload["method_identity"]["fingerprint"].startswith("sha256:")
+    assert payload["corpus_revision"].startswith("sha256:")
+    assert payload["corpus_document_count"] == 3
+    assert payload["hit_count"] == 1
+    assert payload["sources"][0]["rank"] == 1
+    assert payload["sources"][0]["provenance"] == {
+        "kind": "published-corpus",
+        "corpus_revision": payload["corpus_revision"],
+        "retriever_fingerprint": payload["method_identity"]["fingerprint"],
+    }
+    assert payload["stages"][0]["elapsed_ms"] == 12.5
+    assert payload["stages"][0]["application"] == {
+        "status": "applied",
+        "input_count": 1,
+        "output_count": 1,
+    }
 
 
 def test_raw_source_changes_after_build_cannot_change_serving(

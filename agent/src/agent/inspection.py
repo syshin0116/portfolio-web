@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from langgraph.prebuilt import ToolRuntime
 from langgraph.stream import ProtocolEvent, StreamTransformer
 
-from agent.retrieval.protocol import Retrieval
+from agent.retrieval.protocol import DocId, Retrieval
 
 if TYPE_CHECKING:
     from agent.retrieval.registry import ResolvedRetriever
@@ -64,16 +64,10 @@ _PAYLOAD_KEYS = frozenset(
         "tool_call_id",
     }
 )
-_METHOD_IDENTITY_KEYS = frozenset(
-    {"fingerprint", "implementation_id", "method_id"}
-)
-_SOURCE_REQUIRED_KEYS = frozenset(
-    {"doc_id", "provenance", "rank", "title"}
-)
+_METHOD_IDENTITY_KEYS = frozenset({"fingerprint", "implementation_id", "method_id"})
+_SOURCE_REQUIRED_KEYS = frozenset({"doc_id", "provenance", "rank", "title"})
 _SOURCE_OPTIONAL_KEYS = frozenset({"chunk_id", "score"})
-_PROVENANCE_KEYS = frozenset(
-    {"corpus_revision", "kind", "retriever_fingerprint"}
-)
+_PROVENANCE_KEYS = frozenset({"corpus_revision", "kind", "retriever_fingerprint"})
 _STAGE_KEYS = frozenset(
     {
         "application",
@@ -83,9 +77,7 @@ _STAGE_KEYS = frozenset(
         "stage_id",
     }
 )
-_APPLICATION_KEYS = frozenset(
-    {"input_count", "output_count", "status"}
-)
+_APPLICATION_KEYS = frozenset({"input_count", "output_count", "status"})
 _ENVELOPE_KEYS = frozenset({"name", "payload"})
 
 
@@ -203,9 +195,7 @@ def _normalize_method_identity(
         maximum=MAX_METHOD_ID_CHARACTERS,
     )
     if identity_method_id != method_id:
-        raise InspectionContractError(
-            "method_identity.method_id must equal method_id"
-        )
+        raise InspectionContractError("method_identity.method_id must equal method_id")
     return {
         "method_id": identity_method_id,
         "implementation_id": _string(
@@ -263,12 +253,24 @@ def _normalize_source(
             "method_identity.fingerprint"
         )
 
+    doc_id_text = _string(
+        source["doc_id"],
+        field=f"{field}.doc_id",
+        maximum=MAX_SOURCE_DOC_ID_CHARACTERS,
+    )
+    try:
+        doc_id = DocId(doc_id_text)
+    except (TypeError, ValueError) as exc:
+        raise InspectionContractError(
+            f"{field}.doc_id must be a canonical published DocId"
+        ) from exc
+    if not str(doc_id).endswith(".md"):
+        raise InspectionContractError(
+            f"{field}.doc_id must identify a Markdown document"
+        )
+
     normalized: dict[str, object] = {
-        "doc_id": _string(
-            source["doc_id"],
-            field=f"{field}.doc_id",
-            maximum=MAX_SOURCE_DOC_ID_CHARACTERS,
-        ),
+        "doc_id": str(doc_id),
         "title": _string(
             source["title"],
             field=f"{field}.title",
@@ -331,9 +333,7 @@ def _normalize_stage(
         field=f"{field}.fingerprint",
     )
     if fingerprint != method_identity["fingerprint"]:
-        raise InspectionContractError(
-            f"{field}.fingerprint must equal method identity"
-        )
+        raise InspectionContractError(f"{field}.fingerprint must equal method identity")
 
     application = _mapping(
         stage["application"],
@@ -345,9 +345,7 @@ def _normalize_stage(
         field=f"{field}.application",
     )
     if application["status"] != "applied":
-        raise InspectionContractError(
-            f"{field}.application.status must be 'applied'"
-        )
+        raise InspectionContractError(f"{field}.application.status must be 'applied'")
     input_count = _integer(
         application["input_count"],
         field=f"{field}.application.input_count",
@@ -359,9 +357,7 @@ def _normalize_stage(
         maximum=MAX_HIT_COUNT,
     )
     if input_count != 1:
-        raise InspectionContractError(
-            f"{field}.application.input_count must be 1"
-        )
+        raise InspectionContractError(f"{field}.application.input_count must be 1")
     if output_count != hit_count:
         raise InspectionContractError(
             f"{field}.application.output_count must equal hit_count"
@@ -631,10 +627,28 @@ def emit_retrieval_inspection(
         )
     except InspectionContractError:
         return False
+    return emit_inspection_payload(tool_runtime, payload)
+
+
+def emit_inspection_payload(
+    tool_runtime: ToolRuntime | None,
+    payload: object,
+) -> bool:
+    """Emit an already observed payload through a trusted tool runtime."""
+
+    tool_call_id = tool_runtime.tool_call_id if tool_runtime is not None else None
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        return False
+    try:
+        normalized = normalize_retrieval_inspection(payload)
+    except InspectionContractError:
+        return False
+    if normalized["tool_call_id"] != tool_call_id:
+        return False
     tool_runtime.stream_writer(
         {
             "name": INSPECTION_EVENT_NAME,
-            "payload": payload,
+            "payload": normalized,
         }
     )
     return True
@@ -676,6 +690,7 @@ __all__ = [
     "InspectionContractError",
     "InspectionEventTransformer",
     "build_retrieval_inspection",
+    "emit_inspection_payload",
     "emit_retrieval_inspection",
     "normalize_retrieval_inspection",
 ]

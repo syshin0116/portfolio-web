@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import date
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import ToolRuntime
 
+from agent.inspection import emit_retrieval_inspection
 from agent.retrieval.protocol import Retrieval
 from agent.retrieval.serving import (
     CatalogEntry,
@@ -88,7 +91,11 @@ def _format_entries(
 
 
 @tool
-def keyword_search(query: str, top_k: int = 10) -> str:
+def keyword_search(
+    query: str,
+    top_k: int = 10,
+    runtime: ToolRuntime = None,  # type: ignore[assignment]
+) -> str:
     """Rank published posts by literal substring occurrence count.
 
     Args:
@@ -96,17 +103,30 @@ def keyword_search(query: str, top_k: int = 10) -> str:
         top_k: Number of results to return, from 1 to 50.
     """
 
-    runtime = get_serving_runtime()
-    result = runtime.exact(query, limit=_limit(top_k, field="top_k"))
+    serving_runtime = get_serving_runtime()
+    started_ns = time.perf_counter_ns()
+    result = serving_runtime.exact(query, limit=_limit(top_k, field="top_k"))
+    elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+    emit_retrieval_inspection(
+        tool_runtime=runtime,
+        runtime=serving_runtime,
+        retriever=serving_runtime.exact_retriever,
+        retrieval=result,
+        elapsed_ms=elapsed_ms,
+    )
     return _format_retrieval(
-        runtime,
+        serving_runtime,
         result,
-        method_id=runtime.exact_retriever.method_id,
+        method_id=serving_runtime.exact_retriever.method_id,
     )
 
 
 @tool
-def semantic_search(query: str, top_k: int = 10) -> str:
+def semantic_search(
+    query: str,
+    top_k: int = 10,
+    runtime: ToolRuntime = None,  # type: ignore[assignment]
+) -> str:
     """Rank published posts with the configured registry retriever (BM25 by default).
 
     Args:
@@ -114,12 +134,21 @@ def semantic_search(query: str, top_k: int = 10) -> str:
         top_k: Number of results to return, from 1 to 50.
     """
 
-    runtime = get_serving_runtime()
-    result = runtime.retrieve(query, limit=_limit(top_k, field="top_k"))
+    serving_runtime = get_serving_runtime()
+    started_ns = time.perf_counter_ns()
+    result = serving_runtime.retrieve(query, limit=_limit(top_k, field="top_k"))
+    elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+    emit_retrieval_inspection(
+        tool_runtime=runtime,
+        runtime=serving_runtime,
+        retriever=serving_runtime.retriever,
+        retrieval=result,
+        elapsed_ms=elapsed_ms,
+    )
     return _format_retrieval(
-        runtime,
+        serving_runtime,
         result,
-        method_id=runtime.retriever.method_id,
+        method_id=serving_runtime.retriever.method_id,
     )
 
 

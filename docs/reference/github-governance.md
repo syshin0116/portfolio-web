@@ -89,6 +89,19 @@ defaults/environment and changes to the job's exact environment or
 agent-only working directory. A comment, `echo`, or quoted command string
 therefore cannot stand in for an executable gate.
 
+That contract binds the complete `agent` job AST, not only its `run` strings.
+The only job keys are the reviewed name, `always()` condition, `changes`
+dependency, Ubuntu runner, 20-minute timeout, agent working directory, exact CI
+environment, and ordered steps. `container`, `services`, `strategy`,
+`environment`, a self-hosted runner, or any other extra or changed job key
+fails. All eleven steps are exact and ordered: checkout is pinned to its
+reviewed SHA with only `persist-credentials: false`; setup-python is pinned
+with Python 3.12; setup-uv is pinned with only the reviewed cache inputs; and
+the eight run steps retain their exact names, conditions, commands, and
+allowed keys. Adding, deleting, moving, replacing, or changing an action,
+including a pinned or local composite action, is a deliberate baseline change
+in the verifier and its mutation tests.
+
 No job in the required-check emitter or its transitive `needs` graph may use
 job-level `uses`, whether it calls a local or external reusable workflow.
 GitHub can report the caller job successful when every called-workflow job is

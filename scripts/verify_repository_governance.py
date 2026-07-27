@@ -210,6 +210,81 @@ AGENT_RUN_STEP_INVENTORY = (
     ),
     (None, AGENT_CI_CHANGED_CONDITION, AGENT_RUN_COMMANDS[3]),
 )
+EXPECTED_AGENT_CI_JOB = {
+    "name": "ci/agent",
+    "if": "always()",
+    "needs": ["changes"],
+    "runs-on": "ubuntu-latest",
+    "timeout-minutes": "20",
+    "defaults": {
+        "run": {
+            "working-directory": AGENT_CI_WORKING_DIRECTORY,
+        }
+    },
+    "env": AGENT_CI_ENV,
+    "steps": [
+        {
+            "uses": ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"),
+            "with": {
+                "persist-credentials": "false",
+            },
+        },
+        {
+            "name": "Fail closed if change detection failed",
+            "if": "needs.changes.result != 'success'",
+            "run": "exit 1",
+        },
+        {
+            "name": "Report an unaffected component",
+            "if": "needs.changes.outputs.agent != 'true'",
+            "run": (
+                'echo "No agent-affecting paths changed; '
+                'ci/agent reports success without rebuilding."'
+            ),
+        },
+        {
+            "uses": ("actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"),
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "with": {
+                "python-version": "3.12",
+            },
+        },
+        {
+            "uses": ("astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78"),
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "with": {
+                "enable-cache": "true",
+                "cache-dependency-glob": "agent/uv.lock",
+            },
+        },
+        {
+            "name": "Verify the agent lockfile is current",
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_LOCK_COMMAND),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_SYNC_COMMAND),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[0]),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[1]),
+        },
+        {
+            "name": "Build and audit the published corpus and BM25 artifacts",
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[2]),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[3]),
+        },
+    ],
+}
 EXPECTED_DEPENDABOT = {
     "vulnerability_alerts_enabled": True,
     "automated_security_fixes": EXPECTED_AUTOMATED_SECURITY_FIXES,
@@ -668,6 +743,13 @@ def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
         return [f"{AGENT_CI_WORKFLOW}: required job {AGENT_CI_JOB!r} is missing"]
 
     context = f"{AGENT_CI_WORKFLOW}: job {AGENT_CI_JOB!r}"
+    actual_agent_job = _node_to_data(agent)
+    if not _json_exact(actual_agent_job, EXPECTED_AGENT_CI_JOB):
+        errors.append(
+            f"{context} exact job AST differs; "
+            f"expected={EXPECTED_AGENT_CI_JOB!r}, actual={actual_agent_job!r}"
+        )
+
     defaults = _mapping_value(agent, "defaults")
     if not isinstance(defaults, MappingNode):
         errors.append(f"{context} defaults must be a mapping")

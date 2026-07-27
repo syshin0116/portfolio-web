@@ -1,0 +1,156 @@
+{
+  "lockVersion": 1,
+  "lockedAt": "2026-07-26",
+  "protocol": {
+    "repository": "https://github.com/langchain-ai/agent-protocol",
+    "tag": "langchain-protocol==0.0.18",
+    "commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+    "commitDate": "2026-06-18T10:07:23-07:00",
+    "releaseVersion": "0.0.18",
+    "schemaStatus": "DRAFT",
+    "cddlHeaderVersion": "0.0.13",
+    "sourceOfTruth": "streaming/protocol.cddl",
+    "artifacts": {
+      "openapi": {
+        "upstreamPath": "openapi.json",
+        "sha256": "7d069e43ca105e8127ce07ba7bd8bd7a78a2fadd6420009f2634a24cfb153f32"
+      },
+      "cddl": {
+        "upstreamPath": "streaming/protocol.cddl",
+        "sha256": "e04cfd6db218df4573b3bbfdca615aa503b0380bb588081ebe36514f7977e2e2"
+      },
+      "packageManifest": {
+        "upstreamPath": "streaming/package.json",
+        "sha256": "dfe1d12bf41ebcbde7a4704b818b580b574b035d09a041c9aaf9a0c5b92faa7a"
+      },
+      "pnpmLock": {
+        "upstreamPath": "streaming/pnpm-lock.yaml",
+        "sha256": "816c3c3b2ce0ae1a9f99ce49eca83be1b8b7e65eaf7842df2112b6db1ced4f85"
+      },
+      "pnpmWorkspace": {
+        "upstreamPath": "streaming/pnpm-workspace.yaml",
+        "sha256": "feab5101c23861362175a60721448a13d3e8d62d242fe2b89515f356c3ef1d44"
+      },
+      "pythonFixup": {
+        "upstreamPath": "streaming/scripts/fixup.py",
+        "sha256": "d2b7424ec93a29500f910d15d59ac5a01281df4b6034b132623111e50d8af5cc"
+      },
+      "pythonBinding": {
+        "upstreamPath": "streaming/py/langchain_protocol/protocol.py",
+        "vendoredPath": "protocol/generated/python/protocol.py",
+        "package": "langchain-protocol==0.0.18",
+        "sha256": "a225234763858df01fb5f20e2a696bbae1e134252a44aef74c82339858bcc089"
+      },
+      "typescriptBinding": {
+        "upstreamPath": "streaming/js/protocol.ts",
+        "vendoredPath": "protocol/generated/typescript/protocol.ts",
+        "package": "@langchain/protocol@0.0.18",
+        "sha256": "c48feb85acb7af2ff24573c36d80d942d74f40a218fd7f52913d5fd08d22487d"
+      }
+    },
+    "codegen": {
+      "nodeVersion": "24.14.0",
+      "corepackVersion": "0.34.6",
+      "pythonVersion": "3.12",
+      "packageManager": "pnpm@10.33.0",
+      "packages": {
+        "cddl": "0.20.1",
+        "cddl2py": "0.2.2",
+        "cddl2ts": "0.9.1"
+      }
+    },
+    "bindingWireProfile": {
+      "name": "official-generated-snake-case",
+      "reason": "The official generators publish snake_case payload fields; normalized fixture records are validated against those exact generated bindings.",
+      "typescriptGenerator": "cddl2ts protocol.cddl --field-case snake",
+      "pythonGenerator": "cddl2py protocol.cddl | python3 scripts/fixup.py"
+    },
+    "transport": {
+      "sse": "POST /threads/{thread_id}/stream",
+      "websocket": "GET /threads/{thread_id}/stream",
+      "commands": "POST /threads/{thread_id}/commands"
+    }
+  },
+  "aegra": {
+    "repository": "https://github.com/ibbybuilds/aegra",
+    "tag": "v0.9.24",
+    "commit": "51cb5a61f0b5e709d423e3d14978619a2a7c3960",
+    "commitDate": "2026-07-05T17:10:15+05:00",
+    "streamingImplementationCommit": "9e1707c766cb96dffebe5da5bc1200d45704f87c",
+    "artifacts": {
+      "openapi": {
+        "upstreamPath": "docs/openapi.json",
+        "sha256": "39f3c625c642ab0d04ffb59a674f9146f4cf8df891c5c37a47f3ef96387620fb"
+      },
+      "route": {
+        "upstreamPath": "libs/aegra-api/src/aegra_api/api/event_streaming.py",
+        "sha256": "472bb9174d6e1e57c4db4868325e9011715694ab3b0285a7e15e86eb8d688118"
+      },
+      "wireBuilders": {
+        "upstreamPath": "libs/aegra-api/src/aegra_api/services/event_streaming/protocol.py",
+        "sha256": "0a700c3a568480f977db034fa8cb5ff7930cbcdc804452beb10b1b558c8f5a23"
+      },
+      "commands": {
+        "upstreamPath": "libs/aegra-api/src/aegra_api/services/event_streaming/commands.py",
+        "sha256": "2e7811d9d92d5f06fd63fd5f238bdb78a19220ffad1aa2dba5188d4f6453d223"
+      }
+    },
+    "runtimeTransport": {
+      "sse": "POST /threads/{thread_id}/stream/events",
+      "commands": "POST /threads/{thread_id}/commands"
+    },
+    "dialectTranslation": {
+      "boundary": "scripts/protocol_contract.py:normalize_aegra_event",
+      "fixture": "protocol/fixtures/aegra-dialect-translation.json",
+      "raw": "input.requested.params.data.value",
+      "normalized": "input.requested.params.data.payload"
+    },
+    "supportMatrix": [
+      {
+        "capability": "Generated snake_case command and event fields",
+        "status": "supported",
+        "evidence": "Aegra wire builders emit event_id and applied_through_seq; command handlers consume assistant_id and interrupt_id."
+      },
+      {
+        "capability": "Thread-centric SSE stream",
+        "status": "path-divergence",
+        "required": "POST /threads/{thread_id}/stream",
+        "actual": "POST /threads/{thread_id}/stream/events",
+        "consequence": "Use the explicit aegra-0.9.24 smoke profile; the locked upstream transport path must remain visible as a compatibility gap."
+      },
+      {
+        "capability": "WebSocket thread stream",
+        "status": "unsupported",
+        "required": "GET /threads/{thread_id}/stream"
+      },
+      {
+        "capability": "run.start",
+        "status": "supported"
+      },
+      {
+        "capability": "input.respond",
+        "status": "payload-divergence",
+        "required": "input.requested.params.data.payload",
+        "actual": "input.requested.params.data.value",
+        "consequence": "Aegra matches the stock LangGraph SDK but not the locked generated InputRequestedData binding. Normalize this one field at the Aegra transport boundary before generated-binding validation."
+      },
+      {
+        "capability": "input.respond update and goto",
+        "status": "ignored",
+        "required": "Agent Protocol 0.0.18 InputRespondOne/InputRespondMany update and goto fields",
+        "actual": "Aegra 0.9.24 builds only Command(resume=...) and does not forward update or goto.",
+        "consequence": "Do not advertise atomic resume+update or directed resume until an Aegra version passes a live fixture for both fields."
+      },
+      {
+        "capability": "input.inject, state.*, agent.getTree, subscription.*",
+        "status": "unsupported",
+        "consequence": "Aegra 0.9.24 command dispatch implements only run.start and input.respond."
+      },
+      {
+        "capability": "Replay after sequence",
+        "status": "supported-with-runtime-buffer",
+        "actual": "EventStreamRequest.since on /stream/events"
+      }
+    ]
+  }
+}

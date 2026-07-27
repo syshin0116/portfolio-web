@@ -1,0 +1,232 @@
+{
+  "fixture_version": 1,
+  "name": "disconnect and replay after sequence",
+  "description": "A text block begins before disconnect and finishes after replay without duplication.",
+  "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+  "wire_profile": "official-generated-snake-case",
+  "records": [
+    {
+      "kind": "stream_request",
+      "connection": "initial",
+      "payload": {
+        "channels": ["messages", "lifecycle"],
+        "namespaces": [[]]
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-replay-101",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-101",
+        "seq": 101,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400101,
+          "data": {
+            "event": "running",
+            "graph_name": "agent"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-replay-102",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-102",
+        "seq": 102,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400102,
+          "node": "model",
+          "data": {
+            "event": "message-start",
+            "role": "ai",
+            "id": "msg-replay"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-replay-103",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-103",
+        "seq": 103,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400103,
+          "node": "model",
+          "data": {
+            "event": "content-block-start",
+            "index": 0,
+            "content": {
+              "type": "text",
+              "text": ""
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-replay-104",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-104",
+        "seq": 104,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400104,
+          "node": "model",
+          "data": {
+            "event": "content-block-delta",
+            "index": 0,
+            "delta": {
+              "type": "text-delta",
+              "text": "재"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "stream_request",
+      "connection": "resumed",
+      "payload": {
+        "channels": ["messages", "lifecycle"],
+        "namespaces": [[]],
+        "since": 104
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "resumed",
+      "sse": {
+        "id": "evt-replay-105",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-105",
+        "seq": 105,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400105,
+          "node": "model",
+          "data": {
+            "event": "content-block-delta",
+            "index": 0,
+            "delta": {
+              "type": "text-delta",
+              "text": "연결"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "resumed",
+      "sse": {
+        "id": "evt-replay-106",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-106",
+        "seq": 106,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400106,
+          "node": "model",
+          "data": {
+            "event": "content-block-finish",
+            "index": 0,
+            "content": {
+              "type": "text",
+              "text": "재연결"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "resumed",
+      "sse": {
+        "id": "evt-replay-107",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-107",
+        "seq": 107,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400107,
+          "node": "model",
+          "data": {
+            "event": "message-finish"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "resumed",
+      "sse": {
+        "id": "evt-replay-108",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-replay-108",
+        "seq": 108,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031400108,
+          "data": {
+            "event": "completed",
+            "graph_name": "agent"
+          }
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "coverage": ["content_blocks", "run_lifecycle", "replay_disconnect"],
+    "replay": {
+      "disconnect_after_seq": 104,
+      "reconnect_since": 104,
+      "visible_text": "재연결"
+    }
+  }
+}

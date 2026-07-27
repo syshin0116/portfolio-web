@@ -26,18 +26,44 @@ template: spec
 The repository stores the expected external state in
 [`repository-governance.json`](../../.github/repository-governance.json). Local
 verification checks that every external action is pinned to a full 40-character
-commit SHA and that exactly one workflow job emits each stable required check.
-It parses YAML syntax trees with the same PyYAML dependency already locked by
-the agent; duplicate keys, anchors, aliases, merge keys, directives, explicit
-tags, and multiple documents fail closed. Flow mappings and quoted or explicit
-`uses` keys cannot bypass the full-SHA walk. The walk covers nested workflow
-files plus every `.github/actions/**/action.yml` or `action.yaml`, then follows
-local `./` action and reusable-workflow edges recursively. A local target that
-escapes the repository, is missing or ambiguous, or forms a cycle fails:
+commit SHA and that each stable required check has one exact executable
+emitter. GitHub recognizes workflow YAML only directly under
+`.github/workflows/`; YAML in a subdirectory is rejected rather than counted as
+a workflow or required-check emitter.
+
+The verifier parses YAML syntax trees with the same PyYAML dependency already
+locked by the agent; duplicate keys, anchors, aliases, merge keys, directives,
+explicit tags, and multiple documents fail closed. It follows only executable
+`uses` positions:
+
+- `jobs.<id>.uses` must target a reusable workflow.
+- `jobs.<id>.steps[*].uses` must target an action.
+- A repository action must have exactly one `action.yml` or `action.yaml` with
+  `runs.using: composite`; its `runs.steps[*].uses` edges are followed
+  recursively.
+- A local reusable workflow must be a top-level workflow file with
+  `on.workflow_call`.
+- An action/workflow inversion, an escaping, missing, ambiguous, or cyclic
+  local target, or an external reference without a full commit SHA fails.
+
+Keys named `uses` in ordinary input, environment, or metadata mappings are not
+invocations and are ignored. This position-aware parsing applies equally to
+flow mappings and quoted or explicit keys.
+
+The manifest binds each stable context to one exact top-level workflow and job:
 
 - `ci/check`
 - `protocol/compat`
 - `wiki/verify`
+
+Each emitter workflow must have exactly `pull_request`, `push` restricted to
+`main`, `merge_group` restricted to `checks_requested`, and
+`workflow_dispatch`. Workflow-level `paths` filters, schedule-only emission,
+extra triggers, or a renamed/missing emitter fail. The emitter's complete
+`needs` graph must exist without cycles; jobs with dependencies use
+`if: always()`, and no job in that graph may have another skipping condition.
+This keeps a required check from remaining permanently pending after an
+upstream failure or merge-queue run.
 
 Each required check is bound to GitHub Actions integration ID `15368`, not just
 its mutable display context. A read-only check-runs query against
@@ -46,7 +72,13 @@ its mutable display context. A read-only check-runs query against
 bound to another integration, duplicate bindings, and undocumented contexts.
 
 The live verifier additionally reads GitHub rulesets, Actions policy, and
-environment branch and protection policies. It performs GET requests only.
+environment branch and protection policies. It also requires the legacy
+`main` branch-protection endpoint to return the exact unprotected-branch 404;
+rulesets are the only allowed main-protection surface. It performs GET requests
+only and verifies that GitHub selected the API version pinned in the manifest.
+An inaccessible endpoint, unexpected status/body, or API-version downgrade
+fails closed. It reads the repository's enabled merge methods as well, so the
+pull-request rule cannot require a method that the repository has disabled.
 Rulesets, environments, and branch policies request an explicit
 `per_page=100&page=1`; any pagination `Link`, inconsistent `total_count`, or
 second-page requirement fails closed:
@@ -63,17 +95,21 @@ repository settings and during a governance audit.
 
 ## Owner-safe main ruleset
 
-In **Settings → Rules → Rulesets**, create one active branch ruleset for the
-default branch (`main`) with:
+In **Settings → Rules → Rulesets**, create one active branch ruleset named
+`main` for the default branch with:
 
 1. Restrict deletions.
 2. Require a pull request before merging.
 3. Require **zero** approving reviews.
-4. Leave Code Owner review and approval of the last push disabled.
-5. Require `ci/check`, `protocol/compat`, and `wiki/verify`, with the branch
-   required to be up to date.
-6. Block force pushes.
-7. Leave the bypass list empty.
+4. Allow merge commits, squash merges, and rebases, matching the repository
+   settings.
+5. Leave stale-review dismissal, Code Owner review, last-push approval, and
+   required review-thread resolution disabled; leave dismissal restrictions
+   disabled with no actors and the beta required-reviewer list empty.
+6. Require `ci/check`, `protocol/compat`, and `wiki/verify`, with the branch
+   required to be up to date and `do_not_enforce_on_create: false`.
+7. Block force pushes.
+8. Leave the bypass list empty.
 
 `CODEOWNERS` still routes responsibility and makes ownership visible. It is
 deliberately advisory: a required self-review cannot be satisfied safely in a
@@ -82,14 +118,24 @@ access and can cover the owner.
 
 Keep this contract in one active ruleset. Disabled rulesets that target `main`
 and rules distributed over multiple active rulesets fail verification, as does
-any bypass actor. The owner can edit the ruleset if GitHub itself has an
-outage; that is an emergency settings change, not a normal merge path. Required
-checks are compared exactly. The complete rule-type allowlist is also exact:
-`deletion`, `non_fast_forward`, `pull_request`, and
+any bypass actor. Remove legacy branch protection from `main`; overlapping a
+branch-protection rule with the ruleset is policy drift even if both look
+equivalent in the UI. The owner can edit the ruleset if GitHub itself has an
+outage; that is an emergency settings change, not a normal merge path.
+The ruleset name, repository source, `branch` target, active enforcement, and
+the exact `~DEFAULT_BRANCH` include with no excludes are manifest-owned. A
+broader `~ALL` include is rejected even though it also matches `main`.
+
+Required checks and the full pull-request and status-check parameter objects
+are compared exactly with JSON types preserved. This includes disabled/default
+values, empty dismissal and reviewer collections, allowed merge methods,
+strict status checks, and `do_not_enforce_on_create: false`; a newly returned
+semantic parameter fails closed until it is reviewed. The complete rule-type
+allowlist is also exact: `deletion`, `non_fast_forward`, `pull_request`, and
 `required_status_checks`. An additional rule such as `required_deployments`, a
-missing rule, or a duplicate type is policy drift. GitHub-supplied metadata is
-ignored; the rule type and the parameters whose semantics this contract owns
-are compared.
+missing rule, or a duplicate type is policy drift. GitHub-supplied ruleset
+metadata such as IDs, links, and timestamps is ignored; owned identity, target,
+conditions, rule types, and parameter objects are not.
 
 ## Full-SHA Actions policy
 
@@ -161,7 +207,8 @@ baseline, `continue-on-error`, or another false-green suppression.
 1. Merge the repository-side governance PR after the existing three required
    checks pass.
 2. Confirm each required check has reported successfully on `main`.
-3. Create the single main ruleset with zero required approvals and no bypass.
+3. Remove legacy `main` branch protection, then create the single main ruleset
+   with zero required approvals and no bypass.
 4. Enable repository Actions and its full-SHA policy.
 5. Remove the required reviewer from routine `Preview`; retain the existing
    `syshin0116` reviewer on `Production` with self-review allowed, and confirm

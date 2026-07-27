@@ -31,6 +31,49 @@ FULL_SHA_ACTION = re.compile(
     r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     r"(?:/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}$"
 )
+FULL_SHA_REUSABLE_WORKFLOW = re.compile(
+    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/"
+    r"\.github/workflows/[A-Za-z0-9_.-]+\.(?:yml|yaml)@[0-9a-f]{40}$"
+)
+LOCAL_REUSABLE_WORKFLOW = re.compile(
+    r"^\./\.github/workflows/[A-Za-z0-9_.-]+\.(?:yml|yaml)$"
+)
+REQUIRED_CHECK_TRIGGERS = {
+    "pull_request": {},
+    "push": {"branches": ["main"]},
+    "merge_group": {"types": ["checks_requested"]},
+    "workflow_dispatch": {},
+}
+MAIN_RULE_TYPES = [
+    "deletion",
+    "non_fast_forward",
+    "pull_request",
+    "required_status_checks",
+]
+MAIN_RULESET_CONDITIONS = {
+    "ref_name": {
+        "include": ["~DEFAULT_BRANCH"],
+        "exclude": [],
+    }
+}
+MERGE_METHODS = ["merge", "squash", "rebase"]
+SOLO_PULL_REQUEST_PARAMETERS = {
+    "allowed_merge_methods": MERGE_METHODS,
+    "dismiss_stale_reviews_on_push": False,
+    "dismissal_restriction": {
+        "allowed_actors": [],
+        "enabled": False,
+    },
+    "require_code_owner_review": False,
+    "require_last_push_approval": False,
+    "required_approving_review_count": 0,
+    "required_review_thread_resolution": False,
+    "required_reviewers": [],
+}
+MAIN_STATUS_CHECK_PARAMETERS = {
+    "do_not_enforce_on_create": False,
+    "strict_required_status_checks_policy": True,
+}
 
 JsonObject = dict[str, Any]
 ApiGet = Callable[[str], Any]
@@ -54,6 +97,43 @@ class ApiResponse:
 
     payload: Any
     headers: dict[str, str]
+    status: int = 200
+
+
+@dataclass(frozen=True)
+class UsesReference:
+    """A semantically valid `uses` position and the target kind it requires."""
+
+    line_number: int
+    reference: str
+    target_kind: str
+
+
+@dataclass(frozen=True)
+class RequiredCheckContract:
+    """One required check and the workflow/job that must always emit it."""
+
+    context: str
+    integration_id: int
+    workflow: str
+    job: str
+    triggers: JsonObject
+
+
+def _json_exact(actual: Any, expected: Any) -> bool:
+    """Compare JSON values without treating booleans as integers."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            _json_exact(actual[key], value) for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _json_exact(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return actual == expected
 
 
 def _require_yaml() -> None:
@@ -173,9 +253,19 @@ def load_policy(path: Path = DEFAULT_POLICY) -> JsonObject:
 
 
 def workflow_files(root: Path) -> list[Path]:
-    """Return tracked-style workflow paths in deterministic order."""
+    """Return GitHub-supported top-level workflow paths."""
     workflow_dir = root / ".github/workflows"
-    return sorted((*workflow_dir.rglob("*.yml"), *workflow_dir.rglob("*.yaml")))
+    return sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
+
+
+def nested_workflow_files(root: Path) -> list[Path]:
+    """Return unsupported YAML files below workflow subdirectories."""
+    workflow_dir = root / ".github/workflows"
+    return sorted(
+        path
+        for path in (*workflow_dir.rglob("*.yml"), *workflow_dir.rglob("*.yaml"))
+        if path.parent != workflow_dir
+    )
 
 
 def action_manifest_files(root: Path) -> list[Path]:
@@ -198,24 +288,6 @@ def _nodes_for_mapping_key(node: Node, key: str) -> Iterable[Node]:
     elif isinstance(node, SequenceNode):
         for item in node.value:
             yield from _nodes_for_mapping_key(item, key)
-
-
-def action_references(
-    document: YamlDocument,
-) -> Iterable[tuple[int, str]]:
-    """Yield every action or reusable-workflow reference in the AST."""
-    for node in _nodes_for_mapping_key(document.root, "uses"):
-        reference = _scalar_value(node, context=f"{document.path}: uses")
-        yield node.start_mark.line + 1, reference
-
-
-def external_action_references(
-    document: YamlDocument,
-) -> Iterable[tuple[int, str]]:
-    """Yield every non-local action or reusable-workflow reference."""
-    for line_number, reference in action_references(document):
-        if not reference.startswith("./"):
-            yield line_number, reference
 
 
 def workflow_job_names(document: YamlDocument) -> list[str]:
@@ -259,6 +331,129 @@ def workflow_events(document: YamlDocument) -> set[str]:
     raise GovernanceError(f"{document.path}: on must be a scalar, list, or mapping")
 
 
+def workflow_trigger_config(document: YamlDocument) -> JsonObject:
+    """Normalize a required workflow's mapping-form `on` declaration."""
+    events = _mapping_value(document.root, "on")
+    if not isinstance(events, MappingNode):
+        raise GovernanceError(
+            f"{document.path}: required workflow on must be a mapping"
+        )
+    normalized: JsonObject = {}
+    for event, options, _ in _mapping_items(events):
+        if isinstance(options, (MappingNode, SequenceNode)):
+            normalized[event] = _node_to_data(options)
+            continue
+        if isinstance(options, ScalarNode) and options.value in {
+            "",
+            "null",
+            "Null",
+            "NULL",
+            "~",
+        }:
+            normalized[event] = {}
+            continue
+        raise GovernanceError(
+            f"{document.path}: trigger {event!r} options must be an "
+            "empty value, mapping, or list"
+        )
+    return normalized
+
+
+def _workflow_jobs(document: YamlDocument) -> dict[str, MappingNode]:
+    jobs = _mapping_value(document.root, "jobs")
+    if not isinstance(jobs, MappingNode):
+        raise GovernanceError(f"{document.path}: jobs must be a mapping")
+    normalized: dict[str, MappingNode] = {}
+    for job_name, job, _ in _mapping_items(jobs):
+        if not isinstance(job, MappingNode):
+            raise GovernanceError(
+                f"{document.path}: job {job_name!r} must be a mapping"
+            )
+        normalized[job_name] = job
+    return normalized
+
+
+def _job_needs(job: MappingNode, *, context: str) -> list[str]:
+    needs = _mapping_value(job, "needs")
+    if needs is None:
+        return []
+    if isinstance(needs, ScalarNode):
+        if not needs.value:
+            raise GovernanceError(f"{context} needs must not be empty")
+        return [needs.value]
+    if isinstance(needs, SequenceNode):
+        values = [
+            _scalar_value(item, context=f"{context} needs") for item in needs.value
+        ]
+        if not values or len(values) != len(set(values)):
+            raise GovernanceError(
+                f"{context} needs must be a non-empty unique job list"
+            )
+        return values
+    raise GovernanceError(f"{context} needs must be a job or job list")
+
+
+def _job_condition(job: MappingNode, *, context: str) -> str | None:
+    condition = _mapping_value(job, "if")
+    if condition is None:
+        return None
+    value = _scalar_value(condition, context=f"{context} if").strip()
+    if value.startswith("${{") and value.endswith("}}"):
+        value = value[3:-2].strip()
+    return value
+
+
+def validate_required_job_graph(
+    document: YamlDocument,
+    emitter_job: str,
+) -> list[str]:
+    """Ensure the required emitter and every dependency always create a job."""
+    errors: list[str] = []
+    jobs = _workflow_jobs(document)
+    if emitter_job not in jobs:
+        return [f"required emitter job {emitter_job!r} is missing from {document.path}"]
+    state: dict[str, str] = {}
+    stack: list[str] = []
+
+    def visit(job_name: str) -> None:
+        status = state.get(job_name)
+        if status == "done":
+            return
+        if status == "visiting":
+            cycle_start = stack.index(job_name)
+            errors.append(
+                "required-check needs cycle: "
+                + " -> ".join([*stack[cycle_start:], job_name])
+            )
+            return
+        job = jobs.get(job_name)
+        if job is None:
+            errors.append(f"required-check dependency job {job_name!r} is missing")
+            return
+        state[job_name] = "visiting"
+        stack.append(job_name)
+        context = f"{document.path}: job {job_name!r}"
+        try:
+            needs = _job_needs(job, context=context)
+            condition = _job_condition(job, context=context)
+            if condition not in {None, "always()"}:
+                errors.append(
+                    f"{context} can skip required-check creation with if: {condition!r}"
+                )
+            if needs and condition != "always()":
+                errors.append(f"{context} has needs and must use if: always()")
+            for dependency in needs:
+                visit(dependency)
+        except GovernanceError as exc:
+            errors.append(str(exc))
+        finally:
+            stack.pop()
+            state[job_name] = "done"
+
+    visit(emitter_job)
+    return errors
+
+
 def _display_path(path: Path, root: Path) -> str:
     try:
         return str(path.relative_to(root))
@@ -266,7 +461,102 @@ def _display_path(path: Path, root: Path) -> str:
         return str(path)
 
 
-def _resolve_local_action_reference(
+def _step_action_references(
+    steps: Node,
+    *,
+    context: str,
+) -> list[UsesReference]:
+    if not isinstance(steps, SequenceNode):
+        raise GovernanceError(f"{context} steps must be a list")
+    references: list[UsesReference] = []
+    for index, step in enumerate(steps.value):
+        step_context = f"{context} steps[{index}]"
+        if not isinstance(step, MappingNode):
+            raise GovernanceError(f"{step_context} must be a mapping")
+        uses = _mapping_value(step, "uses")
+        run = _mapping_value(step, "run")
+        if uses is not None and run is not None:
+            raise GovernanceError(f"{step_context} cannot contain both uses and run")
+        if uses is None:
+            continue
+        reference = _scalar_value(uses, context=f"{step_context} uses")
+        references.append(
+            UsesReference(
+                line_number=uses.start_mark.line + 1,
+                reference=reference,
+                target_kind="action",
+            )
+        )
+    return references
+
+
+def _workflow_uses_references(document: YamlDocument) -> list[UsesReference]:
+    jobs = _mapping_value(document.root, "jobs")
+    if not isinstance(jobs, MappingNode):
+        raise GovernanceError(f"{document.path}: jobs must be a mapping")
+    references: list[UsesReference] = []
+    for job_name, job, _ in _mapping_items(jobs):
+        if not isinstance(job, MappingNode):
+            raise GovernanceError(
+                f"{document.path}: job {job_name!r} must be a mapping"
+            )
+        context = f"{document.path}: job {job_name!r}"
+        uses = _mapping_value(job, "uses")
+        steps = _mapping_value(job, "steps")
+        if uses is not None:
+            if steps is not None:
+                raise GovernanceError(
+                    f"{context} cannot contain both job-level uses and steps"
+                )
+            reference = _scalar_value(uses, context=f"{context} uses")
+            references.append(
+                UsesReference(
+                    line_number=uses.start_mark.line + 1,
+                    reference=reference,
+                    target_kind="workflow",
+                )
+            )
+            continue
+        if steps is None:
+            raise GovernanceError(
+                f"{context} must contain either steps or reusable-workflow uses"
+            )
+        references.extend(_step_action_references(steps, context=context))
+    return references
+
+
+def _action_uses_references(document: YamlDocument) -> list[UsesReference]:
+    runs = _mapping_value(document.root, "runs")
+    if not isinstance(runs, MappingNode):
+        raise GovernanceError(f"{document.path}: action runs must be a mapping")
+    using = _mapping_value(runs, "using")
+    if (
+        using is None
+        or _scalar_value(
+            using,
+            context=f"{document.path}: action runs.using",
+        )
+        != "composite"
+    ):
+        raise GovernanceError(
+            f"{document.path}: repository-local action runs.using must be 'composite'"
+        )
+    steps = _mapping_value(runs, "steps")
+    if steps is None:
+        raise GovernanceError(
+            f"{document.path}: composite action runs.steps is required"
+        )
+    return _step_action_references(
+        steps,
+        context=f"{document.path}: composite action",
+    )
+
+
+def _workflow_has_call_trigger(document: YamlDocument) -> bool:
+    return "workflow_call" in workflow_events(document)
+
+
+def _resolve_repository_path(
     root: Path,
     source: Path,
     line_number: int,
@@ -285,7 +575,27 @@ def _resolve_local_action_reference(
             f"{_display_path(source, repository_root)}:{line_number} "
             f"local uses target escapes the repository: {reference}"
         )
+    return target
 
+
+def _resolve_local_action_reference(
+    root: Path,
+    source: Path,
+    line_number: int,
+    reference: str,
+) -> Path:
+    repository_root = root.resolve()
+    if reference.startswith("./.github/workflows/"):
+        raise GovernanceError(
+            f"{_display_path(source, repository_root)}:{line_number} "
+            "step-level uses cannot target a reusable workflow"
+        )
+    target = _resolve_repository_path(
+        repository_root,
+        source,
+        line_number,
+        reference,
+    )
     if target.is_dir():
         manifests = [
             candidate
@@ -306,18 +616,70 @@ def _resolve_local_action_reference(
             )
         return manifest
 
-    workflow_root = (repository_root / ".github/workflows").resolve()
-    if (
-        target.is_file()
-        and target.is_relative_to(workflow_root)
-        and target.suffix in {".yml", ".yaml"}
-    ):
-        return target
-
     raise GovernanceError(
-        f"{_display_path(source, repository_root)}:{line_number} local uses "
+        f"{_display_path(source, repository_root)}:{line_number} local action "
         f"target is missing or unsupported: {reference}"
     )
+
+
+def _resolve_local_workflow_reference(
+    root: Path,
+    source: Path,
+    line_number: int,
+    reference: str,
+) -> Path:
+    repository_root = root.resolve()
+    if LOCAL_REUSABLE_WORKFLOW.fullmatch(reference) is None:
+        raise GovernanceError(
+            f"{_display_path(source, repository_root)}:{line_number} "
+            "job-level uses must target "
+            "./.github/workflows/<file>.yml|yaml with no subdirectory or ref"
+        )
+    target = _resolve_repository_path(
+        repository_root,
+        source,
+        line_number,
+        reference,
+    )
+    workflow_root = (repository_root / ".github/workflows").resolve()
+    if (
+        not target.is_file()
+        or target.parent != workflow_root
+        or target.suffix not in {".yml", ".yaml"}
+    ):
+        raise GovernanceError(
+            f"{_display_path(source, repository_root)}:{line_number} local "
+            f"reusable workflow is missing or unsupported: {reference}"
+        )
+    return target
+
+
+def _validate_external_uses(
+    source: Path,
+    root: Path,
+    uses: UsesReference,
+) -> str | None:
+    display = _display_path(source, root)
+    reference = uses.reference
+    if uses.target_kind == "workflow":
+        if FULL_SHA_REUSABLE_WORKFLOW.fullmatch(reference) is None:
+            return (
+                f"local: {display}:{uses.line_number} job-level uses must "
+                "reference owner/repo/.github/workflows/<file>.yml|yaml at "
+                f"a full lowercase commit SHA: {reference}"
+            )
+        return None
+    if "/.github/workflows/" in reference:
+        return (
+            f"local: {display}:{uses.line_number} step-level uses cannot "
+            f"target a reusable workflow: {reference}"
+        )
+    if FULL_SHA_ACTION.fullmatch(reference) is None:
+        return (
+            f"local: {display}:{uses.line_number} action is not pinned to "
+            f"a full lowercase commit SHA: {reference}"
+        )
+    return None
 
 
 def validate_repository_yaml_references(
@@ -328,6 +690,11 @@ def validate_repository_yaml_references(
     workflow_paths = [path.resolve() for path in workflow_files(repository_root)]
     action_paths = [path.resolve() for path in action_manifest_files(repository_root)]
     errors: list[str] = []
+    for nested in nested_workflow_files(repository_root):
+        errors.append(
+            "local: nested workflow YAML is not supported by GitHub: "
+            f"{_display_path(nested, repository_root)}"
+        )
 
     action_manifests_by_directory: dict[Path, list[Path]] = {}
     for path in action_paths:
@@ -344,9 +711,28 @@ def validate_repository_yaml_references(
     state: dict[Path, str] = {}
     stack: list[Path] = []
 
-    def visit(path: Path) -> None:
+    document_kinds: dict[Path, str] = {
+        **dict.fromkeys(workflow_paths, "workflow"),
+        **dict.fromkeys(action_paths, "action"),
+    }
+
+    def visit(
+        path: Path,
+        kind: str,
+        *,
+        require_workflow_call: bool = False,
+    ) -> None:
         status = state.get(path)
         if status == "done":
+            if (
+                require_workflow_call
+                and path in documents
+                and not _workflow_has_call_trigger(documents[path])
+            ):
+                errors.append(
+                    "local: reusable workflow lacks on.workflow_call: "
+                    f"{_display_path(path, repository_root)}"
+                )
             return
         if status == "visiting":
             cycle_start = stack.index(path)
@@ -358,31 +744,63 @@ def validate_repository_yaml_references(
             return
 
         state[path] = "visiting"
+        existing_kind = document_kinds.setdefault(path, kind)
+        if existing_kind != kind:
+            errors.append(
+                "local: uses target kind changed for "
+                f"{_display_path(path, repository_root)}: "
+                f"{existing_kind} vs {kind}"
+            )
+            state[path] = "done"
+            return
         stack.append(path)
         try:
             document = load_yaml_document(path)
             documents[path] = document
-            for line_number, reference in action_references(document):
+            if require_workflow_call and not _workflow_has_call_trigger(document):
+                errors.append(
+                    "local: reusable workflow lacks on.workflow_call: "
+                    f"{_display_path(path, repository_root)}"
+                )
+            references = (
+                _workflow_uses_references(document)
+                if kind == "workflow"
+                else _action_uses_references(document)
+            )
+            for uses in references:
+                reference = uses.reference
                 if not reference.startswith("./"):
-                    if FULL_SHA_ACTION.fullmatch(reference) is None:
-                        errors.append(
-                            "local: "
-                            f"{_display_path(path, repository_root)}:"
-                            f"{line_number} action is not pinned to a full "
-                            f"lowercase commit SHA: {reference}"
-                        )
+                    external_error = _validate_external_uses(
+                        path,
+                        repository_root,
+                        uses,
+                    )
+                    if external_error is not None:
+                        errors.append(external_error)
                     continue
                 try:
-                    target = _resolve_local_action_reference(
-                        repository_root,
-                        path,
-                        line_number,
-                        reference,
-                    )
+                    if uses.target_kind == "workflow":
+                        target = _resolve_local_workflow_reference(
+                            repository_root,
+                            path,
+                            uses.line_number,
+                            reference,
+                        )
+                    else:
+                        target = _resolve_local_action_reference(
+                            repository_root,
+                            path,
+                            uses.line_number,
+                            reference,
+                        )
                 except GovernanceError as exc:
                     errors.append(f"local: {exc}")
                     continue
-                visit(target)
+                visit(
+                    target,
+                    uses.target_kind,
+                    require_workflow_call=uses.target_kind == "workflow",
+                )
         except GovernanceError as exc:
             errors.append(
                 "local: invalid workflow/action YAML "
@@ -393,7 +811,7 @@ def validate_repository_yaml_references(
             state[path] = "done"
 
     for path in sorted({*workflow_paths, *action_paths}):
-        visit(path)
+        visit(path, document_kinds[path])
     return documents, errors
 
 
@@ -535,22 +953,28 @@ def validate_dependabot_grouping(path: Path, policy: JsonObject) -> list[str]:
     return errors
 
 
-def _required_check_bindings(main: JsonObject) -> list[tuple[str, int]]:
+def _required_check_contracts(main: JsonObject) -> list[RequiredCheckContract]:
     required_checks = main.get("required_checks")
     if not isinstance(required_checks, list):
         raise GovernanceError("policy.main.required_checks must be a list")
-    bindings: list[tuple[str, int]] = []
+    contracts: list[RequiredCheckContract] = []
     for index, check in enumerate(required_checks):
         if not isinstance(check, dict) or set(check) != {
             "context",
             "integration_id",
+            "workflow",
+            "job",
+            "triggers",
         }:
             raise GovernanceError(
                 f"policy.main.required_checks[{index}] must contain exactly "
-                "context and integration_id"
+                "context, integration_id, workflow, job, and triggers"
             )
         context = check["context"]
         integration_id = check["integration_id"]
+        workflow = check["workflow"]
+        job = check["job"]
+        triggers = check["triggers"]
         if not isinstance(context, str) or not context:
             raise GovernanceError(
                 f"policy.main.required_checks[{index}].context must be non-empty"
@@ -564,7 +988,34 @@ def _required_check_bindings(main: JsonObject) -> list[tuple[str, int]]:
                 f"policy.main.required_checks[{index}].integration_id "
                 "must be a positive integer"
             )
-        bindings.append((context, integration_id))
+        if (
+            not isinstance(workflow, str)
+            or Path(workflow).parent != Path(".github/workflows")
+            or Path(workflow).suffix not in {".yml", ".yaml"}
+        ):
+            raise GovernanceError(
+                f"policy.main.required_checks[{index}].workflow must be a "
+                "top-level .github/workflows YAML path"
+            )
+        if not isinstance(job, str) or not job:
+            raise GovernanceError(
+                f"policy.main.required_checks[{index}].job must be non-empty"
+            )
+        if triggers != REQUIRED_CHECK_TRIGGERS:
+            raise GovernanceError(
+                f"policy.main.required_checks[{index}].triggers must be "
+                f"{REQUIRED_CHECK_TRIGGERS!r}"
+            )
+        contracts.append(
+            RequiredCheckContract(
+                context=context,
+                integration_id=integration_id,
+                workflow=workflow,
+                job=job,
+                triggers=triggers,
+            )
+        )
+    bindings = [(contract.context, contract.integration_id) for contract in contracts]
     duplicate_bindings = [
         binding for binding, count in Counter(bindings).items() if count > 1
     ]
@@ -579,7 +1030,66 @@ def _required_check_bindings(main: JsonObject) -> list[tuple[str, int]]:
             f"contexts: bindings={duplicate_bindings!r}, "
             f"contexts={duplicate_contexts!r}"
         )
-    return bindings
+    emitters = [(contract.workflow, contract.job) for contract in contracts]
+    duplicate_emitters = [
+        emitter for emitter, count in Counter(emitters).items() if count > 1
+    ]
+    if duplicate_emitters:
+        raise GovernanceError(
+            "policy.main.required_checks contains duplicate emitters: "
+            f"{duplicate_emitters!r}"
+        )
+    return contracts
+
+
+def _required_check_bindings(main: JsonObject) -> list[tuple[str, int]]:
+    return [
+        (contract.context, contract.integration_id)
+        for contract in _required_check_contracts(main)
+    ]
+
+
+def _main_ruleset_contract(policy: JsonObject) -> JsonObject:
+    repository = policy.get("repository")
+    main = policy.get("main")
+    if not isinstance(repository, str) or not repository:
+        raise GovernanceError("policy.repository must be a non-empty string")
+    if not isinstance(main, dict):
+        raise GovernanceError("policy.main must be an object")
+    ruleset = main.get("ruleset")
+    expected = {
+        "name": "main",
+        "target": "branch",
+        "source_type": "Repository",
+        "source": repository,
+        "enforcement": "active",
+        "conditions": MAIN_RULESET_CONDITIONS,
+    }
+    if not _json_exact(ruleset, expected):
+        raise GovernanceError(
+            f"policy.main.ruleset is {ruleset!r}; expected {expected!r}"
+        )
+    return ruleset
+
+
+def _pull_request_parameters(main: JsonObject) -> JsonObject:
+    parameters = main.get("pull_request_parameters")
+    if not _json_exact(parameters, SOLO_PULL_REQUEST_PARAMETERS):
+        raise GovernanceError(
+            "policy.main.pull_request_parameters must keep the complete "
+            f"solo-owner contract {SOLO_PULL_REQUEST_PARAMETERS!r}"
+        )
+    return parameters
+
+
+def _status_check_parameters(main: JsonObject) -> JsonObject:
+    parameters = main.get("required_status_checks_parameters")
+    if not _json_exact(parameters, MAIN_STATUS_CHECK_PARAMETERS):
+        raise GovernanceError(
+            "policy.main.required_status_checks_parameters must be "
+            f"{MAIN_STATUS_CHECK_PARAMETERS!r}"
+        )
+    return parameters
 
 
 def validate_local(root: Path, policy: JsonObject) -> list[str]:
@@ -605,18 +1115,18 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         )
     if main.get("bypass_actors") != []:
         errors.append("local: policy.main.bypass_actors must remain an empty list")
-    rule_types = main.get("rule_types")
-    if (
-        not isinstance(rule_types, list)
-        or not rule_types
-        or not all(isinstance(rule_type, str) for rule_type in rule_types)
-        or len(rule_types) != len(set(rule_types))
-    ):
+    if main.get("legacy_branch_protection") != "absent":
         errors.append(
-            "local: policy.main.rule_types must be a non-empty unique string allowlist"
+            "local: policy.main.legacy_branch_protection must remain 'absent'"
         )
+    rule_types = main.get("rule_types")
+    if not _json_exact(rule_types, MAIN_RULE_TYPES):
+        errors.append(f"local: policy.main.rule_types must remain {MAIN_RULE_TYPES!r}")
     try:
-        required_bindings = _required_check_bindings(main)
+        _main_ruleset_contract(policy)
+        _pull_request_parameters(main)
+        _status_check_parameters(main)
+        required_contracts = _required_check_contracts(main)
     except GovernanceError as exc:
         errors.append(f"local: {exc}")
         return errors
@@ -630,13 +1140,61 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         except GovernanceError as exc:
             relative = path.relative_to(root.resolve())
             errors.append(f"local: invalid workflow {relative}: {exc}")
-    for context, _ in required_bindings:
+    for contract in required_contracts:
+        context = contract.context
         occurrences = names.count(context)
         if occurrences != 1:
             errors.append(
                 f"local: required check {context!r} must be emitted by exactly "
                 f"one job, found {occurrences}"
             )
+        emitter_path = (root.resolve() / contract.workflow).resolve()
+        document = documents.get(emitter_path)
+        if document is None:
+            errors.append(
+                f"local: required check {context!r} workflow is missing or "
+                f"invalid: {contract.workflow}"
+            )
+            continue
+        try:
+            jobs = _workflow_jobs(document)
+            job = jobs.get(contract.job)
+            if job is None:
+                errors.append(
+                    f"local: required check {context!r} emitter job "
+                    f"{contract.job!r} is missing from {contract.workflow}"
+                )
+                continue
+            name = _mapping_value(job, "name")
+            actual_name = (
+                _scalar_value(
+                    name,
+                    context=(f"{contract.workflow}: job {contract.job!r} name"),
+                )
+                if name is not None
+                else None
+            )
+            if actual_name != context:
+                errors.append(
+                    f"local: required check emitter "
+                    f"{contract.workflow}:{contract.job} is named "
+                    f"{actual_name!r}; expected {context!r}"
+                )
+            actual_triggers = workflow_trigger_config(document)
+            if actual_triggers != contract.triggers:
+                errors.append(
+                    f"local: required check {context!r} triggers are "
+                    f"{actual_triggers!r}; expected {contract.triggers!r}"
+                )
+            errors.extend(
+                f"local: {error}"
+                for error in validate_required_job_graph(
+                    document,
+                    contract.job,
+                )
+            )
+        except GovernanceError as exc:
+            errors.append(f"local: required check {context!r}: {exc}")
 
     required_files = (
         ".github/CODEOWNERS",
@@ -694,6 +1252,7 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
 
 
 def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
+    resource = f"repos/{repository}/{endpoint}" if endpoint else f"repos/{repository}"
     command = [
         "gh",
         "api",
@@ -702,21 +1261,30 @@ def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
         "GET",
         "-H",
         f"X-GitHub-Api-Version: {api_version}",
-        f"repos/{repository}/{endpoint}",
+        resource,
     ]
     try:
         result = subprocess.run(
             command,
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
         normalized = result.stdout.replace("\r\n", "\n")
         if "\n\n" not in normalized:
+            detail = result.stderr.strip() or result.stdout.strip()
             raise GovernanceError(
-                f"GitHub API GET {endpoint!r} omitted response headers"
+                f"GitHub API GET {endpoint!r} omitted response headers: {detail}"
             )
         header_text, body = normalized.split("\n\n", 1)
+        status_line = header_text.splitlines()[0]
+        status_match = re.match(r"^HTTP/\S+\s+(\d{3})\b", status_line)
+        if status_match is None:
+            raise GovernanceError(
+                f"GitHub API GET {endpoint!r} returned invalid status line "
+                f"{status_line!r}"
+            )
+        status = int(status_match.group(1))
         headers: dict[str, str] = {}
         for line in header_text.splitlines()[1:]:
             if ":" not in line:
@@ -729,12 +1297,19 @@ def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
                 if key in headers
                 else normalized_value
             )
-        return ApiResponse(payload=json.loads(body), headers=headers)
+        selected_version = headers.get("x-github-api-version-selected")
+        if selected_version != api_version:
+            raise GovernanceError(
+                f"GitHub API GET {endpoint!r} selected version "
+                f"{selected_version!r}; expected {api_version!r}"
+            )
+        return ApiResponse(
+            payload=json.loads(body),
+            headers=headers,
+            status=status,
+        )
     except FileNotFoundError as exc:
         raise GovernanceError("gh is required for --live verification") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-        raise GovernanceError(f"GitHub API GET {endpoint!r} failed: {detail}") from exc
     except json.JSONDecodeError as exc:
         raise GovernanceError(
             f"GitHub API GET {endpoint!r} returned invalid JSON"
@@ -748,7 +1323,12 @@ def _api_response(value: Any) -> ApiResponse:
 
 
 def _api_payload(api_get: ApiGet, endpoint: str) -> Any:
-    return _api_response(api_get(endpoint)).payload
+    response = _api_response(api_get(endpoint))
+    if not 200 <= response.status < 300:
+        raise GovernanceError(
+            f"GitHub API GET {endpoint!r} returned HTTP {response.status}"
+        )
+    return response.payload
 
 
 def _single_page_items(
@@ -763,6 +1343,10 @@ def _single_page_items(
             f"paginated GitHub endpoint lacks explicit first-page bounds: {endpoint}"
         )
     response = _api_response(api_get(endpoint))
+    if not 200 <= response.status < 300:
+        raise GovernanceError(
+            f"GitHub API GET {endpoint!r} returned HTTP {response.status}"
+        )
     link = response.headers.get("link", "").strip()
     if link:
         raise GovernanceError(
@@ -848,6 +1432,9 @@ def _verify_main_rulesets(
 ) -> list[str]:
     errors: list[str] = []
     main = policy["main"]
+    expected_ruleset = _main_ruleset_contract(policy)
+    expected_pull_request = _pull_request_parameters(main)
+    expected_status_base = _status_check_parameters(main)
     main_ref = main["ref"]
     targeting = [
         ruleset for ruleset in rulesets if _ruleset_targets_main(ruleset, main_ref)
@@ -895,6 +1482,13 @@ def _verify_main_rulesets(
     if len(applicable) != 1:
         return errors
 
+    actual_ruleset = {key: applicable[0].get(key) for key in expected_ruleset}
+    if not _json_exact(actual_ruleset, expected_ruleset):
+        errors.append(
+            "external: active main ruleset identity/target differs exactly; "
+            f"actual={actual_ruleset!r}, expected={expected_ruleset!r}"
+        )
+
     rules = applicable[0].get("rules")
     if not isinstance(rules, list) or any(
         not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
@@ -922,7 +1516,7 @@ def _verify_main_rulesets(
         )
 
     pull_request_rules = _rules(applicable, "pull_request")
-    expected_reviews = main["required_approving_review_count"]
+    expected_reviews = expected_pull_request["required_approving_review_count"]
     for rule in pull_request_rules:
         parameters = rule.get("parameters")
         if not isinstance(parameters, dict):
@@ -930,8 +1524,15 @@ def _verify_main_rulesets(
                 "external: main pull-request rule parameters must be an object"
             )
             continue
+        if not _json_exact(parameters, expected_pull_request):
+            errors.append(
+                "external: main pull-request parameters differ exactly; "
+                f"actual={parameters!r}, expected={expected_pull_request!r}"
+            )
         actual_reviews = parameters.get("required_approving_review_count")
-        if actual_reviews != expected_reviews:
+        if actual_reviews != expected_reviews or type(actual_reviews) is not type(
+            expected_reviews
+        ):
             errors.append(
                 "external: main pull-request rule requires "
                 f"{actual_reviews!r} approvals; expected {expected_reviews}"
@@ -948,6 +1549,17 @@ def _verify_main_rulesets(
             )
 
     status_rules = _rules(applicable, "required_status_checks")
+    expected_bindings = _required_check_bindings(main)
+    expected_status_parameters = {
+        "do_not_enforce_on_create": expected_status_base["do_not_enforce_on_create"],
+        "required_status_checks": [
+            {"context": context, "integration_id": integration_id}
+            for context, integration_id in expected_bindings
+        ],
+        "strict_required_status_checks_policy": expected_status_base[
+            "strict_required_status_checks_policy"
+        ],
+    }
     actual_bindings: list[tuple[str, int]] = []
     strict_enabled = False
     for rule in status_rules:
@@ -957,6 +1569,20 @@ def _verify_main_rulesets(
                 "external: required-status-check parameters must be an object"
             )
             continue
+        if not _json_exact(parameters, expected_status_parameters):
+            errors.append(
+                "external: main required-status-check parameters differ exactly; "
+                f"actual={parameters!r}, expected={expected_status_parameters!r}"
+            )
+        if (
+            parameters.get("do_not_enforce_on_create")
+            is not expected_status_base["do_not_enforce_on_create"]
+        ):
+            errors.append(
+                "external: required status checks do_not_enforce_on_create "
+                f"is {parameters.get('do_not_enforce_on_create')!r}; expected "
+                f"{expected_status_base['do_not_enforce_on_create']!r}"
+            )
         checks = parameters.get("required_status_checks")
         if not isinstance(checks, list):
             errors.append("external: required_status_checks must be an explicit list")
@@ -982,9 +1608,11 @@ def _verify_main_rulesets(
             for check in checks
             if check not in malformed
         )
-        strict_enabled = parameters.get("strict_required_status_checks_policy") is True
+        strict_enabled = (
+            parameters.get("strict_required_status_checks_policy")
+            is expected_status_base["strict_required_status_checks_policy"]
+        )
 
-    expected_bindings = _required_check_bindings(main)
     missing_bindings = sorted(
         (Counter(expected_bindings) - Counter(actual_bindings)).elements()
     )
@@ -1006,8 +1634,10 @@ def _verify_main_rulesets(
             f"duplicates={duplicate_bindings!r}, "
             f"duplicate_contexts={duplicate_contexts!r}"
         )
-    if main["strict_status_checks"] and not strict_enabled:
-        errors.append("external: strict required status checks are not enabled")
+    if not strict_enabled:
+        errors.append(
+            "external: strict required status checks differ from the manifest contract"
+        )
 
     return errors
 
@@ -1084,9 +1714,36 @@ def _normalize_environment_protection_rules(
     return sorted(normalized, key=lambda value: json.dumps(value, sort_keys=True))
 
 
+def _repository_merge_methods(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        raise GovernanceError("GitHub repository response must be an object")
+    settings = {
+        "merge": payload.get("allow_merge_commit"),
+        "squash": payload.get("allow_squash_merge"),
+        "rebase": payload.get("allow_rebase_merge"),
+    }
+    if any(type(value) is not bool for value in settings.values()):
+        raise GovernanceError(
+            "GitHub repository merge-method settings must be explicit booleans"
+        )
+    return [method for method in MERGE_METHODS if settings[method]]
+
+
 def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
     """Read GitHub settings and compare them with the checked-in policy."""
     errors: list[str] = []
+    repository_settings = _api_payload(api_get, "")
+    actual_merge_methods = _repository_merge_methods(repository_settings)
+    expected_merge_methods = _pull_request_parameters(policy["main"])[
+        "allowed_merge_methods"
+    ]
+    if not _json_exact(actual_merge_methods, expected_merge_methods):
+        errors.append(
+            "external: repository merge methods are "
+            f"{actual_merge_methods!r}; expected {expected_merge_methods!r} "
+            "to match the main pull-request rule"
+        )
+
     summaries = _single_page_items(
         api_get,
         "rulesets?includes_parents=true&per_page=100&page=1",
@@ -1100,6 +1757,30 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
             raise GovernanceError("GitHub ruleset detail must be an object")
         rulesets.append(detail)
     errors.extend(_verify_main_rulesets(policy, rulesets))
+
+    main_ref = policy["main"]["ref"]
+    if not isinstance(main_ref, str) or not main_ref.startswith("refs/heads/"):
+        raise GovernanceError("policy.main.ref must be a branch ref")
+    branch_name = main_ref.removeprefix("refs/heads/")
+    protection_endpoint = f"branches/{quote(branch_name, safe='')}/protection"
+    protection = _api_response(api_get(protection_endpoint))
+    if protection.status == 404:
+        if (
+            not isinstance(protection.payload, dict)
+            or protection.payload.get("message") != "Branch not protected"
+        ):
+            raise GovernanceError(
+                "legacy branch protection 404 did not confirm an unprotected branch"
+            )
+    elif 200 <= protection.status < 300:
+        errors.append(
+            "external: legacy main branch protection exists; rulesets are "
+            "the only allowed main protection surface"
+        )
+    else:
+        raise GovernanceError(
+            f"legacy branch protection query returned HTTP {protection.status}"
+        )
 
     actions = _api_payload(api_get, "actions/permissions")
     if not isinstance(actions, dict):

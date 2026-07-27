@@ -3,30 +3,113 @@
   "api_version": "2026-03-10",
   "main": {
     "ref": "refs/heads/main",
+    "legacy_branch_protection": "absent",
+    "ruleset": {
+      "name": "main",
+      "target": "branch",
+      "source_type": "Repository",
+      "source": "syshin0116/syshin0116.dev",
+      "enforcement": "active",
+      "conditions": {
+        "ref_name": {
+          "include": [
+            "~DEFAULT_BRANCH"
+          ],
+          "exclude": []
+        }
+      }
+    },
     "active_ruleset_count": 1,
     "bypass_actors": [],
     "required_checks": [
       {
         "context": "ci/check",
-        "integration_id": 15368
+        "integration_id": 15368,
+        "workflow": ".github/workflows/ci.yml",
+        "job": "check",
+        "triggers": {
+          "pull_request": {},
+          "push": {
+            "branches": [
+              "main"
+            ]
+          },
+          "merge_group": {
+            "types": [
+              "checks_requested"
+            ]
+          },
+          "workflow_dispatch": {}
+        }
       },
       {
         "context": "protocol/compat",
-        "integration_id": 15368
+        "integration_id": 15368,
+        "workflow": ".github/workflows/protocol-compat.yml",
+        "job": "protocol-compat",
+        "triggers": {
+          "pull_request": {},
+          "push": {
+            "branches": [
+              "main"
+            ]
+          },
+          "merge_group": {
+            "types": [
+              "checks_requested"
+            ]
+          },
+          "workflow_dispatch": {}
+        }
       },
       {
         "context": "wiki/verify",
-        "integration_id": 15368
+        "integration_id": 15368,
+        "workflow": ".github/workflows/wiki-verify.yml",
+        "job": "verify-wiki",
+        "triggers": {
+          "pull_request": {},
+          "push": {
+            "branches": [
+              "main"
+            ]
+          },
+          "merge_group": {
+            "types": [
+              "checks_requested"
+            ]
+          },
+          "workflow_dispatch": {}
+        }
       }
     ],
-    "strict_status_checks": true,
-    "required_approving_review_count": 0,
     "rule_types": [
       "deletion",
       "non_fast_forward",
       "pull_request",
       "required_status_checks"
-    ]
+    ],
+    "pull_request_parameters": {
+      "allowed_merge_methods": [
+        "merge",
+        "squash",
+        "rebase"
+      ],
+      "dismiss_stale_reviews_on_push": false,
+      "dismissal_restriction": {
+        "allowed_actors": [],
+        "enabled": false
+      },
+      "require_code_owner_review": false,
+      "require_last_push_approval": false,
+      "required_approving_review_count": 0,
+      "required_review_thread_resolution": false,
+      "required_reviewers": []
+    },
+    "required_status_checks_parameters": {
+      "do_not_enforce_on_create": false,
+      "strict_required_status_checks_policy": true
+    }
   },
   "actions": {
     "enabled": true,

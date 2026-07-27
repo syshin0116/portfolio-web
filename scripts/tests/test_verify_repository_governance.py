@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -16,10 +19,16 @@ ENVIRONMENTS_PAGE = "environments?per_page=100&page=1"
 PRODUCTION_BRANCH_POLICIES_PAGE = (
     "environments/Production/deployment-branch-policies?per_page=100&page=1"
 )
+LEGACY_MAIN_PROTECTION = "branches/main/protection"
 
 
 def desired_live_responses() -> dict[str, object]:
     return {
+        "": {
+            "allow_merge_commit": True,
+            "allow_squash_merge": True,
+            "allow_rebase_merge": True,
+        },
         RULESETS_PAGE: [{"id": 7}],
         "rulesets/7": {
             "id": 7,
@@ -44,14 +53,27 @@ def desired_live_responses() -> dict[str, object]:
                 {
                     "type": "pull_request",
                     "parameters": {
+                        "allowed_merge_methods": [
+                            "merge",
+                            "squash",
+                            "rebase",
+                        ],
+                        "dismiss_stale_reviews_on_push": False,
+                        "dismissal_restriction": {
+                            "allowed_actors": [],
+                            "enabled": False,
+                        },
                         "required_approving_review_count": 0,
                         "require_code_owner_review": False,
                         "require_last_push_approval": False,
+                        "required_review_thread_resolution": False,
+                        "required_reviewers": [],
                     },
                 },
                 {
                     "type": "required_status_checks",
                     "parameters": {
+                        "do_not_enforce_on_create": False,
                         "strict_required_status_checks_policy": True,
                         "required_status_checks": [
                             {"context": "ci/check", "integration_id": 15368},
@@ -73,6 +95,11 @@ def desired_live_responses() -> dict[str, object]:
             "allowed_actions": "all",
             "sha_pinning_required": True,
         },
+        LEGACY_MAIN_PROTECTION: governance.ApiResponse(
+            payload={"message": "Branch not protected", "status": "404"},
+            headers={},
+            status=404,
+        ),
         ENVIRONMENTS_PAGE: {
             "total_count": 2,
             "environments": [
@@ -114,10 +141,61 @@ def desired_live_responses() -> dict[str, object]:
     }
 
 
+def copy_local_governance_fixture(directory: str) -> Path:
+    root = Path(directory)
+    shutil.copytree(REPO_ROOT / ".github", root / ".github")
+    return root
+
+
 class LocalGovernanceTests(unittest.TestCase):
     def test_repository_policy_and_workflows_are_locally_valid(self) -> None:
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
+
+    def test_policy_rejects_an_overbroad_main_ruleset(self) -> None:
+        policy = json.loads(json.dumps(governance.load_policy()))
+        policy["main"]["ruleset"]["conditions"]["ref_name"]["include"] = ["~ALL"]
+
+        errors = governance.validate_local(REPO_ROOT, policy)
+
+        self.assertTrue(
+            any(
+                "policy.main.ruleset" in error and "~DEFAULT_BRANCH" in error
+                for error in errors
+            )
+        )
+
+    def test_policy_rejects_solo_owner_review_deadlock_parameters(self) -> None:
+        policy = json.loads(json.dumps(governance.load_policy()))
+        policy["main"]["pull_request_parameters"][
+            "required_review_thread_resolution"
+        ] = True
+
+        errors = governance.validate_local(REPO_ROOT, policy)
+
+        self.assertTrue(
+            any(
+                "complete solo-owner contract" in error
+                and "pull_request_parameters" in error
+                for error in errors
+            )
+        )
+
+    def test_policy_keeps_status_checks_enforced_on_existing_main(self) -> None:
+        policy = json.loads(json.dumps(governance.load_policy()))
+        policy["main"]["required_status_checks_parameters"][
+            "do_not_enforce_on_create"
+        ] = True
+
+        errors = governance.validate_local(REPO_ROOT, policy)
+
+        self.assertTrue(
+            any(
+                "required_status_checks_parameters" in error
+                and "do_not_enforce_on_create" in error
+                for error in errors
+            )
+        )
 
     def test_unpinned_action_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -133,8 +211,12 @@ jobs:
       - uses: actions/checkout@v7
   protocol:
     name: protocol/compat
+    steps:
+      - run: echo protocol
   wiki:
     name: wiki/verify
+    steps:
+      - run: echo wiki
 """.lstrip(),
                 encoding="utf-8",
             )
@@ -157,22 +239,25 @@ jobs:
 
         self.assertIsNone(governance.FULL_SHA_ACTION.fullmatch(reference))
 
-    def test_flow_mapping_uses_is_found_by_ast_walk(self) -> None:
+    def test_flow_mapping_step_uses_is_checked_in_position(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            workflow = Path(directory) / "flow.yml"
+            root = Path(directory)
+            workflow = root / ".github/workflows/flow.yml"
+            workflow.parent.mkdir(parents=True)
             workflow.write_text(
                 'jobs: {check: {steps: [{"uses": actions/checkout@v7}]}}\n',
                 encoding="utf-8",
             )
 
-            document = governance.load_yaml_document(workflow)
-            references = list(governance.external_action_references(document))
+            _, errors = governance.validate_repository_yaml_references(root)
 
-        self.assertEqual([(1, "actions/checkout@v7")], references)
+        self.assertTrue(any("actions/checkout@v7" in error for error in errors))
 
-    def test_explicit_quoted_uses_key_is_found_by_ast_walk(self) -> None:
+    def test_explicit_quoted_step_uses_is_checked_in_position(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            workflow = Path(directory) / "explicit.yml"
+            root = Path(directory)
+            workflow = root / ".github/workflows/explicit.yml"
+            workflow.parent.mkdir(parents=True)
             workflow.write_text(
                 """
 jobs:
@@ -184,10 +269,9 @@ jobs:
                 encoding="utf-8",
             )
 
-            document = governance.load_yaml_document(workflow)
-            references = list(governance.external_action_references(document))
+            _, errors = governance.validate_repository_yaml_references(root)
 
-        self.assertEqual([(5, "actions/checkout@v7")], references)
+        self.assertTrue(any("actions/checkout@v7" in error for error in errors))
 
     def test_duplicate_yaml_key_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -243,28 +327,45 @@ jobs:
             ):
                 governance.load_yaml_document(workflow)
 
-    def test_local_action_reference_is_excluded(self) -> None:
+    def test_valid_local_composite_action_reference_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            workflow = Path(directory) / "local.yml"
+            root = Path(directory)
+            workflow = root / ".github/workflows/local.yml"
+            action = root / ".github/actions/check/action.yml"
+            workflow.parent.mkdir(parents=True)
+            action.parent.mkdir(parents=True)
             workflow.write_text(
-                "jobs: {check: {uses: ./.github/workflows/check.yml}}\n",
+                """
+jobs:
+  check:
+    steps:
+      - uses: ./.github/actions/check
+""".lstrip(),
+                encoding="utf-8",
+            )
+            action.write_text(
+                """
+name: check
+runs:
+  using: composite
+  steps:
+    - run: echo ok
+      shell: bash
+""".lstrip(),
                 encoding="utf-8",
             )
 
-            document = governance.load_yaml_document(workflow)
+            _, errors = governance.validate_repository_yaml_references(root)
 
-        self.assertEqual(
-            [],
-            list(governance.external_action_references(document)),
-        )
+        self.assertEqual([], errors)
 
-    def test_nested_workflow_is_included_in_repository_ast_walk(self) -> None:
+    def test_nested_workflow_is_rejected_as_non_executable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             nested = root / ".github/workflows/nested/check.yaml"
             nested.parent.mkdir(parents=True)
             nested.write_text(
-                "jobs: {check: {uses: actions/checkout@v7}}\n",
+                "jobs: {check: {steps: [{run: echo ignored}]}}\n",
                 encoding="utf-8",
             )
 
@@ -273,7 +374,7 @@ jobs:
         self.assertTrue(
             any(
                 ".github/workflows/nested/check.yaml" in error
-                and "actions/checkout@v7" in error
+                and "not supported by GitHub" in error
                 for error in errors
             )
         )
@@ -288,7 +389,12 @@ jobs:
             outer.parent.mkdir(parents=True)
             inner.parent.mkdir(parents=True)
             workflow.write_text(
-                "jobs: {check: {uses: ./.github/actions/outer}}\n",
+                """
+jobs:
+  check:
+    steps:
+      - uses: ./.github/actions/outer
+""".lstrip(),
                 encoding="utf-8",
             )
             outer.write_text(
@@ -322,13 +428,248 @@ runs:
             )
         )
 
+    def test_ordinary_uses_keys_are_not_treated_as_invocations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/ordinary.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                """
+on:
+  workflow_call:
+    inputs:
+      uses:
+        required: false
+        type: string
+env:
+  uses: actions/checkout@v7
+jobs:
+  check:
+    env:
+      uses: actions/checkout@v7
+    steps:
+      - run: echo ok
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertEqual([], errors)
+
+    def test_job_level_uses_cannot_target_an_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/inverted.yml"
+            action = root / ".github/actions/check/action.yml"
+            workflow.parent.mkdir(parents=True)
+            action.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs: {check: {uses: ./.github/actions/check}}\n",
+                encoding="utf-8",
+            )
+            action.write_text(
+                """
+name: check
+runs:
+  using: composite
+  steps:
+    - run: echo ok
+      shell: bash
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(any("job-level uses must target" in error for error in errors))
+
+    def test_step_level_uses_cannot_target_a_reusable_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            caller = root / ".github/workflows/caller.yml"
+            reusable = root / ".github/workflows/reusable.yml"
+            caller.parent.mkdir(parents=True)
+            caller.write_text(
+                """
+jobs:
+  check:
+    steps:
+      - uses: ./.github/workflows/reusable.yml
+""".lstrip(),
+                encoding="utf-8",
+            )
+            reusable.write_text(
+                """
+on:
+  workflow_call:
+jobs:
+  called:
+    steps:
+      - run: echo called
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(
+            any("step-level uses cannot target" in error for error in errors)
+        )
+
+    def test_valid_top_level_reusable_workflow_reference_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            caller = root / ".github/workflows/caller.yml"
+            reusable = root / ".github/workflows/reusable.yml"
+            caller.parent.mkdir(parents=True)
+            caller.write_text(
+                "jobs: {check: {uses: ./.github/workflows/reusable.yml}}\n",
+                encoding="utf-8",
+            )
+            reusable.write_text(
+                """
+on:
+  workflow_call:
+jobs:
+  called:
+    steps:
+      - run: echo called
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertEqual([], errors)
+
+    def test_reusable_workflow_without_workflow_call_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            caller = root / ".github/workflows/caller.yml"
+            reusable = root / ".github/workflows/reusable.yml"
+            caller.parent.mkdir(parents=True)
+            caller.write_text(
+                "jobs: {check: {uses: ./.github/workflows/reusable.yml}}\n",
+                encoding="utf-8",
+            )
+            reusable.write_text(
+                """
+on:
+  workflow_dispatch:
+jobs:
+  called:
+    steps:
+      - run: echo called
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(any("lacks on.workflow_call" in error for error in errors))
+
+    def test_repository_action_must_be_composite(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            action = root / ".github/actions/node/action.yml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                """
+name: node action
+runs:
+  using: node20
+  main: index.js
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(
+            any("runs.using must be 'composite'" in error for error in errors)
+        )
+
+    def test_external_action_and_reusable_workflow_positions_pass(self) -> None:
+        sha = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/external.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                f"""
+jobs:
+  action:
+    steps:
+      - uses: actions/checkout@{sha}
+  reusable:
+    uses: owner/repo/.github/workflows/reusable.yml@{sha}
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertEqual([], errors)
+
+    def test_external_reusable_workflow_must_use_a_full_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/external.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                """
+jobs:
+  reusable:
+    uses: owner/repo/.github/workflows/reusable.yml@main
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(
+            any(
+                "job-level uses must reference" in error
+                and "reusable.yml@main" in error
+                for error in errors
+            )
+        )
+
+    def test_external_job_action_and_step_workflow_inversions_fail(self) -> None:
+        sha = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/external-inverted.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                f"""
+jobs:
+  action-as-job:
+    uses: actions/checkout@{sha}
+  workflow-as-step:
+    steps:
+      - uses: owner/repo/.github/workflows/reusable.yml@{sha}
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(
+            any("job-level uses must reference" in error for error in errors)
+        )
+        self.assertTrue(
+            any("step-level uses cannot target" in error for error in errors)
+        )
+
     def test_local_action_target_escape_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workflow = root / ".github/workflows/check.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
-                "jobs: {check: {uses: ./../outside}}\n",
+                "jobs: {check: {steps: [{uses: ./../outside}]}}\n",
                 encoding="utf-8",
             )
 
@@ -342,7 +683,7 @@ runs:
             workflow = root / ".github/workflows/check.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
-                "jobs: {check: {uses: ./.github/actions/missing}}\n",
+                "jobs: {check: {steps: [{uses: ./.github/actions/missing}]}}\n",
                 encoding="utf-8",
             )
 
@@ -459,36 +800,196 @@ runs:
 
     def test_duplicate_required_check_name_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            workflows = root / ".github/workflows"
-            workflows.mkdir(parents=True)
-            (workflows / "one.yml").write_text(
-                "jobs:\n  first:\n    name: ci/check\n",
+            root = copy_local_governance_fixture(directory)
+            duplicate = root / ".github/workflows/duplicate.yml"
+            duplicate.write_text(
+                """
+jobs:
+  duplicate:
+    name: ci/check
+    steps:
+      - run: echo duplicate
+""".lstrip(),
                 encoding="utf-8",
             )
-            (workflows / "two.yml").write_text(
-                "jobs:\n  second:\n    name: ci/check\n",
-                encoding="utf-8",
-            )
-            policy = {
-                "main": {
-                    "required_checks": [
-                        {"context": "ci/check", "integration_id": 15368},
-                        {
-                            "context": "protocol/compat",
-                            "integration_id": 15368,
-                        },
-                        {"context": "wiki/verify", "integration_id": 15368},
-                    ]
-                }
-            }
 
-            errors = governance.validate_local(root, policy)
+            errors = governance.validate_local(root, governance.load_policy())
 
         self.assertIn(
             "local: required check 'ci/check' must be emitted by exactly "
             "one job, found 2",
             errors,
+        )
+
+    def test_nested_fake_emitter_cannot_replace_top_level_required_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            ci = root / ".github/workflows/ci.yml"
+            original = ci.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "    name: ci/check\n",
+                "    name: ci/check-renamed\n",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            ci.write_text(mutated, encoding="utf-8")
+            nested = root / ".github/workflows/fake/ci.yml"
+            nested.parent.mkdir(parents=True)
+            nested.write_text(
+                """
+jobs:
+  check:
+    name: ci/check
+    steps:
+      - run: echo fake
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "nested workflow YAML is not supported by GitHub" in error
+                and ".github/workflows/fake/ci.yml" in error
+                for error in errors
+            )
+        )
+        self.assertIn(
+            "local: required check 'ci/check' must be emitted by exactly "
+            "one job, found 0",
+            errors,
+        )
+        self.assertTrue(
+            any(
+                ".github/workflows/ci.yml:check is named 'ci/check-renamed'" in error
+                for error in errors
+            )
+        )
+
+    def test_required_context_in_wrong_job_id_fails_emitter_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows/protocol-compat.yml"
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "  protocol-compat:\n",
+                "  renamed-protocol-job:\n",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertIn(
+            "local: required check 'protocol/compat' emitter job "
+            "'protocol-compat' is missing from "
+            ".github/workflows/protocol-compat.yml",
+            errors,
+        )
+
+    def test_schedule_only_required_workflow_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows/wiki-verify.yml"
+            original = workflow.read_text(encoding="utf-8")
+            mutated = re.sub(
+                r"(?ms)^on:\n.*?^permissions:",
+                (
+                    "on:\n"
+                    "  schedule:\n"
+                    '    - cron: "17 18 * * 0"\n'
+                    "  workflow_dispatch:\n\n"
+                    "permissions:"
+                ),
+                original,
+                count=1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "required check 'wiki/verify' triggers are" in error
+                and "'schedule'" in error
+                for error in errors
+            )
+        )
+
+    def test_pull_request_paths_filter_on_required_workflow_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows/protocol-compat.yml"
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "  pull_request:\n",
+                '  pull_request:\n    paths:\n      - "protocol/**"\n',
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "required check 'protocol/compat' triggers are" in error
+                and "'paths': ['protocol/**']" in error
+                for error in errors
+            )
+        )
+
+    def test_required_aggregate_with_needs_must_use_always(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows/ci.yml"
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "  check:\n    name: ci/check\n    if: always()\n",
+                "  check:\n    name: ci/check\n",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "job 'check' has needs and must use if: always()" in error
+                for error in errors
+            )
+        )
+
+    def test_required_dependency_with_skipping_condition_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows/ci.yml"
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "  web:\n    name: ci/web\n    if: always()\n",
+                ("  web:\n    name: ci/web\n    if: github.actor == 'nobody'\n"),
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "job 'web' can skip required-check creation" in error
+                for error in errors
+            )
+        )
+        self.assertTrue(
+            any(
+                "job 'web' has needs and must use if: always()" in error
+                for error in errors
+            )
         )
 
 
@@ -503,6 +1004,214 @@ class LiveGovernanceTests(unittest.TestCase):
         errors = governance.verify_live(self.policy, responses.__getitem__)
 
         self.assertEqual([], errors)
+
+    def test_repository_merge_methods_must_match_pull_request_rule(self) -> None:
+        responses = desired_live_responses()
+        repository = json.loads(json.dumps(responses[""]))
+        repository["allow_rebase_merge"] = False
+        responses[""] = repository
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "repository merge methods" in error and "'rebase'" in error
+                for error in errors
+            )
+        )
+
+    def test_pull_request_owned_parameter_mutations_fail_exactly(self) -> None:
+        mutations = (
+            ("allowed_merge_methods", ["squash"]),
+            ("dismiss_stale_reviews_on_push", True),
+            (
+                "dismissal_restriction",
+                {"allowed_actors": [], "enabled": True},
+            ),
+            ("require_last_push_approval", True),
+            ("required_review_thread_resolution", True),
+            (
+                "required_reviewers",
+                [
+                    {
+                        "file_patterns": ["web/**"],
+                        "minimum_approvals": 1,
+                        "reviewer": {"id": 17, "type": "Team"},
+                    }
+                ],
+            ),
+            ("undocumented_semantic_gate", True),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                responses = desired_live_responses()
+                ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+                pull_request = next(
+                    rule for rule in ruleset["rules"] if rule["type"] == "pull_request"
+                )
+                pull_request["parameters"][field] = value
+                responses["rulesets/7"] = ruleset
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "main pull-request parameters differ exactly" in error
+                        for error in errors
+                    )
+                )
+
+    def test_status_check_owned_parameter_mutations_fail_exactly(self) -> None:
+        mutations = (
+            ("do_not_enforce_on_create", True),
+            ("strict_required_status_checks_policy", False),
+            ("undocumented_semantic_gate", True),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                responses = desired_live_responses()
+                ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+                status = next(
+                    rule
+                    for rule in ruleset["rules"]
+                    if rule["type"] == "required_status_checks"
+                )
+                status["parameters"][field] = value
+                responses["rulesets/7"] = ruleset
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "required-status-check parameters differ exactly" in error
+                        for error in errors
+                    )
+                )
+
+    def test_main_ruleset_owned_identity_is_exact(self) -> None:
+        mutations = (
+            ("name", "not-main"),
+            (
+                "conditions",
+                {
+                    "ref_name": {
+                        "include": ["~ALL"],
+                        "exclude": [],
+                    }
+                },
+            ),
+            ("source", "another-owner/another-repository"),
+            ("source_type", "Organization"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                responses = desired_live_responses()
+                ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+                ruleset[field] = value
+                responses["rulesets/7"] = ruleset
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "ruleset identity/target differs exactly" in error
+                        for error in errors
+                    )
+                )
+
+    def test_non_branch_ruleset_cannot_satisfy_main_contract(self) -> None:
+        responses = desired_live_responses()
+        ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+        ruleset["target"] = "tag"
+        responses["rulesets/7"] = ruleset
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "0 active branch rulesets target refs/heads/main" in error
+                for error in errors
+            )
+        )
+
+    def test_legacy_main_branch_protection_is_rejected(self) -> None:
+        responses = desired_live_responses()
+        responses[LEGACY_MAIN_PROTECTION] = governance.ApiResponse(
+            payload={"required_status_checks": {}},
+            headers={},
+            status=200,
+        )
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertIn(
+            "external: legacy main branch protection exists; rulesets are "
+            "the only allowed main protection surface",
+            errors,
+        )
+
+    def test_legacy_protection_404_requires_exact_absence_message(self) -> None:
+        responses = desired_live_responses()
+        responses[LEGACY_MAIN_PROTECTION] = governance.ApiResponse(
+            payload={"message": "Not Found", "status": "404"},
+            headers={},
+            status=404,
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "did not confirm an unprotected branch",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_legacy_protection_query_fails_closed_on_forbidden(self) -> None:
+        responses = desired_live_responses()
+        responses[LEGACY_MAIN_PROTECTION] = governance.ApiResponse(
+            payload={"message": "Resource not accessible"},
+            headers={},
+            status=403,
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "returned HTTP 403",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_gh_api_rejects_an_unselected_api_version(self) -> None:
+        completed = governance.subprocess.CompletedProcess(
+            args=["gh", "api"],
+            returncode=0,
+            stdout=(
+                "HTTP/2.0 200 OK\nX-GitHub-Api-Version-Selected: 2022-11-28\n\n{}\n"
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(
+                governance.subprocess,
+                "run",
+                return_value=completed,
+            ),
+            self.assertRaisesRegex(
+                governance.GovernanceError,
+                "selected version '2022-11-28'",
+            ),
+        ):
+            governance._gh_api(
+                "owner/repository",
+                "2026-03-10",
+                "actions/permissions",
+            )
 
     def test_solo_deadlocks_and_missing_guards_are_reported(self) -> None:
         responses = desired_live_responses()

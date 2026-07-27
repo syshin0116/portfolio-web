@@ -22,14 +22,14 @@ class TypeScriptContractGenerationTests(unittest.TestCase):
             report = typescript_contract.generate_contract(output)
             generated = (output / "fixture-contract.ts").read_text(encoding="utf-8")
 
-            self.assertEqual(52, report.records)
-            self.assertEqual(36, report.typed_events)
+            self.assertEqual(53, report.records)
+            self.assertEqual(37, report.typed_events)
             self.assertEqual(
                 {
                     "aegra_raw_event": 1,
                     "command": 5,
                     "command_response": 5,
-                    "event": 35,
+                    "event": 36,
                     "normalized_event": 1,
                     "stream_request": 5,
                 },

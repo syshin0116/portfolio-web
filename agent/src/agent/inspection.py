@@ -14,9 +14,11 @@ budget measurements.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from langgraph.prebuilt import ToolRuntime
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
 
 INSPECTION_EVENT_NAME = "syshin.rag.inspection.v1"
 INSPECTION_SCHEMA_VERSION = 1
+INSPECTION_DELIVERY = "live-run-only"
 
 MAX_EVENT_BYTES = 65_536
 MAX_QUERY_CHARACTERS = 1_000
@@ -41,16 +44,21 @@ MAX_TOOL_CALL_ID_CHARACTERS = 256
 MAX_METHOD_ID_CHARACTERS = 128
 MAX_IMPLEMENTATION_ID_CHARACTERS = 256
 MAX_FINGERPRINT_CHARACTERS = 256
-MAX_STAGE_COUNT = 16
 MAX_ELAPSED_MS = 86_400_000.0
 MAX_HIT_COUNT = 10_000
 MAX_CORPUS_DOCUMENT_COUNT = 1_000_000
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+_METHOD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_IMPLEMENTATION_ID = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:/+-]*@[A-Za-z0-9][A-Za-z0-9._+-]*$"
+)
+_OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#@+-]*$")
 _PAYLOAD_KEYS = frozenset(
     {
         "corpus_document_count",
         "corpus_revision",
+        "delivery",
         "hit_count",
         "kind",
         "method_id",
@@ -79,10 +87,42 @@ _STAGE_KEYS = frozenset(
 )
 _APPLICATION_KEYS = frozenset({"input_count", "output_count", "status"})
 _ENVELOPE_KEYS = frozenset({"name", "payload"})
+_LOGGER = logging.getLogger(__name__)
 
 
 class InspectionContractError(ValueError):
     """An inspection payload would violate the public event contract."""
+
+
+def _record_suppression(reason: str) -> None:
+    """Record one content-free best-effort instrumentation suppression."""
+
+    with suppress(Exception):
+        _LOGGER.warning(
+            "rag_inspection_suppressed",
+            extra={
+                "inspection_suppression_reason": reason,
+                "inspection_suppression_count": 1,
+            },
+        )
+
+
+def _validate_unicode_scalar_text(value: str, *, field: str) -> None:
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise InspectionContractError(
+            f"{field} must contain only Unicode scalar values"
+        )
+
+
+def validate_retrieval_query(value: object) -> str:
+    """Reject unsafe query code points before any retriever is called."""
+
+    if not isinstance(value, str):
+        raise InspectionContractError("query must be a string")
+    if "\x00" in value:
+        raise InspectionContractError("query must not contain null bytes")
+    _validate_unicode_scalar_text(value, field="query")
+    return value
 
 
 def _mapping(value: object, *, field: str) -> Mapping[str, object]:
@@ -129,7 +169,21 @@ def _string(
         )
     if "\x00" in value:
         raise InspectionContractError(f"{field} must not contain null bytes")
+    _validate_unicode_scalar_text(value, field=field)
     return value
+
+
+def _identifier(
+    value: object,
+    *,
+    field: str,
+    maximum: int,
+    pattern: re.Pattern[str],
+) -> str:
+    identifier = _string(value, field=field, maximum=maximum)
+    if pattern.fullmatch(identifier) is None:
+        raise InspectionContractError(f"{field} must be an ASCII safe identifier")
+    return identifier
 
 
 def _sha256(value: object, *, field: str) -> str:
@@ -168,7 +222,10 @@ def _finite_number(
 ) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise InspectionContractError(f"{field} must be a finite number")
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise InspectionContractError(f"{field} must be a finite number") from exc
     if not math.isfinite(number):
         raise InspectionContractError(f"{field} must be a finite number")
     if minimum is not None and number < minimum:
@@ -176,6 +233,21 @@ def _finite_number(
     if maximum is not None and number > maximum:
         raise InspectionContractError(f"{field} must be at most {maximum}")
     return number
+
+
+def _canonical_payload_bytes(value: object) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (OverflowError, TypeError, UnicodeEncodeError, ValueError) as exc:
+        raise InspectionContractError(
+            "inspection payload must be canonical UTF-8 JSON"
+        ) from exc
 
 
 def _normalize_method_identity(
@@ -189,19 +261,21 @@ def _normalize_method_identity(
         required=_METHOD_IDENTITY_KEYS,
         field="method_identity",
     )
-    identity_method_id = _string(
+    identity_method_id = _identifier(
         identity["method_id"],
         field="method_identity.method_id",
         maximum=MAX_METHOD_ID_CHARACTERS,
+        pattern=_METHOD_ID,
     )
     if identity_method_id != method_id:
         raise InspectionContractError("method_identity.method_id must equal method_id")
     return {
         "method_id": identity_method_id,
-        "implementation_id": _string(
+        "implementation_id": _identifier(
             identity["implementation_id"],
             field="method_identity.implementation_id",
             maximum=MAX_IMPLEMENTATION_ID_CHARACTERS,
+            pattern=_IMPLEMENTATION_ID,
         ),
         "fingerprint": _sha256(
             identity["fingerprint"],
@@ -294,10 +368,11 @@ def _normalize_source(
             field=f"{field}.score",
         )
     if "chunk_id" in source:
-        normalized["chunk_id"] = _string(
+        normalized["chunk_id"] = _identifier(
             source["chunk_id"],
             field=f"{field}.chunk_id",
             maximum=MAX_CHUNK_ID_CHARACTERS,
+            pattern=_OPAQUE_ID,
         )
     return normalized
 
@@ -312,17 +387,19 @@ def _normalize_stage(
     field = f"stages[{index}]"
     stage = _mapping(value, field=field)
     _exact_keys(stage, required=_STAGE_KEYS, field=field)
-    stage_id = _string(
+    stage_id = _identifier(
         stage["stage_id"],
         field=f"{field}.stage_id",
         maximum=MAX_METHOD_ID_CHARACTERS,
+        pattern=_METHOD_ID,
     )
     if stage_id != method_identity["method_id"]:
         raise InspectionContractError(f"{field}.stage_id must equal method_id")
-    implementation_id = _string(
+    implementation_id = _identifier(
         stage["implementation_id"],
         field=f"{field}.implementation_id",
         maximum=MAX_IMPLEMENTATION_ID_CHARACTERS,
+        pattern=_IMPLEMENTATION_ID,
     )
     if implementation_id != method_identity["implementation_id"]:
         raise InspectionContractError(
@@ -398,10 +475,13 @@ def normalize_retrieval_inspection(
         )
     if payload["kind"] != "retrieval":
         raise InspectionContractError("kind must be 'retrieval'")
-    tool_call_id = _string(
+    if payload["delivery"] != INSPECTION_DELIVERY:
+        raise InspectionContractError(f"delivery must be {INSPECTION_DELIVERY!r}")
+    tool_call_id = _identifier(
         payload["tool_call_id"],
         field="tool_call_id",
         maximum=MAX_TOOL_CALL_ID_CHARACTERS,
+        pattern=_OPAQUE_ID,
     )
     query = _string(
         payload["query"],
@@ -413,10 +493,11 @@ def normalize_retrieval_inspection(
         raise InspectionContractError("query must contain non-whitespace text")
     if not isinstance(payload["query_truncated"], bool):
         raise InspectionContractError("query_truncated must be a boolean")
-    method_id = _string(
+    method_id = _identifier(
         payload["method_id"],
         field="method_id",
         maximum=MAX_METHOD_ID_CHARACTERS,
+        pattern=_METHOD_ID,
     )
     method_identity = _normalize_method_identity(
         payload["method_identity"],
@@ -458,23 +539,23 @@ def normalize_retrieval_inspection(
     ranks = [source["rank"] for source in sources]
     if ranks != list(range(1, len(sources) + 1)):
         raise InspectionContractError("source ranks must be contiguous 1..N")
-    expected_source_count = min(hit_count, MAX_SOURCE_COUNT)
-    if len(sources) != expected_source_count:
+    maximum_source_count = min(hit_count, MAX_SOURCE_COUNT)
+    if len(sources) > maximum_source_count:
         raise InspectionContractError(
-            "sources must include the bounded prefix of all ranked hits"
+            "sources cannot exceed the bounded prefix of ranked hits"
         )
-    expected_sources_truncated = hit_count > MAX_SOURCE_COUNT
+    expected_sources_truncated = len(sources) < hit_count
     if payload["sources_truncated"] is not expected_sources_truncated:
         raise InspectionContractError(
-            "sources_truncated must reflect the source-count bound"
+            "sources_truncated must reflect the count or byte-budget prefix"
         )
 
     raw_stages = payload["stages"]
     if not isinstance(raw_stages, (list, tuple)):
         raise InspectionContractError("stages must be an array")
-    if not 1 <= len(raw_stages) <= MAX_STAGE_COUNT:
+    if len(raw_stages) != 1:
         raise InspectionContractError(
-            f"stages must contain between 1 and {MAX_STAGE_COUNT} items"
+            "stages must contain exactly one observed retriever stage"
         )
     stages = [
         _normalize_stage(
@@ -488,6 +569,7 @@ def normalize_retrieval_inspection(
     normalized: dict[str, object] = {
         "schema_version": INSPECTION_SCHEMA_VERSION,
         "kind": "retrieval",
+        "delivery": INSPECTION_DELIVERY,
         "tool_call_id": tool_call_id,
         "query": query,
         "query_truncated": payload["query_truncated"],
@@ -500,13 +582,7 @@ def normalize_retrieval_inspection(
         "sources_truncated": payload["sources_truncated"],
         "stages": stages,
     }
-    encoded = json.dumps(
-        normalized,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    encoded = _canonical_payload_bytes(normalized)
     if len(encoded) > MAX_EVENT_BYTES:
         raise InspectionContractError(
             f"inspection payload must be at most {MAX_EVENT_BYTES} bytes"
@@ -514,13 +590,15 @@ def normalize_retrieval_inspection(
     return normalized
 
 
-def _bounded_display_text(value: str, *, maximum: int) -> tuple[str, bool]:
-    normalized = value.replace("\x00", "").strip()
-    if not normalized:
-        return "", False
-    if len(normalized) <= maximum:
-        return normalized, False
-    return normalized[:maximum], True
+def _bounded_prefix(value: str, *, field: str, maximum: int) -> tuple[str, bool]:
+    if not isinstance(value, str):
+        raise InspectionContractError(f"{field} must be a string")
+    if "\x00" in value:
+        raise InspectionContractError(f"{field} must not contain null bytes")
+    _validate_unicode_scalar_text(value, field=field)
+    if len(value) <= maximum:
+        return value, False
+    return value[:maximum], True
 
 
 def build_retrieval_inspection(
@@ -533,8 +611,9 @@ def build_retrieval_inspection(
 ) -> dict[str, object]:
     """Build one whitelisted observation from a completed ranked retrieval."""
 
-    query, query_truncated = _bounded_display_text(
+    query, query_truncated = _bounded_prefix(
         retrieval.query,
+        field="query",
         maximum=MAX_QUERY_CHARACTERS,
     )
     implementation_id = retriever.registration.implementation_id
@@ -543,11 +622,12 @@ def build_retrieval_inspection(
     sources: list[dict[str, object]] = []
     for hit in retrieval.hits[:MAX_SOURCE_COUNT]:
         entry = runtime.entry(hit.doc_id)
-        title, _title_truncated = _bounded_display_text(
+        title, _title_truncated = _bounded_prefix(
             entry.title,
+            field=f"source title for rank {hit.rank}",
             maximum=MAX_SOURCE_TITLE_CHARACTERS,
         )
-        if not title:
+        if not title.strip():
             title = str(hit.doc_id)
         source: dict[str, object] = {
             "doc_id": str(hit.doc_id),
@@ -561,18 +641,23 @@ def build_retrieval_inspection(
         }
         if hit.score is not None:
             source["score"] = hit.score
-        if (
-            hit.chunk_id is not None
-            and len(hit.chunk_id) <= MAX_CHUNK_ID_CHARACTERS
-            and "\x00" not in hit.chunk_id
-        ):
-            source["chunk_id"] = hit.chunk_id
+        if hit.chunk_id is not None:
+            # Chunk identity is optional public metadata. An unsafe opaque ID is
+            # omitted rather than allowed to break the retrieval result.
+            with suppress(InspectionContractError):
+                source["chunk_id"] = _identifier(
+                    hit.chunk_id,
+                    field=f"chunk_id for rank {hit.rank}",
+                    maximum=MAX_CHUNK_ID_CHARACTERS,
+                    pattern=_OPAQUE_ID,
+                )
         sources.append(source)
 
     hit_count = len(retrieval.hits)
     payload = {
         "schema_version": INSPECTION_SCHEMA_VERSION,
         "kind": "retrieval",
+        "delivery": INSPECTION_DELIVERY,
         "tool_call_id": tool_call_id,
         "query": query,
         "query_truncated": query_truncated,
@@ -586,7 +671,7 @@ def build_retrieval_inspection(
         "corpus_revision": corpus_revision,
         "corpus_document_count": len(runtime.corpus.doc_ids()),
         "sources": sources,
-        "sources_truncated": hit_count > MAX_SOURCE_COUNT,
+        "sources_truncated": hit_count > len(sources),
         "stages": [
             {
                 "stage_id": retriever.method_id,
@@ -601,6 +686,11 @@ def build_retrieval_inspection(
             }
         ],
     }
+    while (
+        len(_canonical_payload_bytes(payload)) > MAX_EVENT_BYTES and payload["sources"]
+    ):
+        payload["sources"].pop()
+        payload["sources_truncated"] = len(payload["sources"]) < hit_count
     return normalize_retrieval_inspection(payload)
 
 
@@ -616,6 +706,7 @@ def emit_retrieval_inspection(
 
     tool_call_id = tool_runtime.tool_call_id if tool_runtime is not None else None
     if not isinstance(tool_call_id, str) or not tool_call_id:
+        _record_suppression("missing-tool-runtime")
         return False
     try:
         payload = build_retrieval_inspection(
@@ -626,31 +717,45 @@ def emit_retrieval_inspection(
             elapsed_ms=elapsed_ms,
         )
     except InspectionContractError:
+        _record_suppression("contract-rejected")
         return False
-    return emit_inspection_payload(tool_runtime, payload)
+    except Exception:
+        _record_suppression("instrumentation-failed")
+        return False
+    return _emit_inspection_payload(tool_runtime, payload)
 
 
-def emit_inspection_payload(
+def _emit_inspection_payload(
     tool_runtime: ToolRuntime | None,
     payload: object,
 ) -> bool:
-    """Emit an already observed payload through a trusted tool runtime."""
+    """Test-only raw boundary; production uses ``build_retrieval_inspection``."""
 
     tool_call_id = tool_runtime.tool_call_id if tool_runtime is not None else None
     if not isinstance(tool_call_id, str) or not tool_call_id:
+        _record_suppression("missing-tool-runtime")
         return False
     try:
         normalized = normalize_retrieval_inspection(payload)
     except InspectionContractError:
+        _record_suppression("contract-rejected")
+        return False
+    except Exception:
+        _record_suppression("instrumentation-failed")
         return False
     if normalized["tool_call_id"] != tool_call_id:
+        _record_suppression("tool-call-mismatch")
         return False
-    tool_runtime.stream_writer(
-        {
-            "name": INSPECTION_EVENT_NAME,
-            "payload": normalized,
-        }
-    )
+    try:
+        tool_runtime.stream_writer(
+            {
+                "name": INSPECTION_EVENT_NAME,
+                "payload": normalized,
+            }
+        )
+    except Exception:
+        _record_suppression("writer-failed")
+        return False
     return True
 
 
@@ -678,6 +783,10 @@ class InspectionEventTransformer(StreamTransformer):
         except InspectionContractError:
             # Suppress malformed marked envelopes entirely so a generic custom
             # subscriber cannot observe fields rejected by the public contract.
+            _record_suppression("transformer-contract-rejected")
+            return False
+        except Exception:
+            _record_suppression("transformer-failed")
             return False
         event["method"] = f"custom:{INSPECTION_EVENT_NAME}"
         event["params"]["data"] = payload
@@ -685,12 +794,13 @@ class InspectionEventTransformer(StreamTransformer):
 
 
 __all__ = [
+    "INSPECTION_DELIVERY",
     "INSPECTION_EVENT_NAME",
     "INSPECTION_SCHEMA_VERSION",
     "InspectionContractError",
     "InspectionEventTransformer",
     "build_retrieval_inspection",
-    "emit_inspection_payload",
     "emit_retrieval_inspection",
     "normalize_retrieval_inspection",
+    "validate_retrieval_query",
 ]

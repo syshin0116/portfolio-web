@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
+from langgraph.prebuilt import ToolRuntime
+
 from agent.inspection import (
     INSPECTION_EVENT_NAME,
+    MAX_EVENT_BYTES,
+    InspectionContractError,
     InspectionEventTransformer,
     build_retrieval_inspection,
+    emit_retrieval_inspection,
+    normalize_retrieval_inspection,
 )
 from agent.retrieval.protocol import DocId, Hit, Retrieval
 
@@ -78,6 +87,7 @@ def test_build_retrieval_inspection_exposes_only_bounded_public_provenance() -> 
     payload = _payload()
 
     assert payload["schema_version"] == 1
+    assert payload["delivery"] == "live-run-only"
     assert payload["query"] == ("도커" * 500)
     assert payload["query_truncated"] is True
     assert payload["method_identity"] == {
@@ -135,6 +145,148 @@ def test_build_retrieval_inspection_exposes_only_bounded_public_provenance() -> 
         "subagent",
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.parametrize(
+    ("query", "expected", "truncated"),
+    [
+        ("  도커\t검색\n", "  도커\t검색\n", False),
+        ("가" * 1_001, "가" * 1_000, True),
+    ],
+    ids=["outer-whitespace-is-executed-input", "explicit-prefix-truncation"],
+)
+def test_build_retrieval_inspection_preserves_executed_query_prefix_exactly(
+    query: str,
+    expected: str,
+    truncated: bool,
+) -> None:
+    payload = build_retrieval_inspection(
+        runtime=_Runtime(),
+        retriever=_Retriever(),
+        retrieval=Retrieval(query=query),
+        tool_call_id="call-query-001",
+        elapsed_ms=0.0,
+    )
+
+    assert payload["query"] == expected
+    assert payload["query_truncated"] is truncated
+
+
+def test_build_retrieval_inspection_keeps_maximal_multibyte_source_prefix_under_64kib() -> (
+    None
+):
+    doc_ids = tuple(DocId(f"AI/{rank:02d}-{'x' * 950}.md") for rank in range(1, 51))
+
+    class _LargeCorpus:
+        fingerprint = CORPUS_REVISION
+
+        def doc_ids(self) -> tuple[DocId, ...]:
+            return doc_ids
+
+    class _LargeRuntime:
+        corpus = _LargeCorpus()
+
+        def entry(self, _doc_id: DocId) -> SimpleNamespace:
+            return SimpleNamespace(title="가" * 300)
+
+    retrieval = Retrieval(
+        query="다국어 검색",
+        hits=tuple(
+            Hit(doc_id=doc_id, rank=rank, score=float(rank))
+            for rank, doc_id in enumerate(doc_ids, start=1)
+        ),
+    )
+    payload = build_retrieval_inspection(
+        runtime=_LargeRuntime(),
+        retriever=_Retriever(),
+        retrieval=retrieval,
+        tool_call_id="call-byte-budget-001",
+        elapsed_ms=1.0,
+    )
+
+    sources = payload["sources"]
+    assert 0 < len(sources) < 50
+    assert [source["rank"] for source in sources] == list(range(1, len(sources) + 1))
+    assert payload["sources_truncated"] is True
+    assert (
+        len(
+            json.dumps(
+                payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        )
+        <= MAX_EVENT_BYTES
+    )
+
+    next_hit = retrieval.hits[len(sources)]
+    candidate = deepcopy(payload)
+    candidate["sources"].append(
+        {
+            "doc_id": str(next_hit.doc_id),
+            "title": "가" * 300,
+            "rank": next_hit.rank,
+            "score": next_hit.score,
+            "provenance": {
+                "kind": "published-corpus",
+                "corpus_revision": CORPUS_REVISION,
+                "retriever_fingerprint": METHOD_FINGERPRINT,
+            },
+        }
+    )
+    with pytest.raises(InspectionContractError, match="at most 65536 bytes"):
+        normalize_retrieval_inspection(candidate)
+
+
+def test_emit_retrieval_inspection_writer_failure_is_content_free_and_fail_open(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def broken_writer(_value: object) -> None:
+        raise RuntimeError("SECRET writer detail must not be logged")
+
+    runtime = ToolRuntime(
+        state={},
+        context=None,
+        config={},
+        stream_writer=broken_writer,
+        tool_call_id="call-writer-001",
+        store=None,
+    )
+    retrieval = Retrieval(
+        query="PRIVATE QUERY",
+        hits=(Hit(doc_id=DocId("AI/docker.md"), rank=1, score=1.0),),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="agent.inspection"):
+        emitted = emit_retrieval_inspection(
+            runtime,
+            runtime=_Runtime(),
+            retriever=_Retriever(),
+            retrieval=retrieval,
+            elapsed_ms=1.0,
+        )
+
+    assert emitted is False
+    record = caplog.records[-1]
+    assert record.getMessage() == "rag_inspection_suppressed"
+    assert record.inspection_suppression_reason == "writer-failed"
+    assert record.inspection_suppression_count == 1
+    public_log = repr(
+        {
+            "message": record.getMessage(),
+            "reason": record.inspection_suppression_reason,
+            "count": record.inspection_suppression_count,
+        }
+    )
+    for forbidden in (
+        "PRIVATE QUERY",
+        "Docker Guide",
+        "bm25",
+        "SECRET writer detail",
+    ):
+        assert forbidden not in public_log
 
 
 def test_inspection_transformer_promotes_exact_envelope_and_preserves_namespace() -> (

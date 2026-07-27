@@ -26,7 +26,7 @@ GENERATED_BINDING = PROTOCOL_ROOT / "generated/typescript/protocol.ts"
 TYPESCRIPT_VERSION = "5.9.3"
 NODE_VERSION = "24.14.0"
 EXPECTED_REPLAY_OUTPUT = (
-    "typescript protocol fixtures ok: 52 records, 36 typed events, 12 shapes"
+    "typescript protocol fixtures ok: 53 records, 37 typed events, 13 shapes"
 )
 RECORD_TYPES = {
     "stream_request": "EventStreamRequest",

@@ -9,7 +9,7 @@ from datetime import date
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from agent.inspection import emit_retrieval_inspection
+from agent.inspection import emit_retrieval_inspection, validate_retrieval_query
 from agent.retrieval.protocol import Retrieval
 from agent.retrieval.serving import (
     CatalogEntry,
@@ -103,6 +103,7 @@ def keyword_search(
         top_k: Number of results to return, from 1 to 50.
     """
 
+    validate_retrieval_query(query)
     serving_runtime = get_serving_runtime()
     started_ns = time.perf_counter_ns()
     result = serving_runtime.exact(query, limit=_limit(top_k, field="top_k"))
@@ -134,6 +135,7 @@ def semantic_search(
         top_k: Number of results to return, from 1 to 50.
     """
 
+    validate_retrieval_query(query)
     serving_runtime = get_serving_runtime()
     started_ns = time.perf_counter_ns()
     result = serving_runtime.retrieve(query, limit=_limit(top_k, field="top_k"))

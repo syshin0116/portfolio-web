@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolRuntime
 
 from agent import tools
 from agent.graph import _build_backend
-from agent.inspection import INSPECTION_EVENT_NAME
+from agent.inspection import INSPECTION_EVENT_NAME, InspectionContractError
 from agent.retrieval.corpus import CorpusManifestError, content_checksum
 from agent.retrieval.corpus_build import build_index
 from agent.retrieval.protocol import DocId
@@ -222,6 +222,7 @@ def test_ranked_tool_emits_measured_native_inspection_from_trusted_runtime(
     assert envelope["name"] == INSPECTION_EVENT_NAME
     payload = envelope["payload"]
     assert payload["tool_call_id"] == f"call-{tool_name}"
+    assert payload["delivery"] == "live-run-only"
     assert payload["query"] == query
     assert payload["method_id"] == method_id
     assert payload["method_identity"]["method_id"] == method_id
@@ -244,6 +245,40 @@ def test_ranked_tool_emits_measured_native_inspection_from_trusted_runtime(
         "input_count": 1,
         "output_count": 1,
     }
+
+
+@pytest.mark.parametrize("tool_name", ["keyword_search", "semantic_search"])
+@pytest.mark.parametrize(
+    "query",
+    ["unsafe\x00query", "unsafe\ud800query"],
+    ids=["null-byte", "unpaired-surrogate"],
+)
+def test_ranked_tool_rejects_unsafe_query_before_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
+    query: str,
+) -> None:
+    retrieval_calls = 0
+
+    class _NeverRetrieve:
+        def exact(self, _query: str, *, limit: int):
+            del limit
+            nonlocal retrieval_calls
+            retrieval_calls += 1
+            raise AssertionError("unsafe query reached retrieval")
+
+        def retrieve(self, _query: str, *, limit: int):
+            del limit
+            nonlocal retrieval_calls
+            retrieval_calls += 1
+            raise AssertionError("unsafe query reached retrieval")
+
+    monkeypatch.setattr(tools, "get_serving_runtime", _NeverRetrieve)
+
+    with pytest.raises(InspectionContractError, match="null|Unicode scalar"):
+        getattr(tools, tool_name).func(query=query, top_k=1, runtime=None)
+
+    assert retrieval_calls == 0
 
 
 def test_raw_source_changes_after_build_cannot_change_serving(

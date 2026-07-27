@@ -35,6 +35,12 @@ from agent.inspection import INSPECTION_EVENT_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
+INSPECTION_FIXTURE = REPO_ROOT / "protocol" / "fixtures" / "inspection-events-v1.json"
+
+
+def _canonical_inspection_payload() -> dict[str, object]:
+    fixture = json.loads(INSPECTION_FIXTURE.read_text(encoding="utf-8"))
+    return fixture["records"][0]["payload"]["params"]["data"]["payload"]
 
 
 def _authorization(subject: str = "owner") -> dict[str, str]:
@@ -302,49 +308,7 @@ async def test_native_stream_fixture_covers_tools_nested_interrupt_and_content_b
         if method == f"custom:{INSPECTION_EVENT_NAME}"
     ]
     assert len(inspection_events) == 1
-    assert inspection_events[0]["params"]["data"] == {
-        "schema_version": 1,
-        "kind": "retrieval",
-        "tool_call_id": "fixture-tool-call",
-        "query": "aegra",
-        "query_truncated": False,
-        "method_id": "fixture-retriever",
-        "method_identity": {
-            "method_id": "fixture-retriever",
-            "implementation_id": "agent.tests.fixture:retrieve@1",
-            "fingerprint": "sha256:" + ("b" * 64),
-        },
-        "hit_count": 1,
-        "corpus_revision": "sha256:" + ("a" * 64),
-        "corpus_document_count": 1,
-        "sources": [
-            {
-                "doc_id": "AI/fixture.md",
-                "title": "Fixture",
-                "rank": 1,
-                "provenance": {
-                    "kind": "published-corpus",
-                    "corpus_revision": "sha256:" + ("a" * 64),
-                    "retriever_fingerprint": "sha256:" + ("b" * 64),
-                },
-                "score": 1.0,
-            }
-        ],
-        "sources_truncated": False,
-        "stages": [
-            {
-                "stage_id": "fixture-retriever",
-                "implementation_id": "agent.tests.fixture:retrieve@1",
-                "fingerprint": "sha256:" + ("b" * 64),
-                "elapsed_ms": 1.0,
-                "application": {
-                    "status": "applied",
-                    "input_count": 1,
-                    "output_count": 1,
-                },
-            }
-        ],
-    }
+    assert inspection_events[0]["params"]["data"] == _canonical_inspection_payload()
 
     resumed_events = [
         event

@@ -1,5 +1,8 @@
 """Deterministic graph for Aegra runtime compatibility tests."""
 
+import json
+from copy import deepcopy
+from pathlib import Path
 from typing import Annotated
 
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -13,11 +16,19 @@ from typing_extensions import TypedDict
 from agent.graph import _build_backend
 from agent.inspection import (
     InspectionEventTransformer,
-    emit_inspection_payload,
+    _emit_inspection_payload,
 )
 
-FIXTURE_CORPUS_REVISION = "sha256:" + ("a" * 64)
-FIXTURE_METHOD_FINGERPRINT = "sha256:" + ("b" * 64)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_INSPECTION_FIXTURE = _REPO_ROOT / "protocol" / "fixtures" / "inspection-events-v1.json"
+
+
+def _canonical_inspection_payload() -> dict[str, object]:
+    fixture = json.loads(_INSPECTION_FIXTURE.read_text(encoding="utf-8"))
+    return fixture["records"][0]["payload"]["params"]["data"]["payload"]
+
+
+CANONICAL_INSPECTION_PAYLOAD = _canonical_inspection_payload()
 
 
 class FixtureState(TypedDict, total=False):
@@ -43,52 +54,12 @@ def fixture_lookup(
 ) -> str:
     """Return a deterministic lookup result."""
     if runtime is not None and runtime.tool_call_id is not None:
-        emit_inspection_payload(
-            runtime,
-            {
-                "schema_version": 1,
-                "kind": "retrieval",
-                "tool_call_id": runtime.tool_call_id,
-                "query": query,
-                "query_truncated": False,
-                "method_id": "fixture-retriever",
-                "method_identity": {
-                    "method_id": "fixture-retriever",
-                    "implementation_id": "agent.tests.fixture:retrieve@1",
-                    "fingerprint": FIXTURE_METHOD_FINGERPRINT,
-                },
-                "hit_count": 1,
-                "corpus_revision": FIXTURE_CORPUS_REVISION,
-                "corpus_document_count": 1,
-                "sources": [
-                    {
-                        "doc_id": "AI/fixture.md",
-                        "title": "Fixture",
-                        "rank": 1,
-                        "score": 1.0,
-                        "provenance": {
-                            "kind": "published-corpus",
-                            "corpus_revision": FIXTURE_CORPUS_REVISION,
-                            "retriever_fingerprint": (FIXTURE_METHOD_FINGERPRINT),
-                        },
-                    }
-                ],
-                "sources_truncated": False,
-                "stages": [
-                    {
-                        "stage_id": "fixture-retriever",
-                        "implementation_id": "agent.tests.fixture:retrieve@1",
-                        "fingerprint": FIXTURE_METHOD_FINGERPRINT,
-                        "elapsed_ms": 1.0,
-                        "application": {
-                            "status": "applied",
-                            "input_count": 1,
-                            "output_count": 1,
-                        },
-                    }
-                ],
-            },
-        )
+        payload = deepcopy(CANONICAL_INSPECTION_PAYLOAD)
+        if (
+            runtime.tool_call_id == payload["tool_call_id"]
+            and query == payload["query"]
+        ):
+            _emit_inspection_payload(runtime, payload)
     return f"fixture-result:{query}"
 
 

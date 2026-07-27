@@ -41,6 +41,18 @@ from agent.migrate import migrate_database
 
 POSTGRES_URL = os.environ.get("AEGRA_POSTGRES_TEST_URL")
 FIXTURE_GRAPH = Path(__file__).resolve().parents[1] / "fixtures" / "aegra_graph.py"
+INSPECTION_FIXTURE = (
+    Path(__file__).resolve().parents[3]
+    / "protocol"
+    / "fixtures"
+    / "inspection-events-v1.json"
+)
+
+
+def _canonical_inspection_payload() -> dict[str, object]:
+    fixture = json.loads(INSPECTION_FIXTURE.read_text(encoding="utf-8"))
+    return fixture["records"][0]["payload"]["params"]["data"]["payload"]
+
 
 if os.environ.get("CI", "").lower() == "true" and not POSTGRES_URL:
     raise RuntimeError(
@@ -323,14 +335,10 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
         ]
         assert len(inspection) == 1
         assert inspection[0]["params"]["namespace"] == []
-        assert inspection[0]["params"]["data"]["payload"]["tool_call_id"] == (
-            "fixture-tool-call"
+        assert (
+            inspection[0]["params"]["data"]["payload"]
+            == _canonical_inspection_payload()
         )
-        assert inspection[0]["params"]["data"]["payload"]["method_identity"] == {
-            "method_id": "fixture-retriever",
-            "implementation_id": "agent.tests.fixture:retrieve@1",
-            "fingerprint": "sha256:" + ("b" * 64),
-        }
         assert [envelope["seq"] for envelope in observed] == sorted(
             {envelope["seq"] for envelope in observed}
         )

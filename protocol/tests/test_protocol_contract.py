@@ -39,8 +39,27 @@ class ProtocolContractTests(unittest.TestCase):
 
     def test_full_offline_suite_has_required_coverage(self) -> None:
         reports = validate_all()
-        self.assertEqual(6, len(reports))
+        self.assertEqual(7, len(reports))
         self.assertGreater(sum(report.events for report in reports), 30)
+
+    def test_inspection_fixture_is_live_only_retrieval_not_durable_replay(self) -> None:
+        fixture = self._fixture("inspection-events-v1.json")
+        self.assertNotIn("replay", fixture["expectations"])
+        self.assertEqual(
+            {"durable_replay": False, "mode": "live-run-only"},
+            fixture["expectations"]["delivery"],
+        )
+        self.assertEqual(1, len(fixture["records"]))
+        event = fixture["records"][0]["payload"]
+        self.assertEqual("custom", event["method"])
+        self.assertEqual(
+            "syshin.rag.inspection.v1",
+            event["params"]["data"]["name"],
+        )
+        self.assertEqual(
+            "retrieval",
+            event["params"]["data"]["payload"]["kind"],
+        )
 
     def test_vendored_generated_bindings_match_locked_hashes(self) -> None:
         protocol = self.lock["protocol"]

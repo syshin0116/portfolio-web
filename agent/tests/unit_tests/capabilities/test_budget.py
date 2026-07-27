@@ -25,6 +25,7 @@ from agent.capabilities.budget import (
     RunBudgetMiddleware,
     TaskReservation,
 )
+from agent.capabilities.token_counting import InputTokenCountError
 
 VALID_DESCRIPTION = """\
 Question:
@@ -36,6 +37,10 @@ DocId and one evidence sentence.
 Stopping condition:
 Stop after one supported DocId.
 """
+
+
+async def _zero_input_tokens(_request: ModelRequest) -> int:
+    return 0
 
 
 def _task_request(
@@ -79,6 +84,7 @@ def _middleware(
         depth=depth,
         allow_subagents=allow_subagents,
         allowed_subagents=frozenset({"retrieval-researcher"}),
+        input_token_counter=_zero_input_tokens,
     )
 
 
@@ -156,7 +162,7 @@ def test_task_tranche_transfers_to_first_child_model_without_double_charge():
     assert budget.snapshot().charged_tokens == 2_048
 
     first_model = budget.reserve_model(
-        estimated_input_tokens=100,
+        input_tokens=100,
         task_reservation=task,
     )
     assert budget.snapshot().charged_tokens == 2_148
@@ -164,7 +170,7 @@ def test_task_tranche_transfers_to_first_child_model_without_double_charge():
     assert budget.snapshot().charged_tokens == 120
 
     second_model = budget.reserve_model(
-        estimated_input_tokens=100,
+        input_tokens=100,
         task_reservation=task,
     )
     assert budget.snapshot().charged_tokens == 2_268
@@ -334,12 +340,24 @@ async def test_any_missing_or_invalid_message_usage_prevents_partial_refund(
     assert budget.snapshot().charged_tokens == 2_048
 
 
-async def test_oversized_model_input_is_rejected_before_calling_provider():
+async def test_dense_unicode_input_is_rejected_before_calling_provider():
     budget = RunBudget()
-    middleware = _middleware(budget)
+    dense_content = "🧑🏽‍💻" * 7_000
+
+    async def exact_dense_count(request):
+        assert request.messages[0].content == dense_content
+        return 56_000
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=True,
+        allowed_subagents=frozenset({"retrieval-researcher"}),
+        input_token_counter=exact_dense_count,
+    )
     request = ModelRequest(
         model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
-        messages=[HumanMessage(content="x" * 100_000)],
+        messages=[HumanMessage(content=dense_content)],
         tools=[],
     )
     called = False
@@ -356,6 +374,81 @@ async def test_oversized_model_input_is_rejected_before_calling_provider():
     snapshot = budget.snapshot()
     assert (snapshot.model_calls, snapshot.charged_tokens) == (0, 0)
     assert snapshot.exhausted is True
+
+
+@pytest.mark.parametrize("failure", ["error", "negative", "boolean", "string"])
+async def test_exact_count_failure_is_closed_before_generation(failure):
+    budget = RunBudget()
+
+    async def failing_count(_request):
+        if failure == "error":
+            raise InputTokenCountError("official count unavailable")
+        return {
+            "negative": -1,
+            "boolean": True,
+            "string": "100",
+        }[failure]
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=True,
+        allowed_subagents=frozenset(),
+        input_token_counter=failing_count,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[HumanMessage(content="do not generate")],
+        tools=[],
+    )
+    generated = False
+
+    async def provider(_request):
+        nonlocal generated
+        generated = True
+        return ModelResponse(result=[AIMessage(content="unexpected")])
+
+    with pytest.raises(InputTokenCountError):
+        await middleware.awrap_model_call(request, provider)
+
+    assert generated is False
+    snapshot = budget.snapshot()
+    assert (snapshot.model_calls, snapshot.charged_tokens) == (0, 0)
+    assert snapshot.exhausted is True
+
+
+async def test_exact_count_timeout_is_closed_before_generation(monkeypatch):
+    budget = RunBudget()
+    monkeypatch.setattr(RunBudget, "remaining_seconds", lambda _self: 0)
+
+    async def blocked_count(_request):
+        await asyncio.Event().wait()
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=True,
+        allowed_subagents=frozenset(),
+        input_token_counter=blocked_count,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[HumanMessage(content="do not generate")],
+        tools=[],
+    )
+    generated = False
+
+    async def provider(_request):
+        nonlocal generated
+        generated = True
+        return ModelResponse(result=[AIMessage(content="unexpected")])
+
+    with pytest.raises(InputTokenCountError, match="deadline"):
+        await middleware.awrap_model_call(request, provider)
+
+    assert generated is False
+    assert budget.snapshot().model_calls == 0
+    assert budget.snapshot().exhausted is True
 
 
 async def test_unauthorized_middleware_hides_and_rejects_task_tool():
@@ -390,6 +483,40 @@ async def test_unauthorized_middleware_hides_and_rejects_task_tool():
     with pytest.raises(CapabilityDeniedError, match="owner or eval"):
         await middleware.awrap_tool_call(_task_request(), unused)
     assert budget.snapshot().task_calls == 0
+
+
+async def test_unauthorized_native_prompt_shape_drift_fails_before_count():
+    budget = RunBudget()
+    counted = False
+
+    async def counter(_request):
+        nonlocal counted
+        counted = True
+        return 1
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=counter,
+        native_subagent_prompt="expected native task prompt",
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        system_message=HumanMessage(content="drifted prompt shape"),
+        messages=[],
+        tools=[{"name": "task"}],
+    )
+
+    with pytest.raises(CapabilityDeniedError, match="shape changed"):
+        await middleware.awrap_model_call(
+            request,
+            lambda _request: pytest.fail("provider must not run"),
+        )
+
+    assert counted is False
+    assert budget.snapshot().model_calls == 0
 
 
 @pytest.mark.parametrize(
@@ -580,14 +707,14 @@ def test_policy_integer_limits_reject_non_integer_values(field, value):
         replace(DEFAULT_RUN_BUDGET_POLICY, **{field: value})
 
 
-@pytest.mark.parametrize("estimated_input_tokens", [1.0, True, -1])
+@pytest.mark.parametrize("input_tokens", [1.0, True, -1])
 def test_model_reservation_rejects_non_integer_input_without_spending(
-    estimated_input_tokens,
+    input_tokens,
 ):
     budget = RunBudget()
 
     with pytest.raises(ValueError, match="non-negative integer"):
-        budget.reserve_model(estimated_input_tokens=estimated_input_tokens)
+        budget.reserve_model(input_tokens=input_tokens)
 
     assert (budget.snapshot().model_calls, budget.snapshot().charged_tokens) == (0, 0)
 

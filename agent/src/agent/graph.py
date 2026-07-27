@@ -33,11 +33,16 @@ from langgraph_sdk.runtime import ServerRuntime
 
 from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
 from agent.capabilities.subagents import (
+    NATIVE_SUBAGENT_SYSTEM_PROMPT,
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
     build_subagents,
     dynamic_subagents_allowed,
     validate_capability_config,
+)
+from agent.capabilities.token_counting import (
+    InputTokenCounter,
+    count_anthropic_input_tokens,
 )
 from agent.inspection import InspectionEventTransformer
 from agent.prompts import SYSTEM_PROMPT
@@ -46,7 +51,7 @@ from agent.tools import TOOLS
 DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
 MODEL_MAX_OUTPUT_TOKENS = 2_048
 MODEL_TIMEOUT_SECONDS = 60.0
-SUPPORTED_MODEL_PROVIDERS = frozenset({"anthropic", "openai"})
+SUPPORTED_MODEL_PROVIDERS = frozenset({"anthropic"})
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
     general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
@@ -142,6 +147,7 @@ def create_graph(
     config: Mapping[str, Any],
     budget: RunBudget | None = None,
     model: BaseChatModel | None = None,
+    input_token_counter: InputTokenCounter | None = None,
 ):
     """Compile one topology-stable Deep Agent around a run-local budget.
 
@@ -154,6 +160,7 @@ def create_graph(
     _disable_general_purpose_subagent(model_spec)
     selected_model = model or _bounded_model(model_spec)
     run_budget = budget or RunBudget()
+    exact_input_counter = input_token_counter or count_anthropic_input_tokens
     allow_subagents = dynamic_subagents_allowed(runtime)
     system_prompt = SYSTEM_PROMPT
     if allow_subagents:
@@ -169,9 +176,15 @@ def create_graph(
                 depth=0,
                 allow_subagents=allow_subagents,
                 allowed_subagents=SUBAGENT_NAMES,
+                input_token_counter=exact_input_counter,
+                native_subagent_prompt=NATIVE_SUBAGENT_SYSTEM_PROMPT,
             )
         ],
-        subagents=build_subagents(model=selected_model, budget=run_budget),
+        subagents=build_subagents(
+            model=selected_model,
+            budget=run_budget,
+            input_token_counter=exact_input_counter,
+        ),
         backend=_build_backend(),
         skills=["/skills/"],
         permissions=_filesystem_permissions(),

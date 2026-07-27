@@ -36,7 +36,11 @@ from langgraph.store.memory import InMemoryStore
 from pydantic import Field
 
 from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
-from agent.capabilities.subagents import SUBAGENT_ROOT_PROMPT
+from agent.capabilities.subagents import (
+    NATIVE_SUBAGENT_SYSTEM_PROMPT,
+    SUBAGENT_NAMES,
+    SUBAGENT_ROOT_PROMPT,
+)
 from agent.graph import (
     DEFAULT_MODEL,
     MODEL_MAX_OUTPUT_TOKENS,
@@ -71,6 +75,21 @@ class ToolCapableFakeModel(FakeMessagesListChatModel):
         return self
 
 
+class PayloadRecordingFakeModel(ToolCapableFakeModel):
+    """Record the exact messages delivered after every middleware wrapper."""
+
+    invoked_messages: list[list] = Field(default_factory=list)
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.invoked_messages.append(list(messages))
+        return super()._generate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **kwargs,
+        )
+
+
 def _compiled_tool_names(compiled_graph: CompiledStateGraph) -> set[str]:
     return set(compiled_graph.nodes["tools"].bound._tools_by_name)
 
@@ -101,6 +120,18 @@ def _final_message(content: str, *, total_tokens: int = 10) -> AIMessage:
             "output_tokens": 1,
             "total_tokens": total_tokens,
         },
+    )
+
+
+async def _exact_test_input_tokens(_request) -> int:
+    return 1
+
+
+@pytest.fixture(autouse=True)
+def _replace_provider_token_count(monkeypatch):
+    monkeypatch.setattr(
+        "agent.graph.count_anthropic_input_tokens",
+        _exact_test_input_tokens,
     )
 
 
@@ -317,6 +348,7 @@ def test_bounded_provider_model_disables_retries_and_runtime_configuration(monke
     "configured_model",
     [
         "ollama:local-model",
+        "openai:gpt-5",
         "anthropic:",
         "client configurable model",
     ],
@@ -331,29 +363,21 @@ def test_unsupported_server_model_configuration_fails_closed(
         _normalized_model_spec()
 
 
-async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt(
-    monkeypatch,
-):
+async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt():
     model = ToolCapableFakeModel(responses=[_final_message("no delegation")])
     budget = RunBudget()
     root_prompts = []
-    original = RunBudgetMiddleware.awrap_model_call
 
-    async def capture_root_prompt(self, request, handler):
-        if self._depth == 0:
-            root_prompts.append(request.system_message.content)
-        return await original(self, request, handler)
+    async def capture_counted_prompt(request):
+        root_prompts.append(request.system_message.content)
+        return 1
 
-    monkeypatch.setattr(
-        RunBudgetMiddleware,
-        "awrap_model_call",
-        capture_root_prompt,
-    )
     compiled = create_graph(
         runtime=_server_runtime([]),
         config={"configurable": {"thread_id": "unauthorized-task"}},
         model=model,
         budget=budget,
+        input_token_counter=capture_counted_prompt,
     )
 
     result = await compiled.ainvoke(
@@ -365,8 +389,49 @@ async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt
     assert len(model.bound_tool_names) == 1
     assert "task" not in model.bound_tool_names[0]
     assert len(root_prompts) == 1
-    assert SUBAGENT_ROOT_PROMPT.strip() not in root_prompts[0]
+    prompt_text = str(root_prompts[0])
+    assert SUBAGENT_ROOT_PROMPT.strip() not in prompt_text
+    assert NATIVE_SUBAGENT_SYSTEM_PROMPT not in prompt_text
+    assert "## `task` (subagent spawner)" not in prompt_text
+    assert "Available subagent types" not in prompt_text
+    assert all(name not in prompt_text for name in SUBAGENT_NAMES)
     assert budget.snapshot().model_calls == 1
+
+
+async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model():
+    model = PayloadRecordingFakeModel(responses=[_final_message("same payload")])
+    counted_requests = []
+
+    async def capture_exact_payload(request):
+        counted_requests.append(request)
+        return 1
+
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": "payload-equivalence"}},
+        model=model,
+        budget=RunBudget(),
+        input_token_counter=capture_exact_payload,
+    )
+    await compiled.ainvoke(
+        {"messages": [{"role": "user", "content": "compare payloads"}]},
+        {"configurable": {"thread_id": "payload-equivalence"}},
+    )
+
+    assert len(counted_requests) == 1
+    assert len(model.invoked_messages) == 1
+    counted = counted_requests[0]
+    assert model.invoked_messages[0] == [
+        counted.system_message,
+        *counted.messages,
+    ]
+    counted_tool_names = frozenset(
+        tool.get("name") if isinstance(tool, dict) else tool.name
+        for tool in counted.tools
+    )
+    assert model.bound_tool_names == [counted_tool_names]
+    assert "## `task` (subagent spawner)" in str(counted.system_message.content)
+    assert "Available subagent types" in str(counted.system_message.content)
 
 
 async def test_root_and_child_share_one_ledger_and_child_has_no_task_or_eval():
@@ -436,6 +501,132 @@ Stop after the first supported DocId.
     }
 
 
+async def test_parallel_children_receive_only_their_envelopes_and_return_no_files():
+    descriptions = [
+        """\
+Question:
+Check sibling A.
+Allowed corpus/method scope:
+Published exact retrieval evidence only.
+Expected output schema:
+One bounded verdict.
+Stopping condition:
+Stop after one verdict.
+""",
+        """\
+Question:
+Check sibling B.
+Allowed corpus/method scope:
+Published exact retrieval evidence only.
+Expected output schema:
+One bounded verdict.
+Stopping condition:
+Stop after one verdict.
+""",
+    ]
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {
+                            "description": description,
+                            "subagent_type": "evidence-checker",
+                        },
+                        "id": f"isolated-task-{index}",
+                        "type": "tool_call",
+                    }
+                    for index, description in enumerate(descriptions)
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            ),
+            _final_message("child A isolated"),
+            _final_message("child B isolated"),
+            _final_message("root isolated"),
+        ]
+    )
+    child_requests = []
+
+    async def capture_child_boundaries(request):
+        tool_names = {
+            tool.get("name") if isinstance(tool, dict) else tool.name
+            for tool in request.tools
+        }
+        if "task" not in tool_names:
+            child_requests.append(request)
+        return 1
+
+    budget = RunBudget()
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": "parallel-child-isolation"}},
+        model=model,
+        budget=budget,
+        input_token_counter=capture_child_boundaries,
+    )
+    original_files = {
+        "/parent-secret.txt": {
+            "content": "PARENT_ONLY_SECRET",
+            "encoding": "utf-8",
+        },
+        "/sibling-a.txt": {
+            "content": "SIBLING_A_SECRET",
+            "encoding": "utf-8",
+        },
+        "/sibling-b.txt": {
+            "content": "SIBLING_B_SECRET",
+            "encoding": "utf-8",
+        },
+    }
+
+    result = await compiled.ainvoke(
+        {
+            "messages": [{"role": "user", "content": "delegate in parallel"}],
+            "files": original_files,
+        },
+        {"configurable": {"thread_id": "parallel-child-isolation"}},
+    )
+
+    assert len(child_requests) == 2
+    assert {request.messages[0].content for request in child_requests} == set(
+        descriptions
+    )
+    for request in child_requests:
+        assert "files" not in request.state
+        tool_names = {
+            tool.get("name") if isinstance(tool, dict) else tool.name
+            for tool in request.tools
+        }
+        assert "read_blog_retrieval_skill" in tool_names
+        assert {
+            "task",
+            "ls",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "glob",
+            "grep",
+            "execute",
+        }.isdisjoint(tool_names)
+    assert result["files"] == original_files
+    assert "skills_metadata" not in result
+    assert "memory_contents" not in result
+    snapshot = budget.snapshot()
+    assert (
+        snapshot.model_calls,
+        snapshot.tool_calls,
+        snapshot.task_calls,
+        snapshot.tasks_in_flight,
+        snapshot.charged_tokens,
+    ) == (4, 2, 2, 0, 40)
+
+
 async def test_aegra_run_config_reaches_child_without_carrying_budget(monkeypatch):
     description = """\
 Question:
@@ -472,15 +663,8 @@ Stop after one verdict.
                 content="",
                 tool_calls=[
                     {
-                        "name": "write_todos",
-                        "args": {
-                            "todos": [
-                                {
-                                    "content": "record config propagation",
-                                    "status": "completed",
-                                }
-                            ]
-                        },
+                        "name": "read_blog_retrieval_skill",
+                        "args": {},
                         "id": "child-config-tool",
                         "type": "tool_call",
                     }

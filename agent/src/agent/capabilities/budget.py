@@ -18,8 +18,12 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.types import Command
+
+from agent.capabilities.token_counting import (
+    InputTokenCounter,
+    InputTokenCountError,
+)
 
 TASK_TOOL_NAME = "task"
 MAX_TASK_DESCRIPTION_BYTES = 16_000
@@ -193,20 +197,18 @@ class RunBudget:
     def reserve_model(
         self,
         *,
-        estimated_input_tokens: int = 0,
+        input_tokens: int = 0,
         task_reservation: TaskReservation | None = None,
     ) -> ModelReservation:
-        """Atomically reserve one call, its estimated input, and maximum output."""
+        """Atomically reserve one call, its exact input, and maximum output."""
         with self._lock:
             self._require_time_locked()
             if (
-                not isinstance(estimated_input_tokens, int)
-                or isinstance(estimated_input_tokens, bool)
-                or estimated_input_tokens < 0
+                not isinstance(input_tokens, int)
+                or isinstance(input_tokens, bool)
+                or input_tokens < 0
             ):
-                raise ValueError(
-                    "estimated_input_tokens must be a non-negative integer"
-                )
+                raise ValueError("input_tokens must be a non-negative integer")
             task_tranche = 0
             if task_reservation is not None:
                 if (
@@ -229,7 +231,7 @@ class RunBudget:
             if self._model_calls >= self._policy.max_model_calls:
                 self._exhausted = True
                 raise RunBudgetExceededError("model-call budget exhausted")
-            reserved = estimated_input_tokens + self._policy.max_output_tokens
+            reserved = input_tokens + self._policy.max_output_tokens
             additional_charge = reserved - task_tranche
             if self._charged_tokens + additional_charge > self._policy.max_total_tokens:
                 self._exhausted = True
@@ -372,6 +374,11 @@ class RunBudget:
                 exhausted=self._exhausted,
             )
 
+    def exhaust(self) -> None:
+        """Mark a fail-closed preflight failure without spending a counter."""
+        with self._lock:
+            self._exhausted = True
+
 
 def _tool_name(tool: Any) -> str | None:
     if isinstance(tool, Mapping):
@@ -423,19 +430,6 @@ def _actual_token_usage(response: Any) -> int | None:
                 return None
         totals.append(total)
     return sum(totals)
-
-
-def _estimated_input_tokens(request: ModelRequest[Any]) -> int:
-    messages: list[BaseMessage] = []
-    if request.system_message is not None:
-        messages.append(request.system_message)
-    messages.extend(request.messages)
-    return count_tokens_approximately(
-        messages,
-        chars_per_token=2.0,
-        tools=request.tools,
-        use_usage_metadata_scaling=True,
-    )
 
 
 def _validate_task_call(
@@ -503,12 +497,69 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         depth: int,
         allow_subagents: bool,
         allowed_subagents: frozenset[str],
+        input_token_counter: InputTokenCounter,
+        native_subagent_prompt: str | None = None,
     ) -> None:
         super().__init__()
         self._budget = budget
         self._depth = depth
         self._allow_subagents = allow_subagents
         self._allowed_subagents = allowed_subagents
+        self._input_token_counter = input_token_counter
+        self._native_subagent_prompt = native_subagent_prompt
+
+    def _remove_unauthorized_subagent_surface(
+        self,
+        request: ModelRequest[Any],
+    ) -> ModelRequest[Any]:
+        """Remove the task schema and exact pinned native prompt block."""
+        if self._native_subagent_prompt is not None:
+            system_message = request.system_message
+            content = system_message.content if system_message is not None else None
+            expected_text = f"\n\n{self._native_subagent_prompt}"
+            if (
+                not isinstance(content, list)
+                or not content
+                or not isinstance(content[-1], Mapping)
+                or content[-1].get("type") != "text"
+                or content[-1].get("text") != expected_text
+            ):
+                raise CapabilityDeniedError(
+                    "pinned Deep Agents task prompt shape changed"
+                )
+            system_message = system_message.model_copy(update={"content": content[:-1]})
+            request = request.override(system_message=system_message)
+
+        return request.override(
+            tools=[tool for tool in request.tools if _tool_name(tool) != TASK_TOOL_NAME]
+        )
+
+    async def _count_input_tokens(self, request: ModelRequest[Any]) -> int:
+        try:
+            async with asyncio.timeout(self._budget.remaining_seconds()):
+                token_count = await self._input_token_counter(request)
+        except TimeoutError as exc:
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "input token counting exceeded the run deadline"
+            ) from exc
+        except InputTokenCountError:
+            self._budget.exhaust()
+            raise
+        except Exception as exc:
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "input token counting failed before generation"
+            ) from exc
+
+        if (
+            not isinstance(token_count, int)
+            or isinstance(token_count, bool)
+            or token_count < 0
+        ):
+            self._budget.exhaust()
+            raise InputTokenCountError("input token counter returned a malformed value")
+        return token_count
 
     async def awrap_model_call(
         self,
@@ -516,14 +567,11 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> Any:
         if not self._allow_subagents:
-            request = request.override(
-                tools=[
-                    tool for tool in request.tools if _tool_name(tool) != TASK_TOOL_NAME
-                ]
-            )
+            request = self._remove_unauthorized_subagent_surface(request)
 
+        input_tokens = await self._count_input_tokens(request)
         reservation = self._budget.reserve_model(
-            estimated_input_tokens=_estimated_input_tokens(request),
+            input_tokens=input_tokens,
             task_reservation=(
                 _ACTIVE_TASK_RESERVATION.get() if self._depth > 0 else None
             ),
@@ -589,6 +637,8 @@ __all__ = [
     "BudgetSnapshot",
     "CapabilityDeniedError",
     "InvalidDelegationError",
+    "InputTokenCountError",
+    "InputTokenCounter",
     "ModelReservation",
     "RunBudget",
     "RunBudgetExceededError",

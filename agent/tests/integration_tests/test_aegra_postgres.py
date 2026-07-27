@@ -451,7 +451,10 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
     alice_memory_thread = f"postgres-memory-alice-{unique}"
     bob_memory_thread = f"postgres-memory-bob-{unique}"
     budget_thread = f"postgres-budget-{unique}"
+    isolation_thread = f"postgres-isolation-{unique}"
+    isolation_memory_thread = f"postgres-isolation-memory-{unique}"
     budget_graph_id = f"budget_factory_{unique}"
+    isolation_graph_id = f"isolation_factory_{unique}"
     alice_namespace = (
         "users",
         hashlib.sha256(b"alice").hexdigest(),
@@ -462,8 +465,17 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
         hashlib.sha256(b"bob").hexdigest(),
         "filesystem",
     )
+    isolation_namespace = (
+        "users",
+        hashlib.sha256(b"isolation-owner").hexdigest(),
+        "filesystem",
+    )
     alice = User(identity="alice")
     bob = User(identity="bob")
+    isolation_owner = User(
+        identity="isolation-owner",
+        permissions=["admin"],
+    )
     alice_config = create_run_config(
         f"run-alice-{unique}",
         alice_thread,
@@ -495,6 +507,21 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
         f"memory-bob-read-{unique}",
         bob_memory_thread,
         bob,
+    )
+    isolation_memory_config = create_run_config(
+        f"memory-isolation-{unique}",
+        isolation_memory_thread,
+        isolation_owner,
+    )
+    isolation_memory_read_config = create_run_config(
+        f"memory-isolation-read-{unique}",
+        isolation_memory_thread,
+        isolation_owner,
+    )
+    isolation_config = create_run_config(
+        f"isolation-run-{unique}",
+        isolation_thread,
+        isolation_owner,
     )
 
     try:
@@ -532,6 +559,14 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
         monkeypatch.setattr(
             "agent.graph._bounded_model",
             lambda _spec: budget_model,
+        )
+
+        async def fixed_input_count(_request):
+            return 1
+
+        monkeypatch.setattr(
+            "agent.graph.count_anthropic_input_tokens",
+            fixed_input_count,
         )
         budget_owner = User(identity="budget-owner", permissions=[])
         budget_config = create_run_config(
@@ -633,6 +668,184 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
 
         assert alice_memory_write["result"] == "/memories/preference.txt"
         assert bob_memory_write["result"] == "/memories/preference.txt"
+
+        async with memory_service.get_graph(
+            "memory_fixture",
+            config=isolation_memory_config,
+            user=isolation_owner,
+        ) as isolation_memory_graph:
+            isolation_memory_write = await isolation_memory_graph.ainvoke(
+                {"operation": "write", "content": "PERSISTENT_ONLY_SECRET"},
+                isolation_memory_config,
+            )
+        assert isolation_memory_write["result"] == "/memories/preference.txt"
+
+        descriptions = [
+            """\
+Question:
+Check PostgreSQL sibling A.
+Allowed corpus/method scope:
+Published exact retrieval evidence only.
+Expected output schema:
+One bounded verdict.
+Stopping condition:
+Stop after one verdict.
+""",
+            """\
+Question:
+Check PostgreSQL sibling B.
+Allowed corpus/method scope:
+Published exact retrieval evidence only.
+Expected output schema:
+One bounded verdict.
+Stopping condition:
+Stop after one verdict.
+""",
+        ]
+        isolation_model = ToolCapableFakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "task",
+                            "args": {
+                                "description": description,
+                                "subagent_type": "evidence-checker",
+                            },
+                            "id": f"postgres-isolation-task-{index}",
+                            "type": "tool_call",
+                        }
+                        for index, description in enumerate(descriptions)
+                    ],
+                    usage_metadata={
+                        "input_tokens": 9,
+                        "output_tokens": 1,
+                        "total_tokens": 10,
+                    },
+                ),
+                AIMessage(
+                    content="isolated child result",
+                    usage_metadata={
+                        "input_tokens": 9,
+                        "output_tokens": 1,
+                        "total_tokens": 10,
+                    },
+                ),
+                AIMessage(
+                    content="isolated child result",
+                    usage_metadata={
+                        "input_tokens": 9,
+                        "output_tokens": 1,
+                        "total_tokens": 10,
+                    },
+                ),
+                AIMessage(
+                    content="isolated root result",
+                    usage_metadata={
+                        "input_tokens": 9,
+                        "output_tokens": 1,
+                        "total_tokens": 10,
+                    },
+                ),
+            ]
+        )
+        observed_child_requests = []
+
+        async def capture_isolation_count(request):
+            tool_names = {
+                tool.get("name") if isinstance(tool, dict) else tool.name
+                for tool in request.tools
+            }
+            if "task" not in tool_names:
+                observed_child_requests.append(request)
+            return 1
+
+        monkeypatch.setattr(
+            "agent.graph._bounded_model",
+            lambda _spec: isolation_model,
+        )
+        monkeypatch.setattr(
+            "agent.graph.count_anthropic_input_tokens",
+            capture_isolation_count,
+        )
+        isolation_service = _factory_service(
+            production_graph,
+            graph_id=isolation_graph_id,
+        )
+        parent_files = {
+            "/parent-secret.txt": {
+                "content": "PARENT_ONLY_SECRET",
+                "encoding": "utf-8",
+            },
+            "/sibling-a.txt": {
+                "content": "SIBLING_A_SECRET",
+                "encoding": "utf-8",
+            },
+            "/sibling-b.txt": {
+                "content": "SIBLING_B_SECRET",
+                "encoding": "utf-8",
+            },
+        }
+        async with isolation_service.get_graph(
+            isolation_graph_id,
+            config=isolation_config,
+            user=isolation_owner,
+        ) as isolation_graph:
+            isolation_result = await isolation_graph.ainvoke(
+                {
+                    "messages": [
+                        HumanMessage(content="delegate isolated PostgreSQL tasks")
+                    ],
+                    "files": parent_files,
+                },
+                isolation_config,
+            )
+
+        assert len(observed_child_requests) == 2
+        assert {
+            request.messages[0].content for request in observed_child_requests
+        } == set(descriptions)
+        for request in observed_child_requests:
+            assert "files" not in request.state
+            assert "memory_contents" not in request.state
+            tool_names = {
+                tool.get("name") if isinstance(tool, dict) else tool.name
+                for tool in request.tools
+            }
+            assert "read_blog_retrieval_skill" in tool_names
+            assert {
+                "task",
+                "ls",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "glob",
+                "grep",
+                "execute",
+            }.isdisjoint(tool_names)
+        assert isolation_result["files"] == parent_files
+        assert "skills_metadata" not in isolation_result
+        async with isolation_service.get_graph(
+            isolation_graph_id,
+            config=isolation_config,
+            user=isolation_owner,
+        ) as persisted_isolation_graph:
+            isolation_state = await persisted_isolation_graph.aget_state(
+                isolation_config
+            )
+        assert isolation_state.values["files"] == parent_files
+        async with memory_service.get_graph(
+            "memory_fixture",
+            config=isolation_memory_read_config,
+            user=isolation_owner,
+        ) as isolation_memory_graph:
+            isolation_memory_read = await isolation_memory_graph.ainvoke(
+                {"operation": "read"},
+                isolation_memory_read_config,
+            )
+        assert isolation_memory_read["result"] == "PERSISTENT_ONLY_SECRET"
+
         first_checkpointer = db_manager.get_checkpointer()
         first_store = db_manager.get_store()
 
@@ -736,10 +949,17 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
         await db_manager.get_checkpointer().adelete_thread(alice_memory_thread)
         await db_manager.get_checkpointer().adelete_thread(bob_memory_thread)
         await db_manager.get_checkpointer().adelete_thread(budget_thread)
+        await db_manager.get_checkpointer().adelete_thread(isolation_thread)
+        await db_manager.get_checkpointer().adelete_thread(isolation_memory_thread)
         await db_manager.get_store().adelete(alice_namespace, "/preference.txt")
         await db_manager.get_store().adelete(bob_namespace, "/preference.txt")
+        await db_manager.get_store().adelete(
+            isolation_namespace,
+            "/preference.txt",
+        )
     finally:
         graph_factory.clear_factory_registry(budget_graph_id)
+        graph_factory.clear_factory_registry(isolation_graph_id)
         await db_manager.close()
         aegra_orm.async_session_maker = None
         settings.db.DATABASE_URL = previous_url

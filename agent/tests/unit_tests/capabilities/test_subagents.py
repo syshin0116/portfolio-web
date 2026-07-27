@@ -5,12 +5,14 @@ from types import SimpleNamespace
 import pytest
 from aegra_api.services.graph_factory import build_server_runtime
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.store.memory import InMemoryStore
+from pydantic import Field
 
-from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
+from agent.capabilities.budget import RunBudget
 from agent.capabilities.subagents import (
     SUBAGENT_NAMES,
+    SUBAGENT_SKILLS,
     build_subagents,
     dynamic_subagents_allowed,
     validate_capability_config,
@@ -22,24 +24,61 @@ EXPECTED_TOOLS = {
         "keyword_search",
         "list_posts",
         "metadata_filter",
+        "read_blog_retrieval_skill",
         "read_post",
         "semantic_search",
     },
-    "evidence-checker": {"keyword_search", "read_post"},
-    "comparison-synthesizer": {"read_post"},
+    "evidence-checker": {
+        "keyword_search",
+        "read_blog_retrieval_skill",
+        "read_post",
+    },
+    "comparison-synthesizer": {
+        "read_blog_retrieval_skill",
+        "read_post",
+    },
     "general-purpose": {
         "graph_traverse",
         "keyword_search",
         "list_posts",
         "metadata_filter",
+        "read_blog_retrieval_skill",
         "read_post",
         "semantic_search",
     },
 }
 
 
-def _model() -> FakeMessagesListChatModel:
-    return FakeMessagesListChatModel(responses=[AIMessage(content="bounded")])
+class ToolCapableFakeModel(FakeMessagesListChatModel):
+    """Fake model that preserves the exact tool surface under test."""
+
+    bound_tool_names: list[frozenset[str]] = Field(default_factory=list)
+
+    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+        del tool_choice, kwargs
+        self.bound_tool_names.append(
+            frozenset(
+                tool.get("name") if isinstance(tool, dict) else tool.name
+                for tool in tools
+            )
+        )
+        return self
+
+
+def _model() -> ToolCapableFakeModel:
+    return ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="bounded",
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            )
+            for _index in range(4)
+        ]
+    )
 
 
 def _runtime(permissions, *, context=None):
@@ -57,9 +96,19 @@ def _runtime(permissions, *, context=None):
     )
 
 
-def test_declared_subagents_have_explicit_read_only_stateless_contracts():
+async def test_compiled_subagents_enforce_real_state_and_backend_isolation():
     budget = RunBudget()
-    specs = build_subagents(model=_model(), budget=budget)
+    observed_requests = []
+
+    async def exact_input_tokens(request):
+        observed_requests.append(request)
+        return 10
+
+    specs = build_subagents(
+        model=_model(),
+        budget=budget,
+        input_token_counter=exact_input_tokens,
+    )
 
     assert [spec["name"] for spec in specs] == [
         "retrieval-researcher",
@@ -68,30 +117,59 @@ def test_declared_subagents_have_explicit_read_only_stateless_contracts():
         "general-purpose",
     ]
     assert {spec["name"] for spec in specs} == SUBAGENT_NAMES
+    assert SUBAGENT_SKILLS == ("/blog-retrieval/SKILL.md",)
 
     for spec in specs:
-        assert "runnable" not in spec
+        assert set(spec) == {"name", "description", "runnable"}
         assert "graph_id" not in spec
-        assert {tool.name for tool in spec["tools"]} == EXPECTED_TOOLS[spec["name"]]
-        assert {"task", "eval"}.isdisjoint(tool.name for tool in spec["tools"])
-        assert spec["skills"] == ["/skills/"]
-        assert len(spec["permissions"]) == 1
-        permission = spec["permissions"][0]
-        assert permission.operations == ["write"]
-        assert permission.paths == ["/**"]
-        assert permission.mode == "deny"
-        prompt = " ".join(spec["system_prompt"].split())
-        assert "stateless context" in prompt
-        assert "Stop" in prompt
-        assert "delegate work" in prompt
-        assert "run code" in prompt
+        result = await spec["runnable"].ainvoke(
+            {
+                "messages": [HumanMessage(content=f"dispatch:{spec['name']}")],
+                "files": {
+                    "/parent-secret.txt": {
+                        "content": "PARENT_ONLY_SECRET",
+                        "encoding": "utf-8",
+                    },
+                    f"/sibling-{spec['name']}.txt": {
+                        "content": "SIBLING_ONLY_SECRET",
+                        "encoding": "utf-8",
+                    },
+                },
+                "memory_contents": {"preference": "PERSISTENT_ONLY_SECRET"},
+            },
+            {"configurable": {"thread_id": f"isolated-{spec['name']}"}},
+        )
+        assert set(result) == {"messages"}
 
-        middleware = spec["middleware"]
-        assert len(middleware) == 1
-        assert isinstance(middleware[0], RunBudgetMiddleware)
-        assert middleware[0]._budget is budget
-        assert middleware[0]._depth == 1
-        assert middleware[0]._allow_subagents is False
+    assert len(observed_requests) == 4
+    for spec, request in zip(specs, observed_requests, strict=True):
+        assert "files" not in request.state
+        assert "memory_contents" not in request.state
+        assert len(request.messages) == 1
+        assert request.messages[0].content == f"dispatch:{spec['name']}"
+        tool_names = {
+            tool.get("name") if isinstance(tool, dict) else tool.name
+            for tool in request.tools
+        }
+        assert tool_names == EXPECTED_TOOLS[spec["name"]]
+        assert {
+            "task",
+            "eval",
+            "ls",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "glob",
+            "grep",
+            "execute",
+        }.isdisjoint(tool_names)
+        system_text = str(request.system_message.content)
+        assert "Exactly one server-owned skill" in system_text
+        assert "blog-retrieval" in system_text
+        assert "/blog-retrieval/SKILL.md" in system_text
+
+    snapshot = budget.snapshot()
+    assert (snapshot.model_calls, snapshot.charged_tokens) == (4, 40)
 
 
 @pytest.mark.parametrize("permission", ["admin", "eval"])

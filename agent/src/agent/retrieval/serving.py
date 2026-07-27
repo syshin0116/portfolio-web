@@ -20,6 +20,7 @@ from agent.retrieval.corpus import (
     CATALOG_SCHEMA,
     WIKILINK_SCHEMA,
     PublishedCorpus,
+    content_checksum,
 )
 from agent.retrieval.exact import EXACT_METHOD_ID
 from agent.retrieval.protocol import DocId, Retrieval
@@ -90,6 +91,17 @@ class CatalogEntry:
     category: str
     description: str
     metadata: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedWikilinkGraph:
+    """Serving-strength validation result shared with offline evaluation."""
+
+    adjacency: Mapping[DocId, tuple[DocId, ...]]
+    links: tuple[Mapping[str, object], ...]
+    unresolved: tuple[Mapping[str, object], ...]
+    excluded_links: tuple[Mapping[str, object], ...]
+    artifact_checksum: str
 
 
 def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -397,10 +409,10 @@ def _resolve_graph_target(
     return (candidates[0], candidates) if len(candidates) == 1 else (None, candidates)
 
 
-def _adjacency(
+def _validated_wikilinks(
     corpus: PublishedCorpus,
     entries: Sequence[CatalogEntry],
-) -> Mapping[DocId, tuple[DocId, ...]]:
+) -> ValidatedWikilinkGraph:
     payload = _load_json(corpus, "wikilinks.json")
     _exact_keys(payload, _GRAPH_KEYS, location="wikilinks")
     if payload["schema"] != WIKILINK_SCHEMA:
@@ -652,7 +664,21 @@ def _adjacency(
                 )
         else:
             raise ServingArtifactError(f"{location}.reason is unsupported")
-    return graph
+    return ValidatedWikilinkGraph(
+        adjacency=graph,
+        links=tuple(raw_links),
+        unresolved=tuple(raw_unresolved),
+        excluded_links=tuple(raw_excluded),
+        artifact_checksum=content_checksum(corpus.read_artifact("wikilinks.json")),
+    )
+
+
+def load_validated_wikilink_graph(
+    corpus: PublishedCorpus,
+) -> ValidatedWikilinkGraph:
+    """Validate the complete graph exactly as serving does and return its entries."""
+
+    return _validated_wikilinks(corpus, _catalog(corpus))
 
 
 def _normalize_lookup(value: str) -> str:
@@ -682,7 +708,10 @@ class ServingRuntime:
         self.corpus = PublishedCorpus(index_root)
         self.entries = _catalog(self.corpus)
         self._entry_by_id = {entry.doc_id: entry for entry in self.entries}
-        self.adjacency = _adjacency(self.corpus, self.entries)
+        self.adjacency = _validated_wikilinks(
+            self.corpus,
+            self.entries,
+        ).adjacency
         self.retriever = registry.servable.create(method_id, self.corpus)
         self.exact_retriever = (
             self.retriever
@@ -845,6 +874,8 @@ __all__ = [
     "DEFAULT_RETRIEVER_METHOD",
     "ServingArtifactError",
     "ServingRuntime",
+    "ValidatedWikilinkGraph",
     "get_serving_runtime",
+    "load_validated_wikilink_graph",
     "reset_serving_runtime_cache",
 ]

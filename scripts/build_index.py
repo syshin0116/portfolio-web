@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "corpus_fingerprint": report.fingerprint,
+                "content_git_tree_sha": report.content_git_tree_sha,
                 "bm25_fingerprint": report.bm25_fingerprint,
                 "document_count": report.document_count,
                 "output": str(report.output_root),

@@ -1,0 +1,25 @@
+FROM ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc AS uv
+
+FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+
+COPY --from=uv /uv /uvx /bin/
+
+WORKDIR /workspace
+ENV PATH="/workspace/.venv/bin:${PATH}" \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+COPY pyproject.toml uv.lock ./
+COPY agent/pyproject.toml agent/pyproject.toml
+COPY eval/pyproject.toml eval/pyproject.toml
+COPY agent/src agent/src
+COPY eval/src eval/src
+COPY agent/corpus-policy.toml agent/bm25-policy.toml agent/
+COPY scripts/build_index.py scripts/build_index.py
+COPY content content
+COPY eval/querysets eval/querysets
+
+RUN uv sync --frozen --package syshin0116-dev-agent --all-extras --dev \
+    && uv sync --frozen --package syshin0116-dev-eval --all-groups
+
+CMD ["blogeval", "--help"]

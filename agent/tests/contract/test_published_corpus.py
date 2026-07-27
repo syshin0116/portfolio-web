@@ -45,6 +45,7 @@ def test_manifest_corpus_implements_shared_protocol_and_reads_exact_doc(
     assert corpus.doc_ids() == (DocId("AI/한글.md"),)
     assert corpus.read(DocId("AI/한글.md")).endswith("본문\n")
     assert corpus.fingerprint.startswith("sha256:")
+    assert len(corpus.content_git_tree_sha) == 40
     with pytest.raises(KeyError, match="not in the published corpus"):
         corpus.read(DocId("AI/not-published.md"))
 
@@ -69,7 +70,8 @@ def test_manifest_protects_every_derived_artifact(tmp_path: Path) -> None:
     index = _fixture_index(tmp_path)
     manifest = json.loads((index / "manifest.json").read_text(encoding="utf-8"))
 
-    assert manifest["schema"] == "published-corpus-manifest-v2"
+    assert manifest["schema"] == "published-corpus-manifest-v3"
+    assert len(manifest["content_git_tree_sha"]) == 40
     artifact_paths = sorted(
         path.relative_to(index).as_posix()
         for path in index.rglob("*")
@@ -167,9 +169,20 @@ def test_loader_rejects_manifest_fingerprint_and_duplicate_json_keys(
         PublishedCorpus(index)
 
     manifest_path.write_text(
-        '{"schema":"published-corpus-manifest-v2",'
-        '"schema":"published-corpus-manifest-v2"}',
+        '{"schema":"published-corpus-manifest-v3",'
+        '"schema":"published-corpus-manifest-v3"}',
         encoding="utf-8",
     )
     with pytest.raises(CorpusManifestError, match="duplicate"):
+        PublishedCorpus(index)
+
+
+def test_loader_rejects_invalid_content_git_tree_sha(tmp_path: Path) -> None:
+    index = _fixture_index(tmp_path)
+    manifest_path = index / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["content_git_tree_sha"] = "f" * 39
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(CorpusManifestError, match="content_git_tree_sha"):
         PublishedCorpus(index)

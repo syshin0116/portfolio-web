@@ -1,0 +1,41 @@
+{
+  "corpus": {
+    "document_count": 3,
+    "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "git_tree_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "dataset_id": "topic-contract-fixture-v1",
+  "dataset_kind": "topic",
+  "exclusions": [],
+  "labels": {
+    "review": null,
+    "reviewed_qrels_checksum": null,
+    "status": "synthetic-only"
+  },
+  "provenance": {
+    "generator": "synthetic-contract-fixture",
+    "generator_version": 1,
+    "included_occurrence_count": 1,
+    "source_artifacts": [],
+    "source_occurrence_count": 1
+  },
+  "qrels": [
+    {
+      "evidence": [
+        {
+          "kind": "synthetic-contract",
+          "occurrences": 1,
+          "source_doc_id": null,
+          "target": "fixture-only"
+        }
+      ],
+      "query": "배포",
+      "query_id": "topic-deploy",
+      "relevant_doc_ids": [
+        "Dev/cloud-run.md",
+        "Dev/vercel.md"
+      ]
+    }
+  ],
+  "schema": "blogeval-queryset-v2"
+}

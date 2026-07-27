@@ -8,7 +8,7 @@ when_to_read: >
   or when looking for what has already been tried and what it scored.
 tags: [reference, retrieval, rag, evaluation, registry]
 status: draft
-updated: "2026-07-27"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs: [../adr/0008-chatbot-is-a-rag-evaluation-testbed.md, ../plans/rag-restack.md]
 template: reference
@@ -48,7 +48,7 @@ Two things gate every entry in this table, both from
   [the tokenizer note](#the-korean-tokenizer-problem).
 - **One retriever interface**, intended for both the chat and the harness. The chat now
   resolves its configured method from the shared servable registry; the evaluation
-  harness still needs to be built against that interface.
+  harness extends a copy of that registry and executes the same Protocol.
 
 ## The corpus, and what it affords
 
@@ -82,7 +82,7 @@ those same links turned out to be the better prize.
 | Method | Status | Meant to teach |
 |---|---|---|
 | BM25 + Kiwi morphological tokenization | `implemented` | The fitted, raw-score baseline everything else is measured against |
-| BM25 + character n-grams | `planned` | Whether morphological analysis earns its complexity, or n-grams match it on mixed-script Korean |
+| Character n-grams over raw Markdown + positive-IDF BM25 variant | `implemented` | A compound lexical alternative; it changes document representation and IDF/ranker behavior, so it is not a tokenizer-only morphology ablation |
 | BM25 field weighting (title/tags/body) | `planned` | How much of retrieval quality is just "the title said so" |
 | Exact substring | `implemented` | The safe literal-match floor. If a method cannot beat it, it is not earning its cost |
 | Bounded regex | `planned` | Whether regex expressiveness adds useful recall without exposing unbounded query execution |
@@ -101,6 +101,7 @@ those same links turned out to be the better prize.
 | Method | Status | Meant to teach |
 |---|---|---|
 | Reciprocal rank fusion (sparse + dense) | `planned` | The standard hybrid. Expected to win; the interesting part is by how much and where |
+| Reciprocal rank fusion (BM25 + character n-grams) | `implemented` | A provider-free fusion control that proves composition and fingerprints before a dense method lands |
 | Weighted score fusion | `planned` | Whether score-level fusion beats rank-level once normalisation is done correctly |
 
 > **Normalisation is a trap here.** The existing BM25 forces the top hit to 1.0 for *any*
@@ -144,7 +145,7 @@ seed set for the qrels *and* a retrieval signal in its own right.
 
 | Method | Status | Meant to teach |
 |---|---|---|
-| Alias-derived known-item query set | `planned` | Up to 164 owner-authored candidates to resolve, deduplicate, and review before any LLM-generated queries |
+| Alias-derived known-item query set | `implemented` | 164 owner-authored occurrences resolve to 90 single-target qrels; 24 conflicting, ambiguous, self-link, or unresolved occurrences remain recorded exclusions |
 | Alias text as an indexed field | `planned` | Whether the author's own paraphrases beat title and body text as a match target |
 
 ### Chunking (an axis, not a method)
@@ -271,16 +272,22 @@ the postings needed for the query; it neither retains raw token documents nor co
 `BM25Okapi`. Scores at or below zero are intentionally omitted, including common-term
 negative IDFs and the exact half-corpus zero-IDF boundary.
 
+The current `char-ngram` method reads raw published Markdown (including frontmatter) and
+uses Lucene's always-positive BM25 IDF, while the Kiwi baseline uses structured fields
+and `rank-bm25`'s Okapi IDF behavior. Its fingerprint declares both differences. Treat
+its result as a compound lexical baseline; a tokenizer-only morphology experiment still
+needs a shared field extractor and ranker.
+
 ## Results
 
-Populated once the harness runs. Until then this section is empty on purpose - an empty
-results table is honest, and a table of guesses is not.
+Populated once the harness runs inside the digest-pinned Linux x86_64 deployment image.
+The earlier macOS ARM bootstrap run is intentionally unpublished: its run identity did
+not bind source trees, the shared lock, or execution image provenance. An empty results
+table is honest, and a table of non-comparable numbers is not.
 
 > **Do not headline nDCG yet.** On four smoke queries nDCG@10 read **1.000 for every one**
 > while recall@10 ranged 0.23 to 0.77. With large, ungraded relevant-sets nDCG saturates
 > and stops discriminating. Lead with recall@k and coverage until the qrels are small and
 > genuinely graded.
 
-| Run | Date | Methods | Dataset | Metrics | Result |
-|---|---|---|---|---|---|
-| _(none yet)_ | | | | | |
+No publication-qualified run exists yet.

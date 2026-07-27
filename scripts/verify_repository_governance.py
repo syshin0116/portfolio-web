@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import re
 import shlex
@@ -104,6 +105,22 @@ EXPECTED_ACTIONS = {
     "sha_pinning_required": True,
 }
 EXPECTED_ENVIRONMENTS = {
+    "Evaluation Publication": {
+        "can_admins_bypass": False,
+        "deployment_branch_policy": {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
+        "branch_policies": [{"name": "main", "type": "branch"}],
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "prevent_self_review": False,
+                "reviewers": [{"type": "User", "login": "syshin0116"}],
+            },
+            {"type": "branch_policy"},
+        ],
+    },
     "Preview": {
         "can_admins_bypass": True,
         "deployment_branch_policy": None,
@@ -127,6 +144,7 @@ EXPECTED_ENVIRONMENTS = {
         ],
     },
 }
+SECRETLESS_ENVIRONMENTS = frozenset({"Evaluation Publication"})
 EXPECTED_AUTOMATED_SECURITY_FIXES = {
     "enabled": True,
     "paused": False,
@@ -140,6 +158,14 @@ AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
     "AGENT_AUTH_SECRET": "ci-only-agent-secret-ci-only-agent-secret",
 }
+EVAL_CI_JOB = "eval"
+EVAL_CI_JOB_AST_SHA256 = (
+    "3bc77abb21cf296e9554ba70cb05fb05786f69fa36ab137f849dbd9ee7bf63ed"
+)
+EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
+EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
+    "c67bc5ebb4a96eb7fb3a8a35266b479b5cb15157d5d4ee8fba7abaca543906ba"
+)
 AGENT_CI_SERVICES = {
     "postgres": {
         "image": (
@@ -160,12 +186,22 @@ AGENT_CI_SERVICES = {
 }
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 AGENT_LOCK_COMMAND = ("uv", "lock", "--check")
-AGENT_SYNC_COMMAND = ("uv", "sync", "--frozen", "--all-extras", "--dev")
+AGENT_SYNC_COMMAND = (
+    "uv",
+    "sync",
+    "--frozen",
+    "--package",
+    "syshin0116-dev-agent",
+    "--all-extras",
+    "--dev",
+)
 AGENT_RUN_COMMANDS = (
     (
         "uv",
         "run",
         "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
         "ruff",
         "check",
         "src",
@@ -179,6 +215,8 @@ AGENT_RUN_COMMANDS = (
         "uv",
         "run",
         "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
         "ruff",
         "format",
         "--check",
@@ -193,12 +231,23 @@ AGENT_RUN_COMMANDS = (
         "uv",
         "run",
         "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
         "python",
         "../scripts/build_index.py",
         "--expect-document-count",
         "335",
     ),
-    ("uv", "run", "--frozen", "--all-extras", "pytest", "-q"),
+    (
+        "uv",
+        "run",
+        "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
+        "--all-extras",
+        "pytest",
+        "-q",
+    ),
 )
 AGENT_RUN_STEP_INVENTORY = (
     (
@@ -216,7 +265,7 @@ AGENT_RUN_STEP_INVENTORY = (
         ),
     ),
     (
-        "Verify the agent lockfile is current",
+        "Verify the workspace lockfile is current",
         AGENT_CI_CHANGED_CONDITION,
         AGENT_LOCK_COMMAND,
     ),
@@ -275,11 +324,11 @@ EXPECTED_AGENT_CI_JOB = {
             "if": AGENT_CI_CHANGED_CONDITION,
             "with": {
                 "enable-cache": "true",
-                "cache-dependency-glob": "agent/uv.lock",
+                "cache-dependency-glob": "uv.lock",
             },
         },
         {
-            "name": "Verify the agent lockfile is current",
+            "name": "Verify the workspace lockfile is current",
             "if": AGENT_CI_CHANGED_CONDITION,
             "run": " ".join(AGENT_LOCK_COMMAND),
         },
@@ -321,7 +370,7 @@ EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
                 "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
             ),
             "enable-cache": "true",
-            "cache-dependency-glob": "agent/uv.lock",
+            "cache-dependency-glob": "uv.lock",
         },
     },
 ]
@@ -382,7 +431,7 @@ EXPECTED_DEPENDABOT = {
         },
         {
             "package_ecosystem": "uv",
-            "directory": "/agent",
+            "directory": "/",
             "schedule": {
                 "interval": "weekly",
                 "day": "monday",
@@ -398,7 +447,7 @@ EXPECTED_DEPENDABOT = {
             },
             "groups": [
                 {
-                    "name": "agent-routine",
+                    "name": "python-routine",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
                     "exclude_patterns": [
@@ -440,6 +489,137 @@ EXPECTED_DEPENDABOT = {
         },
     ],
 }
+PUBLICATION_DOCKERFILE = "eval/Dockerfile.publication"
+PUBLICATION_DOCKERIGNORE = f"{PUBLICATION_DOCKERFILE}.dockerignore"
+EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES = (
+    "pyproject.toml",
+    "uv.lock",
+    "agent/pyproject.toml",
+    "eval/pyproject.toml",
+    "agent/src",
+    "eval/src",
+    "agent/corpus-policy.toml",
+    "agent/bm25-policy.toml",
+    "scripts/build_index.py",
+    "content",
+    "eval/querysets",
+)
+EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES = (
+    "!pyproject.toml",
+    "!uv.lock",
+    "!agent/",
+    "!agent/pyproject.toml",
+    "!agent/src/",
+    "!agent/src/**",
+    "!agent/corpus-policy.toml",
+    "!agent/bm25-policy.toml",
+    "!eval/",
+    "!eval/pyproject.toml",
+    "!eval/src/",
+    "!eval/src/**",
+    "!eval/querysets/",
+    "!eval/querysets/**",
+    "!scripts/",
+    "!scripts/build_index.py",
+    "!content/",
+    "!content/**",
+)
+EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES = (
+    "**",
+    "!pyproject.toml",
+    "!uv.lock",
+    "!agent/",
+    "agent/**",
+    "!agent/pyproject.toml",
+    "!agent/src/",
+    "!agent/src/**",
+    "!agent/corpus-policy.toml",
+    "!agent/bm25-policy.toml",
+    "!eval/",
+    "eval/**",
+    "!eval/pyproject.toml",
+    "!eval/src/",
+    "!eval/src/**",
+    "!eval/querysets/",
+    "!eval/querysets/**",
+    "!scripts/",
+    "scripts/**",
+    "!scripts/build_index.py",
+    "!content/",
+    "!content/**",
+)
+REQUIRED_PUBLICATION_DOCKER_DENY_RULES = (
+    "**/.env",
+    "**/.env.*",
+    "**/.envrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/.netrc",
+    "**/.git-credentials",
+    "**/artifacts",
+    "**/artifacts/**",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.ppk",
+    "**/*.crt",
+    "**/*.cer",
+    "**/*.der",
+    "**/*.jks",
+    "**/*.keystore",
+    "**/*credentials*.json",
+    "**/*service-account*.json",
+    "**/*service_account*.json",
+    "**/application_default_credentials.json",
+    "**/*.tfstate*",
+    "**/*.tfvars",
+    "**/*.tfvars.*",
+    "**/.terraform",
+    "**/.terraform/**",
+    "**/.aws",
+    "**/.aws/**",
+    "**/.config/gcloud",
+    "**/.config/gcloud/**",
+    "**/.ssh",
+    "**/.ssh/**",
+    "**/id_rsa",
+    "**/id_dsa",
+    "**/id_ecdsa",
+    "**/id_ed25519",
+    "**/ssh_host_*_key",
+    "**/.docker/config.json",
+    "**/.kube/config",
+)
+REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES = (
+    "**/Dockerfile*",
+    "**/.dockerignore",
+    "**/*.dockerignore",
+    "**/.git",
+    "**/.git/**",
+    "**/.venv",
+    "**/.venv/**",
+    "**/.index",
+    "**/.index/**",
+    "**/.pytest_cache",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache",
+    "**/.ruff_cache/**",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "**/*.py[cod]",
+    "eval/results",
+    "eval/results/**",
+    "**/node_modules",
+    "**/node_modules/**",
+    "**/.next",
+    "**/.next/**",
+    "**/coverage",
+    "**/coverage/**",
+    "**/.coverage",
+    "**/htmlcov",
+    "**/htmlcov/**",
+)
 
 JsonObject = dict[str, Any]
 ApiGet = Callable[[str], Any]
@@ -616,6 +796,154 @@ def load_policy(path: Path = DEFAULT_POLICY) -> JsonObject:
     if not isinstance(payload, dict):
         raise GovernanceError(f"policy {path} must contain one JSON object")
     return payload
+
+
+def _dockerignore_rules(path: Path) -> tuple[str, ...]:
+    """Return effective non-comment rules from one Docker ignore file."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise GovernanceError(f"cannot read {path}: {exc}") from exc
+    rules: list[str] = []
+    for line_number, line in enumerate(lines, start=1):
+        rule = line.strip()
+        if not rule or rule.startswith("#"):
+            continue
+        if rule == "!":
+            raise GovernanceError(
+                f"{path}:{line_number}: empty Docker ignore exception is forbidden"
+            )
+        rules.append(rule)
+    return tuple(rules)
+
+
+def root_dockerignore_rules(root: Path) -> tuple[str, ...]:
+    """Return the common build-context deny rules."""
+    return _dockerignore_rules(root / ".dockerignore")
+
+
+def publication_dockerignore_rules(root: Path) -> tuple[str, ...]:
+    """Return the Dockerfile-specific evaluation publication rules."""
+    return _dockerignore_rules(root / PUBLICATION_DOCKERIGNORE)
+
+
+def publication_docker_copy_sources(root: Path) -> tuple[str, ...]:
+    """Extract local build-context sources from the publication Dockerfile."""
+    path = root / PUBLICATION_DOCKERFILE
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise GovernanceError(f"cannot read {path}: {exc}") from exc
+    sources: list[str] = []
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        instruction, separator, payload = stripped.partition(" ")
+        if not separator or instruction.upper() != "COPY":
+            continue
+        if payload.rstrip().endswith("\\") or payload.lstrip().startswith("["):
+            raise GovernanceError(
+                f"{path}:{line_number}: publication COPY must remain one-line "
+                "shell form"
+            )
+        try:
+            words = shlex.split(payload)
+        except ValueError as exc:
+            raise GovernanceError(
+                f"{path}:{line_number}: invalid COPY syntax: {exc}"
+            ) from exc
+        local_copy = True
+        while words and words[0].startswith("--"):
+            option = words.pop(0)
+            if option == "--from":
+                if not words:
+                    raise GovernanceError(
+                        f"{path}:{line_number}: --from requires a stage"
+                    )
+                words.pop(0)
+                local_copy = False
+            elif option.startswith("--from="):
+                local_copy = False
+        if not local_copy:
+            continue
+        if len(words) < 2:
+            raise GovernanceError(
+                f"{path}:{line_number}: COPY requires a source and destination"
+            )
+        sources.extend(words[:-1])
+    return tuple(sources)
+
+
+def validate_publication_docker_context(root: Path) -> list[str]:
+    """Require a fail-closed Docker context for evaluation publication."""
+    errors: list[str] = []
+    try:
+        root_rules = root_dockerignore_rules(root)
+        rules = publication_dockerignore_rules(root)
+        sources = publication_docker_copy_sources(root)
+    except GovernanceError as exc:
+        return [str(exc)]
+
+    root_allow_rules = tuple(rule for rule in root_rules if rule.startswith("!"))
+    if root_allow_rules:
+        errors.append(
+            ".dockerignore is a common denylist and must not contain exceptions; "
+            f"actual={root_allow_rules!r}"
+        )
+    for rule in (
+        *REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES,
+        *REQUIRED_PUBLICATION_DOCKER_DENY_RULES,
+    ):
+        if rule not in root_rules:
+            errors.append(f".dockerignore required deny rule is missing: {rule!r}")
+    if not rules or rules[0] != "**":
+        errors.append(
+            f"{PUBLICATION_DOCKERIGNORE} must start by excluding the complete "
+            "context: '**'"
+        )
+    actual_scope_rules = rules[: len(EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES)]
+    if actual_scope_rules != EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES:
+        errors.append(
+            f"{PUBLICATION_DOCKERIGNORE} scope rules differ from the exact "
+            "reviewed traversal contract; "
+            f"expected={EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES!r}, "
+            f"actual={actual_scope_rules!r}"
+        )
+
+    allow_rules = tuple(rule for rule in rules if rule.startswith("!"))
+    if allow_rules != EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES:
+        errors.append(
+            f"{PUBLICATION_DOCKERIGNORE} exceptions must remain the exact reviewed "
+            "publication allowlist; "
+            f"expected={EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES!r}, "
+            f"actual={allow_rules!r}"
+        )
+
+    last_allow_index = max(
+        (index for index, rule in enumerate(rules) if rule.startswith("!")),
+        default=-1,
+    )
+    for rule in (
+        *REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES,
+        *REQUIRED_PUBLICATION_DOCKER_DENY_RULES,
+    ):
+        if rule not in rules:
+            errors.append(
+                f"{PUBLICATION_DOCKERIGNORE} required terminal deny rule is "
+                f"missing: {rule!r}"
+            )
+        elif rules.index(rule) <= last_allow_index:
+            errors.append(
+                f"{PUBLICATION_DOCKERIGNORE} terminal deny rules must follow "
+                f"every exception: {rule!r}"
+            )
+
+    if sources != EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES:
+        errors.append(
+            f"{PUBLICATION_DOCKERFILE} local COPY sources differ from the reviewed "
+            f"contract; expected={EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES!r}, "
+            f"actual={sources!r}"
+        )
+    return errors
 
 
 def workflow_files(root: Path) -> list[Path]:
@@ -891,6 +1219,56 @@ def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
             f"expected={AGENT_RUN_STEP_INVENTORY!r}, "
             f"actual={tuple(run_step_inventory)!r}"
         )
+    return errors
+
+
+def _canonical_ast_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def validate_eval_workflow_contracts(
+    root: Path,
+    documents: dict[Path, YamlDocument],
+) -> list[str]:
+    """Bind eval CI and its trusted publication boundary to reviewed ASTs."""
+
+    errors: list[str] = []
+    ci_path = (root.resolve() / AGENT_CI_WORKFLOW).resolve()
+    ci = documents.get(ci_path)
+    if ci is None:
+        errors.append(f"{AGENT_CI_WORKFLOW}: workflow is missing or invalid")
+    else:
+        eval_job = _workflow_jobs(ci).get(EVAL_CI_JOB)
+        if eval_job is None:
+            errors.append(f"{AGENT_CI_WORKFLOW}: job {EVAL_CI_JOB!r} is missing")
+        else:
+            actual = _canonical_ast_sha256(_node_to_data(eval_job))
+            if actual != EVAL_CI_JOB_AST_SHA256:
+                errors.append(
+                    f"{AGENT_CI_WORKFLOW}: job {EVAL_CI_JOB!r} exact AST differs; "
+                    f"expected_sha256={EVAL_CI_JOB_AST_SHA256}, "
+                    f"actual_sha256={actual}"
+                )
+
+    publication_path = (root.resolve() / EVAL_PUBLICATION_WORKFLOW).resolve()
+    publication = documents.get(publication_path)
+    if publication is None:
+        errors.append(f"{EVAL_PUBLICATION_WORKFLOW}: workflow is missing or invalid")
+    else:
+        actual = _canonical_ast_sha256(_node_to_data(publication.root))
+        if actual != EVAL_PUBLICATION_WORKFLOW_AST_SHA256:
+            errors.append(
+                f"{EVAL_PUBLICATION_WORKFLOW}: exact workflow AST differs; "
+                f"expected_sha256={EVAL_PUBLICATION_WORKFLOW_AST_SHA256}, "
+                f"actual_sha256={actual}"
+            )
     return errors
 
 
@@ -2042,6 +2420,16 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
             )
         except GovernanceError as exc:
             errors.append(f"local: invalid ci/agent resolution contract: {exc}")
+    try:
+        errors.extend(
+            f"local: {error}"
+            for error in validate_eval_workflow_contracts(root, documents)
+        )
+    except GovernanceError as exc:
+        errors.append(f"local: invalid eval workflow contract: {exc}")
+    errors.extend(
+        f"local: {error}" for error in validate_publication_docker_context(root)
+    )
 
     required_files = (
         ".github/CODEOWNERS",
@@ -2112,7 +2500,7 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     if not _json_exact(environments_policy, EXPECTED_ENVIRONMENTS):
         errors.append(
             "local: policy.environments differs from the complete reviewed "
-            f"Preview/Production payload; actual={environments_policy!r}, "
+            f"environment payload; actual={environments_policy!r}, "
             f"expected={EXPECTED_ENVIRONMENTS!r}"
         )
 
@@ -2850,6 +3238,19 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
                     f"external: environment {name!r} protection rules are "
                     f"{actual_protection!r}; expected {expected_protection!r}"
                 )
+        if name in SECRETLESS_ENVIRONMENTS:
+            for collection in ("secrets", "variables"):
+                inventory = _single_page_items(
+                    api_get,
+                    f"environments/{encoded_name}/{collection}?per_page=100&page=1",
+                    collection_key=collection,
+                    require_total_count=True,
+                )
+                if inventory:
+                    errors.append(
+                        f"external: environment {name!r} contains "
+                        f"{len(inventory)} {collection}; expected 0"
+                    )
         expected_deployment = expected["deployment_branch_policy"]
         if actual.get("deployment_branch_policy") != expected_deployment:
             errors.append(

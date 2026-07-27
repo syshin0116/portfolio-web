@@ -254,6 +254,7 @@ registry.register(
     create,
     implementation_id=EXACT_IMPLEMENTATION_ID,
     config=EXACT_CONFIG,
+    data_dependencies=("corpus:published-markdown",),
     servable=True,
 )
 

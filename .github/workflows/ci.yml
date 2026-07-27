@@ -159,15 +159,16 @@ jobs:
         if: needs.changes.outputs.agent == 'true'
         with:
           enable-cache: true
-          cache-dependency-glob: agent/uv.lock
-      - name: Verify the agent lockfile is current
+          cache-dependency-glob: uv.lock
+      - name: Verify the workspace lockfile is current
         if: needs.changes.outputs.agent == 'true'
         run: uv lock --check
       - if: needs.changes.outputs.agent == 'true'
-        run: uv sync --frozen --all-extras --dev
+        run: >-
+          uv sync --frozen --package syshin0116-dev-agent --all-extras --dev
       - if: needs.changes.outputs.agent == 'true'
         run: >-
-          uv run --frozen ruff check
+          uv run --frozen --package syshin0116-dev-agent ruff check
           src
           tests
           ../scripts/build_index.py
@@ -176,7 +177,7 @@ jobs:
           ../scripts/tests
       - if: needs.changes.outputs.agent == 'true'
         run: >-
-          uv run --frozen ruff format --check
+          uv run --frozen --package syshin0116-dev-agent ruff format --check
           src
           tests
           ../scripts/build_index.py
@@ -186,10 +187,12 @@ jobs:
       - name: Build and audit the published corpus and BM25 artifacts
         if: needs.changes.outputs.agent == 'true'
         run: >-
-          uv run --frozen python ../scripts/build_index.py
+          uv run --frozen --package syshin0116-dev-agent
+          python ../scripts/build_index.py
           --expect-document-count 335
       - if: needs.changes.outputs.agent == 'true'
-        run: uv run --frozen --all-extras pytest -q
+        run: >-
+          uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q
 
   eval:
     name: ci/eval
@@ -197,7 +200,10 @@ jobs:
     needs:
       - changes
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: eval
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -208,15 +214,103 @@ jobs:
       - name: Report an unaffected component
         if: needs.changes.outputs.eval != 'true'
         run: echo "No eval-affecting paths changed; ci/eval reports success without rebuilding."
-      - name: Guard the future eval workspace
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.changes.outputs.eval == 'true'
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        if: needs.changes.outputs.eval == 'true'
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Verify the workspace lockfile is current
+        if: needs.changes.outputs.eval == 'true'
+        run: uv lock --check
+      - if: needs.changes.outputs.eval == 'true'
+        run: >-
+          uv sync --frozen --package syshin0116-dev-eval --all-groups
+      - if: needs.changes.outputs.eval == 'true'
+        run: >-
+          uv run --frozen --package syshin0116-dev-eval ruff check src tests
+      - if: needs.changes.outputs.eval == 'true'
+        run: >-
+          uv run --frozen --package syshin0116-dev-eval
+          ruff format --check src tests
+      - if: needs.changes.outputs.eval == 'true'
+        run: uv run --frozen --package syshin0116-dev-eval pytest
+      - name: Build and inspect the Linux amd64 publication image
         if: needs.changes.outputs.eval == 'true'
         shell: bash
         run: |
-          if [[ -d eval ]]; then
-            echo "::error::eval/ exists but ci/eval is still the foundation guard; replace this step with the real frozen-install, schema, metric, registry, and no-cost sweep gates."
-            exit 1
-          fi
-          echo "eval/ is not present yet; ci/eval will become executable in the eval workspace PR."
+          set -euo pipefail
+          image_tag="blogeval-ci:$GITHUB_SHA"
+          docker build \
+            --file Dockerfile.publication \
+            --platform linux/amd64 \
+            --tag "$image_tag" \
+            ..
+          test "$(
+            docker image inspect \
+              --format '{{.Os}}/{{.Architecture}}' \
+              "$image_tag"
+          )" = "linux/amd64"
+      - name: Build the pinned published corpus for the no-cost sweep
+        if: needs.changes.outputs.eval == 'true'
+        run: >-
+          uv run --frozen --package syshin0116-dev-eval
+          python ../scripts/build_index.py
+          --output "$RUNNER_TEMP/eval-index"
+          --expect-document-count 335
+      - name: Verify and byte-compare two deterministic known-item sweeps
+        if: needs.changes.outputs.eval == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          content_tree_sha="$(git rev-parse HEAD:content)"
+          uv run --frozen --package syshin0116-dev-eval \
+            blogeval generate-known-item \
+            --index-root "$RUNNER_TEMP/eval-index" \
+            --content-tree-sha "$content_tree_sha" \
+            --output querysets/known-item-alias-v1.json \
+            --check
+          uv run --frozen --package syshin0116-dev-eval blogeval validate \
+            --index-root "$RUNNER_TEMP/eval-index" \
+            --content-tree-sha "$content_tree_sha" \
+            --dataset querysets/known-item-alias-v1.json
+          for output_root in \
+            "$RUNNER_TEMP/eval-results-first" \
+            "$RUNNER_TEMP/eval-results-second"
+          do
+            uv run --frozen --package syshin0116-dev-eval blogeval sweep \
+              --index-root "$RUNNER_TEMP/eval-index" \
+              --content-tree-sha "$content_tree_sha" \
+              --dataset querysets/known-item-alias-v1.json \
+              --output-root "$output_root"
+            test "$(find "$output_root" -name run.json -type f | wc -l)" -eq 1
+            test "$(find "$output_root" -name leaderboard.md -type f | wc -l)" -eq 1
+            test "$(find "$output_root" -name per-query.md -type f | wc -l)" -eq 1
+            test "$(find "$output_root" -name metrics.svg -type f | wc -l)" -eq 1
+            test "$(find "$output_root" -name manifest.json -type f | wc -l)" -eq 1
+            run_json="$(find "$output_root" -name run.json -type f)"
+            run_directory="${run_json%/run.json}"
+            uv run --frozen --package syshin0116-dev-eval \
+              blogeval verify-run \
+              --index-root "$RUNNER_TEMP/eval-index" \
+              --content-tree-sha "$content_tree_sha" \
+              --dataset querysets/known-item-alias-v1.json \
+              --run-directory "$run_directory"
+          done
+          first_run_json="$(
+            find "$RUNNER_TEMP/eval-results-first" -name run.json -type f
+          )"
+          second_run_json="$(
+            find "$RUNNER_TEMP/eval-results-second" -name run.json -type f
+          )"
+          first_run_directory="${first_run_json%/run.json}"
+          second_run_directory="${second_run_json%/run.json}"
+          diff --no-dereference --recursive \
+            "$first_run_directory" \
+            "$second_run_directory"
 
   infra:
     name: ci/infra

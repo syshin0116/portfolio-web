@@ -15,6 +15,7 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 ALL_ZERO_SHA = "0" * 40
 ROOT_AGENT_PATHS = frozenset(
     {
+        ".dockerignore",
         "Dockerfile",
         "aegra.json",
         "pyproject.toml",
@@ -26,6 +27,12 @@ PUBLICATION_SEMANTICS_WEB_PATHS = frozenset(
         "web/bun.lock",
         "web/package.json",
         "web/scripts/prebuild.ts",
+    }
+)
+PUBLICATION_DOCKER_CONTEXT_PATHS = frozenset(
+    {
+        "eval/Dockerfile.publication",
+        "eval/Dockerfile.publication.dockerignore",
     }
 )
 OPS_FOUNDATION_PATHS = frozenset(
@@ -57,7 +64,11 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
             continue
         if path.startswith(".github/workflows/") or path in CHANGE_DETECTION_PATHS:
             return dict.fromkeys(COMPONENTS, True)
-        if path == ".gitignore":
+        if path in {".dockerignore", ".gitignore"}:
+            affected["infra"] = True
+        if path in PUBLICATION_DOCKER_CONTEXT_PATHS:
+            affected["agent"] = True
+            affected["eval"] = True
             affected["infra"] = True
         if path.startswith("protocol/") or path.startswith("content/"):
             affected["web"] = True

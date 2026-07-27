@@ -19,6 +19,16 @@ ENVIRONMENTS_PAGE = "environments?per_page=100&page=1"
 PRODUCTION_BRANCH_POLICIES_PAGE = (
     "environments/Production/deployment-branch-policies?per_page=100&page=1"
 )
+EVAL_PUBLICATION_BRANCH_POLICIES_PAGE = (
+    "environments/Evaluation%20Publication/"
+    "deployment-branch-policies?per_page=100&page=1"
+)
+EVAL_PUBLICATION_SECRETS_PAGE = (
+    "environments/Evaluation%20Publication/secrets?per_page=100&page=1"
+)
+EVAL_PUBLICATION_VARIABLES_PAGE = (
+    "environments/Evaluation%20Publication/variables?per_page=100&page=1"
+)
 LEGACY_MAIN_PROTECTION = "branches/main/protection"
 
 
@@ -111,11 +121,33 @@ def desired_live_responses() -> dict[str, object]:
             status=404,
         ),
         ENVIRONMENTS_PAGE: {
-            "total_count": 2,
+            "total_count": 3,
             "environments": [
+                {"name": "Evaluation Publication"},
                 {"name": "Preview"},
                 {"name": "Production"},
             ],
+        },
+        "environments/Evaluation%20Publication": {
+            "name": "Evaluation Publication",
+            "can_admins_bypass": False,
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [
+                        {
+                            "type": "User",
+                            "reviewer": {"login": "syshin0116"},
+                        }
+                    ],
+                },
+                {"type": "branch_policy"},
+            ],
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
         },
         "environments/Preview": {
             "name": "Preview",
@@ -148,12 +180,33 @@ def desired_live_responses() -> dict[str, object]:
             "total_count": 1,
             "branch_policies": [{"name": "main", "type": "branch"}],
         },
+        EVAL_PUBLICATION_BRANCH_POLICIES_PAGE: {
+            "total_count": 1,
+            "branch_policies": [{"name": "main", "type": "branch"}],
+        },
+        EVAL_PUBLICATION_SECRETS_PAGE: {
+            "total_count": 0,
+            "secrets": [],
+        },
+        EVAL_PUBLICATION_VARIABLES_PAGE: {
+            "total_count": 0,
+            "variables": [],
+        },
     }
 
 
 def copy_local_governance_fixture(directory: str) -> Path:
     root = Path(directory)
     shutil.copytree(REPO_ROOT / ".github", root / ".github")
+    shutil.copy2(REPO_ROOT / ".dockerignore", root / ".dockerignore")
+    dockerfile = root / governance.PUBLICATION_DOCKERFILE
+    dockerfile.parent.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / governance.PUBLICATION_DOCKERFILE, dockerfile)
+    publication_ignore = root / governance.PUBLICATION_DOCKERIGNORE
+    shutil.copy2(
+        REPO_ROOT / governance.PUBLICATION_DOCKERIGNORE,
+        publication_ignore,
+    )
     return root
 
 
@@ -161,6 +214,83 @@ class LocalGovernanceTests(unittest.TestCase):
     def test_repository_policy_and_workflows_are_locally_valid(self) -> None:
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
+
+    def test_publication_docker_context_scope_and_copy_inputs_are_exact(self) -> None:
+        rules = governance.publication_dockerignore_rules(REPO_ROOT)
+        sources = governance.publication_docker_copy_sources(REPO_ROOT)
+        self.assertEqual(
+            governance.EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES,
+            rules[: len(governance.EXPECTED_PUBLICATION_DOCKER_SCOPE_RULES)],
+        )
+        self.assertEqual(
+            governance.EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES,
+            sources,
+        )
+
+    def test_root_docker_context_has_no_exceptions_and_all_required_denies(
+        self,
+    ) -> None:
+        rules = governance.root_dockerignore_rules(REPO_ROOT)
+        self.assertFalse(any(rule.startswith("!") for rule in rules))
+        required = (
+            *governance.REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES,
+            *governance.REQUIRED_PUBLICATION_DOCKER_DENY_RULES,
+        )
+        self.assertTrue(set(required).issubset(rules))
+
+    def test_publication_docker_context_rejects_deleted_sensitive_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            dockerignore = root / governance.PUBLICATION_DOCKERIGNORE
+            original = dockerignore.read_text(encoding="utf-8")
+            mutated = original.replace("**/*.pem\n", "", 1)
+            self.assertNotEqual(original, mutated)
+            dockerignore.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "required terminal deny rule is missing: '**/*.pem'" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_publication_docker_context_rejects_deleted_parent_reclosure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            dockerignore = root / governance.PUBLICATION_DOCKERIGNORE
+            original = dockerignore.read_text(encoding="utf-8")
+            mutated = original.replace("agent/**\n", "", 1)
+            self.assertNotEqual(original, mutated)
+            dockerignore.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("scope rules differ" in error for error in errors),
+            errors,
+        )
+
+    def test_root_docker_context_rejects_deleted_environment_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            dockerignore = root / ".dockerignore"
+            original = dockerignore.read_text(encoding="utf-8")
+            mutated = original.replace("**/.env\n", "", 1)
+            self.assertNotEqual(original, mutated)
+            dockerignore.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                ".dockerignore required deny rule is missing: '**/.env'" in error
+                for error in errors
+            ),
+            errors,
+        )
 
     def assert_agent_ci_job_mutation_rejected(
         self,
@@ -186,6 +316,133 @@ class LocalGovernanceTests(unittest.TestCase):
             any("job 'agent' exact job AST differs" in error for error in errors),
             errors,
         )
+
+    def assert_eval_workflow_mutation_rejected(
+        self,
+        *,
+        workflow_name: str,
+        replacements: tuple[tuple[str, str], ...],
+        expected_error: str,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows" / workflow_name
+            original = workflow.read_text(encoding="utf-8")
+            prefix = ""
+            suffix = ""
+            mutated = original
+            if workflow_name == "ci.yml":
+                eval_start = original.index("  eval:\n")
+                eval_end = original.index("\n  infra:\n", eval_start)
+                prefix = original[:eval_start]
+                mutated = original[eval_start:eval_end]
+                suffix = original[eval_end:]
+            for old, new in replacements:
+                before = mutated
+                mutated = mutated.replace(old, new, 1)
+                self.assertNotEqual(before, mutated)
+            workflow.write_text(prefix + mutated + suffix, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(expected_error in error for error in errors),
+            errors,
+        )
+
+    def test_eval_ci_exact_ast_rejects_gate_and_order_weakening(self) -> None:
+        mutations = {
+            "lock-check": (
+                ("        run: uv lock --check\n", "        run: uv lock\n"),
+            ),
+            "frozen": (
+                (
+                    "uv sync --frozen --package syshin0116-dev-eval",
+                    "uv sync --package syshin0116-dev-eval",
+                ),
+            ),
+            "dataset-check": (("          --check\n", ""),),
+            "dataset-validate": (
+                (
+                    "uv run --frozen --package syshin0116-dev-eval blogeval validate",
+                    "echo validate",
+                ),
+            ),
+            "second-sweep": (
+                (
+                    '            "$RUNNER_TEMP/eval-results-second"\n',
+                    "",
+                ),
+            ),
+            "recursive-diff": (
+                (
+                    "          diff --no-dereference --recursive \\\n",
+                    "          diff \\\n",
+                ),
+            ),
+            "publication-linux-amd64-build": (
+                (
+                    "            --platform linux/amd64 \\\n",
+                    "            --platform linux/arm64 \\\n",
+                ),
+            ),
+            "condition": (
+                (
+                    "if: needs.changes.outputs.eval == 'true'",
+                    "if: false",
+                ),
+            ),
+            "continue-on-error": (
+                (
+                    "      - name: Verify the workspace lockfile is current\n",
+                    "      - name: Verify the workspace lockfile is current\n"
+                    "        continue-on-error: true\n",
+                ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_eval_workflow_mutation_rejected(
+                    workflow_name="ci.yml",
+                    replacements=replacements,
+                    expected_error="job 'eval' exact AST differs",
+                )
+
+    def test_eval_publication_exact_ast_rejects_untrusted_identity_inputs(self) -> None:
+        mutations = {
+            "non-main": (
+                (
+                    "if: github.ref == 'refs/heads/main'",
+                    "if: always()",
+                ),
+            ),
+            "environment": (("    environment: Evaluation Publication\n", ""),),
+            "caller-image": (
+                (
+                    "IMAGE_DIGEST: ${{ steps.image.outputs.digest }}",
+                    "IMAGE_DIGEST: ${{ env.BLOGEVAL_IMAGE_DIGEST }}",
+                ),
+            ),
+            "tag-execution": (
+                (
+                    '            "$IMAGE_DIGEST" \\\n',
+                    '            "blogeval-candidate:$GITHUB_SHA" \\\n',
+                ),
+            ),
+            "attestation": (
+                (
+                    "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+                    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+                ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_eval_workflow_mutation_rejected(
+                    workflow_name="eval-publication.yml",
+                    replacements=replacements,
+                    expected_error="exact workflow AST differs",
+                )
 
     def test_agent_ci_exact_job_surface_rejects_every_unreviewed_key(self) -> None:
         header = (
@@ -328,7 +585,7 @@ class LocalGovernanceTests(unittest.TestCase):
             "        if: needs.changes.outputs.agent == 'true'\n"
             "        with:\n"
             "          enable-cache: true\n"
-            "          cache-dependency-glob: agent/uv.lock\n"
+            "          cache-dependency-glob: uv.lock\n"
         )
         mutations = {
             "checkout-ref": (
@@ -442,7 +699,7 @@ runs:
             workflow = root / ".github/workflows/ci.yml"
             original = workflow.read_text(encoding="utf-8")
             old = (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
             )
             new = (
@@ -463,20 +720,24 @@ runs:
     def test_agent_ci_requires_lock_check_before_frozen_install(self) -> None:
         mutations = {
             "removed": (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
                 "        run: uv lock --check\n",
                 "",
             ),
             "after-install": (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
                 "        run: uv lock --check\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv sync --frozen --all-extras --dev\n",
+                "        run: >-\n"
+                "          uv sync --frozen --package syshin0116-dev-agent "
+                "--all-extras --dev\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv sync --frozen --all-extras --dev\n"
-                "      - name: Verify the agent lockfile is current\n"
+                "        run: >-\n"
+                "          uv sync --frozen --package syshin0116-dev-agent "
+                "--all-extras --dev\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
                 "        run: uv lock --check\n",
             ),
@@ -510,15 +771,15 @@ runs:
     def test_agent_ci_rejects_non_frozen_or_misplaced_uv_run_flag(self) -> None:
         mutations = {
             "missing": (
-                "uv run --frozen ruff check",
-                "uv run ruff check",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
+                "uv run --package syshin0116-dev-agent ruff check",
             ),
             "passed-to-child-command": (
-                "uv run --frozen ruff check",
-                "uv run ruff --frozen check",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
+                "uv run --package syshin0116-dev-agent ruff --frozen check",
             ),
             "quoted-shell": (
-                "uv run --frozen ruff check",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
                 'bash -c "uv run ruff check"',
             ),
         }
@@ -543,29 +804,38 @@ runs:
     def test_agent_ci_requires_exact_frozen_uv_run_inventory(self) -> None:
         mutations = {
             "variable-executable": (
-                "uv run --frozen --all-extras pytest -q",
-                "$UV run --frozen --all-extras pytest -q",
+                "uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q",
+                "$UV run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q",
             ),
             "command-variable-executable": (
-                "uv run --frozen --all-extras pytest -q",
-                'command "$UV" run --frozen --all-extras pytest -q',
+                "uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q",
+                'command "$UV" run --frozen --package syshin0116-dev-agent '
+                "--all-extras pytest -q",
             ),
             "deleted-pytest": (
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
                 "",
             ),
             "renamed-child-command": (
-                "uv run --frozen ruff check",
-                "uv run --frozen ruff lint",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
+                "uv run --frozen --package syshin0116-dev-agent ruff lint",
             ),
             "extra-run": (
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen python -V\n"
+                "        run: uv run --frozen "
+                "--package syshin0116-dev-agent python -V\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
             ),
         }
         for label, (old, new) in mutations.items():
@@ -590,11 +860,15 @@ runs:
         mutations = {
             "extra-indirect-run": (
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: 'U=uv; \"$U\" run --all-extras pytest -q'\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
             ),
             "step-shell": (
                 "        run: uv lock --check\n",
@@ -647,13 +921,13 @@ runs:
     def test_agent_ci_rejects_non_frozen_install_and_disabled_lock_check(self) -> None:
         mutations = {
             "non-frozen-install": (
-                "uv sync --frozen --all-extras --dev",
-                "uv sync --all-extras --dev",
+                "uv sync --frozen --package syshin0116-dev-agent --all-extras --dev",
+                "uv sync --package syshin0116-dev-agent --all-extras --dev",
             ),
             "disabled-lock-check": (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n",
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: 'false'\n",
             ),
         }
@@ -810,6 +1084,14 @@ runs:
                 "prevent_self_review"
             ] = True
 
+        def mutate_eval_publication_admin_bypass(policy: dict[str, object]) -> None:
+            policy["environments"]["Evaluation Publication"]["can_admins_bypass"] = True
+
+        def mutate_eval_publication_reviewer(policy: dict[str, object]) -> None:
+            policy["environments"]["Evaluation Publication"]["protection_rules"][0][
+                "reviewers"
+            ] = []
+
         def mutate_staging(policy: dict[str, object]) -> None:
             policy["environments"]["Staging"] = {
                 "can_admins_bypass": True,
@@ -825,6 +1107,8 @@ runs:
             ("reviewer-identity", mutate_reviewer_identity),
             ("reviewer-duplicate", mutate_duplicate_reviewer),
             ("self-review", mutate_self_review),
+            ("eval-publication-admin-bypass", mutate_eval_publication_admin_bypass),
+            ("eval-publication-reviewer", mutate_eval_publication_reviewer),
             ("staging", mutate_staging),
         )
         for label, mutate in mutations:
@@ -1541,7 +1825,7 @@ runs:
                     "numpy",
                 ]
             ),
-            groups["uv:/agent:agent-routine"]["exclude_patterns"],
+            groups["uv:/:python-routine"]["exclude_patterns"],
         )
 
     def test_dependabot_group_pattern_mutation_is_rejected(self) -> None:
@@ -3001,6 +3285,86 @@ class LiveGovernanceTests(unittest.TestCase):
             )
         )
 
+    def test_evaluation_publication_environment_drift_is_rejected(self) -> None:
+        mutations = (
+            ("admin-bypass", "can_admins_bypass", True),
+            ("self-review", "prevent_self_review", True),
+            ("reviewer", "reviewer-login", "another-owner"),
+        )
+        for label, field, value in mutations:
+            with self.subTest(label=label):
+                responses = desired_live_responses()
+                path = "environments/Evaluation%20Publication"
+                environment = json.loads(json.dumps(responses[path]))
+                if field == "reviewer-login":
+                    environment["protection_rules"][0]["reviewers"][0]["reviewer"][
+                        "login"
+                    ] = value
+                elif field == "prevent_self_review":
+                    environment["protection_rules"][0][field] = value
+                else:
+                    environment[field] = value
+                responses[path] = environment
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "environment 'Evaluation Publication'" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_evaluation_publication_inventory_must_remain_empty(self) -> None:
+        cases = (
+            (EVAL_PUBLICATION_SECRETS_PAGE, "secrets"),
+            (EVAL_PUBLICATION_VARIABLES_PAGE, "variables"),
+        )
+        for endpoint, collection in cases:
+            with self.subTest(collection=collection):
+                responses = desired_live_responses()
+                responses[endpoint] = {
+                    "total_count": 1,
+                    collection: [{"name": "MUST_NOT_APPEAR_IN_OUTPUT"}],
+                }
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        f"contains 1 {collection}; expected 0" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+                self.assertNotIn("MUST_NOT_APPEAR_IN_OUTPUT", "\n".join(errors))
+
+    def test_evaluation_publication_inventory_api_failure_fails_closed(self) -> None:
+        for endpoint in (
+            EVAL_PUBLICATION_SECRETS_PAGE,
+            EVAL_PUBLICATION_VARIABLES_PAGE,
+        ):
+            with self.subTest(endpoint=endpoint):
+                responses = desired_live_responses()
+                responses[endpoint] = governance.ApiResponse(
+                    payload={"message": "Forbidden"},
+                    headers={},
+                    status=403,
+                )
+
+                with self.assertRaisesRegex(
+                    governance.GovernanceError,
+                    "returned HTTP 403",
+                ):
+                    governance.verify_live(self.policy, responses.__getitem__)
+
     def test_production_reviewer_identity_drift_is_rejected(self) -> None:
         responses = desired_live_responses()
         production = json.loads(json.dumps(responses["environments/Production"]))
@@ -3118,7 +3482,7 @@ class LiveGovernanceTests(unittest.TestCase):
     def test_extra_environment_is_rejected_as_policy_drift(self) -> None:
         responses = desired_live_responses()
         environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
-        environments["total_count"] = 3
+        environments["total_count"] = 4
         environments["environments"].append({"name": "Staging"})
         responses[ENVIRONMENTS_PAGE] = environments
 
@@ -3147,12 +3511,12 @@ class LiveGovernanceTests(unittest.TestCase):
     def test_environment_total_count_mismatch_fails_closed(self) -> None:
         responses = desired_live_responses()
         environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
-        environments["total_count"] = 3
+        environments["total_count"] = 4
         responses[ENVIRONMENTS_PAGE] = environments
 
         with self.assertRaisesRegex(
             governance.GovernanceError,
-            "total_count is 3",
+            "total_count is 4",
         ):
             governance.verify_live(self.policy, responses.__getitem__)
 
@@ -3170,6 +3534,47 @@ class LiveGovernanceTests(unittest.TestCase):
             "requires pagination",
         ):
             governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_evaluation_publication_inventory_pagination_fails_closed(self) -> None:
+        for endpoint in (
+            EVAL_PUBLICATION_SECRETS_PAGE,
+            EVAL_PUBLICATION_VARIABLES_PAGE,
+        ):
+            with self.subTest(endpoint=endpoint):
+                responses = desired_live_responses()
+                responses[endpoint] = governance.ApiResponse(
+                    payload=responses[endpoint],
+                    headers={
+                        "link": (
+                            '<https://api.github.test/inventory?page=2>; rel="next"'
+                        )
+                    },
+                )
+
+                with self.assertRaisesRegex(
+                    governance.GovernanceError,
+                    "requires pagination",
+                ):
+                    governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_evaluation_publication_inventory_total_count_fails_closed(self) -> None:
+        cases = (
+            (EVAL_PUBLICATION_SECRETS_PAGE, "secrets"),
+            (EVAL_PUBLICATION_VARIABLES_PAGE, "variables"),
+        )
+        for endpoint, collection in cases:
+            with self.subTest(collection=collection):
+                responses = desired_live_responses()
+                responses[endpoint] = {
+                    "total_count": 1,
+                    collection: [],
+                }
+
+                with self.assertRaisesRegex(
+                    governance.GovernanceError,
+                    "total_count is 1",
+                ):
+                    governance.verify_live(self.policy, responses.__getitem__)
 
 
 if __name__ == "__main__":

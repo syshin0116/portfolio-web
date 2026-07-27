@@ -9,7 +9,7 @@ when_to_read: >
   Singapore database.
 tags: [operations, gcp, neon, workload-identity, cloud-run, secrets, terraform]
 status: stable
-updated: "2026-07-27"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
@@ -53,6 +53,9 @@ After this foundation is reviewed and applied, the target is:
   environment, and the `pull_request` event;
 - production federation restricted to the numeric repository and owner IDs, the `push`
   event, `refs/heads/main`, and the `Production` environment;
+- evaluation publication isolated in a separate `Evaluation Publication` environment
+  that is not accepted by either GCP workload-identity provider and carries no GCP or
+  deployment secrets;
 - no user-managed service-account keys.
 
 The live verifier reads direct policies at the project, every reported folder and
@@ -92,16 +95,29 @@ provider therefore cannot honestly bind `job_workflow_ref`; `push` + `main` +
 workflow-ref claim and condition after its workflow path exists, then update both the
 Terraform exact-value test and live verifier.
 
-GitHub environment names are exactly `Preview` and `Production`. Their reviewers,
-self-review settings, and deployment branches are governed only by
+GitHub environment names are exactly `Preview`, `Production`, and
+`Evaluation Publication`. Their reviewers, self-review settings, admin-bypass settings,
+and deployment branches are governed only by
 `.github/repository-governance.json` and
 `scripts/verify_repository_governance.py`; this foundation does not duplicate that policy.
 When those central files are present, `--live` delegates to their live verifier. The
-canonical Production deployment-branch set is `{main}`. Delegation requires both `uv` and
-`gh` and runs the verifier exactly as:
+canonical Production and Evaluation Publication deployment-branch set is `{main}`.
+`Evaluation Publication` must use `syshin0116` as its required reviewer, allow the solo
+owner to review, forbid admin bypass, and contain no environment secrets or variables.
+It must never be added to the GCP WIF provider conditions.
+
+As of 2026-07-28, the live repository has the `Evaluation Publication` environment with
+required reviewer `syshin0116`, `prevent_self_review=false`, admin bypass disabled, and
+one custom deployment branch policy for `main`. The frozen live verifier below passes,
+including its fail-closed zero-count checks for environment secrets and variables; an
+independent direct GitHub API check also confirmed both inventories are empty. The manual
+publication workflow has not been dispatched, and no evaluation result is claimed as
+published gold.
+
+Delegation requires both `uv` and `gh` and runs the verifier exactly as:
 
 ```sh
-uv run --no-project --with pyyaml==6.0.3 \
+uv run --frozen --package syshin0116-dev-agent \
   python scripts/verify_repository_governance.py --live
 ```
 

@@ -42,12 +42,14 @@ jobs:
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           enable-cache: true
-          cache-dependency-glob: agent/uv.lock
+          cache-dependency-glob: uv.lock
       - name: Install the locked protocol test environment
-        run: uv sync --project agent --frozen --all-extras --dev
+        run: >-
+          uv sync --project agent --frozen --package syshin0116-dev-agent
+          --all-extras --dev
       - name: Lint protocol consumers
         run: >-
-          uv run --project agent --frozen ruff check
+          uv run --project agent --frozen --package syshin0116-dev-agent ruff check
           scripts/protocol_typescript_contract.py
           scripts/protocol_contract.py
           scripts/smoke.py
@@ -56,7 +58,8 @@ jobs:
           protocol/tests
       - name: Check protocol consumer formatting
         run: >-
-          uv run --project agent --frozen ruff format --check
+          uv run --project agent --frozen --package syshin0116-dev-agent
+          ruff format --check
           scripts/protocol_typescript_contract.py
           scripts/protocol_contract.py
           scripts/smoke.py
@@ -65,7 +68,7 @@ jobs:
           protocol/tests
       - name: Verify pinned upstream schemas and generated bindings
         run: >-
-          uv run --project agent --frozen
+          uv run --project agent --frozen --package syshin0116-dev-agent
           python scripts/verify_protocol_upstream.py
       - name: Prepare the locked codegen toolchain
         run: >-
@@ -88,11 +91,11 @@ jobs:
           --repeat 2
       - name: Validate protocol fixtures
         run: >-
-          uv run --project agent --frozen
+          uv run --project agent --frozen --package syshin0116-dev-agent
           python scripts/protocol_contract.py
       - name: Run protocol contract tests
         run: >-
-          uv run --project agent --frozen
+          uv run --project agent --frozen --package syshin0116-dev-agent
           python -m unittest discover -s protocol/tests -v
       - name: Compile and replay every fixture through generated TypeScript types
         env:
@@ -104,5 +107,5 @@ jobs:
             --compile-with protocol/tests/typescript
       - name: Replay the offline smoke fixtures
         run: >-
-          uv run --project agent --frozen
+          uv run --project agent --frozen --package syshin0116-dev-agent
           python scripts/smoke.py

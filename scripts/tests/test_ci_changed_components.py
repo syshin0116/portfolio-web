@@ -55,6 +55,23 @@ class PathClassificationTests(unittest.TestCase):
             changes.classify_paths([".gitignore"]),
         )
 
+    def test_root_dockerignore_runs_publication_and_infrastructure_gates(self) -> None:
+        self.assertEqual(
+            {"web": False, "agent": True, "eval": True, "infra": True},
+            changes.classify_paths([".dockerignore"]),
+        )
+
+    def test_publication_docker_context_runs_all_relevant_gates(self) -> None:
+        for path in (
+            "eval/Dockerfile.publication",
+            "eval/Dockerfile.publication.dockerignore",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": False, "agent": True, "eval": True, "infra": True},
+                    changes.classify_paths([path]),
+                )
+
     def test_all_workflows_run_every_component(self) -> None:
         for path in (
             ".github/workflows/protocol-compat.yml",
@@ -99,7 +116,13 @@ class PathClassificationTests(unittest.TestCase):
                 )
 
     def test_root_runtime_and_scripts_run_agent_and_eval(self) -> None:
-        for path in ("aegra.json", "Dockerfile", "scripts/build_index.py"):
+        for path in (
+            "aegra.json",
+            "Dockerfile",
+            "pyproject.toml",
+            "uv.lock",
+            "scripts/build_index.py",
+        ):
             with self.subTest(path=path):
                 self.assertEqual(
                     {"web": False, "agent": True, "eval": True, "infra": False},

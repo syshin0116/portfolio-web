@@ -46,7 +46,7 @@ updates:
     open-pull-requests-limit: 0
 
   - package-ecosystem: "uv"
-    directory: "/agent"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -59,7 +59,7 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      agent-routine:
+      python-routine:
         applies-to: "version-updates"
         patterns:
           - "*"

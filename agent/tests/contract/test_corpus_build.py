@@ -990,6 +990,7 @@ def test_cli_builds_to_an_explicit_output_and_reports_json(tmp_path: Path) -> No
     report = json.loads(completed.stdout)
     assert report["document_count"] == 1
     assert report["source_markdown_count"] == 1
+    assert len(report["content_git_tree_sha"]) == 40
     assert Path(report["output"]) == index
     assert (index / "posts" / "AI" / "public.md").is_file()
     before = _tree_digest(index)
@@ -1019,6 +1020,77 @@ def test_cli_builds_to_an_explicit_output_and_reports_json(tmp_path: Path) -> No
     assert not (index / "posts" / "AI" / "second.md").exists()
 
 
+@pytest.mark.parametrize("mutation", ["tracked", "untracked"])
+def test_git_backed_build_rejects_dirty_and_untracked_content(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    repository = tmp_path / "repository"
+    content = repository / "content"
+    _write_post(content, "AI/public.md", "draft: false")
+    policy = _write_policy(repository / "policy.toml")
+    subprocess.run(("git", "init", "-q", str(repository)), check=True)
+    subprocess.run(
+        ("git", "-C", str(repository), "config", "user.email", "test@example.com"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(repository), "config", "user.name", "Test"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(repository), "add", "content"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(repository), "commit", "-qm", "content"),
+        check=True,
+    )
+    expected_tree = subprocess.run(
+        ("git", "-C", str(repository), "rev-parse", "HEAD:content"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    clean = build_index(
+        content_root=content,
+        policy_path=policy,
+        output_root=repository / "clean-index",
+    )
+    assert clean.content_git_tree_sha == expected_tree
+
+    if mutation == "tracked":
+        _write_post(content, "AI/public.md", "draft: false", body="changed")
+    else:
+        (content / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+
+    with pytest.raises(CorpusBuildError, match="dirty or untracked"):
+        build_index(
+            content_root=content,
+            policy_path=policy,
+            output_root=repository / "rejected-index",
+        )
+
+
+def test_git_backed_build_rejects_when_git_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    content = repository / "content"
+    _write_post(content, "AI/public.md", "draft: false")
+    policy = _write_policy(repository / "policy.toml")
+    subprocess.run(("git", "init", "-q", str(repository)), check=True)
+    monkeypatch.setattr(corpus_build.shutil, "which", lambda _name: None)
+
+    with pytest.raises(CorpusBuildError, match="Git is unavailable"):
+        build_index(
+            content_root=content,
+            policy_path=policy,
+            output_root=repository / "index",
+        )
+
+
 def test_real_corpus_build_is_exactly_the_nuartz_published_335(
     tmp_path: Path,
 ) -> None:
@@ -1032,6 +1104,15 @@ def test_real_corpus_build_is_exactly_the_nuartz_published_335(
 
     sets = _artifact_doc_ids(index)
     assert report.document_count == 335
+    assert (
+        report.content_git_tree_sha
+        == subprocess.run(
+            ("git", "-C", str(REPO_ROOT), "rev-parse", "HEAD:content"),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
     assert all(len(doc_ids) == 335 for doc_ids in sets)
     assert sets[0] == sets[1] == sets[2] == sets[3] == sets[4]
     assert "AI/pdf-parser/_index.md" not in sets[0]

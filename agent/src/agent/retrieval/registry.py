@@ -28,6 +28,7 @@ class RetrieverRegistration:
     implementation_id: str
     factory: RetrieverFactory
     config_json: str
+    data_dependencies: tuple[str, ...]
     servable: bool
     identity_factory: RetrieverIdentityFactory | None
 
@@ -217,6 +218,7 @@ class RetrieverRegistry:
         *,
         implementation_id: str,
         config: Mapping[str, object] | None = None,
+        data_dependencies: Iterable[str] = (),
         servable: bool = True,
         identity_factory: RetrieverIdentityFactory | None = None,
     ) -> RetrieverRegistration:
@@ -230,12 +232,23 @@ class RetrieverRegistry:
             raise TypeError("servable must be a boolean")
         if identity_factory is not None and not callable(identity_factory):
             raise TypeError("identity_factory must be callable or None")
+        dependencies = tuple(data_dependencies)
+        if not all(
+            isinstance(value, str) and value and value == value.strip() and ":" in value
+            for value in dependencies
+        ):
+            raise ValueError(
+                "data_dependencies must contain non-empty namespaced strings"
+            )
+        if dependencies != tuple(sorted(set(dependencies))):
+            raise ValueError("data_dependencies must be sorted and unique")
 
         registration = RetrieverRegistration(
             method_id=method_id,
             implementation_id=validate_implementation_id(implementation_id),
             factory=factory,
             config_json=canonical_config({} if config is None else config),
+            data_dependencies=dependencies,
             servable=servable,
             identity_factory=identity_factory,
         )

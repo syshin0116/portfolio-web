@@ -59,7 +59,7 @@ A personal tech blog, portfolio, and AI chatbot - built with [Next.js 16](https:
 ### Prerequisites
 
 - [Bun](https://bun.sh/) 1.3.10 - for `web/`
-- [uv](https://github.com/astral-sh/uv) and Python 3.12+ - for `agent/`
+- [uv](https://github.com/astral-sh/uv) and Python 3.12+ - for `agent/` and `eval/`
 - Postgres database (Neon, Supabase, or local) and API keys (Anthropic/OpenAI, OAuth providers) - see `.env.example`
 
 ### Installation
@@ -72,7 +72,7 @@ cd syshin0116.dev
 cd web && bun install && cd ..
 
 # Agent (optional, for local LangGraph backend)
-cd agent && uv sync && cd ..
+uv sync --package syshin0116-dev-agent
 ```
 
 ### Environment Variables
@@ -101,7 +101,8 @@ Use a direct Postgres/Neon endpoint for migrations, not a Neon `-pooler` endpoin
 same-image migration entrypoint before starting Aegra:
 
 ```bash
-uv run --project agent --frozen --env-file .env python -m agent.migrate
+uv run --frozen --project agent --package syshin0116-dev-agent \
+  --env-file .env python -m agent.migrate
 ```
 
 Production sets `RUN_MIGRATIONS_ON_STARTUP=false`; migration is an explicit deployment
@@ -116,7 +117,8 @@ a separate operational feature, not user-facing deletion.
 cd web && bun dev       # http://localhost:3000
 
 # Agent backend (separate terminal, optional)
-uv run --project agent --frozen aegra serve --config aegra.json
+uv run --frozen --project agent --package syshin0116-dev-agent \
+  aegra serve --config aegra.json
 ```
 
 ## Project Structure

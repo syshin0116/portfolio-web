@@ -256,21 +256,32 @@ production or spend-bearing preview.
 
 ## Dependabot and scheduled audit
 
-Dependabot version 2 has exactly three update identities: npm at `/web`, pip at
-`/agent`, and GitHub Actions at `/`. They run weekly on Monday in
-`Asia/Seoul`, staggered at 04:00, 04:20, and 04:40, with three open PRs per
-ecosystem. npm and pip use the reviewed 7-day default, 14-day major, 7-day
-minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day default
-cooldown. Routine minor/patch updates are grouped per ecosystem. Security
-updates are not grouped or cooled, so one vulnerable package is not held behind
-unrelated upgrades.
+Dependabot version 2 has exactly four update identities: Bun at `/web`, an npm
+security-only bridge at `/web`, uv at `/agent`, and GitHub Actions at `/`. The
+native Bun and uv ecosystems are required so version updates change
+`web/bun.lock` and `agent/uv.lock` with their manifests instead of opening
+predictably red manifest-only PRs. GitHub does not yet support Dependabot
+security updates for Bun, so the npm bridge sets
+`open-pull-requests-limit: 0`: npm version PRs are disabled while npm security
+PRs remain enabled. Such a security PR does not own `bun.lock`; regenerate and
+verify that lock in a dedicated worktree before merge.
+
+The identities run weekly on Monday in `Asia/Seoul`, staggered at 04:00, 04:10,
+04:20, and 04:40. Bun, uv, and Actions allow three version PRs; the npm bridge
+allows zero version PRs. Bun and uv use the reviewed 7-day default, 14-day
+major, 7-day minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day
+default cooldown. Routine minor/patch updates are grouped for Bun, uv, and
+Actions; the npm bridge opens no version PRs. Security updates are not grouped
+or cooled, so one vulnerable package is not held behind unrelated upgrades.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
 LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
-`@langchain/*`, Next.js, NextAuth, and `@auth/*` remain isolated bump PRs because
-each can change an agent, protocol, framework, or authentication compatibility
-surface. The local verifier compares version, update identity set, schedule,
-open-PR limit, full cooldown object, and every group exactly; missing,
-duplicate, changed, or extra updates/groups fail.
+`@langchain/*`, Next.js, NextAuth, `@auth/*`, React/React DOM and their type
+packages, and NumPy remain isolated bump PRs. React updates require focused
+build/browser evidence, while NumPy is part of the persisted BM25 artifact
+provenance contract; the other exclusions can change an agent, protocol,
+framework, or authentication compatibility surface. The local verifier compares
+version, update identity set, schedule, open-PR limit, full cooldown object, and
+every group exactly; missing, duplicate, changed, or extra updates/groups fail.
 
 The version-update schedule in `dependabot.yml` does not itself enable GitHub's
 repository security features. The external contract separately requires
@@ -279,10 +290,9 @@ update state is checked through both the dedicated
 `automated-security-fixes` endpoint and the admin-only repository security
 summary so one stale or incomplete surface cannot appear green by itself. A
 missing summary fails closed rather than assuming the caller lacks permission.
-At the time this contract was recorded, vulnerability alerts were disabled and
-the security-update API and repository summary both reported security updates
-disabled. Those are two intentional rollout gaps; this PR detects them but does
-not change the external settings.
+Vulnerability alerts and automated security updates are enabled. The live
+verifier confirms both the dedicated endpoint and the repository security
+summary, so disabling or pausing either feature is external policy drift.
 
 [`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs
 weekly and manually. It verifies both lockfiles, runs the web policy below,
@@ -372,6 +382,8 @@ they have been applied.
 - [GitHub deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
 - [GitHub deployment branch policy API](https://docs.github.com/en/rest/deployments/branch-policies)
 - [Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
+- [Dependabot supported ecosystems and lockfiles](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)
+- [Dependabot security-only ecosystem configuration](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-security-updates#overriding-the-default-behavior-with-a-configuration-file)
 - [GitHub vulnerability-alert status API](https://docs.github.com/en/rest/repos/repos#check-if-vulnerability-alerts-are-enabled-for-a-repository)
 - [GitHub Dependabot security-update status API](https://docs.github.com/en/rest/repos/repos#check-if-automated-security-fixes-are-enabled-for-a-repository)
 - [GitHub repository security-and-analysis response](https://docs.github.com/en/rest/repos/repos#get-a-repository)

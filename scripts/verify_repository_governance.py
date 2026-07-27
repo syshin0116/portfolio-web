@@ -312,7 +312,7 @@ EXPECTED_DEPENDABOT = {
     "version": 2,
     "updates": [
         {
-            "package_ecosystem": "npm",
+            "package_ecosystem": "bun",
             "directory": "/web",
             "schedule": {
                 "interval": "weekly",
@@ -338,13 +338,30 @@ EXPECTED_DEPENDABOT = {
                         "@langchain/*",
                         "next",
                         "next-auth",
+                        "react",
+                        "react-dom",
+                        "@types/react",
+                        "@types/react-dom",
                     ],
                     "update_types": ["minor", "patch"],
                 }
             ],
         },
         {
-            "package_ecosystem": "pip",
+            "package_ecosystem": "npm",
+            "directory": "/web",
+            "schedule": {
+                "interval": "weekly",
+                "day": "monday",
+                "time": "04:10",
+                "timezone": "Asia/Seoul",
+            },
+            "open_pull_requests_limit": 0,
+            "cooldown": {},
+            "groups": [],
+        },
+        {
+            "package_ecosystem": "uv",
             "directory": "/agent",
             "schedule": {
                 "interval": "weekly",
@@ -372,6 +389,7 @@ EXPECTED_DEPENDABOT = {
                         "langgraph",
                         "langgraph-*",
                         "langsmith",
+                        "numpy",
                     ],
                     "update_types": ["minor", "patch"],
                 }
@@ -1519,18 +1537,24 @@ def _normalized_dependabot(document: YamlDocument) -> JsonObject:
     normalized_updates: dict[str, JsonObject] = {}
     for update_index, update in enumerate(updates):
         update_context = f"{document.path}: updates[{update_index}]"
-        update = _require_exact_keys(
-            update,
-            {
-                "package-ecosystem",
-                "directory",
-                "schedule",
-                "open-pull-requests-limit",
-                "cooldown",
-                "groups",
-            },
-            context=update_context,
-        )
+        required_update_keys = {
+            "package-ecosystem",
+            "directory",
+            "schedule",
+            "open-pull-requests-limit",
+        }
+        allowed_update_keys = {*required_update_keys, "cooldown", "groups"}
+        if not isinstance(update, dict):
+            raise GovernanceError(f"{update_context} must be a mapping")
+        actual_update_keys = set(update)
+        missing_update_keys = required_update_keys - actual_update_keys
+        extra_update_keys = actual_update_keys - allowed_update_keys
+        if missing_update_keys or extra_update_keys:
+            raise GovernanceError(
+                f"{update_context} keys differ; "
+                f"missing={sorted(missing_update_keys)!r}, "
+                f"extra={sorted(extra_update_keys)!r}"
+            )
         ecosystem = update.get("package-ecosystem")
         directory = update.get("directory")
         if not isinstance(ecosystem, str) or not isinstance(directory, str):
@@ -1553,7 +1577,7 @@ def _normalized_dependabot(document: YamlDocument) -> JsonObject:
                 f"{update_context} schedule values must all be strings"
             )
 
-        cooldown = update.get("cooldown")
+        cooldown = update.get("cooldown", {})
         if not isinstance(cooldown, dict):
             raise GovernanceError(f"{update_context} cooldown must be a mapping")
         allowed_cooldown_keys = {
@@ -1576,7 +1600,7 @@ def _normalized_dependabot(document: YamlDocument) -> JsonObject:
             for key, value in cooldown.items()
         }
 
-        groups = update.get("groups")
+        groups = update.get("groups", {})
         if not isinstance(groups, dict):
             raise GovernanceError(
                 f"{document.path}: groups for {ecosystem}:{directory} must be a mapping"

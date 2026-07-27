@@ -30,8 +30,8 @@ jobs:
           bun-version: 1.3.10
       - name: Verify the committed web lock
         run: bun install --frozen-lockfile --ignore-scripts
-      - name: Audit high and critical web vulnerabilities
-        run: bun audit --audit-level=high
+      - name: Audit the fail-closed web dependency policy
+        run: bun run audit:security
 
   agent:
     name: dependency/agent

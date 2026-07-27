@@ -2,7 +2,9 @@
 
 import hashlib
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.backends import (
@@ -10,6 +12,8 @@ from deepagents.backends import (
     StateBackend,
     StoreBackend,
 )
+from langgraph.config import get_config
+from langgraph.runtime import Runtime
 
 from agent.lib.read_only_backend import ReadOnlyFilesystemBackend
 from agent.prompts import SYSTEM_PROMPT
@@ -27,50 +31,71 @@ CONTENT_DIR = str(
 SKILLS_DIR = str(AGENT_DIR / "skills")
 
 
-def _memory_namespace(context) -> tuple[str, str, str]:
-    config = getattr(context.runtime, "config", {})
-    user_id = config.get("configurable", {}).get("user_id")
-    if not isinstance(user_id, str) or not user_id:
-        raise ValueError("authenticated user_id is required for persistent memory")
-    return ("users", hashlib.sha256(user_id.encode()).hexdigest(), "filesystem")
+def _trusted_identity(config: Mapping[str, Any]) -> str:
+    """Read the server-authoritative Aegra identity from a run config."""
+    configurable = config.get("configurable")
+    if not isinstance(configurable, Mapping):
+        raise ValueError("Aegra authentication context is required for memory")
+
+    auth_user = configurable.get("langgraph_auth_user")
+    if isinstance(auth_user, Mapping):
+        identity = auth_user.get("identity")
+    else:
+        identity = getattr(auth_user, "identity", None)
+
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("Aegra authentication identity is required for memory")
+    return identity
 
 
-def _build_backend(store=None):
-    """Build a CompositeBackend with 3 routes:
+def _memory_namespace(runtime: Runtime[Any]) -> tuple[str, str, str]:
+    """Scope persistent files to the authenticated Aegra identity."""
+    server_info = runtime.server_info
+    server_user = server_info.user if server_info is not None else None
+    identity = getattr(server_user, "identity", None)
+    if not isinstance(identity, str) or not identity:
+        # Aegra 0.9.24 does not populate Runtime.server_info for a static
+        # graph. It overwrites langgraph_auth_user after merging client config,
+        # so this remains server-authoritative while configurable.user_id does not.
+        identity = _trusted_identity(get_config())
+    return (
+        "users",
+        hashlib.sha256(identity.encode()).hexdigest(),
+        "filesystem",
+    )
 
-    /           → StateBackend (ephemeral working files per thread)
-    /memories/  → StoreBackend (persistent cross-thread memory, requires store)
-    /blog/      → FilesystemBackend (read-only blog content from content/)
+
+def _build_backend() -> CompositeBackend:
+    """Build the instance backend used by every Aegra graph copy.
+
+    /            -> StateBackend (ephemeral working files per thread)
+    /memories/   -> StoreBackend (persistent cross-thread memory)
+    /blog/       -> read-only blog content
+    /skills/     -> read-only Deep Agents skills
     """
-
-    def factory(rt):
-        routes = {
+    return CompositeBackend(
+        default=StateBackend(),
+        routes={
+            "/memories/": StoreBackend(namespace=_memory_namespace),
             "/blog/": ReadOnlyFilesystemBackend(
                 root_dir=CONTENT_DIR, virtual_mode=True
             ),
-        }
-        # Only add StoreBackend if store is available
-        if store is not None:
-            routes["/memories/"] = StoreBackend(rt, namespace=_memory_namespace)
-
-        return CompositeBackend(
-            default=StateBackend(rt),
-            routes=routes,
-        )
-
-    return factory
+            "/skills/": ReadOnlyFilesystemBackend(
+                root_dir=SKILLS_DIR, virtual_mode=True
+            ),
+        },
+    )
 
 
-def create_graph(checkpointer=None, store=None):
-    """Factory to build a deep agent.
+def create_graph():
+    """Build a compiled Deep Agent for Aegra to register.
 
-    The checkpointer is injected at startup (main.py lifespan),
-    because create_deep_agent returns a CompiledStateGraph that cannot be
-    rebound to a different checkpointer after creation.
+    Aegra copies the compiled graph and injects its Postgres checkpointer and
+    store for each request.
 
     Set the MODEL env var to override the default model.
     """
-    model = os.environ.get("MODEL", DEFAULT_MODEL)
+    model = os.environ.get("MODEL") or DEFAULT_MODEL
     # Normalize "provider/model" → "provider:model" for deepagents compatibility
     if "/" in model and ":" not in model:
         model = model.replace("/", ":", 1)
@@ -79,18 +104,11 @@ def create_graph(checkpointer=None, store=None):
         model=model,
         tools=TOOLS,
         system_prompt=SYSTEM_PROMPT,
-        backend=_build_backend(store=store),
-        skills=[SKILLS_DIR],
-        checkpointer=checkpointer,
-        store=store,
+        backend=_build_backend(),
+        skills=["/skills/"],
     )
 
 
-def _lazy_graph():
-    """Lazy graph for langgraph.json — LangGraph Platform injects its own checkpointer."""
-    return create_graph()
-
-
-graph = _lazy_graph
+graph = create_graph()
 
 __all__ = ["graph", "create_graph"]

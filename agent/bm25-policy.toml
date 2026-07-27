@@ -1,0 +1,12 @@
+schema_version = 1
+policy_id = "bm25-dictionary-policy-v1"
+
+# Owner-reviewed Korean names which are not reliably recovered from Latin-script tags.
+seeds = [
+  "도커",
+  "랭그래프",
+]
+
+# Candidate collection never activates a term. If a reviewed seed is later denied,
+# deny wins without deleting its corpus evidence from the audit artifact.
+deny = []

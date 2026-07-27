@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from typing import Any
+from uuid import RFC_4122, UUID
 
 import jwt
 from langgraph_sdk import Auth
@@ -13,6 +14,9 @@ TOKEN_ISSUER = "syshin0116.dev"
 TOKEN_AUDIENCE = "agent-api"
 MIN_SECRET_LENGTH = 32
 MAX_SCOPE_LENGTH = 512
+ANONYMOUS_PERMISSION = "anon"
+ANONYMOUS_SUBJECT_PREFIX = "anon:"
+ANONYMOUS_TOKEN_TTL_SECONDS = 300
 _SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9:_-]+$")
 
 
@@ -25,6 +29,34 @@ def _required_secret() -> str:
 
 AGENT_AUTH_SECRET = _required_secret()
 auth = Auth()
+
+
+def server_anonymous_access_enabled() -> bool:
+    """Resolve the independent agent-side public-access gate."""
+    value = os.environ.get("AGENT_ANONYMOUS_ACCESS_ENABLED", "false")
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise RuntimeError(
+        "AGENT_ANONYMOUS_ACCESS_ENABLED must be exactly 'true' or 'false'"
+    )
+
+
+def is_anonymous_identity(identity: object) -> bool:
+    """Accept only the canonical ``anon:<uuid4>`` identity minted by the web tier."""
+    if not isinstance(identity, str) or not identity.startswith(
+        ANONYMOUS_SUBJECT_PREFIX
+    ):
+        return False
+    raw_uuid = identity.removeprefix(ANONYMOUS_SUBJECT_PREFIX)
+    try:
+        parsed = UUID(raw_uuid)
+    except (ValueError, AttributeError):
+        return False
+    return (
+        parsed.version == 4 and parsed.variant == RFC_4122 and str(parsed) == raw_uuid
+    )
 
 
 def _bearer_token(headers: dict[str, str]) -> str:
@@ -70,11 +102,35 @@ async def authenticate(headers: dict[str, str]) -> Auth.types.MinimalUserDict:
         ) from exc
 
     identity = claims.get("sub")
-    if not isinstance(identity, str) or not identity or identity.startswith("anon:"):
+    if not isinstance(identity, str) or not identity:
         raise Auth.exceptions.HTTPException(status_code=401, detail="Unauthorized")
 
     permissions = _permissions(claims)
-    if "anon" in permissions:
+    if is_anonymous_identity(identity):
+        issued_at = claims.get("iat")
+        expires_at = claims.get("exp")
+        if (
+            not server_anonymous_access_enabled()
+            or claims.get("scope") != ANONYMOUS_PERMISSION
+            or permissions != [ANONYMOUS_PERMISSION]
+            or not isinstance(issued_at, int)
+            or isinstance(issued_at, bool)
+            or not isinstance(expires_at, int)
+            or isinstance(expires_at, bool)
+            or expires_at - issued_at != ANONYMOUS_TOKEN_TTL_SECONDS
+        ):
+            raise Auth.exceptions.HTTPException(status_code=401, detail="Unauthorized")
+        return {
+            "identity": identity,
+            "display_name": "anonymous",
+            "is_authenticated": True,
+            "permissions": [ANONYMOUS_PERMISSION],
+        }
+
+    if (
+        identity.startswith(ANONYMOUS_SUBJECT_PREFIX)
+        or ANONYMOUS_PERMISSION in permissions
+    ):
         raise Auth.exceptions.HTTPException(status_code=401, detail="Unauthorized")
 
     return {
@@ -97,10 +153,15 @@ async def deny_unsafe_core_thread_delete(
 
 __all__ = [
     "AGENT_AUTH_SECRET",
+    "ANONYMOUS_PERMISSION",
+    "ANONYMOUS_SUBJECT_PREFIX",
+    "ANONYMOUS_TOKEN_TTL_SECONDS",
     "MAX_SCOPE_LENGTH",
     "MIN_SECRET_LENGTH",
     "TOKEN_AUDIENCE",
     "TOKEN_ISSUER",
     "auth",
     "authenticate",
+    "is_anonymous_identity",
+    "server_anonymous_access_enabled",
 ]

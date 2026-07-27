@@ -6,6 +6,7 @@ import inspect
 import json
 from dataclasses import asdict
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from aegra_api.core import database as aegra_database
@@ -56,15 +57,20 @@ from agent.capabilities.subagents import (
 )
 from agent.graph import (
     DEFAULT_MODEL,
+    GUEST_MODEL_MAX_OUTPUT_TOKENS,
+    GUEST_RUN_BUDGET_POLICY,
     MODEL_MAX_OUTPUT_TOKENS,
     MODEL_TIMEOUT_SECONDS,
     NO_GENERAL_PURPOSE_SUBAGENT,
+    _bounded_guest_model,
     _bounded_model,
     _build_backend,
     _disable_general_purpose_subagent,
     _filesystem_permissions,
     _memory_namespace,
+    _normalized_guest_model_spec,
     _normalized_model_spec,
+    _runtime_is_guest,
     create_graph,
     graph,
 )
@@ -107,21 +113,32 @@ def _compiled_tool_names(compiled_graph: CompiledStateGraph) -> set[str]:
     return set(compiled_graph.nodes["tools"].bound._tools_by_name)
 
 
-def _user(permissions: list[str]):
+def _user(permissions: list[str], *, identity: str = "runtime-user"):
     return SimpleNamespace(
-        identity="runtime-user",
-        display_name="runtime-user",
+        identity=identity,
+        display_name=identity,
         is_authenticated=True,
         permissions=permissions,
     )
 
 
-def _server_runtime(permissions: list[str]):
+def _server_runtime(
+    permissions: list[str],
+    *,
+    identity: str = "runtime-user",
+):
     return build_server_runtime(
         access_context="threads.create_run",
         store=InMemoryStore(),
-        user=_user(permissions),
+        user=_user(permissions, identity=identity),
         context=None,
+    )
+
+
+def _guest_runtime():
+    return _server_runtime(
+        ["anon"],
+        identity=f"anon:{UUID(int=1, version=4)}",
     )
 
 
@@ -264,6 +281,27 @@ async def test_graph_factory_creates_a_fresh_budget_for_every_run(monkeypatch):
     assert created_budgets[0] is not created_budgets[1]
     assert [budget.snapshot().model_calls for budget in created_budgets] == [1, 1]
     assert [budget.snapshot().charged_tokens for budget in created_budgets] == [10, 10]
+
+
+async def test_graph_factory_selects_the_guest_policy_before_compilation(monkeypatch):
+    captured = []
+
+    def capture_graph(**kwargs):
+        captured.append(kwargs)
+        return object()
+
+    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setattr("agent.graph.create_graph", capture_graph)
+
+    async with graph(
+        {"configurable": {"thread_id": "guest-policy-factory"}},
+        _guest_runtime(),
+    ) as request_graph:
+        assert request_graph is not None
+
+    assert len(captured) == 1
+    assert captured[0]["budget"].policy == GUEST_RUN_BUDGET_POLICY
+    assert captured[0]["quickjs_middleware"].enabled is False
 
 
 async def test_aegra_factory_creates_a_fresh_quickjs_tool_session_per_access(
@@ -531,6 +569,63 @@ def test_bounded_provider_model_disables_retries_and_runtime_configuration(monke
     ]
 
 
+def test_bounded_guest_model_uses_the_lower_nonconfigurable_output_limit(monkeypatch):
+    calls = []
+    fake_model = ToolCapableFakeModel(responses=[_final_message("done")])
+
+    def fake_init(model_spec, **kwargs):
+        calls.append((model_spec, kwargs))
+        return fake_model
+
+    monkeypatch.setattr("agent.graph.init_chat_model", fake_init)
+    _bounded_guest_model.cache_clear()
+    try:
+        resolved = _bounded_guest_model("anthropic:test-guest-model")
+        cached = _bounded_guest_model("anthropic:test-guest-model")
+    finally:
+        _bounded_guest_model.cache_clear()
+
+    assert resolved is fake_model
+    assert cached is fake_model
+    assert calls == [
+        (
+            "anthropic:test-guest-model",
+            {
+                "max_tokens": GUEST_MODEL_MAX_OUTPUT_TOKENS,
+                "max_retries": 0,
+                "timeout": MODEL_TIMEOUT_SECONDS,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("configured_model", "expected"),
+    [
+        ("anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+        ("anthropic/claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+    ],
+)
+def test_guest_model_is_explicit_and_canonical(monkeypatch, configured_model, expected):
+    monkeypatch.setenv("GUEST_MODEL", configured_model)
+
+    assert _normalized_guest_model_spec() == expected
+
+
+@pytest.mark.parametrize(
+    "configured_model",
+    ["", "openai:gpt-5", "anthropic:", "runtime configurable"],
+)
+def test_missing_or_unsupported_guest_model_fails_closed(
+    monkeypatch,
+    configured_model,
+):
+    monkeypatch.setenv("GUEST_MODEL", configured_model)
+
+    with pytest.raises(RuntimeError, match="GUEST_MODEL"):
+        _normalized_guest_model_spec()
+
+
 @pytest.mark.parametrize(
     "configured_model",
     [
@@ -587,6 +682,65 @@ async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt
     assert all(name not in prompt_text for name in SUBAGENT_NAMES)
     assert QUICKJS_SYSTEM_PROMPT.strip() not in prompt_text
     assert budget.snapshot().model_calls == 1
+
+
+async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilities(
+    monkeypatch,
+):
+    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    model = ToolCapableFakeModel(responses=[_final_message("guest answer")])
+    budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
+    compiled = create_graph(
+        runtime=_guest_runtime(),
+        config={"configurable": {"thread_id": "guest-tier"}},
+        model=model,
+        budget=budget,
+        dynamic_subagents_enabled=True,
+        quickjs_enabled=True,
+    )
+
+    result = await compiled.ainvoke(
+        {"messages": [{"role": "user", "content": "public test"}]},
+        {"configurable": {"thread_id": "guest-tier"}},
+    )
+
+    assert result["messages"][-1].content == "guest answer"
+    assert len(model.bound_tool_names) == 1
+    assert "task" not in model.bound_tool_names[0]
+    assert QUICKJS_TOOL_NAME not in model.bound_tool_names[0]
+    snapshot = budget.snapshot()
+    assert snapshot.policy_id == "anonymous-public-v1"
+    assert snapshot.model_calls == 1
+    assert snapshot.charged_tokens == 10
+
+
+def test_guest_runtime_rejects_an_owner_budget_override(monkeypatch):
+    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+
+    with pytest.raises(ValueError, match="anonymous run budget"):
+        create_graph(
+            runtime=_guest_runtime(),
+            config={"configurable": {"thread_id": "guest-owner-budget"}},
+            model=ToolCapableFakeModel(responses=[_final_message("unused")]),
+            budget=RunBudget(),
+        )
+
+
+def test_only_the_canonical_anonymous_identity_selects_the_guest_tier():
+    assert _runtime_is_guest(_guest_runtime())
+    assert not _runtime_is_guest(_server_runtime(["anon"]))
+    assert not _runtime_is_guest(
+        _server_runtime(
+            ["anon", "admin"],
+            identity=f"anon:{UUID(int=2, version=4)}",
+        )
+    )
+    assert not _runtime_is_guest(
+        _server_runtime(
+            ["admin"],
+            identity=f"anon:{UUID(int=3, version=4)}",
+        )
+    )
 
 
 async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model():
@@ -1213,6 +1367,15 @@ def test_backend_uses_instances_for_all_routes():
     assert isinstance(backend.routes["/memories/"], StoreBackend)
     assert isinstance(backend.routes["/skills/"], FilesystemBackend)
     assert set(backend.routes) == {"/memories/", "/skills/"}
+
+
+def test_guest_backend_has_ephemeral_thread_files_and_no_persistent_memory():
+    backend = _build_backend(persistent_memory=False)
+
+    assert isinstance(backend, CompositeBackend)
+    assert isinstance(backend.default, StateBackend)
+    assert isinstance(backend.routes["/skills/"], FilesystemBackend)
+    assert set(backend.routes) == {"/skills/"}
 
 
 def test_skills_are_the_only_host_filesystem_route_and_are_write_denied():

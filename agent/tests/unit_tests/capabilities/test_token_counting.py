@@ -49,6 +49,12 @@ async def test_anthropic_official_counter_receives_final_messages_and_tools(
         system_message=SystemMessage(content="final system prompt"),
         messages=[HumanMessage(content="dense 🧑🏽‍💻 input")],
         tools=[exact_count_tool],
+        model_settings={
+            "cache_control": {
+                "type": "ephemeral",
+                "ttl": "5m",
+            }
+        },
     )
 
     count = await count_anthropic_input_tokens(request)
@@ -61,7 +67,12 @@ async def test_anthropic_official_counter_receives_final_messages_and_tools(
             *request.messages,
         ],
         "tools": [exact_count_tool],
-        "kwargs": {},
+        "kwargs": {
+            "cache_control": {
+                "type": "ephemeral",
+                "ttl": "5m",
+            }
+        },
     }
 
 

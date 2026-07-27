@@ -12,8 +12,11 @@ from threading import Barrier
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ToolCallRequest
+from langchain_anthropic import ChatAnthropic
+from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
 from agent.capabilities.budget import (
@@ -37,6 +40,12 @@ DocId and one evidence sentence.
 Stopping condition:
 Stop after one supported DocId.
 """
+
+
+@tool
+def cache_parity_tool(query: str) -> str:
+    """Return a bounded value for prompt-cache parity testing."""
+    return query
 
 
 async def _zero_input_tokens(_request: ModelRequest) -> int:
@@ -289,6 +298,20 @@ async def test_missing_model_usage_metadata_never_refunds_reservation():
     assert budget.snapshot().charged_tokens == 2_048
 
 
+def test_provider_usage_above_exact_reservation_closes_the_ledger():
+    budget = RunBudget()
+    reservation = budget.reserve_model(input_tokens=2)
+
+    with pytest.raises(RunBudgetExceededError, match="exact model reservation"):
+        budget.settle_model(reservation, actual_tokens=2_051)
+
+    snapshot = budget.snapshot()
+    assert snapshot.charged_tokens == 2_051
+    assert snapshot.exhausted is True
+    with pytest.raises(RunBudgetExceededError, match="already exhausted"):
+        budget.reserve_tool()
+
+
 @pytest.mark.parametrize(
     "second_usage",
     [
@@ -374,6 +397,85 @@ async def test_dense_unicode_input_is_rejected_before_calling_provider():
     snapshot = budget.snapshot()
     assert (snapshot.model_calls, snapshot.charged_tokens) == (0, 0)
     assert snapshot.exhausted is True
+
+
+async def test_native_prompt_cache_shape_is_counted_before_generation():
+    model = ChatAnthropic(
+        model="claude-sonnet-4-6",
+        anthropic_api_key="test-cache-parity-key",
+        max_tokens=2_048,
+        max_retries=0,
+        timeout=60,
+    )
+    budget = RunBudget()
+    counted_requests = []
+    generated_requests = []
+
+    async def capture_count(request):
+        counted_requests.append(request)
+        return 1
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=True,
+        allowed_subagents=frozenset(),
+        input_token_counter=capture_count,
+    )
+    downstream_cache = AnthropicPromptCachingMiddleware(
+        unsupported_model_behavior="ignore"
+    )
+    request = ModelRequest(
+        model=model,
+        system_message=SystemMessage(content="stable system prompt"),
+        messages=[HumanMessage(content="count the final cache-tagged payload")],
+        tools=[cache_parity_tool],
+    )
+
+    async def generate(final_request):
+        generated_requests.append(final_request)
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="bounded",
+                    usage_metadata={
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                )
+            ]
+        )
+
+    async def apply_downstream_cache(final_request):
+        return await downstream_cache.awrap_model_call(final_request, generate)
+
+    await middleware.awrap_model_call(request, apply_downstream_cache)
+
+    assert len(counted_requests) == len(generated_requests) == 1
+    counted = counted_requests[0]
+    generated = generated_requests[0]
+    assert counted.system_message == generated.system_message
+    assert counted.messages == generated.messages
+    assert counted.tools == generated.tools
+    assert (
+        counted.model_settings
+        == generated.model_settings
+        == {
+            "cache_control": {
+                "type": "ephemeral",
+                "ttl": "5m",
+            }
+        }
+    )
+    assert counted.system_message.content[-1]["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "5m",
+    }
+    assert counted.tools[-1].extras["cache_control"] == {
+        "type": "ephemeral",
+        "ttl": "5m",
+    }
 
 
 @pytest.mark.parametrize("failure", ["error", "negative", "boolean", "string"])
@@ -668,6 +770,45 @@ def test_elapsed_deadline_rejects_reservation_without_spending_counters():
         "elapsed_ms": 90_000,
         "exhausted": True,
     }
+
+
+def test_exhaustion_is_terminal_but_open_reservations_can_be_cleaned_up():
+    budget = RunBudget(clock=lambda: 0.0)
+    task = budget.reserve_task(depth=1)
+    model = budget.reserve_model(input_tokens=1, task_reservation=task)
+
+    budget.exhaust()
+
+    operations = (
+        budget.remaining_seconds,
+        budget.reserve_tool,
+        lambda: budget.reserve_task(depth=1),
+        lambda: budget.reserve_model(input_tokens=0),
+    )
+    for operation in operations:
+        with pytest.raises(RunBudgetExceededError, match="already exhausted"):
+            operation()
+
+    budget.settle_model(model, actual_tokens=2)
+    budget.finish_task(task)
+    snapshot = budget.snapshot()
+    assert snapshot.exhausted is True
+    assert snapshot.tasks_in_flight == 0
+    assert snapshot.charged_tokens == 2
+
+
+def test_limit_failure_permanently_closes_every_new_reservation():
+    budget = RunBudget()
+
+    with pytest.raises(RunBudgetExceededError, match="depth"):
+        budget.reserve_task(depth=2)
+
+    with pytest.raises(RunBudgetExceededError, match="already exhausted"):
+        budget.reserve_tool()
+    with pytest.raises(RunBudgetExceededError, match="already exhausted"):
+        budget.reserve_model()
+    with pytest.raises(RunBudgetExceededError, match="already exhausted"):
+        budget.reserve_task(depth=1)
 
 
 def test_task_token_check_is_atomic_with_other_task_limits():

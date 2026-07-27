@@ -17,6 +17,7 @@ from langchain.agents.middleware import (
     ModelResponse,
 )
 from langchain.agents.middleware.types import ToolCallRequest
+from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.types import Command
 
@@ -189,9 +190,14 @@ class RunBudget:
             self._exhausted = True
             raise RunBudgetExceededError("run elapsed-time budget exhausted")
 
+    def _require_active_locked(self) -> None:
+        if self._exhausted:
+            raise RunBudgetExceededError("run budget is already exhausted")
+        self._require_time_locked()
+
     def remaining_seconds(self) -> float:
         with self._lock:
-            self._require_time_locked()
+            self._require_active_locked()
             return self._policy.max_elapsed_seconds - self._elapsed_locked()
 
     def reserve_model(
@@ -202,7 +208,7 @@ class RunBudget:
     ) -> ModelReservation:
         """Atomically reserve one call, its exact input, and maximum output."""
         with self._lock:
-            self._require_time_locked()
+            self._require_active_locked()
             if (
                 not isinstance(input_tokens, int)
                 or isinstance(input_tokens, bool)
@@ -279,6 +285,15 @@ class RunBudget:
                 raise RunBudgetExceededError("provider returned invalid token usage")
 
             settled = self._charged_tokens - reserved + actual_tokens
+            if actual_tokens > reserved:
+                self._charged_tokens = min(
+                    settled,
+                    self._policy.max_total_tokens,
+                )
+                self._exhausted = True
+                raise RunBudgetExceededError(
+                    "provider usage exceeded the exact model reservation"
+                )
             if settled > self._policy.max_total_tokens:
                 self._charged_tokens = self._policy.max_total_tokens
                 self._exhausted = True
@@ -288,7 +303,7 @@ class RunBudget:
     def reserve_tool(self) -> None:
         """Atomically reserve one non-task tool call."""
         with self._lock:
-            self._require_time_locked()
+            self._require_active_locked()
             if self._tool_calls >= self._policy.max_tool_calls:
                 self._exhausted = True
                 raise RunBudgetExceededError("tool-call budget exhausted")
@@ -297,7 +312,7 @@ class RunBudget:
     def reserve_task(self, *, depth: int) -> TaskReservation:
         """Jointly reserve tool, task-total, fan-out, depth, time, and tokens."""
         with self._lock:
-            self._require_time_locked()
+            self._require_active_locked()
             if not isinstance(depth, int) or isinstance(depth, bool) or depth < 1:
                 raise ValueError("depth must be a positive integer")
             if depth > self._policy.max_depth:
@@ -507,6 +522,9 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         self._allowed_subagents = allowed_subagents
         self._input_token_counter = input_token_counter
         self._native_subagent_prompt = native_subagent_prompt
+        self._prompt_caching = AnthropicPromptCachingMiddleware(
+            unsupported_model_behavior="ignore"
+        )
 
     def _remove_unauthorized_subagent_surface(
         self,
@@ -569,24 +587,36 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         if not self._allow_subagents:
             request = self._remove_unauthorized_subagent_surface(request)
 
-        input_tokens = await self._count_input_tokens(request)
-        reservation = self._budget.reserve_model(
-            input_tokens=input_tokens,
-            task_reservation=(
-                _ACTIVE_TASK_RESERVATION.get() if self._depth > 0 else None
-            ),
+        async def count_then_generate(
+            final_request: ModelRequest[Any],
+        ) -> ModelResponse[Any]:
+            input_tokens = await self._count_input_tokens(final_request)
+            reservation = self._budget.reserve_model(
+                input_tokens=input_tokens,
+                task_reservation=(
+                    _ACTIVE_TASK_RESERVATION.get() if self._depth > 0 else None
+                ),
+            )
+            try:
+                async with asyncio.timeout(self._budget.remaining_seconds()):
+                    response = await handler(final_request)
+            except BaseException:
+                self._budget.settle_model(reservation, actual_tokens=None)
+                raise
+            self._budget.settle_model(
+                reservation,
+                actual_tokens=_actual_token_usage(response),
+            )
+            return response
+
+        # Deep Agents appends this native middleware after user middleware.
+        # Apply it once here as well so the official count and generation see
+        # the same token-bearing request. The downstream application is
+        # idempotent, and compiled children now receive the same cache shape.
+        return await self._prompt_caching.awrap_model_call(
+            request,
+            count_then_generate,
         )
-        try:
-            async with asyncio.timeout(self._budget.remaining_seconds()):
-                response = await handler(request)
-        except BaseException:
-            self._budget.settle_model(reservation, actual_tokens=None)
-            raise
-        self._budget.settle_model(
-            reservation,
-            actual_tokens=_actual_token_usage(response),
-        )
-        return response
 
     async def awrap_tool_call(
         self,

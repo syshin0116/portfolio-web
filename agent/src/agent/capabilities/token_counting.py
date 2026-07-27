@@ -36,11 +36,17 @@ async def count_anthropic_input_tokens(request: ModelRequest[Any]) -> int:
         messages.append(request.system_message)
     messages.extend(request.messages)
 
+    count_kwargs: dict[str, Any] = {}
+    cache_control = request.model_settings.get("cache_control")
+    if cache_control is not None:
+        count_kwargs["cache_control"] = cache_control
+
     try:
         token_count = await asyncio.to_thread(
             model.get_num_tokens_from_messages,
             messages,
             tools=request.tools,
+            **count_kwargs,
         )
     except Exception as exc:
         raise InputTokenCountError(

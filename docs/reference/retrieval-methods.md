@@ -48,7 +48,7 @@ Two things gate every entry in this table, both from
   [the tokenizer note](#the-korean-tokenizer-problem).
 - **One retriever interface**, intended for both the chat and the harness. The chat now
   resolves its configured method from the shared servable registry; the evaluation
-  harness still needs to be built against that interface.
+  harness extends a copy of that registry and executes the same Protocol.
 
 ## The corpus, and what it affords
 
@@ -82,7 +82,7 @@ those same links turned out to be the better prize.
 | Method | Status | Meant to teach |
 |---|---|---|
 | BM25 + Kiwi morphological tokenization | `implemented` | The fitted, raw-score baseline everything else is measured against |
-| BM25 + character n-grams | `planned` | Whether morphological analysis earns its complexity, or n-grams match it on mixed-script Korean |
+| BM25 + character n-grams | `implemented` | Whether morphological analysis earns its complexity, or n-grams match it on mixed-script Korean |
 | BM25 field weighting (title/tags/body) | `planned` | How much of retrieval quality is just "the title said so" |
 | Exact substring | `implemented` | The safe literal-match floor. If a method cannot beat it, it is not earning its cost |
 | Bounded regex | `planned` | Whether regex expressiveness adds useful recall without exposing unbounded query execution |
@@ -101,6 +101,7 @@ those same links turned out to be the better prize.
 | Method | Status | Meant to teach |
 |---|---|---|
 | Reciprocal rank fusion (sparse + dense) | `planned` | The standard hybrid. Expected to win; the interesting part is by how much and where |
+| Reciprocal rank fusion (BM25 + character n-grams) | `implemented` | A provider-free fusion control that proves composition and fingerprints before a dense method lands |
 | Weighted score fusion | `planned` | Whether score-level fusion beats rank-level once normalisation is done correctly |
 
 > **Normalisation is a trap here.** The existing BM25 forces the top hit to 1.0 for *any*
@@ -144,7 +145,7 @@ seed set for the qrels *and* a retrieval signal in its own right.
 
 | Method | Status | Meant to teach |
 |---|---|---|
-| Alias-derived known-item query set | `planned` | Up to 164 owner-authored candidates to resolve, deduplicate, and review before any LLM-generated queries |
+| Alias-derived known-item query set | `implemented` | 164 owner-authored occurrences resolve to 90 single-target qrels; 24 conflicting, ambiguous, self-link, or unresolved occurrences remain recorded exclusions |
 | Alias text as an indexed field | `planned` | Whether the author's own paraphrases beat title and body text as a match target |
 
 ### Chunking (an axis, not a method)
@@ -283,4 +284,4 @@ results table is honest, and a table of guesses is not.
 
 | Run | Date | Methods | Dataset | Metrics | Result |
 |---|---|---|---|---|---|
-| _(none yet)_ | | | | | |
+| `sha256:2b4b9e88…986fa` | 2026-07-27 | BM25, character n-grams, sparse RRF | `known-item-alias-v1` (90 queries) | Hit@10 / MRR@10 / coverage | BM25 0.900 / 0.537 / 1.000; char 0.844 / 0.576 / 1.000; RRF 0.856 / 0.562 / 1.000. Bootstrap run only; no topic claim. |

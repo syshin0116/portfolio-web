@@ -197,7 +197,10 @@ jobs:
     needs:
       - changes
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: eval
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -208,15 +211,55 @@ jobs:
       - name: Report an unaffected component
         if: needs.changes.outputs.eval != 'true'
         run: echo "No eval-affecting paths changed; ci/eval reports success without rebuilding."
-      - name: Guard the future eval workspace
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: needs.changes.outputs.eval == 'true'
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        if: needs.changes.outputs.eval == 'true'
+        with:
+          enable-cache: true
+          cache-dependency-glob: eval/uv.lock
+      - name: Verify the eval lockfile is current
+        if: needs.changes.outputs.eval == 'true'
+        run: uv lock --check
+      - if: needs.changes.outputs.eval == 'true'
+        run: uv sync --frozen --all-groups
+      - if: needs.changes.outputs.eval == 'true'
+        run: uv run --frozen ruff check src tests
+      - if: needs.changes.outputs.eval == 'true'
+        run: uv run --frozen ruff format --check src tests
+      - if: needs.changes.outputs.eval == 'true'
+        run: uv run --frozen pytest
+      - name: Build the pinned published corpus for the no-cost sweep
+        if: needs.changes.outputs.eval == 'true'
+        run: >-
+          uv run --frozen python ../scripts/build_index.py
+          --output "$RUNNER_TEMP/eval-index"
+          --expect-document-count 335
+      - name: Verify and sweep the committed known-item query set
         if: needs.changes.outputs.eval == 'true'
         shell: bash
         run: |
-          if [[ -d eval ]]; then
-            echo "::error::eval/ exists but ci/eval is still the foundation guard; replace this step with the real frozen-install, schema, metric, registry, and no-cost sweep gates."
-            exit 1
-          fi
-          echo "eval/ is not present yet; ci/eval will become executable in the eval workspace PR."
+          content_tree_sha="$(git rev-parse HEAD:content)"
+          uv run --frozen blogeval generate-known-item \
+            --index-root "$RUNNER_TEMP/eval-index" \
+            --content-tree-sha "$content_tree_sha" \
+            --output querysets/known-item-alias-v1.json \
+            --check
+          uv run --frozen blogeval validate \
+            --index-root "$RUNNER_TEMP/eval-index" \
+            --content-tree-sha "$content_tree_sha" \
+            --dataset querysets/known-item-alias-v1.json
+          uv run --frozen blogeval sweep \
+            --index-root "$RUNNER_TEMP/eval-index" \
+            --content-tree-sha "$content_tree_sha" \
+            --dataset querysets/known-item-alias-v1.json \
+            --output-root "$RUNNER_TEMP/eval-results"
+          test "$(find "$RUNNER_TEMP/eval-results" -name run.json -type f | wc -l)" -eq 1
+          test "$(find "$RUNNER_TEMP/eval-results" -name leaderboard.md -type f | wc -l)" -eq 1
+          test "$(find "$RUNNER_TEMP/eval-results" -name per-query.md -type f | wc -l)" -eq 1
+          test "$(find "$RUNNER_TEMP/eval-results" -name metrics.svg -type f | wc -l)" -eq 1
 
   infra:
     name: ci/infra

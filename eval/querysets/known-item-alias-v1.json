@@ -1,0 +1,1834 @@
+{
+  "corpus": {
+    "document_count": 335,
+    "fingerprint": "sha256:a36065dae4d6471b25ddb71b815338e7d9d165bd177286a528761c7c63d55d10",
+    "git_tree_sha": "71c5bbda097cc20be0cb15ca4666fd6917f89d5f"
+  },
+  "dataset_id": "known-item-alias-v1",
+  "dataset_kind": "known-item",
+  "exclusions": [
+    {
+      "candidate_doc_ids": [
+        "Projects/syshin0116-dev/00-Overview.md"
+      ],
+      "query": "00. 리팩토링 계획 (현재 글)",
+      "reason": "self-link",
+      "source_doc_id": "Projects/syshin0116-dev/00-Overview.md",
+      "target": "00-Overview"
+    },
+    {
+      "candidate_doc_ids": [
+        "Projects/Nuartz/05-Publishing.md"
+      ],
+      "query": "05. npm 배포: 버전 관리와 자동화",
+      "reason": "self-link",
+      "source_doc_id": "Projects/Nuartz/05-Publishing.md",
+      "target": "05-Publishing"
+    },
+    {
+      "candidate_doc_ids": [
+        "Tools/LangFlow.md",
+        "wiki/langflow.md"
+      ],
+      "query": "Day2 - LangFlow - AI 워크플로우 시각적 구축 도구",
+      "reason": "ambiguous-target",
+      "source_doc_id": "Events/데블챌 데이터 블로그 챌린지.md",
+      "target": "LangFlow"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+      "target": "MinerU - PDF Parser"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/2026-03-22-RAG-Anything-파헤치기.md",
+      "target": "MinerU - PDF Parser"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+      "target": "MinerU - PDF Parser"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-25-PyMuPDF4LLM-PDF-파서-분석.md",
+      "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-25-PyMuPDF4LLM-PDF-파서-분석.md",
+      "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-25-PyMuPDF4LLM-PDF-파서-분석.md",
+      "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-25-PyMuPDF4LLM-PDF-파서-분석.md",
+      "target": "MinerU - PDF Parser"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-26-Docling-PDF-파서-분석.md",
+      "target": "MinerU - PDF Parser"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-26-LiteParse-PDF-파서-분석.md",
+      "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ],
+      "query": "MinerU",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "AI/pdf-parser/2026-03-26-Marker-PDF-파서-분석.md",
+      "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+    },
+    {
+      "candidate_doc_ids": [],
+      "query": "Part 2",
+      "reason": "unresolved-target",
+      "source_doc_id": "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 1.md",
+      "target": "Tensowflow Deep-Learning Computer-Vision Guide Notes 2"
+    },
+    {
+      "candidate_doc_ids": [
+        "Tools/2024-08-02-Second-Brain-RAG.md",
+        "wiki/second-brain-rag.md"
+      ],
+      "query": "Second Brain + RAG",
+      "reason": "ambiguous-target",
+      "source_doc_id": "AI/2026-05-17-LLM-Wiki와-ADR.md",
+      "target": "second-brain-rag"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/2026-04-19-LLM-Text-to-SQL.md",
+        "wiki/llm-text-to-sql.md"
+      ],
+      "query": "Text-to-SQL",
+      "reason": "ambiguous-target",
+      "source_doc_id": "AI/AX-Engineering/05-AI-ready-데이터의-오해와-준비-방법.md",
+      "target": "llm-text-to-sql"
+    },
+    {
+      "candidate_doc_ids": [
+        "AI/2026-05-18-Tech-Intelligence-Radar.md",
+        "wiki/tech-intelligence-radar.md"
+      ],
+      "query": "기술 변화 추적",
+      "reason": "ambiguous-target",
+      "source_doc_id": "AI/AX-Engineering/08-도구-종속을-피하는-지식-substrate-전략.md",
+      "target": "tech-intelligence-radar"
+    },
+    {
+      "candidate_doc_ids": [],
+      "query": "내 프로젝트",
+      "reason": "unresolved-target",
+      "source_doc_id": "AI/2025-10-26-context-engineering-for-ai-agents.md",
+      "target": "PostgreSQL 18 + pgvector를 활용한 블로그 벡터 검색 시스템 구축"
+    },
+    {
+      "candidate_doc_ids": [],
+      "query": "벡터 데이터베이스를 활용한 검색 시스템",
+      "reason": "unresolved-target",
+      "source_doc_id": "AI/2025-10-26-context-engineering-for-ai-agents.md",
+      "target": "PostgreSQL 18 + pgvector를 활용한 블로그 벡터 검색 시스템 구축"
+    },
+    {
+      "candidate_doc_ids": [
+        "Projects/Nuartz/03-Vercel-Deployment.md",
+        "Projects/Nuartz/04-Headless-and-Ecosystem.md"
+      ],
+      "query": "이전 글",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "Projects/Nuartz/04-Headless-and-Ecosystem.md",
+      "target": "03-Vercel-Deployment"
+    },
+    {
+      "candidate_doc_ids": [
+        "Projects/Nuartz/03-Vercel-Deployment.md",
+        "Projects/Nuartz/04-Headless-and-Ecosystem.md"
+      ],
+      "query": "이전 글",
+      "reason": "conflicting-alias-target",
+      "source_doc_id": "Projects/Nuartz/05-Publishing.md",
+      "target": "04-Headless-and-Ecosystem"
+    },
+    {
+      "candidate_doc_ids": [],
+      "query": "이전 글",
+      "reason": "unresolved-target",
+      "source_doc_id": "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 2.md",
+      "target": "Tensorflow Deep-Learning Computer-Vision Guide Notes1"
+    },
+    {
+      "candidate_doc_ids": [
+        "Tools/2024-08-02-Second-Brain-RAG.md",
+        "wiki/second-brain-rag.md"
+      ],
+      "query": "조직 Second Brain",
+      "reason": "ambiguous-target",
+      "source_doc_id": "AI/AX-Engineering/07-개인-팀-조직-지식-통합-중앙집중-대신-federation.md",
+      "target": "second-brain-rag"
+    },
+    {
+      "candidate_doc_ids": [],
+      "query": "현재 진행 중인 프로젝트",
+      "reason": "unresolved-target",
+      "source_doc_id": "AI/2025-10-26-context-engineering-for-ai-agents.md",
+      "target": "2025-10-06-AppHub-개인-프로젝트-플랫폼-기획"
+    }
+  ],
+  "provenance": {
+    "generator": "blogeval.wikilink-aliases",
+    "generator_version": 1,
+    "included_occurrence_count": 140,
+    "source_artifact_schema": "published-wikilinks-v2",
+    "source_occurrence_count": 164
+  },
+  "qrels": [
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Blog-rag/00-Overview.md",
+          "target": "01-Motivation"
+        }
+      ],
+      "query": "01. 왜 블로그를 RAG 대상으로, 왜 Modular RAG인가",
+      "query_id": "alias-f5323a0cf8718c0a",
+      "relevant_doc_ids": [
+        "Projects/Blog-rag/01-Motivation.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/00-Overview.md",
+          "target": "01-Motivation"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/05-Publishing.md",
+          "target": "01-Motivation"
+        }
+      ],
+      "query": "01. 출발점 - Quartz의 한계에서 시작된 여정",
+      "query_id": "alias-e6b65aafdf4c9af6",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/01-Motivation.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/00-Overview.md",
+          "target": "02-Quartz-Internals"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/05-Publishing.md",
+          "target": "02-Quartz-Internals"
+        }
+      ],
+      "query": "02. Quartz 플러그인 해부: 무엇을 재사용할 수 있나",
+      "query_id": "alias-0af5fb1156812dd8",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/02-Quartz-Internals.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/00-Overview.md",
+          "target": "03-Vercel-Deployment"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/05-Publishing.md",
+          "target": "03-Vercel-Deployment"
+        }
+      ],
+      "query": "03. 첫 배포: 구현 내용과 Vercel에서 만난 것들",
+      "query_id": "alias-cc45bd76e8bd9bd9",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/03-Vercel-Deployment.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/00-Overview.md",
+          "target": "04-Headless-and-Ecosystem"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/05-Publishing.md",
+          "target": "04-Headless-and-Ecosystem"
+        }
+      ],
+      "query": "04. Headless 설계와 레포 생태계 재편",
+      "query_id": "alias-3d1aca45465e8291",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/04-Headless-and-Ecosystem.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/00-Overview.md",
+          "target": "05-Publishing"
+        }
+      ],
+      "query": "05. npm 배포: 버전 관리와 자동화",
+      "query_id": "alias-174c176c85f2b9f2",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/05-Publishing.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/06-구현에서-드러나는-요구사항과-ADR-피드포워드.md",
+          "target": "agentic-decision-workflow"
+        }
+      ],
+      "query": "ADR/결정 파이프라인",
+      "query_id": "alias-c2cdb7af218f5510",
+      "relevant_doc_ids": [
+        "wiki/agentic-decision-workflow.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - CAP 이론과 분산 시스템의 이해"
+        }
+      ],
+      "query": "CAP 이론과 분산 시스템의 이해 - 일관성, 가용성, 분할 허용성의 트레이드오프",
+      "query_id": "alias-e6bf0893deedc924",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - CAP 이론과 분산 시스템의 이해.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/데블챌 데이터 블로그 챌린지.md",
+          "target": "바이브코딩과 커서(Cursor)"
+        }
+      ],
+      "query": "Day1 - 바이브코딩과 커서(Cursor)",
+      "query_id": "alias-c4147a8df7b02d1f",
+      "relevant_doc_ids": [
+        "Tools/바이브코딩과 커서(Cursor).md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-Marker-PDF-파서-분석.md",
+          "target": "2026-03-26-Docling-PDF-파서-분석"
+        }
+      ],
+      "query": "Docling",
+      "query_id": "alias-18714c10c2ade313",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-26-Docling-PDF-파서-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-OmniDocBench-파싱-성능-비교.md",
+          "target": "2026-03-26-Docling-PDF-파서-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md",
+          "target": "2026-03-26-Docling-PDF-파서-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-27-OpenDataLoader-PDF-파서-분석.md",
+          "target": "2026-03-26-Docling-PDF-파서-분석"
+        }
+      ],
+      "query": "Docling 분석",
+      "query_id": "alias-6b44d1b9e0060b17",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-26-Docling-PDF-파서-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/syshin0116-dev/00-Overview.md",
+          "target": "Projects/Nuartz/04-Headless-and-Ecosystem"
+        }
+      ],
+      "query": "Headless 설계 글",
+      "query_id": "alias-51711a968135fa54",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/04-Headless-and-Ecosystem.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/08-도구-종속을-피하는-지식-substrate-전략.md",
+          "target": "agentic-decision-workflow"
+        }
+      ],
+      "query": "Hermes 엔티티 모델",
+      "query_id": "alias-604b5fea130be4f6",
+      "relevant_doc_ids": [
+        "wiki/agentic-decision-workflow.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/07-개인-팀-조직-지식-통합-중앙집중-대신-federation.md",
+          "target": "agentic-decision-workflow"
+        }
+      ],
+      "query": "Hermes 엔티티 모델 + permission-before-search",
+      "query_id": "alias-b693bf79de1304d5",
+      "relevant_doc_ids": [
+        "wiki/agentic-decision-workflow.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Dev/2025-05-24-Supabase-NextJS.md",
+          "target": "Hostit 개요"
+        }
+      ],
+      "query": "Hostit",
+      "query_id": "alias-25a790048559362b",
+      "relevant_doc_ids": [
+        "Projects/Hostit/Hostit 개요.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Dev/2025-05-24-Supabase-NextJS.md",
+          "target": "Hostit README"
+        }
+      ],
+      "query": "Hostit 프로젝트",
+      "query_id": "alias-1da9655e362d6c53",
+      "relevant_doc_ids": [
+        "Projects/Hostit/Hostit README.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Dev/2025-05-24-Supabase-NextJS.md",
+          "target": "Hostit 구조"
+        }
+      ],
+      "query": "Hostit의 구조",
+      "query_id": "alias-c172a224108520eb",
+      "relevant_doc_ids": [
+        "Projects/Hostit/Hostit 구조.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/AX-Engineering/01-고객이-원하는-걸-모를-때의-요구사항-발굴.md",
+          "target": "llm-wiki"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/AX-Engineering/02-AI-자동화-전에-짚어야-할-현행-업무-as-is-분석.md",
+          "target": "llm-wiki"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/AX-Engineering/03-AI-프로젝트-인테이크-양식-설계.md",
+          "target": "llm-wiki"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/AX-Engineering/05-AI-ready-데이터의-오해와-준비-방법.md",
+          "target": "llm-wiki"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/08-도구-종속을-피하는-지식-substrate-전략.md",
+          "target": "llm-wiki"
+        }
+      ],
+      "query": "LLM Wiki",
+      "query_id": "alias-7f4a63d4688f2a06",
+      "relevant_doc_ids": [
+        "wiki/llm-wiki.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Track Anything: Segment Anything Meets Videos.md",
+          "target": "LangChain"
+        }
+      ],
+      "query": "LangChain",
+      "query_id": "alias-63c34d5ded165a69",
+      "relevant_doc_ids": [
+        "AI/LangChain.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+          "target": "LangChain"
+        }
+      ],
+      "query": "LangChain 프레임워크",
+      "query_id": "alias-71ffa34e4f31478a",
+      "relevant_doc_ids": [
+        "AI/LangChain.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/차원 축소 (Dimensionality Reduction) 기법.md",
+          "target": "LangChain"
+        }
+      ],
+      "query": "LangChain을 활용한 응용",
+      "query_id": "alias-5a57ea0570ee1fa7",
+      "relevant_doc_ids": [
+        "AI/LangChain.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Track Anything: Segment Anything Meets Videos.md",
+          "target": "LangGraph"
+        }
+      ],
+      "query": "LangGraph",
+      "query_id": "alias-845bbc27a312cec7",
+      "relevant_doc_ids": [
+        "AI/LangGraph.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md",
+          "target": "2026-03-26-LiteParse-PDF-파서-분석"
+        }
+      ],
+      "query": "LiteParse 분석",
+      "query_id": "alias-f91f5f2406bbc363",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-26-LiteParse-PDF-파서-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-OmniDocBench-파싱-성능-비교.md",
+          "target": "2026-03-26-Marker-PDF-파서-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md",
+          "target": "2026-03-26-Marker-PDF-파서-분석"
+        }
+      ],
+      "query": "Marker 분석",
+      "query_id": "alias-2a304aa41fcd7e98",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-26-Marker-PDF-파서-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2026-03-22-RAG-Anything-파헤치기.md",
+          "target": "MinerU - PDF Parser"
+        }
+      ],
+      "query": "MinerU - 고품질 PDF 변환 및 데이터 추출 도구",
+      "query_id": "alias-bfb1ac84da1f4a89",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/MinerU - PDF Parser.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md",
+          "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+        }
+      ],
+      "query": "MinerU 분석",
+      "query_id": "alias-28bdc21ebddf1f57",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-OmniDocBench-파싱-성능-비교.md",
+          "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+        }
+      ],
+      "query": "MinerU 파이프라인 분석",
+      "query_id": "alias-e88ee13015e52bd2",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - NextJS 선택 전 알아야 할 것들"
+        }
+      ],
+      "query": "NextJS 선택 전 알아야 할 것들",
+      "query_id": "alias-10acfd19014dd00c",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - NextJS 선택 전 알아야 할 것들.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "Projects/Blog-rag/00-Overview.md",
+          "target": "Projects/Nuartz/00-Overview"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/syshin0116-dev/00-Overview.md",
+          "target": "Projects/Nuartz/00-Overview"
+        }
+      ],
+      "query": "Nuartz",
+      "query_id": "alias-7a758a03f569345d",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/00-Overview.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Blog-rag/01-Motivation.md",
+          "target": "Projects/Nuartz/04-Headless-and-Ecosystem"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/syshin0116-dev/00-Overview.md",
+          "target": "Projects/Nuartz/04-Headless-and-Ecosystem"
+        }
+      ],
+      "query": "Nuartz - Headless 설계와 레포 생태계 재편",
+      "query_id": "alias-a84629b196bbbee9",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/04-Headless-and-Ecosystem.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Blog-rag/01-Motivation.md",
+          "target": "Projects/Nuartz/03-Vercel-Deployment"
+        }
+      ],
+      "query": "Nuartz - 한국어 검색 구현",
+      "query_id": "alias-e4f3c817303feedb",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/03-Vercel-Deployment.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md",
+          "target": "2026-03-26-OmniDocBench-파싱-성능-비교"
+        }
+      ],
+      "query": "OmniDocBench 요소별 성능 비교",
+      "query_id": "alias-34a279f167f6841d",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-26-OmniDocBench-파싱-성능-비교.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-27-OpenDataLoader-PDF-파서-분석.md",
+          "target": "2026-03-26-PDF-파서-5종-비교-분석"
+        }
+      ],
+      "query": "PDF 파서 5종 비교",
+      "query_id": "alias-9d5c0646667c6238",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+          "target": "2026-03-26-PDF-파서-5종-비교-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-25-PyMuPDF4LLM-PDF-파서-분석.md",
+          "target": "2026-03-26-PDF-파서-5종-비교-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-Docling-PDF-파서-분석.md",
+          "target": "2026-03-26-PDF-파서-5종-비교-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-LiteParse-PDF-파서-분석.md",
+          "target": "2026-03-26-PDF-파서-5종-비교-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-Marker-PDF-파서-분석.md",
+          "target": "2026-03-26-PDF-파서-5종-비교-분석"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-27-OpenDataLoader-PDF-파서-분석.md",
+          "target": "2026-03-26-PDF-파서-5종-비교-분석"
+        }
+      ],
+      "query": "PDF 파서 5종 비교 분석",
+      "query_id": "alias-02ce4f977c94b19e",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-LiteParse-PDF-파서-분석.md",
+          "target": "2026-03-25-PyMuPDF4LLM-PDF-파서-분석"
+        }
+      ],
+      "query": "PyMuPDF4LLM",
+      "query_id": "alias-5a750423432d0440",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-25-PyMuPDF4LLM-PDF-파서-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-PDF-파서-5종-비교-분석.md",
+          "target": "2026-03-25-PyMuPDF4LLM-PDF-파서-분석"
+        }
+      ],
+      "query": "PyMuPDF4LLM 분석",
+      "query_id": "alias-e5ed2fc04e0c8c89",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-25-PyMuPDF4LLM-PDF-파서-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/01-Motivation.md",
+          "target": "02-Quartz-Internals"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/03-Vercel-Deployment.md",
+          "target": "02-Quartz-Internals"
+        }
+      ],
+      "query": "Quartz 플러그인 해부",
+      "query_id": "alias-57b171ae396998d7",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/02-Quartz-Internals.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+          "target": "LLM Chain Chatbot + RAG"
+        }
+      ],
+      "query": "RAG 챗봇",
+      "query_id": "alias-d50ab5e483db1f8a",
+      "relevant_doc_ids": [
+        "AI/LLM Chain Chatbot + RAG.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+          "target": "2026-03-22-RAG-Anything-파헤치기"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-Docling-PDF-파서-분석.md",
+          "target": "2026-03-22-RAG-Anything-파헤치기"
+        }
+      ],
+      "query": "RAG-Anything",
+      "query_id": "alias-ed3e28f660bb6643",
+      "relevant_doc_ids": [
+        "AI/2026-03-22-RAG-Anything-파헤치기.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md",
+          "target": "2026-03-22-RAG-Anything-파헤치기"
+        }
+      ],
+      "query": "RAG-Anything 파헤치기",
+      "query_id": "alias-f4cf7d066d5b4e1d",
+      "relevant_doc_ids": [
+        "AI/2026-03-22-RAG-Anything-파헤치기.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+          "target": "Knowledge Graphs for RAG"
+        }
+      ],
+      "query": "RAG용 지식 그래프",
+      "query_id": "alias-089e68eba4a1e958",
+      "relevant_doc_ids": [
+        "AI/Knowledge Graphs for RAG.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Imbalanced Data Prediction(Anomaly Detection).md",
+          "target": "T-SNE"
+        }
+      ],
+      "query": "T-Distributed Stochastic Neighbor Embedding",
+      "query_id": "alias-761338627dfc6425",
+      "relevant_doc_ids": [
+        "AI/T-SNE.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/02-AI-자동화-전에-짚어야-할-현행-업무-as-is-분석.md",
+          "target": "llm-wiki"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/06-구현에서-드러나는-요구사항과-ADR-피드포워드.md",
+          "target": "llm-wiki"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/07-개인-팀-조직-지식-통합-중앙집중-대신-federation.md",
+          "target": "llm-wiki"
+        }
+      ],
+      "query": "Wiki",
+      "query_id": "alias-63ec69fde300e6d6",
+      "relevant_doc_ids": [
+        "wiki/llm-wiki.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/AX-Engineering/01-고객이-원하는-걸-모를-때의-요구사항-발굴.md",
+          "target": "agentic-decision-workflow"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/AX-Engineering/04-AI-위임-범위-결정-능력보다-검증-비용.md",
+          "target": "agentic-decision-workflow"
+        }
+      ],
+      "query": "agentic decision workflow",
+      "query_id": "alias-1484ec414875f96b",
+      "relevant_doc_ids": [
+        "wiki/agentic-decision-workflow.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/00-Overview.md",
+          "target": "Projects/Blog-rag/00-Overview"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/01-Motivation.md",
+          "target": "Projects/Blog-rag/00-Overview"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/04-Headless-and-Ecosystem.md",
+          "target": "Projects/Blog-rag/00-Overview"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/syshin0116-dev/00-Overview.md",
+          "target": "Projects/Blog-rag/00-Overview"
+        }
+      ],
+      "query": "blog-rag",
+      "query_id": "alias-850ae0940019f1d8",
+      "relevant_doc_ids": [
+        "Projects/Blog-rag/00-Overview.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/syshin0116-dev/00-Overview.md",
+          "target": "Projects/Blog-rag/00-Overview"
+        }
+      ],
+      "query": "blog-rag 개요",
+      "query_id": "alias-596ce2ead38c69ac",
+      "relevant_doc_ids": [
+        "Projects/Blog-rag/00-Overview.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/syshin0116-dev/00-Overview.md",
+          "target": "Projects/Blog-rag/01-Motivation"
+        }
+      ],
+      "query": "blog-rag 동기",
+      "query_id": "alias-b715ff93a35012c2",
+      "relevant_doc_ids": [
+        "Projects/Blog-rag/01-Motivation.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2026-04-04-블로그-검색-실험-1-실험설계.md",
+          "target": "2025-10-13-pgvector-vs-Qdrant-vs-Milvus-Performance-Comparison"
+        }
+      ],
+      "query": "pgvector vs Qdrant vs Milvus 성능 비교",
+      "query_id": "alias-87398a515b72c8f0",
+      "relevant_doc_ids": [
+        "AI/2025-10-13-pgvector-vs-Qdrant-vs-Milvus-Performance-Comparison.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/07-개인-팀-조직-지식-통합-중앙집중-대신-federation.md",
+          "target": "agentic-decision-workflow"
+        }
+      ],
+      "query": "scope ladder",
+      "query_id": "alias-93549bfbb3aa7a06",
+      "relevant_doc_ids": [
+        "wiki/agentic-decision-workflow.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 2.md",
+          "target": "T-SNE"
+        }
+      ],
+      "query": "t-SNE",
+      "query_id": "alias-1af7b018d15ea9e7",
+      "relevant_doc_ids": [
+        "AI/T-SNE.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/차원 축소 (Dimensionality Reduction) 기법.md",
+          "target": "T-SNE"
+        }
+      ],
+      "query": "t-SNE에 대한 자세한 분석",
+      "query_id": "alias-2d01bb94560c1f2d",
+      "relevant_doc_ids": [
+        "AI/T-SNE.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/04-AI-위임-범위-결정-능력보다-검증-비용.md",
+          "target": "vibe-coding"
+        }
+      ],
+      "query": "vibe coding",
+      "query_id": "alias-2c56afdd8aa6c70c",
+      "relevant_doc_ids": [
+        "wiki/vibe-coding.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/05-AI-ready-데이터의-오해와-준비-방법.md",
+          "target": "블로그-검색-실험"
+        }
+      ],
+      "query": "검색 실험",
+      "query_id": "alias-bc7f38e540c0a2f4",
+      "relevant_doc_ids": [
+        "wiki/블로그-검색-실험.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Anomaly Detection.md",
+          "target": "LangChain"
+        }
+      ],
+      "query": "고급 ML 파이프라인",
+      "query_id": "alias-2046d4fd5b85a508",
+      "relevant_doc_ids": [
+        "AI/LangChain.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+          "target": "문서(pdf 등) 내 시각 자료와 텍스트의 추출 및 활용"
+        }
+      ],
+      "query": "기존 PDF 파서들",
+      "query_id": "alias-43a30574b5508477",
+      "relevant_doc_ids": [
+        "AI/문서(pdf 등) 내 시각 자료와 텍스트의 추출 및 활용.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/03-AI-프로젝트-인테이크-양식-설계.md",
+          "target": "agentic-decision-workflow"
+        }
+      ],
+      "query": "기존 결정 파이프라인",
+      "query_id": "alias-0b464d5fac50851a",
+      "relevant_doc_ids": [
+        "wiki/agentic-decision-workflow.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/02-AI-자동화-전에-짚어야-할-현행-업무-as-is-분석.md",
+          "target": "agentic-decision-workflow"
+        }
+      ],
+      "query": "기존 지식 파이프라인",
+      "query_id": "alias-a48659926f48e054",
+      "relevant_doc_ids": [
+        "wiki/agentic-decision-workflow.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/T-SNE.md",
+          "target": "차원 축소 (Dimensionality Reduction) 기법"
+        }
+      ],
+      "query": "다른 차원 축소 기법",
+      "query_id": "alias-8117085fa1381d75",
+      "relevant_doc_ids": [
+        "AI/차원 축소 (Dimensionality Reduction) 기법.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 2.md",
+          "target": "차원 축소 (Dimensionality Reduction) 기법"
+        }
+      ],
+      "query": "다양한 차원 축소 방법",
+      "query_id": "alias-310077a958a8b2d4",
+      "relevant_doc_ids": [
+        "AI/차원 축소 (Dimensionality Reduction) 기법.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Multi-Agent Architecture and Large-Scale Implementation Strategies.md",
+          "target": "Agent Architecture Comparison"
+        }
+      ],
+      "query": "단일 에이전트 시스템",
+      "query_id": "alias-29348238a3d19363",
+      "relevant_doc_ids": [
+        "AI/2025-06-04-Agent Architecture Comparison.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 1.md",
+          "target": "Tensorflow Deep-Learning Computer-Vision Guide Notes 2"
+        }
+      ],
+      "query": "더 복잡한 모델",
+      "query_id": "alias-8ae9d7e14715f13b",
+      "relevant_doc_ids": [
+        "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 2.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+          "target": "문서(pdf 등) 내 시각 자료와 텍스트의 추출 및 활용"
+        }
+      ],
+      "query": "멀티모달 RAG",
+      "query_id": "alias-e8e5cf08653ad681",
+      "relevant_doc_ids": [
+        "AI/문서(pdf 등) 내 시각 자료와 텍스트의 추출 및 활용.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+          "target": "문서(pdf 등) 내 시각 자료와 텍스트의 추출 및 활용"
+        }
+      ],
+      "query": "멀티모달 문서 처리",
+      "query_id": "alias-7f019c3acddfd806",
+      "relevant_doc_ids": [
+        "AI/문서(pdf 등) 내 시각 자료와 텍스트의 추출 및 활용.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Track Anything: Segment Anything Meets Videos.md",
+          "target": "LayoutLM"
+        }
+      ],
+      "query": "문서 레이아웃 인식",
+      "query_id": "alias-ca82e017ad3ed729",
+      "relevant_doc_ids": [
+        "AI/LayoutLM.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 법대생이었던 내가 일어나보니 개발자가 된 건에 대하여"
+        }
+      ],
+      "query": "법대생에서 개발자로의 여정 - 커리어 전환 이야기 리뷰",
+      "query_id": "alias-e426edab3bc3eac4",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 법대생이었던 내가 일어나보니 개발자가 된 건에 대하여.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Anomaly Detection.md",
+          "target": "Imbalanced Data Prediction(Anomaly Detection)"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/T-SNE.md",
+          "target": "Imbalanced Data Prediction(Anomaly Detection)"
+        }
+      ],
+      "query": "불균형 데이터 예측",
+      "query_id": "alias-1eb1b6cdce4b07e3",
+      "relevant_doc_ids": [
+        "AI/Imbalanced Data Prediction(Anomaly Detection).md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Anomaly Detection.md",
+          "target": "Imbalanced Data Prediction(Anomaly Detection)"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/차원 축소 (Dimensionality Reduction) 기법.md",
+          "target": "Imbalanced Data Prediction(Anomaly Detection)"
+        }
+      ],
+      "query": "불균형 데이터 처리",
+      "query_id": "alias-630bf4c0fc03ab08",
+      "relevant_doc_ids": [
+        "AI/Imbalanced Data Prediction(Anomaly Detection).md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 시니어 개발자로 성장하기 위한 핵심 역량"
+        }
+      ],
+      "query": "시니어 개발자로 성장하기 위한 핵심 역량 - 육각형 개발자 책 리뷰",
+      "query_id": "alias-cdc00ae5764c0373",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 시니어 개발자로 성장하기 위한 핵심 역량.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Imbalanced Data Prediction(Anomaly Detection).md",
+          "target": "LangChain"
+        }
+      ],
+      "query": "신경망 기반 접근법",
+      "query_id": "alias-9f87f8ec95de94dc",
+      "relevant_doc_ids": [
+        "AI/LangChain.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 성공적인 애플리케이션 현대화를 위한 12가지 기본 원칙"
+        }
+      ],
+      "query": "애플리케이션 현대화를 위한 12가지 기본 원칙 리뷰",
+      "query_id": "alias-0586a1959aee7b19",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 성공적인 애플리케이션 현대화를 위한 12가지 기본 원칙.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/01-고객이-원하는-걸-모를-때의-요구사항-발굴.md",
+          "target": "정보처리기사"
+        }
+      ],
+      "query": "요구사항 분석",
+      "query_id": "alias-d0f0c03457d66acd",
+      "relevant_doc_ids": [
+        "wiki/정보처리기사.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/AX-Engineering/08-도구-종속을-피하는-지식-substrate-전략.md",
+          "target": "llm-wiki"
+        }
+      ],
+      "query": "이 기질을 이미 만들었다",
+      "query_id": "alias-572a67acacac08b1",
+      "relevant_doc_ids": [
+        "wiki/llm-wiki.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 1.md",
+          "target": "Anomaly Detection"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Tensorflow Deep-Learning Computer-Vision Guide Notes 2.md",
+          "target": "Anomaly Detection"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/차원 축소 (Dimensionality Reduction) 기법.md",
+          "target": "Anomaly Detection"
+        }
+      ],
+      "query": "이상 탐지",
+      "query_id": "alias-0d20da72fce28fb7",
+      "relevant_doc_ids": [
+        "AI/Anomaly Detection.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Imbalanced Data Prediction(Anomaly Detection).md",
+          "target": "Anomaly Detection"
+        }
+      ],
+      "query": "이상 탐지 시스템",
+      "query_id": "alias-0f3c93992a6aa098",
+      "relevant_doc_ids": [
+        "AI/Anomaly Detection.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/T-SNE.md",
+          "target": "Anomaly Detection"
+        }
+      ],
+      "query": "이상 탐지(Anomaly Detection)",
+      "query_id": "alias-d195a8ef69165162",
+      "relevant_doc_ids": [
+        "AI/Anomaly Detection.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/pdf-parser/2026-03-26-OmniDocBench-파싱-성능-비교.md",
+          "target": "2026-03-23-MinerU-2x-파이프라인-분석"
+        }
+      ],
+      "query": "이전 글들",
+      "query_id": "alias-44031bd01039ff60",
+      "relevant_doc_ids": [
+        "AI/pdf-parser/2026-03-23-MinerU-2x-파이프라인-분석.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-10-26-context-engineering-for-ai-agents.md",
+          "target": "LLM Chain Chatbot + RAG"
+        }
+      ],
+      "query": "일반적인 챗봇",
+      "query_id": "alias-9026e6491ef39979",
+      "relevant_doc_ids": [
+        "AI/LLM Chain Chatbot + RAG.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 자바 클래스 설계의 다섯 가지 SOLID 원칙"
+        }
+      ],
+      "query": "자바 클래스 설계의 다섯 가지 SOLID 원칙 - 객체지향 설계의 핵심",
+      "query_id": "alias-7bc5565ace6141f2",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 자바 클래스 설계의 다섯 가지 SOLID 원칙.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 7개월간의 자바스프링 독학 회고"
+        }
+      ],
+      "query": "자바스프링 독학 7개월 여정과 효과적인 학습법",
+      "query_id": "alias-39dc156e7e4c6b0c",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 7개월간의 자바스프링 독학 회고.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 주니어 개발자가 면접을 앞두고 준비한 것들"
+        }
+      ],
+      "query": "주니어 개발자가 면접을 앞두고 준비한 것들",
+      "query_id": "alias-dcce0e3f99e6bd21",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 주니어 개발자가 면접을 앞두고 준비한 것들.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 주니어 개발자의 복수"
+        }
+      ],
+      "query": "주니어 개발자의 복수 - AI 코딩 시대의 개발자 역학 관계",
+      "query_id": "alias-57b3658cf140c330",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 주니어 개발자의 복수.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2025-09-14-학술 -논문-특화-파서-시스템.md",
+          "target": "Knowledge Graphs for RAG"
+        }
+      ],
+      "query": "지식 그래프",
+      "query_id": "alias-d38c9f7a44e9511b",
+      "relevant_doc_ids": [
+        "AI/Knowledge Graphs for RAG.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/2026-03-22-RAG-Anything-파헤치기.md",
+          "target": "Knowledge Graphs for RAG"
+        }
+      ],
+      "query": "지식 그래프를 활용한 RAG",
+      "query_id": "alias-6133b084c0737ae2",
+      "relevant_doc_ids": [
+        "AI/Knowledge Graphs for RAG.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Track Anything: Segment Anything Meets Videos.md",
+          "target": "차원 축소 (Dimensionality Reduction) 기법"
+        }
+      ],
+      "query": "차원 축소",
+      "query_id": "alias-8334e5d2f4b92da4",
+      "relevant_doc_ids": [
+        "AI/차원 축소 (Dimensionality Reduction) 기법.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "AI/Anomaly Detection.md",
+          "target": "차원 축소 (Dimensionality Reduction) 기법"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "AI/Imbalanced Data Prediction(Anomaly Detection).md",
+          "target": "차원 축소 (Dimensionality Reduction) 기법"
+        }
+      ],
+      "query": "차원 축소 기법",
+      "query_id": "alias-646e6ebca890ed0a",
+      "relevant_doc_ids": [
+        "AI/차원 축소 (Dimensionality Reduction) 기법.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Projects/Nuartz/02-Quartz-Internals.md",
+          "target": "01-Motivation"
+        }
+      ],
+      "query": "첫 번째 글",
+      "query_id": "alias-b80da2001cf577f3",
+      "relevant_doc_ids": [
+        "Projects/Nuartz/01-Motivation.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 2,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 자바 클래스 설계의 다섯 가지 SOLID 원칙.md",
+          "target": "아티클 리뷰 - 프론트엔드와 SOLID 원칙"
+        }
+      ],
+      "query": "카카오엔터테인먼트의 스티브님 아티클",
+      "query_id": "alias-95a0d5fa5c219402",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 프론트엔드와 SOLID 원칙.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 자바 클래스 설계의 다섯 가지 SOLID 원칙.md",
+          "target": "아티클 리뷰 - 프론트엔드와 SOLID 원칙"
+        }
+      ],
+      "query": "프론트엔드와 SOLID 원칙",
+      "query_id": "alias-06829ecfe6f79a57",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 프론트엔드와 SOLID 원칙.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md",
+          "target": "아티클 리뷰 - 프론트엔드와 SOLID 원칙"
+        }
+      ],
+      "query": "프론트엔드와 SOLID 원칙 - 객체지향 설계의 프론트엔드 적용",
+      "query_id": "alias-61ef69a9594dfd6e",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 프론트엔드와 SOLID 원칙.md"
+      ]
+    },
+    {
+      "evidence": [
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 7개월간의 자바스프링 독학 회고.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - CAP 이론과 분산 시스템의 이해.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - NextJS 선택 전 알아야 할 것들.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 법대생이었던 내가 일어나보니 개발자가 된 건에 대하여.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 성공적인 애플리케이션 현대화를 위한 12가지 기본 원칙.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 시니어 개발자로 성장하기 위한 핵심 역량.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 자바 클래스 설계의 다섯 가지 SOLID 원칙.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 주니어 개발자가 면접을 앞두고 준비한 것들.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 주니어 개발자의 복수.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        },
+        {
+          "kind": "wikilink-alias",
+          "occurrences": 1,
+          "source_doc_id": "Events/항해99 1일 1아티클 챌린지/아티클 리뷰 - 프론트엔드와 SOLID 원칙.md",
+          "target": "항해99 1일 1아티클 챌린지"
+        }
+      ],
+      "query": "항해99 1일 1아티클 챌린지",
+      "query_id": "alias-7a2fa7b06571ee86",
+      "relevant_doc_ids": [
+        "Events/항해99 1일 1아티클 챌린지/항해99 1일 1아티클 챌린지.md"
+      ]
+    }
+  ],
+  "schema": "blogeval-queryset-v1"
+}

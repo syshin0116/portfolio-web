@@ -56,6 +56,9 @@ agent/.index*/
 agent/.langgraph_api/
 agent/supabase/.temp/
 
+# retrieval evaluation (local JSON is the system of record, never a build input)
+eval/results/
+
 # in-flight series research (author working files, not for commit)
 .series-research/
 

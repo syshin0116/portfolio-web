@@ -30,14 +30,26 @@ commit SHA and that exactly one workflow job emits each stable required check.
 It parses YAML syntax trees with the same PyYAML dependency already locked by
 the agent; duplicate keys, anchors, aliases, merge keys, directives, explicit
 tags, and multiple documents fail closed. Flow mappings and quoted or explicit
-`uses` keys cannot bypass the full-SHA walk:
+`uses` keys cannot bypass the full-SHA walk. The walk covers nested workflow
+files plus every `.github/actions/**/action.yml` or `action.yaml`, then follows
+local `./` action and reusable-workflow edges recursively. A local target that
+escapes the repository, is missing or ambiguous, or forms a cycle fails:
 
 - `ci/check`
 - `protocol/compat`
 - `wiki/verify`
 
+Each required check is bound to GitHub Actions integration ID `15368`, not just
+its mutable display context. A read-only check-runs query against
+`main@d058ebc` confirmed all three contexts came from app slug
+`github-actions`, ID `15368`. The live verifier rejects missing IDs, a context
+bound to another integration, duplicate bindings, and undocumented contexts.
+
 The live verifier additionally reads GitHub rulesets, Actions policy, and
-environment branch and protection policies. It performs GET requests only:
+environment branch and protection policies. It performs GET requests only.
+Rulesets, environments, and branch policies request an explicit
+`per_page=100&page=1`; any pagination `Link`, inconsistent `total_count`, or
+second-page requirement fails closed:
 
 ```bash
 uv run --no-project --with pyyaml==6.0.3 \
@@ -72,8 +84,12 @@ Keep this contract in one active ruleset. Disabled rulesets that target `main`
 and rules distributed over multiple active rulesets fail verification, as does
 any bypass actor. The owner can edit the ruleset if GitHub itself has an
 outage; that is an emergency settings change, not a normal merge path. Required
-checks are compared exactly, so both a missing gate and an undocumented extra
-gate fail.
+checks are compared exactly. The complete rule-type allowlist is also exact:
+`deletion`, `non_fast_forward`, `pull_request`, and
+`required_status_checks`. An additional rule such as `required_deployments`, a
+missing rule, or a duplicate type is policy drift. GitHub-supplied metadata is
+ignored; the rule type and the parameters whose semantics this contract owns
+are compared.
 
 ## Full-SHA Actions policy
 
@@ -100,12 +116,13 @@ Keep the existing Vercel environments explicit:
 
 The verifier compares these settings exactly, including branch policy,
 protection-rule types, reviewer identities, `prevent_self_review`, and admin
-bypass. At the time this contract was recorded, both environments had the owner
-as a required reviewer with `prevent_self_review: false`. The desired routine
-state removes that reviewer from `Preview`; `Production` keeps the existing
-owner gate and explicitly permits self-review so a solo owner cannot deadlock.
-The current Preview mismatch is an external rollout item, not something this PR
-mutates.
+bypass. The environment-name set is also exact, so an undeclared `Staging` or
+other environment cannot silently become a deployment surface. At the time
+this contract was recorded, both environments had the owner as a required
+reviewer with `prevent_self_review: false`. The desired routine state removes
+that reviewer from `Preview`; `Production` keeps the existing owner gate and
+explicitly permits self-review so a solo owner cannot deadlock. The current
+Preview mismatch is an external rollout item, not something this PR mutates.
 
 When separate Cloud Run `preview` and `production` environments are introduced,
 add them to the checked-in policy in the same PR as their workflows; do not

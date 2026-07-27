@@ -11,13 +11,24 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import verify_repository_governance as governance  # noqa: E402
 
+RULESETS_PAGE = "rulesets?includes_parents=true&per_page=100&page=1"
+ENVIRONMENTS_PAGE = "environments?per_page=100&page=1"
+PRODUCTION_BRANCH_POLICIES_PAGE = (
+    "environments/Production/deployment-branch-policies?per_page=100&page=1"
+)
+
 
 def desired_live_responses() -> dict[str, object]:
     return {
-        "rulesets?includes_parents=true": [{"id": 7}],
+        RULESETS_PAGE: [{"id": 7}],
         "rulesets/7": {
             "id": 7,
+            "node_id": "RRS_test",
             "name": "main",
+            "source_type": "Repository",
+            "source": "syshin0116/syshin0116.dev",
+            "created_at": "2026-07-27T00:00:00Z",
+            "updated_at": "2026-07-27T00:00:00Z",
             "target": "branch",
             "enforcement": "active",
             "bypass_actors": [],
@@ -43,9 +54,15 @@ def desired_live_responses() -> dict[str, object]:
                     "parameters": {
                         "strict_required_status_checks_policy": True,
                         "required_status_checks": [
-                            {"context": "ci/check"},
-                            {"context": "protocol/compat"},
-                            {"context": "wiki/verify"},
+                            {"context": "ci/check", "integration_id": 15368},
+                            {
+                                "context": "protocol/compat",
+                                "integration_id": 15368,
+                            },
+                            {
+                                "context": "wiki/verify",
+                                "integration_id": 15368,
+                            },
                         ],
                     },
                 },
@@ -56,7 +73,7 @@ def desired_live_responses() -> dict[str, object]:
             "allowed_actions": "all",
             "sha_pinning_required": True,
         },
-        "environments?per_page=100": {
+        ENVIRONMENTS_PAGE: {
             "total_count": 2,
             "environments": [
                 {"name": "Preview"},
@@ -90,7 +107,7 @@ def desired_live_responses() -> dict[str, object]:
                 "custom_branch_policies": True,
             },
         },
-        "environments/Production/deployment-branch-policies?per_page=100": {
+        PRODUCTION_BRANCH_POLICIES_PAGE: {
             "total_count": 1,
             "branch_policies": [{"name": "main", "type": "branch"}],
         },
@@ -241,6 +258,130 @@ jobs:
             list(governance.external_action_references(document)),
         )
 
+    def test_nested_workflow_is_included_in_repository_ast_walk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / ".github/workflows/nested/check.yaml"
+            nested.parent.mkdir(parents=True)
+            nested.write_text(
+                "jobs: {check: {uses: actions/checkout@v7}}\n",
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(
+            any(
+                ".github/workflows/nested/check.yaml" in error
+                and "actions/checkout@v7" in error
+                for error in errors
+            )
+        )
+
+    def test_nested_local_composite_action_is_walked_recursively(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/check.yml"
+            outer = root / ".github/actions/outer/action.yml"
+            inner = root / ".github/actions/inner/action.yaml"
+            workflow.parent.mkdir(parents=True)
+            outer.parent.mkdir(parents=True)
+            inner.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs: {check: {uses: ./.github/actions/outer}}\n",
+                encoding="utf-8",
+            )
+            outer.write_text(
+                """
+name: outer
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/inner
+""".lstrip(),
+                encoding="utf-8",
+            )
+            inner.write_text(
+                """
+name: inner
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v7
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(
+            any(
+                ".github/actions/inner/action.yaml" in error
+                and "actions/checkout@v7" in error
+                for error in errors
+            )
+        )
+
+    def test_local_action_target_escape_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs: {check: {uses: ./../outside}}\n",
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(any("escapes the repository" in error for error in errors))
+
+    def test_missing_local_action_target_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github/workflows/check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs: {check: {uses: ./.github/actions/missing}}\n",
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(any("missing or unsupported" in error for error in errors))
+
+    def test_local_action_cycle_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / ".github/actions/first/action.yml"
+            second = root / ".github/actions/second/action.yml"
+            first.parent.mkdir(parents=True)
+            second.parent.mkdir(parents=True)
+            first.write_text(
+                """
+name: first
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/second
+""".lstrip(),
+                encoding="utf-8",
+            )
+            second.write_text(
+                """
+name: second
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/first
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            _, errors = governance.validate_repository_yaml_references(root)
+
+        self.assertTrue(any("local uses cycle detected" in error for error in errors))
+
     def test_dependency_audit_events_are_schedule_and_manual_only(self) -> None:
         workflow = REPO_ROOT / ".github/workflows/dependency-audit.yml"
         document = governance.load_yaml_document(workflow)
@@ -332,9 +473,12 @@ jobs:
             policy = {
                 "main": {
                     "required_checks": [
-                        "ci/check",
-                        "protocol/compat",
-                        "wiki/verify",
+                        {"context": "ci/check", "integration_id": 15368},
+                        {
+                            "context": "protocol/compat",
+                            "integration_id": 15368,
+                        },
+                        {"context": "wiki/verify", "integration_id": 15368},
                     ]
                 }
             }
@@ -404,7 +548,7 @@ class LiveGovernanceTests(unittest.TestCase):
             errors,
         )
 
-    def test_required_checks_compare_missing_extra_and_duplicates_exactly(self) -> None:
+    def test_required_check_bindings_compare_wrong_and_duplicates_exactly(self) -> None:
         responses = desired_live_responses()
         ruleset = json.loads(json.dumps(responses["rulesets/7"]))
         status = next(
@@ -413,19 +557,64 @@ class LiveGovernanceTests(unittest.TestCase):
             if rule["type"] == "required_status_checks"
         )
         status["parameters"]["required_status_checks"] = [
-            {"context": "ci/check"},
-            {"context": "ci/check"},
-            {"context": "protocol/compat"},
-            {"context": "unexpected/check"},
+            {"context": "ci/check", "integration_id": 15368},
+            {"context": "ci/check", "integration_id": 15368},
+            {"context": "protocol/compat", "integration_id": 999},
+            {"context": "unexpected/check", "integration_id": 15368},
         ]
         responses["rulesets/7"] = ruleset
 
         errors = governance.verify_live(self.policy, responses.__getitem__)
 
-        mismatch = next(error for error in errors if "checks differ exactly" in error)
+        mismatch = next(
+            error
+            for error in errors
+            if "required check bindings differ exactly" in error
+        )
         self.assertIn("wiki/verify", mismatch)
         self.assertIn("unexpected/check", mismatch)
-        self.assertIn("duplicates=['ci/check']", mismatch)
+        self.assertIn("999", mismatch)
+        self.assertIn("duplicates=[('ci/check', 15368)]", mismatch)
+
+    def test_required_check_missing_integration_id_fails_closed(self) -> None:
+        responses = desired_live_responses()
+        ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+        status = next(
+            rule
+            for rule in ruleset["rules"]
+            if rule["type"] == "required_status_checks"
+        )
+        del status["parameters"]["required_status_checks"][0]["integration_id"]
+        responses["rulesets/7"] = ruleset
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "without a valid context/integration_id binding" in error
+                for error in errors
+            )
+        )
+
+    def test_extra_and_duplicate_ruleset_types_fail_closed(self) -> None:
+        responses = desired_live_responses()
+        ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+        ruleset["rules"].append({"type": "deletion"})
+        ruleset["rules"].append(
+            {
+                "type": "required_deployments",
+                "parameters": {"required_deployment_environments": ["Production"]},
+            }
+        )
+        responses["rulesets/7"] = ruleset
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        mismatch = next(
+            error for error in errors if "rule types differ exactly" in error
+        )
+        self.assertIn("required_deployments", mismatch)
+        self.assertIn("duplicates=['deletion']", mismatch)
 
     def test_every_main_ruleset_bypass_actor_is_rejected(self) -> None:
         responses = desired_live_responses()
@@ -461,7 +650,7 @@ class LiveGovernanceTests(unittest.TestCase):
         second["id"] = 8
         second["name"] = "main-part-two"
         second["rules"] = second["rules"][2:]
-        responses["rulesets?includes_parents=true"] = [{"id": 7}, {"id": 8}]
+        responses[RULESETS_PAGE] = [{"id": 7}, {"id": 8}]
         responses["rulesets/7"] = first
         responses["rulesets/8"] = second
 
@@ -530,6 +719,62 @@ class LiveGovernanceTests(unittest.TestCase):
                 for error in errors
             )
         )
+
+    def test_extra_environment_is_rejected_as_policy_drift(self) -> None:
+        responses = desired_live_responses()
+        environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
+        environments["total_count"] = 3
+        environments["environments"].append({"name": "Staging"})
+        responses[ENVIRONMENTS_PAGE] = environments
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "GitHub environments differ exactly" in error and "Staging" in error
+                for error in errors
+            )
+        )
+
+    def test_ruleset_pagination_link_fails_closed(self) -> None:
+        responses = desired_live_responses()
+        responses[RULESETS_PAGE] = governance.ApiResponse(
+            payload=responses[RULESETS_PAGE],
+            headers={"link": '<https://api.github.test/rulesets?page=2>; rel="next"'},
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "requires pagination",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_environment_total_count_mismatch_fails_closed(self) -> None:
+        responses = desired_live_responses()
+        environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
+        environments["total_count"] = 3
+        responses[ENVIRONMENTS_PAGE] = environments
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "total_count is 3",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_branch_policy_pagination_link_fails_closed(self) -> None:
+        responses = desired_live_responses()
+        responses[PRODUCTION_BRANCH_POLICIES_PAGE] = governance.ApiResponse(
+            payload=responses[PRODUCTION_BRANCH_POLICIES_PAGE],
+            headers={
+                "link": ('<https://api.github.test/branch-policies?page=2>; rel="next"')
+            },
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "requires pagination",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
 
 
 if __name__ == "__main__":

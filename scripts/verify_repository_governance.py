@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,14 @@ class YamlDocument:
 
     path: Path
     root: MappingNode
+
+
+@dataclass(frozen=True)
+class ApiResponse:
+    """One GitHub API payload together with lower-cased response headers."""
+
+    payload: Any
+    headers: dict[str, str]
 
 
 def _require_yaml() -> None:
@@ -166,7 +175,18 @@ def load_policy(path: Path = DEFAULT_POLICY) -> JsonObject:
 def workflow_files(root: Path) -> list[Path]:
     """Return tracked-style workflow paths in deterministic order."""
     workflow_dir = root / ".github/workflows"
-    return sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
+    return sorted((*workflow_dir.rglob("*.yml"), *workflow_dir.rglob("*.yaml")))
+
+
+def action_manifest_files(root: Path) -> list[Path]:
+    """Return repository-owned action manifests in deterministic order."""
+    action_dir = root / ".github/actions"
+    return sorted(
+        (
+            *action_dir.rglob("action.yml"),
+            *action_dir.rglob("action.yaml"),
+        )
+    )
 
 
 def _nodes_for_mapping_key(node: Node, key: str) -> Iterable[Node]:
@@ -180,14 +200,22 @@ def _nodes_for_mapping_key(node: Node, key: str) -> Iterable[Node]:
             yield from _nodes_for_mapping_key(item, key)
 
 
+def action_references(
+    document: YamlDocument,
+) -> Iterable[tuple[int, str]]:
+    """Yield every action or reusable-workflow reference in the AST."""
+    for node in _nodes_for_mapping_key(document.root, "uses"):
+        reference = _scalar_value(node, context=f"{document.path}: uses")
+        yield node.start_mark.line + 1, reference
+
+
 def external_action_references(
     document: YamlDocument,
 ) -> Iterable[tuple[int, str]]:
-    """Yield every non-local action or reusable-workflow reference in the AST."""
-    for node in _nodes_for_mapping_key(document.root, "uses"):
-        reference = _scalar_value(node, context=f"{document.path}: uses")
+    """Yield every non-local action or reusable-workflow reference."""
+    for line_number, reference in action_references(document):
         if not reference.startswith("./"):
-            yield node.start_mark.line + 1, reference
+            yield line_number, reference
 
 
 def workflow_job_names(document: YamlDocument) -> list[str]:
@@ -229,6 +257,144 @@ def workflow_events(document: YamlDocument) -> set[str]:
     if isinstance(events, MappingNode):
         return {key for key, _, _ in _mapping_items(events)}
     raise GovernanceError(f"{document.path}: on must be a scalar, list, or mapping")
+
+
+def _display_path(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _resolve_local_action_reference(
+    root: Path,
+    source: Path,
+    line_number: int,
+    reference: str,
+) -> Path:
+    repository_root = root.resolve()
+    relative_target = reference.removeprefix("./")
+    if not relative_target:
+        raise GovernanceError(
+            f"{_display_path(source, repository_root)}:{line_number} "
+            "local uses target is empty"
+        )
+    target = (repository_root / relative_target).resolve()
+    if not target.is_relative_to(repository_root):
+        raise GovernanceError(
+            f"{_display_path(source, repository_root)}:{line_number} "
+            f"local uses target escapes the repository: {reference}"
+        )
+
+    if target.is_dir():
+        manifests = [
+            candidate
+            for candidate in (target / "action.yml", target / "action.yaml")
+            if candidate.is_file()
+        ]
+        if len(manifests) != 1:
+            raise GovernanceError(
+                f"{_display_path(source, repository_root)}:{line_number} "
+                f"local action {reference!r} must contain exactly one of "
+                f"action.yml/action.yaml, found {len(manifests)}"
+            )
+        manifest = manifests[0].resolve()
+        if not manifest.is_relative_to(repository_root):
+            raise GovernanceError(
+                f"{_display_path(source, repository_root)}:{line_number} "
+                f"local action manifest escapes the repository: {reference}"
+            )
+        return manifest
+
+    workflow_root = (repository_root / ".github/workflows").resolve()
+    if (
+        target.is_file()
+        and target.is_relative_to(workflow_root)
+        and target.suffix in {".yml", ".yaml"}
+    ):
+        return target
+
+    raise GovernanceError(
+        f"{_display_path(source, repository_root)}:{line_number} local uses "
+        f"target is missing or unsupported: {reference}"
+    )
+
+
+def validate_repository_yaml_references(
+    root: Path,
+) -> tuple[dict[Path, YamlDocument], list[str]]:
+    """Parse workflow/action YAML and recursively validate every `uses` edge."""
+    repository_root = root.resolve()
+    workflow_paths = [path.resolve() for path in workflow_files(repository_root)]
+    action_paths = [path.resolve() for path in action_manifest_files(repository_root)]
+    errors: list[str] = []
+
+    action_manifests_by_directory: dict[Path, list[Path]] = {}
+    for path in action_paths:
+        action_manifests_by_directory.setdefault(path.parent, []).append(path)
+    for directory, manifests in action_manifests_by_directory.items():
+        if len(manifests) > 1:
+            errors.append(
+                "local: repository action directory "
+                f"{_display_path(directory, repository_root)!r} contains both "
+                "action.yml and action.yaml"
+            )
+
+    documents: dict[Path, YamlDocument] = {}
+    state: dict[Path, str] = {}
+    stack: list[Path] = []
+
+    def visit(path: Path) -> None:
+        status = state.get(path)
+        if status == "done":
+            return
+        if status == "visiting":
+            cycle_start = stack.index(path)
+            cycle = [*stack[cycle_start:], path]
+            errors.append(
+                "local: local uses cycle detected: "
+                + " -> ".join(_display_path(item, repository_root) for item in cycle)
+            )
+            return
+
+        state[path] = "visiting"
+        stack.append(path)
+        try:
+            document = load_yaml_document(path)
+            documents[path] = document
+            for line_number, reference in action_references(document):
+                if not reference.startswith("./"):
+                    if FULL_SHA_ACTION.fullmatch(reference) is None:
+                        errors.append(
+                            "local: "
+                            f"{_display_path(path, repository_root)}:"
+                            f"{line_number} action is not pinned to a full "
+                            f"lowercase commit SHA: {reference}"
+                        )
+                    continue
+                try:
+                    target = _resolve_local_action_reference(
+                        repository_root,
+                        path,
+                        line_number,
+                        reference,
+                    )
+                except GovernanceError as exc:
+                    errors.append(f"local: {exc}")
+                    continue
+                visit(target)
+        except GovernanceError as exc:
+            errors.append(
+                "local: invalid workflow/action YAML "
+                f"{_display_path(path, repository_root)}: {exc}"
+            )
+        finally:
+            stack.pop()
+            state[path] = "done"
+
+    for path in sorted({*workflow_paths, *action_paths}):
+        visit(path)
+    return documents, errors
 
 
 def _string_list(value: Any, *, context: str) -> list[str]:
@@ -369,6 +535,53 @@ def validate_dependabot_grouping(path: Path, policy: JsonObject) -> list[str]:
     return errors
 
 
+def _required_check_bindings(main: JsonObject) -> list[tuple[str, int]]:
+    required_checks = main.get("required_checks")
+    if not isinstance(required_checks, list):
+        raise GovernanceError("policy.main.required_checks must be a list")
+    bindings: list[tuple[str, int]] = []
+    for index, check in enumerate(required_checks):
+        if not isinstance(check, dict) or set(check) != {
+            "context",
+            "integration_id",
+        }:
+            raise GovernanceError(
+                f"policy.main.required_checks[{index}] must contain exactly "
+                "context and integration_id"
+            )
+        context = check["context"]
+        integration_id = check["integration_id"]
+        if not isinstance(context, str) or not context:
+            raise GovernanceError(
+                f"policy.main.required_checks[{index}].context must be non-empty"
+            )
+        if (
+            not isinstance(integration_id, int)
+            or isinstance(integration_id, bool)
+            or integration_id <= 0
+        ):
+            raise GovernanceError(
+                f"policy.main.required_checks[{index}].integration_id "
+                "must be a positive integer"
+            )
+        bindings.append((context, integration_id))
+    duplicate_bindings = [
+        binding for binding, count in Counter(bindings).items() if count > 1
+    ]
+    duplicate_contexts = [
+        context
+        for context, count in Counter(context for context, _ in bindings).items()
+        if count > 1
+    ]
+    if duplicate_bindings or duplicate_contexts:
+        raise GovernanceError(
+            "policy.main.required_checks contains duplicate bindings or "
+            f"contexts: bindings={duplicate_bindings!r}, "
+            f"contexts={duplicate_contexts!r}"
+        )
+    return bindings
+
+
 def validate_local(root: Path, policy: JsonObject) -> list[str]:
     """Validate contracts represented in the repository itself."""
     errors: list[str] = []
@@ -376,21 +589,9 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     if not workflows:
         return ["local: no workflow files found"]
 
-    documents: dict[Path, YamlDocument] = {}
-    for path in workflows:
-        try:
-            document = load_yaml_document(path)
-            documents[path] = document
-            for line_number, reference in external_action_references(document):
-                if FULL_SHA_ACTION.fullmatch(reference) is None:
-                    relative = path.relative_to(root)
-                    errors.append(
-                        f"local: {relative}:{line_number} action is not pinned "
-                        f"to a full lowercase commit SHA: {reference}"
-                    )
-        except GovernanceError as exc:
-            relative = path.relative_to(root)
-            errors.append(f"local: invalid workflow {relative}: {exc}")
+    documents, reference_errors = validate_repository_yaml_references(root)
+    errors.extend(reference_errors)
+    workflow_paths = {path.resolve() for path in workflows}
 
     main = policy.get("main")
     if not isinstance(main, dict):
@@ -404,25 +605,36 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         )
     if main.get("bypass_actors") != []:
         errors.append("local: policy.main.bypass_actors must remain an empty list")
-    required_checks = main.get("required_checks")
-    if not isinstance(required_checks, list) or not all(
-        isinstance(value, str) for value in required_checks
+    rule_types = main.get("rule_types")
+    if (
+        not isinstance(rule_types, list)
+        or not rule_types
+        or not all(isinstance(rule_type, str) for rule_type in rule_types)
+        or len(rule_types) != len(set(rule_types))
     ):
-        errors.append("local: policy.main.required_checks must be a string list")
+        errors.append(
+            "local: policy.main.rule_types must be a non-empty unique string allowlist"
+        )
+    try:
+        required_bindings = _required_check_bindings(main)
+    except GovernanceError as exc:
+        errors.append(f"local: {exc}")
         return errors
 
     names: list[str] = []
     for path, document in documents.items():
+        if path not in workflow_paths:
+            continue
         try:
             names.extend(workflow_job_names(document))
         except GovernanceError as exc:
-            relative = path.relative_to(root)
+            relative = path.relative_to(root.resolve())
             errors.append(f"local: invalid workflow {relative}: {exc}")
-    for required in required_checks:
-        occurrences = names.count(required)
+    for context, _ in required_bindings:
+        occurrences = names.count(context)
         if occurrences != 1:
             errors.append(
-                f"local: required check {required!r} must be emitted by exactly "
+                f"local: required check {context!r} must be emitted by exactly "
                 f"one job, found {occurrences}"
             )
 
@@ -435,7 +647,7 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         if not (root / relative).is_file():
             errors.append(f"local: required governance file is missing: {relative}")
 
-    dependency_audit = root / ".github/workflows/dependency-audit.yml"
+    dependency_audit = (root / ".github/workflows/dependency-audit.yml").resolve()
     if dependency_audit in documents:
         try:
             events = workflow_events(documents[dependency_audit])
@@ -481,10 +693,11 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     return errors
 
 
-def _gh_api(repository: str, api_version: str, endpoint: str) -> Any:
+def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
     command = [
         "gh",
         "api",
+        "--include",
         "--method",
         "GET",
         "-H",
@@ -498,7 +711,25 @@ def _gh_api(repository: str, api_version: str, endpoint: str) -> Any:
             capture_output=True,
             text=True,
         )
-        return json.loads(result.stdout)
+        normalized = result.stdout.replace("\r\n", "\n")
+        if "\n\n" not in normalized:
+            raise GovernanceError(
+                f"GitHub API GET {endpoint!r} omitted response headers"
+            )
+        header_text, body = normalized.split("\n\n", 1)
+        headers: dict[str, str] = {}
+        for line in header_text.splitlines()[1:]:
+            if ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            key = name.strip().lower()
+            normalized_value = value.strip()
+            headers[key] = (
+                f"{headers[key]}, {normalized_value}"
+                if key in headers
+                else normalized_value
+            )
+        return ApiResponse(payload=json.loads(body), headers=headers)
     except FileNotFoundError as exc:
         raise GovernanceError("gh is required for --live verification") from exc
     except subprocess.CalledProcessError as exc:
@@ -508,6 +739,60 @@ def _gh_api(repository: str, api_version: str, endpoint: str) -> Any:
         raise GovernanceError(
             f"GitHub API GET {endpoint!r} returned invalid JSON"
         ) from exc
+
+
+def _api_response(value: Any) -> ApiResponse:
+    if isinstance(value, ApiResponse):
+        return value
+    return ApiResponse(payload=value, headers={})
+
+
+def _api_payload(api_get: ApiGet, endpoint: str) -> Any:
+    return _api_response(api_get(endpoint)).payload
+
+
+def _single_page_items(
+    api_get: ApiGet,
+    endpoint: str,
+    *,
+    collection_key: str | None = None,
+    require_total_count: bool = False,
+) -> list[Any]:
+    if "per_page=100" not in endpoint or "page=1" not in endpoint:
+        raise GovernanceError(
+            f"paginated GitHub endpoint lacks explicit first-page bounds: {endpoint}"
+        )
+    response = _api_response(api_get(endpoint))
+    link = response.headers.get("link", "").strip()
+    if link:
+        raise GovernanceError(
+            f"GitHub API {endpoint!r} requires pagination; expected one exact page"
+        )
+    payload = response.payload
+    if collection_key is None:
+        items = payload
+    else:
+        if not isinstance(payload, dict):
+            raise GovernanceError(f"GitHub API {endpoint!r} response must be an object")
+        items = payload.get(collection_key)
+    if not isinstance(items, list):
+        raise GovernanceError(f"GitHub API {endpoint!r} collection must be a list")
+    if len(items) > 100:
+        raise GovernanceError(
+            f"GitHub API {endpoint!r} returned more than per_page=100"
+        )
+    if require_total_count:
+        total_count = payload.get("total_count")
+        if (
+            not isinstance(total_count, int)
+            or isinstance(total_count, bool)
+            or total_count != len(items)
+        ):
+            raise GovernanceError(
+                f"GitHub API {endpoint!r} total_count is {total_count!r}, "
+                f"but page 1 contains {len(items)} items"
+            )
+    return items
 
 
 def _ref_pattern_matches(pattern: str, main_ref: str) -> bool:
@@ -610,13 +895,31 @@ def _verify_main_rulesets(
     if len(applicable) != 1:
         return errors
 
-    for rule_type in main["required_rules"]:
-        occurrences = len(_rules(applicable, rule_type))
-        if occurrences != 1:
-            errors.append(
-                f"external: active main ruleset must enforce exactly one "
-                f"{rule_type!r} rule, found {occurrences}"
-            )
+    rules = applicable[0].get("rules")
+    if not isinstance(rules, list) or any(
+        not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
+        for rule in rules
+    ):
+        raise GovernanceError("active main ruleset contains invalid rules")
+    actual_rule_types = [rule["type"] for rule in rules]
+    expected_rule_types = main["rule_types"]
+    missing_rule_types = sorted(
+        (Counter(expected_rule_types) - Counter(actual_rule_types)).elements()
+    )
+    extra_rule_types = sorted(
+        (Counter(actual_rule_types) - Counter(expected_rule_types)).elements()
+    )
+    duplicate_rule_types = sorted(
+        rule_type
+        for rule_type, count in Counter(actual_rule_types).items()
+        if count > 1
+    )
+    if missing_rule_types or extra_rule_types or duplicate_rule_types:
+        errors.append(
+            "external: main ruleset rule types differ exactly; "
+            f"missing={missing_rule_types!r}, extra={extra_rule_types!r}, "
+            f"duplicates={duplicate_rule_types!r}"
+        )
 
     pull_request_rules = _rules(applicable, "pull_request")
     expected_reviews = main["required_approving_review_count"]
@@ -645,7 +948,7 @@ def _verify_main_rulesets(
             )
 
     status_rules = _rules(applicable, "required_status_checks")
-    actual_checks: list[str] = []
+    actual_bindings: list[tuple[str, int]] = []
     strict_enabled = False
     for rule in status_rules:
         parameters = rule.get("parameters")
@@ -661,29 +964,47 @@ def _verify_main_rulesets(
         malformed = [
             check
             for check in checks
-            if not isinstance(check, dict) or not isinstance(check.get("context"), str)
+            if not isinstance(check, dict)
+            or not isinstance(check.get("context"), str)
+            or not check.get("context")
+            or not isinstance(check.get("integration_id"), int)
+            or isinstance(check.get("integration_id"), bool)
+            or check["integration_id"] <= 0
         ]
         if malformed:
             errors.append(
-                "external: required_status_checks contains malformed entries: "
+                "external: required_status_checks contains entries without a "
+                "valid context/integration_id binding: "
                 f"{malformed!r}"
             )
-            continue
-        actual_checks.extend(check["context"] for check in checks)
+        actual_bindings.extend(
+            (check["context"], check["integration_id"])
+            for check in checks
+            if check not in malformed
+        )
         strict_enabled = parameters.get("strict_required_status_checks_policy") is True
 
-    expected_checks = set(main["required_checks"])
-    actual_check_set = set(actual_checks)
-    missing_checks = sorted(expected_checks - actual_check_set)
-    extra_checks = sorted(actual_check_set - expected_checks)
-    duplicate_checks = sorted(
-        check for check in actual_check_set if actual_checks.count(check) > 1
+    expected_bindings = _required_check_bindings(main)
+    missing_bindings = sorted(
+        (Counter(expected_bindings) - Counter(actual_bindings)).elements()
     )
-    if missing_checks or extra_checks or duplicate_checks:
+    extra_bindings = sorted(
+        (Counter(actual_bindings) - Counter(expected_bindings)).elements()
+    )
+    duplicate_bindings = sorted(
+        binding for binding, count in Counter(actual_bindings).items() if count > 1
+    )
+    duplicate_contexts = sorted(
+        context
+        for context, count in Counter(context for context, _ in actual_bindings).items()
+        if count > 1
+    )
+    if missing_bindings or extra_bindings or duplicate_bindings or duplicate_contexts:
         errors.append(
-            "external: main required checks differ exactly; "
-            f"missing={missing_checks!r}, extra={extra_checks!r}, "
-            f"duplicates={duplicate_checks!r}"
+            "external: main required check bindings differ exactly; "
+            f"missing={missing_bindings!r}, extra={extra_bindings!r}, "
+            f"duplicates={duplicate_bindings!r}, "
+            f"duplicate_contexts={duplicate_contexts!r}"
         )
     if main["strict_status_checks"] and not strict_enabled:
         errors.append("external: strict required status checks are not enabled")
@@ -766,20 +1087,21 @@ def _normalize_environment_protection_rules(
 def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
     """Read GitHub settings and compare them with the checked-in policy."""
     errors: list[str] = []
-    summaries = api_get("rulesets?includes_parents=true")
-    if not isinstance(summaries, list):
-        raise GovernanceError("GitHub rulesets response must be a list")
+    summaries = _single_page_items(
+        api_get,
+        "rulesets?includes_parents=true&per_page=100&page=1",
+    )
     rulesets: list[JsonObject] = []
     for summary in summaries:
         if not isinstance(summary, dict) or not isinstance(summary.get("id"), int):
             raise GovernanceError("GitHub ruleset summary is missing an integer id")
-        detail = api_get(f"rulesets/{summary['id']}")
+        detail = _api_payload(api_get, f"rulesets/{summary['id']}")
         if not isinstance(detail, dict):
             raise GovernanceError("GitHub ruleset detail must be an object")
         rulesets.append(detail)
     errors.extend(_verify_main_rulesets(policy, rulesets))
 
-    actions = api_get("actions/permissions")
+    actions = _api_payload(api_get, "actions/permissions")
     if not isinstance(actions, dict):
         raise GovernanceError("GitHub Actions permissions response must be an object")
     for key, label in (
@@ -797,22 +1119,34 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
                 f"{actual_value!r}; expected {expected_value!r}"
             )
 
-    environments = api_get("environments?per_page=100")
-    if not isinstance(environments, dict) or not isinstance(
-        environments.get("environments"), list
+    environment_items = _single_page_items(
+        api_get,
+        "environments?per_page=100&page=1",
+        collection_key="environments",
+        require_total_count=True,
+    )
+    if any(
+        not isinstance(item, dict) or not isinstance(item.get("name"), str)
+        for item in environment_items
     ):
-        raise GovernanceError("GitHub environments response is invalid")
-    available = {
-        item["name"]
-        for item in environments["environments"]
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
-    }
+        raise GovernanceError("GitHub environments contain an invalid entry")
+    environment_names = [item["name"] for item in environment_items]
+    if len(environment_names) != len(set(environment_names)):
+        raise GovernanceError("GitHub environments contain duplicate names")
+    available = set(environment_names)
+    expected_names = set(policy["environments"])
+    missing_environments = sorted(expected_names - available)
+    extra_environments = sorted(available - expected_names)
+    if missing_environments or extra_environments:
+        errors.append(
+            "external: GitHub environments differ exactly; "
+            f"missing={missing_environments!r}, extra={extra_environments!r}"
+        )
     for name, expected in policy["environments"].items():
         if name not in available:
-            errors.append(f"external: required environment {name!r} does not exist")
             continue
         encoded_name = quote(name, safe="")
-        actual = api_get(f"environments/{encoded_name}")
+        actual = _api_payload(api_get, f"environments/{encoded_name}")
         if not isinstance(actual, dict):
             raise GovernanceError(f"GitHub environment {name!r} response is invalid")
         expected_admin_bypass = expected["can_admins_bypass"]
@@ -849,22 +1183,27 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
             continue
         if expected_deployment is None:
             continue
-        policies = api_get(
-            f"environments/{encoded_name}/deployment-branch-policies?per_page=100"
+        branch_policy_items = _single_page_items(
+            api_get,
+            f"environments/{encoded_name}/deployment-branch-policies"
+            "?per_page=100&page=1",
+            collection_key="branch_policies",
+            require_total_count=True,
         )
-        if not isinstance(policies, dict) or not isinstance(
-            policies.get("branch_policies"), list
+        if any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not isinstance(item.get("type"), str)
+            for item in branch_policy_items
         ):
             raise GovernanceError(
-                f"GitHub environment {name!r} branch policies response is invalid"
+                f"GitHub environment {name!r} branch policies contain an invalid entry"
             )
-        actual_policies = {
-            (item["name"], item["type"])
-            for item in policies["branch_policies"]
-            if isinstance(item, dict)
-            and isinstance(item.get("name"), str)
-            and isinstance(item.get("type"), str)
-        }
+        actual_policies = {(item["name"], item["type"]) for item in branch_policy_items}
+        if len(actual_policies) != len(branch_policy_items):
+            raise GovernanceError(
+                f"GitHub environment {name!r} branch policies contain duplicates"
+            )
         expected_policies = {
             (item["name"], item["type"]) for item in expected["branch_policies"]
         }

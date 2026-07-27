@@ -1,0 +1,28 @@
+{
+  "info": {
+    "name": "quickjs-rs",
+    "version": "0.2.5"
+  },
+  "releases": {
+    "0.2.4": [
+      {
+        "yanked": false
+      }
+    ],
+    "0.2.5": [
+      {
+        "yanked": false
+      }
+    ],
+    "0.3.0rc1": [
+      {
+        "yanked": false
+      }
+    ],
+    "1.0.0": [
+      {
+        "yanked": true
+      }
+    ]
+  }
+}

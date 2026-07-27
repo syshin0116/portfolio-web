@@ -206,6 +206,22 @@ REQUIRED_TARGETS = (
         source=_pypi_source("langgraph-sdk"),
         pin_sources=(PYTHON_MANIFEST, PYTHON_LOCK),
     ),
+    Target(
+        id="langchain-quickjs",
+        display_name="LangChain QuickJS",
+        package="langchain-quickjs",
+        pin_kind="python",
+        source=_pypi_source("langchain-quickjs"),
+        pin_sources=(PYTHON_MANIFEST, PYTHON_LOCK),
+    ),
+    Target(
+        id="quickjs-rs",
+        display_name="QuickJS Rust binding",
+        package="quickjs-rs",
+        pin_kind="python",
+        source=_pypi_source("quickjs-rs"),
+        pin_sources=(PYTHON_MANIFEST, PYTHON_LOCK),
+    ),
 )
 
 ASSISTANT_UI_GROUP = OptionalTargetGroup(
@@ -249,8 +265,6 @@ ASSISTANT_UI_GROUP = OptionalTargetGroup(
     ),
 )
 
-# Add a future capability such as QuickJS as another data-only group here. Its
-# packages remain outside the network allowlist until the capability lands.
 OPTIONAL_TARGET_GROUPS = (ASSISTANT_UI_GROUP,)
 ALL_TARGETS = REQUIRED_TARGETS + tuple(
     target for group in OPTIONAL_TARGET_GROUPS for target in group.targets

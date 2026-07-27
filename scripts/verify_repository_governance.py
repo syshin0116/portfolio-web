@@ -243,6 +243,9 @@ AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
 )
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 UPSTREAM_VERSION_AUDIT_SCRIPT = "scripts/upstream_version_audit.py"
+UPSTREAM_VERSION_AUDIT_SCRIPT_SHA256 = (
+    "4d3ce8ece65e08d7cdb5d0ae260634708eeac45e1daed676db520d423ac97c74"
+)
 EXPECTED_DEPENDENCY_AUDIT_JOB_AST_SHA256 = {
     "upstream": "69d71776cf99461e058269b3aec66b5730c661a820d6360b355f6031c13601f3",
     "check": "2d800e0c036d1864cdd81c1771d280d49612483ded70171ef0dca13786fbca8e",
@@ -349,6 +352,7 @@ EXPECTED_DEPENDABOT = {
                         "langgraph-*",
                         "langsmith",
                         "numpy",
+                        "quickjs-rs",
                     ],
                     "update_types": ["minor", "patch"],
                 }
@@ -2574,6 +2578,24 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
                     "local: dependency audit upstream script must be a regular "
                     f"repository file: {UPSTREAM_VERSION_AUDIT_SCRIPT}"
                 )
+            else:
+                try:
+                    upstream_script_sha256 = hashlib.sha256(
+                        upstream_script.read_bytes()
+                    ).hexdigest()
+                except OSError as exc:
+                    errors.append(
+                        "local: dependency audit upstream script cannot be read "
+                        f"safely: {exc}"
+                    )
+                else:
+                    if upstream_script_sha256 != UPSTREAM_VERSION_AUDIT_SCRIPT_SHA256:
+                        errors.append(
+                            "local: dependency audit upstream script must match "
+                            "the exact reviewed target/source contract; "
+                            f"expected_sha256={UPSTREAM_VERSION_AUDIT_SCRIPT_SHA256}, "
+                            f"actual_sha256={upstream_script_sha256}"
+                        )
             audit_commands = [
                 _scalar_value(
                     node,

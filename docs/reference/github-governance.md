@@ -340,7 +340,8 @@ default cooldown. Routine minor/patch updates are grouped for Bun, uv, and
 Actions; the npm bridge opens no version PRs. Security updates are not grouped
 or cooled, so one vulnerable package is not held behind unrelated upgrades.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
-LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
+the direct QuickJS Rust binding (`quickjs-rs`), LangGraph (`langgraph` and
+`langgraph-*`), LangSmith, assistant-ui,
 `@langchain/*`, Next.js, NextAuth, `@auth/*`, React/React DOM and their type
 packages, and NumPy remain isolated bump PRs. React updates require focused
 build/browser evidence, while NumPy is part of the persisted BM25 artifact
@@ -371,10 +372,11 @@ than making every unrelated PR permanently pending.
 
 The `dependency/upstream-versions` job invokes the dependency-free
 [`upstream_version_audit.py`](../../scripts/upstream_version_audit.py) with Python 3.12.
-Its job AST and the final aggregation job AST are hardcoded in the local governance
-verifier so removing the audit from `needs`, changing its source command, or masking its
-result is deliberate reviewed drift. The script reads exact manifest and lock pins but
-never changes them. It emits deterministic JSON and a GitHub step summary; exit `1`
+Its job AST, the final aggregation job AST, and the complete audit-script SHA-256 are
+hardcoded in the local governance verifier so removing a target, removing the audit from
+`needs`, changing its source command, or masking its result is deliberate reviewed drift.
+The script reads exact manifest and lock pins but never changes them. It emits
+deterministic JSON and a GitHub step summary; exit `1`
 means a newer stable release exists, while transport, redirect, response-size, schema,
 pin, and canonical-repository failures exit `2`. Both fail the scheduled/manual run.
 The full target, stable-release, triage, and extension contract is in the

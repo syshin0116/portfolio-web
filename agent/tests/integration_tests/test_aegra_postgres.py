@@ -33,7 +33,7 @@ from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.types import Command
+from langgraph.types import Command, StateSnapshot
 from pydantic import Field
 
 from agent.auth import (
@@ -1005,11 +1005,20 @@ Stop after one verdict.
             config=bob_config,
             user=bob,
         ) as restarted_bob_graph:
-            bob_state = await restarted_bob_graph.aget_state(bob_config)
+            bob_state = await restarted_bob_graph.aget_state(
+                bob_config,
+                subgraphs=True,
+            )
 
         assert alice_resumed["approval"] == "approved-after-restart"
         assert "approval" not in bob_state.values
-        assert bob_state.next == ("request_approval",)
+        assert bob_state.next == ("nested_subgraph",)
+        assert len(bob_state.tasks) == 1
+        nested_task = bob_state.tasks[0]
+        assert nested_task.name == "nested_subgraph"
+        assert isinstance(nested_task.state, StateSnapshot)
+        assert nested_task.state.next == ("request_approval",)
+        assert nested_task.interrupts == nested_task.state.interrupts
 
         restarted_memory_service = _service(
             memory_base_graph,

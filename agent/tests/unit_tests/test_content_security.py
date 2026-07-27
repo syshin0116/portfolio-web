@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,15 @@ from agent.retrieval.serving import (
     ServingRuntime,
     get_serving_runtime,
     reset_serving_runtime_cache,
+)
+
+_NONCANONICAL_TOOL_DATES = (
+    "20250102",
+    "2025-W01-1",
+    "2025-01-02T00:00:00",
+    " 2025-01-02",
+    "2025-01-02 ",
+    "２０２５-０１-０２",
 )
 
 
@@ -254,6 +264,44 @@ def test_graph_and_metadata_use_the_same_published_snapshot(
     assert "AI/graph.md" in graph
     assert "AI/docker.md" in filtered
     assert "AI/graph.md" not in filtered
+
+
+@pytest.mark.parametrize("value", _NONCANONICAL_TOOL_DATES)
+def test_date_helper_rejects_noncanonical_or_non_ascii_dates(value: str) -> None:
+    with pytest.raises(ValueError, match="date_from must be YYYY-MM-DD"):
+        tools._date(value, field="date_from")
+
+
+@pytest.mark.parametrize("value", _NONCANONICAL_TOOL_DATES)
+def test_metadata_filter_rejects_noncanonical_or_non_ascii_dates(
+    configured_runtime: ServingRuntime,
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match="date_from must be YYYY-MM-DD"):
+        tools.metadata_filter.invoke({"date_from": value})
+
+
+def test_date_helper_and_metadata_filter_enforce_calendar_and_leap_day_rules(
+    configured_runtime: ServingRuntime,
+) -> None:
+    assert tools._date(None, field="date_from") is None
+    assert tools._date("2025-01-02", field="date_from") == date(2025, 1, 2)
+    assert tools._date("2024-02-29", field="date_from") == date(2024, 2, 29)
+    with pytest.raises(ValueError, match="date_from must be YYYY-MM-DD"):
+        tools._date("2025-02-29", field="date_from")
+    with pytest.raises(ValueError, match="date_from must be YYYY-MM-DD"):
+        tools.metadata_filter.invoke({"date_from": "2025-02-29"})
+
+    exact_day = tools.metadata_filter.invoke(
+        {"date_from": "2025-01-02", "date_to": "2025-01-02"}
+    )
+    leap_day = tools.metadata_filter.invoke(
+        {"date_from": "2024-02-29", "date_to": "2024-02-29"}
+    )
+
+    assert "AI/docker.md" in exact_day
+    assert "AI/graph.md" not in exact_day
+    assert "No results found" in leap_day
 
 
 def test_catalog_preserves_yaml_dates_for_recent_post_order(

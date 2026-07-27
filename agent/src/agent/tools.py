@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from langchain_core.tools import tool
@@ -14,6 +15,7 @@ from agent.retrieval.serving import (
 )
 
 _MAX_RESULTS = 50
+_CANONICAL_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 def _limit(value: int, *, field: str) -> int:
@@ -27,7 +29,7 @@ def _limit(value: int, *, field: str) -> int:
 def _date(value: str | None, *, field: str) -> date | None:
     if value is None:
         return None
-    if not isinstance(value, str):
+    if not isinstance(value, str) or _CANONICAL_DATE.fullmatch(value) is None:
         raise ValueError(f"{field} must be YYYY-MM-DD")
     try:
         return date.fromisoformat(value)

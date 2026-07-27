@@ -71,7 +71,8 @@ upstream failure or merge-queue run.
 
 The `ci/agent` job also has an immutable-resolution contract. It runs exactly
 one executable `uv lock --check` before its exact
-`uv sync --frozen --all-extras --dev` install, and every project-bound
+`uv sync --frozen --package syshin0116-dev-agent --all-extras --dev` install,
+and every project-bound
 `uv run` places `--frozen` immediately after `uv run`. Without that flag,
 `uv run` may resolve a stale `pyproject.toml`/`uv.lock` pair after the frozen
 sync and silently replace the environment that CI was meant to verify. The
@@ -263,9 +264,9 @@ production or spend-bearing preview.
 ## Dependabot and scheduled audit
 
 Dependabot version 2 has exactly four update identities: Bun at `/web`, an npm
-security-only bridge at `/web`, uv at `/agent`, and GitHub Actions at `/`. The
+security-only bridge at `/web`, uv at `/`, and GitHub Actions at `/`. The
 native Bun and uv ecosystems are required so version updates change
-`web/bun.lock` and `agent/uv.lock` with their manifests instead of opening
+`web/bun.lock` and the root `uv.lock` with their manifests instead of opening
 predictably red manifest-only PRs. GitHub does not yet support Dependabot
 security updates for Bun, so the npm bridge sets
 `open-pull-requests-limit: 0`: npm version PRs are disabled while npm security
@@ -301,8 +302,9 @@ verifier confirms both the dedicated endpoint and the repository security
 summary, so disabling or pausing either feature is external policy drift.
 
 [`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs
-weekly and manually. It verifies both lockfiles, runs the web policy below,
-audits the exact exported Python resolution with pinned `pip-audit`, and reports
+weekly and manually. It verifies the web and root Python lockfiles, runs the web
+policy below, exports only the agent workspace member, audits that exact Python
+resolution with pinned `pip-audit`, and reports
 one stable `dependency/audit` result. It is an alerting workflow, not a required
 main check; a discovered vulnerability should create a focused fix PR rather
 than making every unrelated PR permanently pending.

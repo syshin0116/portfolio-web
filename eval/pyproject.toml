@@ -18,7 +18,7 @@ blogeval = "blogeval.cli:main"
 where = ["src"]
 
 [tool.uv.sources]
-syshin0116-dev-agent = { path = "../agent", editable = true }
+syshin0116-dev-agent = { workspace = true }
 
 [dependency-groups]
 dev = [

@@ -7,6 +7,12 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 
+[manifest]
+members = [
+    "syshin0116-dev-agent",
+    "syshin0116-dev-eval",
+]
+
 [[package]]
 name = "aegra-api"
 version = "0.9.24"
@@ -2179,7 +2185,7 @@ wheels = [
 [[package]]
 name = "syshin0116-dev-agent"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "agent" }
 dependencies = [
     { name = "aegra-api" },
     { name = "aegra-cli" },
@@ -2237,6 +2243,29 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+]
+
+[[package]]
+name = "syshin0116-dev-eval"
+version = "0.1.0"
+source = { editable = "eval" }
+dependencies = [
+    { name = "syshin0116-dev-agent" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "syshin0116-dev-agent", editable = "agent" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "ruff", specifier = ">=0.15.8" },
 ]
 
 [[package]]

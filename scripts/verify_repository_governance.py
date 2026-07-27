@@ -160,12 +160,22 @@ AGENT_CI_SERVICES = {
 }
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 AGENT_LOCK_COMMAND = ("uv", "lock", "--check")
-AGENT_SYNC_COMMAND = ("uv", "sync", "--frozen", "--all-extras", "--dev")
+AGENT_SYNC_COMMAND = (
+    "uv",
+    "sync",
+    "--frozen",
+    "--package",
+    "syshin0116-dev-agent",
+    "--all-extras",
+    "--dev",
+)
 AGENT_RUN_COMMANDS = (
     (
         "uv",
         "run",
         "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
         "ruff",
         "check",
         "src",
@@ -179,6 +189,8 @@ AGENT_RUN_COMMANDS = (
         "uv",
         "run",
         "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
         "ruff",
         "format",
         "--check",
@@ -193,12 +205,23 @@ AGENT_RUN_COMMANDS = (
         "uv",
         "run",
         "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
         "python",
         "../scripts/build_index.py",
         "--expect-document-count",
         "335",
     ),
-    ("uv", "run", "--frozen", "--all-extras", "pytest", "-q"),
+    (
+        "uv",
+        "run",
+        "--frozen",
+        "--package",
+        "syshin0116-dev-agent",
+        "--all-extras",
+        "pytest",
+        "-q",
+    ),
 )
 AGENT_RUN_STEP_INVENTORY = (
     (
@@ -216,7 +239,7 @@ AGENT_RUN_STEP_INVENTORY = (
         ),
     ),
     (
-        "Verify the agent lockfile is current",
+        "Verify the workspace lockfile is current",
         AGENT_CI_CHANGED_CONDITION,
         AGENT_LOCK_COMMAND,
     ),
@@ -275,11 +298,11 @@ EXPECTED_AGENT_CI_JOB = {
             "if": AGENT_CI_CHANGED_CONDITION,
             "with": {
                 "enable-cache": "true",
-                "cache-dependency-glob": "agent/uv.lock",
+                "cache-dependency-glob": "uv.lock",
             },
         },
         {
-            "name": "Verify the agent lockfile is current",
+            "name": "Verify the workspace lockfile is current",
             "if": AGENT_CI_CHANGED_CONDITION,
             "run": " ".join(AGENT_LOCK_COMMAND),
         },
@@ -321,7 +344,7 @@ EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
                 "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
             ),
             "enable-cache": "true",
-            "cache-dependency-glob": "agent/uv.lock",
+            "cache-dependency-glob": "uv.lock",
         },
     },
 ]
@@ -382,7 +405,7 @@ EXPECTED_DEPENDABOT = {
         },
         {
             "package_ecosystem": "uv",
-            "directory": "/agent",
+            "directory": "/",
             "schedule": {
                 "interval": "weekly",
                 "day": "monday",
@@ -398,7 +421,7 @@ EXPECTED_DEPENDABOT = {
             },
             "groups": [
                 {
-                    "name": "agent-routine",
+                    "name": "python-routine",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
                     "exclude_patterns": [

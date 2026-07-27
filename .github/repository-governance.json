@@ -213,7 +213,7 @@
       },
       {
         "package_ecosystem": "uv",
-        "directory": "/agent",
+        "directory": "/",
         "schedule": {
           "interval": "weekly",
           "day": "monday",
@@ -229,7 +229,7 @@
         },
         "groups": [
           {
-            "name": "agent-routine",
+            "name": "python-routine",
             "applies_to": "version-updates",
             "patterns": [
               "*"

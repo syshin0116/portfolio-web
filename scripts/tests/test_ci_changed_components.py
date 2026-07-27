@@ -99,7 +99,13 @@ class PathClassificationTests(unittest.TestCase):
                 )
 
     def test_root_runtime_and_scripts_run_agent_and_eval(self) -> None:
-        for path in ("aegra.json", "Dockerfile", "scripts/build_index.py"):
+        for path in (
+            "aegra.json",
+            "Dockerfile",
+            "pyproject.toml",
+            "uv.lock",
+            "scripts/build_index.py",
+        ):
             with self.subTest(path=path):
                 self.assertEqual(
                     {"web": False, "agent": True, "eval": True, "infra": False},

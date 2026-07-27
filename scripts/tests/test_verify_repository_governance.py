@@ -328,7 +328,7 @@ class LocalGovernanceTests(unittest.TestCase):
             "        if: needs.changes.outputs.agent == 'true'\n"
             "        with:\n"
             "          enable-cache: true\n"
-            "          cache-dependency-glob: agent/uv.lock\n"
+            "          cache-dependency-glob: uv.lock\n"
         )
         mutations = {
             "checkout-ref": (
@@ -442,7 +442,7 @@ runs:
             workflow = root / ".github/workflows/ci.yml"
             original = workflow.read_text(encoding="utf-8")
             old = (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
             )
             new = (
@@ -463,20 +463,24 @@ runs:
     def test_agent_ci_requires_lock_check_before_frozen_install(self) -> None:
         mutations = {
             "removed": (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
                 "        run: uv lock --check\n",
                 "",
             ),
             "after-install": (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
                 "        run: uv lock --check\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv sync --frozen --all-extras --dev\n",
+                "        run: >-\n"
+                "          uv sync --frozen --package syshin0116-dev-agent "
+                "--all-extras --dev\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv sync --frozen --all-extras --dev\n"
-                "      - name: Verify the agent lockfile is current\n"
+                "        run: >-\n"
+                "          uv sync --frozen --package syshin0116-dev-agent "
+                "--all-extras --dev\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n"
                 "        run: uv lock --check\n",
             ),
@@ -510,15 +514,15 @@ runs:
     def test_agent_ci_rejects_non_frozen_or_misplaced_uv_run_flag(self) -> None:
         mutations = {
             "missing": (
-                "uv run --frozen ruff check",
-                "uv run ruff check",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
+                "uv run --package syshin0116-dev-agent ruff check",
             ),
             "passed-to-child-command": (
-                "uv run --frozen ruff check",
-                "uv run ruff --frozen check",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
+                "uv run --package syshin0116-dev-agent ruff --frozen check",
             ),
             "quoted-shell": (
-                "uv run --frozen ruff check",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
                 'bash -c "uv run ruff check"',
             ),
         }
@@ -543,29 +547,38 @@ runs:
     def test_agent_ci_requires_exact_frozen_uv_run_inventory(self) -> None:
         mutations = {
             "variable-executable": (
-                "uv run --frozen --all-extras pytest -q",
-                "$UV run --frozen --all-extras pytest -q",
+                "uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q",
+                "$UV run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q",
             ),
             "command-variable-executable": (
-                "uv run --frozen --all-extras pytest -q",
-                'command "$UV" run --frozen --all-extras pytest -q',
+                "uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q",
+                'command "$UV" run --frozen --package syshin0116-dev-agent '
+                "--all-extras pytest -q",
             ),
             "deleted-pytest": (
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
                 "",
             ),
             "renamed-child-command": (
-                "uv run --frozen ruff check",
-                "uv run --frozen ruff lint",
+                "uv run --frozen --package syshin0116-dev-agent ruff check",
+                "uv run --frozen --package syshin0116-dev-agent ruff lint",
             ),
             "extra-run": (
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen python -V\n"
+                "        run: uv run --frozen "
+                "--package syshin0116-dev-agent python -V\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
             ),
         }
         for label, (old, new) in mutations.items():
@@ -590,11 +603,15 @@ runs:
         mutations = {
             "extra-indirect-run": (
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
                 "      - if: needs.changes.outputs.agent == 'true'\n"
                 "        run: 'U=uv; \"$U\" run --all-extras pytest -q'\n"
                 "      - if: needs.changes.outputs.agent == 'true'\n"
-                "        run: uv run --frozen --all-extras pytest -q\n",
+                "        run: >-\n"
+                "          uv run --frozen --package syshin0116-dev-agent "
+                "--all-extras pytest -q\n",
             ),
             "step-shell": (
                 "        run: uv lock --check\n",
@@ -647,13 +664,13 @@ runs:
     def test_agent_ci_rejects_non_frozen_install_and_disabled_lock_check(self) -> None:
         mutations = {
             "non-frozen-install": (
-                "uv sync --frozen --all-extras --dev",
-                "uv sync --all-extras --dev",
+                "uv sync --frozen --package syshin0116-dev-agent --all-extras --dev",
+                "uv sync --package syshin0116-dev-agent --all-extras --dev",
             ),
             "disabled-lock-check": (
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: needs.changes.outputs.agent == 'true'\n",
-                "      - name: Verify the agent lockfile is current\n"
+                "      - name: Verify the workspace lockfile is current\n"
                 "        if: 'false'\n",
             ),
         }
@@ -1541,7 +1558,7 @@ runs:
                     "numpy",
                 ]
             ),
-            groups["uv:/agent:agent-routine"]["exclude_patterns"],
+            groups["uv:/:python-routine"]["exclude_patterns"],
         )
 
     def test_dependabot_group_pattern_mutation_is_rejected(self) -> None:

@@ -49,12 +49,13 @@ jobs:
           version: "0.11.29"
           checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
           enable-cache: true
-          cache-dependency-glob: agent/uv.lock
+          cache-dependency-glob: uv.lock
       - name: Verify and export the committed agent lock
         run: |
           uv lock --project agent --check
           uv export \
             --project agent \
+            --package syshin0116-dev-agent \
             --frozen \
             --all-extras \
             --no-emit-project \

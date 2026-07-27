@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -172,11 +173,7 @@ def _budget_factory(policy: RunBudgetPolicy) -> RunBudget:
     return RunBudget(policy, clock=lambda: 0.0)
 
 
-def _run():
-    dataset = load_capability_taskset(
-        TASKSET_PATH,
-        content_tree_sha=CONTENT_TREE_SHA,
-    )
+def _run_dataset(dataset):
     return asyncio.run(
         run_capability_experiment(
             dataset=dataset,
@@ -186,6 +183,15 @@ def _run():
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
             budget_factory=_budget_factory,
+        )
+    )
+
+
+def _run():
+    return _run_dataset(
+        load_capability_taskset(
+            TASKSET_PATH,
+            content_tree_sha=CONTENT_TREE_SHA,
         )
     )
 
@@ -227,6 +233,107 @@ def test_capability_taskset_is_canonical_and_content_tree_bound() -> None:
         parse_capability_taskset(
             forged,
             checksum=json_checksum(canonical_json_bytes(forged)),
+        )
+
+
+@pytest.mark.parametrize(
+    "dataset_id",
+    [
+        "../../escaped-capability-result",
+        "nested/dataset",
+        "Upper-Kebab",
+        "underscored_id",
+        "a" * 129,
+    ],
+    ids=[
+        "traversal",
+        "nested-path",
+        "uppercase",
+        "underscore",
+        "oversized",
+    ],
+)
+def test_capability_taskset_rejects_unsafe_or_unbounded_dataset_ids(
+    dataset_id: str,
+) -> None:
+    dataset = load_capability_taskset(TASKSET_PATH)
+    value = dataset.as_dict()
+    value["dataset_id"] = dataset_id
+
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="bounded lower kebab-case",
+    ):
+        parse_capability_taskset(
+            value,
+            checksum=json_checksum(canonical_json_bytes(value)),
+        )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {"label_status": "owner-reviewed"},
+            "cannot claim reviewed",
+        ),
+        (
+            {"checksum": "sha256:" + "0" * 64},
+            "checksum differs from canonical",
+        ),
+        (
+            {"dataset_id": "../../escaped-capability-result"},
+            "bounded lower kebab-case",
+        ),
+    ],
+    ids=["forged-label", "forged-checksum", "traversal-id"],
+)
+def test_runner_reparses_directly_constructed_tasksets(
+    changes: dict[str, str],
+    message: str,
+) -> None:
+    dataset = load_capability_taskset(TASKSET_PATH)
+
+    with pytest.raises(CapabilityEvaluationError, match=message):
+        _run_dataset(replace(dataset, **changes))
+
+
+def test_run_parse_write_and_verify_reparse_directly_constructed_tasksets(
+    tmp_path: Path,
+) -> None:
+    run = _run()
+    forged_label = replace(run.dataset, label_status="owner-reviewed")
+    with pytest.raises(CapabilityEvaluationError, match="cannot claim reviewed"):
+        parse_capability_run(run.as_dict(), dataset=forged_label)
+
+    forged_path = replace(
+        run.dataset,
+        dataset_id="../../escaped-capability-result",
+    )
+    output_root = tmp_path / "output"
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="bounded lower kebab-case",
+    ):
+        write_capability_artifacts(
+            replace(run, dataset=forged_path),
+            output_root=output_root,
+        )
+    assert not output_root.exists()
+    assert not (tmp_path / "escaped-capability-result").exists()
+
+    artifacts = write_capability_artifacts(run, output_root=output_root)
+    forged_checksum = replace(
+        run.dataset,
+        checksum="sha256:" + "0" * 64,
+    )
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="checksum differs from canonical",
+    ):
+        verify_capability_run_directory(
+            artifacts.directory,
+            dataset=forged_checksum,
         )
 
 
@@ -275,6 +382,10 @@ def test_capability_artifacts_are_byte_stable_and_not_a_retrieval_leaderboard(
     assert first.run_json.read_bytes() == second.run_json.read_bytes()
     assert _tree_digest(first.directory) == _tree_digest(second.directory)
     assert first.directory.parts[-3] == "capabilities"
+    assert (
+        first.directory.parent.resolve().parent
+        == (tmp_path / "first" / "capabilities").resolve()
+    )
     assert not (first.directory / "leaderboard.md").exists()
     report = first.report_markdown.read_text(encoding="utf-8")
     assert "intentionally excluded from the retrieval leaderboard" in report
@@ -344,6 +455,62 @@ def test_capability_verifier_rejects_partial_result_directory(
     ],
 )
 def test_recorded_run_fails_closed_on_incomplete_or_forged_arm_data(
+    mutate,
+    message: str,
+) -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    mutate(value)
+
+    with pytest.raises(CapabilityEvaluationError, match=message):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["dataset"].__setitem__("task_count", True),
+            r"run\.dataset\.task_count must be a non-negative integer",
+        ),
+        (
+            lambda value: value["arms"][0]["arm"].__setitem__(
+                "quickjs_enabled",
+                0,
+            ),
+            "quickjs_enabled must be a boolean",
+        ),
+        (
+            lambda value: value["arms"][0]["metrics"].__setitem__(
+                "task_success_count",
+                True,
+            ),
+            "task_success_count must be a non-negative integer",
+        ),
+        (
+            lambda value: value["arms"][0]["tasks"][0].__setitem__(
+                "estimated_cost_usd_micros",
+                True,
+            ),
+            "estimated_cost_usd_micros must be a non-negative integer",
+        ),
+        (
+            lambda value: value["arms"][0]["tasks"][0].__setitem__(
+                "task_success",
+                1,
+            ),
+            "task_success must be a boolean",
+        ),
+    ],
+    ids=[
+        "dataset-bool-as-int",
+        "arm-int-as-bool",
+        "metrics-bool-as-int",
+        "cost-bool-as-int",
+        "score-int-as-bool",
+    ],
+)
+def test_recorded_run_rejects_boolean_integer_type_confusion(
     mutate,
     message: str,
 ) -> None:

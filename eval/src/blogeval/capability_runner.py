@@ -49,9 +49,11 @@ CAPABILITY_RUNNER_ID = "blogeval.capability_runner@1"
 CAPABILITY_MANIFEST_SCHEMA = "blogeval-capability-result-manifest-v1"
 CAPABILITY_RESULT_DIGEST_SCHEMA = "blogeval-capability-result-digest-v1"
 CAPABILITY_RESULT_FILES = ("capability-report.md", "run.json")
+_DATASET_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _TASK_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_MAX_DATASET_ID_BYTES = 128
 _MAX_PROMPT_BYTES = 16_000
 _RATE_SCALE = 1_000_000
 _FAILURE_CODES = frozenset(
@@ -410,6 +412,13 @@ def parse_capability_taskset(
     if raw["schema"] != CAPABILITY_TASKSET_SCHEMA:
         raise CapabilityEvaluationError("capability task-set schema is unsupported")
     dataset_id = _text(raw["dataset_id"], location="task-set.dataset_id")
+    if (
+        _DATASET_ID_RE.fullmatch(dataset_id) is None
+        or len(dataset_id.encode("utf-8")) > _MAX_DATASET_ID_BYTES
+    ):
+        raise CapabilityEvaluationError(
+            "task-set.dataset_id must be bounded lower kebab-case"
+        )
     content_tree_sha = _text(
         raw["content_tree_sha"],
         location="task-set.content_tree_sha",
@@ -493,9 +502,9 @@ def parse_capability_taskset(
         raise CapabilityEvaluationError(
             "capability tasks must be sorted by unique task_id"
         )
-    if _SHA256_RE.fullmatch(checksum) is None:
+    if not isinstance(checksum, str) or _SHA256_RE.fullmatch(checksum) is None:
         raise CapabilityEvaluationError("capability task-set checksum is malformed")
-    return CapabilityTaskSet(
+    taskset = CapabilityTaskSet(
         dataset_id=dataset_id,
         content_tree_sha=content_tree_sha,
         description=description,
@@ -503,6 +512,34 @@ def parse_capability_taskset(
         tasks=tuple(tasks),
         checksum=checksum,
     )
+    if json_checksum(canonical_json_bytes(taskset.as_dict())) != checksum:
+        raise CapabilityEvaluationError(
+            "capability task-set checksum differs from canonical task-set"
+        )
+    return taskset
+
+
+def _validated_taskset(
+    dataset: object,
+    *,
+    location: str,
+) -> CapabilityTaskSet:
+    """Reparse a task-set instance instead of trusting direct construction."""
+
+    if not isinstance(dataset, CapabilityTaskSet):
+        raise CapabilityEvaluationError(f"{location} must be a capability task-set")
+    try:
+        value = dataset.as_dict()
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise CapabilityEvaluationError(
+            f"{location} is not a canonical capability task-set"
+        ) from exc
+    parsed = parse_capability_taskset(value, checksum=dataset.checksum)
+    if parsed != dataset:
+        raise CapabilityEvaluationError(
+            f"{location} is not a canonical capability task-set"
+        )
+    return parsed
 
 
 def load_capability_taskset(
@@ -766,8 +803,7 @@ async def run_capability_experiment(
 ) -> CapabilityRun:
     """Run all four arms or fail without returning a partial experiment."""
 
-    if not isinstance(dataset, CapabilityTaskSet) or not dataset.tasks:
-        raise CapabilityEvaluationError("a parsed non-empty task-set is required")
+    dataset = _validated_taskset(dataset, location="experiment dataset")
     if not isinstance(executor_identity, CapabilityExecutorIdentity):
         raise CapabilityEvaluationError("executor identity is required")
     if not isinstance(budget_policy, RunBudgetPolicy):
@@ -971,6 +1007,70 @@ def _parse_budget(
     return snapshot
 
 
+def _parse_arm(value: object, *, location: str) -> CapabilityArm:
+    raw = _mapping(
+        value,
+        location=location,
+        keys=frozenset({"arm_id", "quickjs_enabled", "subagents_enabled"}),
+    )
+    return CapabilityArm(
+        arm_id=_text(raw["arm_id"], location=f"{location}.arm_id"),
+        quickjs_enabled=_boolean(
+            raw["quickjs_enabled"],
+            location=f"{location}.quickjs_enabled",
+        ),
+        subagents_enabled=_boolean(
+            raw["subagents_enabled"],
+            location=f"{location}.subagents_enabled",
+        ),
+    )
+
+
+def _parse_arm_metrics(value: object, *, location: str) -> CapabilityArmMetrics:
+    keys = frozenset(CapabilityArmMetrics.__dataclass_fields__)
+    raw = _mapping(value, location=location, keys=keys)
+    values = {
+        key: _integer(raw[key], location=f"{location}.{key}") for key in sorted(keys)
+    }
+    return CapabilityArmMetrics(**values)
+
+
+def _parse_dataset_identity(value: object) -> dict[str, object]:
+    location = "run.dataset"
+    raw = _mapping(
+        value,
+        location=location,
+        keys=frozenset(
+            {
+                "checksum",
+                "content_tree_sha",
+                "dataset_id",
+                "label_status",
+                "task_count",
+            }
+        ),
+    )
+    return {
+        "checksum": _text(raw["checksum"], location=f"{location}.checksum"),
+        "content_tree_sha": _text(
+            raw["content_tree_sha"],
+            location=f"{location}.content_tree_sha",
+        ),
+        "dataset_id": _text(
+            raw["dataset_id"],
+            location=f"{location}.dataset_id",
+        ),
+        "label_status": _text(
+            raw["label_status"],
+            location=f"{location}.label_status",
+        ),
+        "task_count": _integer(
+            raw["task_count"],
+            location=f"{location}.task_count",
+        ),
+    }
+
+
 def _parse_task_result(
     value: object,
     *,
@@ -1037,10 +1137,22 @@ def _parse_task_result(
         ),
         identity=identity,
     )
+    task_success = _boolean(
+        raw["task_success"],
+        location=f"{location}.task_success",
+    )
+    citation_correct = _boolean(
+        raw["citation_correct"],
+        location=f"{location}.citation_correct",
+    )
+    estimated_cost = _integer(
+        raw["estimated_cost_usd_micros"],
+        location=f"{location}.estimated_cost_usd_micros",
+    )
     if (
-        raw["task_success"] is not result.task_success
-        or raw["citation_correct"] is not result.citation_correct
-        or raw["estimated_cost_usd_micros"] != result.estimated_cost_usd_micros
+        task_success is not result.task_success
+        or citation_correct is not result.citation_correct
+        or estimated_cost != result.estimated_cost_usd_micros
     ):
         raise CapabilityEvaluationError(f"{location} derived scoring is inconsistent")
     return result
@@ -1053,6 +1165,7 @@ def parse_capability_run(
 ) -> CapabilityRun:
     """Parse and fully recompute a recorded four-arm capability run."""
 
+    dataset = _validated_taskset(dataset, location="run dataset")
     raw = _mapping(
         value,
         location="capability run",
@@ -1078,7 +1191,7 @@ def parse_capability_run(
         "label_status": dataset.label_status,
         "task_count": len(dataset.tasks),
     }
-    if raw["dataset"] != expected_dataset:
+    if _parse_dataset_identity(raw["dataset"]) != expected_dataset:
         raise CapabilityEvaluationError(
             "capability run dataset identity differs from the supplied task-set"
         )
@@ -1102,7 +1215,13 @@ def parse_capability_run(
             location=location,
             keys=frozenset({"arm", "metrics", "tasks"}),
         )
-        if arm_record["arm"] != expected_arm.as_dict():
+        if (
+            _parse_arm(
+                arm_record["arm"],
+                location=f"{location}.arm",
+            )
+            != expected_arm
+        ):
             raise CapabilityEvaluationError(
                 f"{location}.arm is missing, reordered, or duplicated"
             )
@@ -1125,7 +1244,13 @@ def parse_capability_run(
             )
         )
         metrics = _summarize_arm(expected_arm, tasks)
-        if arm_record["metrics"] != metrics.as_dict():
+        if (
+            _parse_arm_metrics(
+                arm_record["metrics"],
+                location=f"{location}.metrics",
+            )
+            != metrics
+        ):
             raise CapabilityEvaluationError(
                 f"{location}.metrics differs from recomputed task observations"
             )
@@ -1313,6 +1438,7 @@ def verify_capability_run_directory(
 ) -> VerifiedCapabilityRun:
     """Verify exact inventory, canonical run data, scores, and report bytes."""
 
+    dataset = _validated_taskset(dataset, location="verification dataset")
     expected_entries = tuple(sorted((*CAPABILITY_RESULT_FILES, "manifest.json")))
     if _inventory(directory) != expected_entries:
         raise CapabilityEvaluationError(
@@ -1456,7 +1582,10 @@ def write_capability_artifacts(
 ) -> CapabilityArtifacts:
     """Atomically publish one complete capability report outside leaderboards."""
 
-    run = parse_capability_run(run.as_dict(), dataset=run.dataset)
+    if not isinstance(run, CapabilityRun):
+        raise CapabilityEvaluationError("a complete capability run is required")
+    dataset = _validated_taskset(run.dataset, location="artifact dataset")
+    run = parse_capability_run(run.as_dict(), dataset=dataset)
     capability_root = output_root / "capabilities"
     dataset_directory = capability_root / run.dataset.dataset_id
     run_slug = run.run_id.removeprefix("sha256:")
@@ -1464,10 +1593,18 @@ def write_capability_artifacts(
     payloads, manifest_payload, result_digest = _artifact_payloads(run)
     if output_root.is_symlink() or capability_root.is_symlink():
         raise CapabilityEvaluationError("capability result roots must not be symlinks")
-    dataset_directory.mkdir(parents=True, exist_ok=True)
-    if dataset_directory.is_symlink():
+    resolved_capability_root = capability_root.resolve(strict=False)
+    resolved_dataset_directory = dataset_directory.resolve(strict=False)
+    if resolved_dataset_directory.parent != resolved_capability_root:
         raise CapabilityEvaluationError(
-            "capability dataset result directory must not be a symlink"
+            "capability dataset result directory must be an immediate child"
+        )
+    dataset_directory.mkdir(parents=True, exist_ok=True)
+    if dataset_directory.is_symlink() or dataset_directory.resolve(
+        strict=True
+    ).parent != capability_root.resolve(strict=True):
+        raise CapabilityEvaluationError(
+            "capability dataset result directory must be a real immediate child"
         )
     staged = Path(
         tempfile.mkdtemp(

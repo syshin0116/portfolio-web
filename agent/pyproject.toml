@@ -20,7 +20,7 @@ dependencies = [
     "langgraph-checkpoint-postgres==3.1.0",
     "psycopg[binary,pool]>=3.3.4",
     "python-dotenv",
-    "fastapi>=0.115",
+    "fastapi>=0.139.2",
     "uvicorn>=0.51.0",
     "sse-starlette>=3.4.6",
     "pyyaml>=6.0",
@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-arq = ["arq>=0.26", "redis>=5.0"]
+arq = ["arq>=0.28.0", "redis>=5.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

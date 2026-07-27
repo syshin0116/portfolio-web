@@ -222,9 +222,10 @@ part of the contract; renaming one requires updating branch protection in the sa
   auth, `max-instances=1`, and one application worker, posts the URL to the PR, and expires
   the service automatically.
 - GitHub authenticates to GCP through Workload Identity Federation; no long-lived service
-  account JSON key is stored. Build once, push an immutable Artifact Registry image tagged
-  with the git SHA, record its digest/SBOM, and deploy that digest—never rebuild between
-  preview, smoke, and promotion.
+  account JSON key is stored. Preview and production use isolated builders and Artifact
+  Registry repositories. Each delivery attempt pushes a fresh git-SHA/run/attempt tag,
+  records its digest/SBOM in that builder job, and deploys only that digest—never trust a
+  pre-existing tag or rebuild between migration, smoke, and promotion.
 - `deploy-agent.yml` runs only after required main-branch CI succeeds. Before P6 it deploys
   the owner-only service. After P6, the same workflow deploys the public revision but does
   not shift traffic until `smoke-production` passes.

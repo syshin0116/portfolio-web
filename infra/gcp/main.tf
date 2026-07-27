@@ -34,6 +34,12 @@ locals {
     production = "agent-migration-database-url"
   }
 
+  required_agent_secret_names = setunion(
+    local.production_secret_names,
+    local.preview_secret_names,
+    toset(values(local.migration_secret_names)),
+  )
+
   deployers = {
     preview = {
       account_id   = "agent-preview-deployer"
@@ -69,11 +75,74 @@ resource "google_artifact_registry_repository" "agent" {
   project       = var.project_id
   location      = var.region
   repository_id = "agent"
-  description   = "Immutable agent images"
+  description   = "Production agent images with bounded rollback retention"
   format        = "DOCKER"
 
   docker_config {
-    immutable_tags = true
+    # Each delivery writes a never-reused run/attempt tag and deploys the
+    # resolved digest. Tags must remain mutable so cleanup policies can remove
+    # expired tagged versions.
+    immutable_tags = false
+  }
+
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-after-90-days"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "ANY"
+      older_than = "7776000s"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-last-30"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 30
+    }
+  }
+
+  depends_on = [google_project_service.required]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_artifact_registry_repository" "preview_agent" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "agent-preview"
+  description   = "Preview agent images with short-lived retention"
+  format        = "DOCKER"
+
+  docker_config {
+    immutable_tags = false
+  }
+
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-after-14-days"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "ANY"
+      older_than = "1209600s"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-last-20"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 20
+    }
   }
 
   depends_on = [google_project_service.required]
@@ -118,7 +187,17 @@ resource "google_service_account" "deployer" {
 resource "google_service_account" "builder" {
   project      = var.project_id
   account_id   = "agent-image-builder"
-  display_name = "GitHub immutable agent image builder"
+  display_name = "GitHub production agent image builder"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_service_account" "preview_builder" {
+  project      = var.project_id
+  account_id   = "agent-preview-image-builder"
+  display_name = "GitHub preview agent image builder"
 
   lifecycle {
     prevent_destroy = true
@@ -235,6 +314,31 @@ check "runtime_environments_are_disjoint" {
   assert {
     condition     = length(setintersection(local.production_secret_names, local.preview_secret_names)) == 0
     error_message = "Preview and production Secret Manager resource names must be disjoint."
+  }
+}
+
+check "agent_delivery_stage_inputs" {
+  assert {
+    condition = var.agent_delivery_stage == "foundation" ? (
+      var.agent_bootstrap_image == null
+      && var.agent_preview_bootstrap_image == null
+      && var.agent_secret_versions == null
+      ) : (
+      var.agent_bootstrap_image != null
+      && var.agent_preview_bootstrap_image != null
+      && var.agent_secret_versions != null
+    )
+    error_message = "foundation requires null image/version inputs; jobs and services require immutable production/preview images plus the complete reviewed numeric version map."
+  }
+}
+
+check "agent_secret_version_inventory" {
+  assert {
+    condition = var.agent_delivery_stage == "foundation" ? true : (
+      var.agent_secret_versions != null
+      && toset(keys(var.agent_secret_versions)) == local.required_agent_secret_names
+    )
+    error_message = "jobs and services require exactly the twelve managed secret IDs, with no missing or extra version keys."
   }
 }
 

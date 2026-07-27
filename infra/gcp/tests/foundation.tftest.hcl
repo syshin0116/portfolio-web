@@ -1,134 +1,218 @@
 mock_provider "google" {}
 
+override_data {
+  target = data.google_project.current
+  values = {
+    number     = "72919926064"
+    project_id = "festive-ally-503605-v7"
+  }
+}
+
+override_resource {
+  target = google_artifact_registry_repository.agent
+}
+
+override_resource {
+  target = google_storage_bucket.terraform_state
+}
+
+override_resource {
+  target          = google_service_account.runtime
+  override_during = plan
+  values = {
+    email = "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_service_account.preview_runtime
+  override_during = plan
+  values = {
+    email = "agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_service_account.deployer["preview"]
+  override_during = plan
+  values = {
+    email = "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_service_account.deployer["production"]
+  override_during = plan
+  values = {
+    email = "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_service_account.builder
+  override_during = plan
+  values = {
+    email = "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_service_account.preview_builder
+  override_during = plan
+  values = {
+    email = "agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_service_account.migrator["preview"]
+  override_during = plan
+  values = {
+    email = "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_service_account.migrator["production"]
+  override_during = plan
+  values = {
+    email = "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
+    name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target = google_iam_workload_identity_pool.github
+}
+
+override_resource {
+  target = google_iam_workload_identity_pool_provider.preview
+}
+
+override_resource {
+  target = google_iam_workload_identity_pool_provider.production
+}
+
+override_resource {
+  target = google_secret_manager_secret.runtime["agent-auth-secret"]
+}
+
+override_resource {
+  target = google_secret_manager_secret.runtime["agent-database-url"]
+}
+
+override_resource {
+  target = google_secret_manager_secret.runtime["anthropic-api-key"]
+}
+
+override_resource {
+  target = google_secret_manager_secret.runtime["langsmith-api-key"]
+}
+
+override_resource {
+  target = google_secret_manager_secret.runtime["openai-api-key"]
+}
+
+override_resource {
+  target = google_secret_manager_secret.migration["preview"]
+}
+
+override_resource {
+  target = google_secret_manager_secret.migration["production"]
+}
+
 run "foundation_security_contract" {
   command = plan
 
   variables {
-    agent_bootstrap_image = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  }
-
-  override_data {
-    target = data.google_project.current
-    values = {
-      number     = "72919926064"
-      project_id = "festive-ally-503605-v7"
+    agent_delivery_stage          = "services"
+    agent_bootstrap_image         = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    agent_preview_bootstrap_image = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    agent_secret_versions = {
+      agent-auth-secret                    = "11"
+      agent-database-url                   = "12"
+      agent-migration-database-url         = "13"
+      agent-preview-anthropic-api-key      = "21"
+      agent-preview-auth-secret            = "22"
+      agent-preview-database-url           = "23"
+      agent-preview-langsmith-api-key      = "24"
+      agent-preview-migration-database-url = "25"
+      agent-preview-openai-api-key         = "26"
+      anthropic-api-key                    = "14"
+      langsmith-api-key                    = "15"
+      openai-api-key                       = "16"
     }
-  }
-
-  override_resource {
-    target = google_artifact_registry_repository.agent
-  }
-
-  override_resource {
-    target = google_storage_bucket.terraform_state
-  }
-
-  override_resource {
-    target          = google_service_account.runtime
-    override_during = plan
-    values = {
-      email = "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-      name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-    }
-  }
-
-  override_resource {
-    target          = google_service_account.preview_runtime
-    override_during = plan
-    values = {
-      email = "agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-      name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-    }
-  }
-
-  override_resource {
-    target          = google_service_account.deployer["preview"]
-    override_during = plan
-    values = {
-      email = "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
-      name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
-    }
-  }
-
-  override_resource {
-    target          = google_service_account.deployer["production"]
-    override_during = plan
-    values = {
-      email = "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
-      name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
-    }
-  }
-
-  override_resource {
-    target          = google_service_account.builder
-    override_during = plan
-    values = {
-      email = "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
-      name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
-    }
-  }
-
-  override_resource {
-    target          = google_service_account.migrator["preview"]
-    override_during = plan
-    values = {
-      email = "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
-      name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
-    }
-  }
-
-  override_resource {
-    target          = google_service_account.migrator["production"]
-    override_during = plan
-    values = {
-      email = "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
-      name  = "projects/festive-ally-503605-v7/serviceAccounts/agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
-    }
-  }
-
-  override_resource {
-    target = google_iam_workload_identity_pool.github
-  }
-
-  override_resource {
-    target = google_iam_workload_identity_pool_provider.preview
-  }
-
-  override_resource {
-    target = google_iam_workload_identity_pool_provider.production
-  }
-
-  override_resource {
-    target = google_secret_manager_secret.runtime["agent-auth-secret"]
-  }
-
-  override_resource {
-    target = google_secret_manager_secret.runtime["agent-database-url"]
-  }
-
-  override_resource {
-    target = google_secret_manager_secret.runtime["anthropic-api-key"]
-  }
-
-  override_resource {
-    target = google_secret_manager_secret.runtime["langsmith-api-key"]
-  }
-
-  override_resource {
-    target = google_secret_manager_secret.runtime["openai-api-key"]
-  }
-
-  override_resource {
-    target = google_secret_manager_secret.migration["preview"]
-  }
-
-  override_resource {
-    target = google_secret_manager_secret.migration["production"]
   }
 
   assert {
-    condition     = google_artifact_registry_repository.agent.docker_config[0].immutable_tags
-    error_message = "Artifact Registry tags must be immutable."
+    condition = (
+      !google_artifact_registry_repository.agent.docker_config[0].immutable_tags
+      && !google_artifact_registry_repository.preview_agent.docker_config[0].immutable_tags
+      && !google_artifact_registry_repository.agent.cleanup_policy_dry_run
+      && !google_artifact_registry_repository.preview_agent.cleanup_policy_dry_run
+    )
+    error_message = "Both registries must allow expired tagged versions to be deleted by active cleanup policies."
+  }
+
+  assert {
+    condition = (
+      length(google_artifact_registry_repository.agent.cleanup_policies) == 2
+      && one([
+        for policy in google_artifact_registry_repository.agent.cleanup_policies : policy
+        if policy.id == "delete-after-90-days"
+      ]).action == "DELETE"
+      && one([
+        for policy in google_artifact_registry_repository.agent.cleanup_policies : policy
+        if policy.id == "delete-after-90-days"
+      ]).condition[0].tag_state == "ANY"
+      && one([
+        for policy in google_artifact_registry_repository.agent.cleanup_policies : policy
+        if policy.id == "delete-after-90-days"
+      ]).condition[0].older_than == "7776000s"
+      && one([
+        for policy in google_artifact_registry_repository.agent.cleanup_policies : policy
+        if policy.id == "keep-last-30"
+      ]).action == "KEEP"
+      && one([
+        for policy in google_artifact_registry_repository.agent.cleanup_policies : policy
+        if policy.id == "keep-last-30"
+      ]).most_recent_versions[0].keep_count == 30
+    )
+    error_message = "Production images must retain at least 30 versions and 90 days of rollback history."
+  }
+
+  assert {
+    condition = (
+      length(google_artifact_registry_repository.preview_agent.cleanup_policies) == 2
+      && one([
+        for policy in google_artifact_registry_repository.preview_agent.cleanup_policies : policy
+        if policy.id == "delete-after-14-days"
+      ]).action == "DELETE"
+      && one([
+        for policy in google_artifact_registry_repository.preview_agent.cleanup_policies : policy
+        if policy.id == "delete-after-14-days"
+      ]).condition[0].tag_state == "ANY"
+      && one([
+        for policy in google_artifact_registry_repository.preview_agent.cleanup_policies : policy
+        if policy.id == "delete-after-14-days"
+      ]).condition[0].older_than == "1209600s"
+      && one([
+        for policy in google_artifact_registry_repository.preview_agent.cleanup_policies : policy
+        if policy.id == "keep-last-20"
+      ]).action == "KEEP"
+      && one([
+        for policy in google_artifact_registry_repository.preview_agent.cleanup_policies : policy
+        if policy.id == "keep-last-20"
+      ]).most_recent_versions[0].keep_count == 20
+    )
+    error_message = "Preview images must retain at least 20 versions and 14 days of history."
   }
 
   assert {
@@ -263,13 +347,20 @@ run "foundation_security_contract" {
     condition = (
       google_artifact_registry_repository_iam_member.builder_writer.role == "roles/artifactregistry.writer"
       && google_artifact_registry_repository_iam_member.builder_writer.member == "serviceAccount:agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
-      && length(google_artifact_registry_repository_iam_member.deployer_reader) == 2
-      && google_artifact_registry_repository_iam_member.deployer_reader["preview"].member == "serviceAccount:agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.builder_writer.repository == "agent"
+      && google_artifact_registry_repository_iam_member.preview_builder_writer.member == "serviceAccount:agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_builder_writer.repository == "agent-preview"
+      && length(google_artifact_registry_repository_iam_member.deployer_reader) == 1
       && google_artifact_registry_repository_iam_member.deployer_reader["production"].member == "serviceAccount:agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_deployer_reader.member == "serviceAccount:agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.role == "roles/artifactregistry.reader"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && length(google_service_account_iam_member.github_builder) == 1
+      && google_service_account_iam_member.github_builder["production"].member == local.github_environment_principals.production
+      && google_service_account_iam_member.github_preview_builder.member == local.github_environment_principals.preview
     )
-    error_message = "Only the builder writes images; deployers and the Cloud Run service agent have read-only access."
+    error_message = "Preview and production builders, repositories, readers, and WIF principals must remain disjoint."
   }
 
   assert {
@@ -277,7 +368,11 @@ run "foundation_security_contract" {
       for environment, service in google_cloud_run_v2_service.agent :
       service.template[0].scaling[0].max_instance_count == 1
       && service.template[0].max_instance_request_concurrency == 8
-      && service.template[0].containers[0].image == var.agent_bootstrap_image
+      && service.template[0].containers[0].image == (
+        environment == "preview"
+        ? var.agent_preview_bootstrap_image
+        : var.agent_bootstrap_image
+      )
       && service.template[0].containers[0].command == tolist(["uvicorn"])
       && service.template[0].containers[0].args == tolist([
         "aegra_api.main:app",
@@ -289,8 +384,20 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
+      && length([
+        for env in service.template[0].containers[0].env : env
+        if try(env.value_source[0].secret_key_ref[0].version, null) != null
+      ]) == 5
+      && alltrue([
+        for env in service.template[0].containers[0].env :
+        try(
+          env.value_source[0].secret_key_ref[0].version
+          == var.agent_secret_versions[env.value_source[0].secret_key_ref[0].secret],
+          true,
+        )
+      ])
     ])
-    error_message = "Both services must keep the immutable image, one-instance/one-worker runtime, and deletion protection."
+    error_message = "Both services must keep the immutable image, one-instance/one-worker runtime, deletion protection, and exact numeric secret pins."
   }
 
   assert {
@@ -299,20 +406,48 @@ run "foundation_security_contract" {
       && length(google_cloud_run_v2_job.grant_probe) == 2
       && alltrue([
         for environment, job in google_cloud_run_v2_job.migration :
-        job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
+        job.template[0].template[0].containers[0].image == (
+          environment == "preview"
+          ? var.agent_preview_bootstrap_image
+          : var.agent_bootstrap_image
+        )
         && job.template[0].template[0].containers[0].args == tolist(["-m", "agent.migrate"])
         && job.template[0].template[0].max_retries == 0
+        && length([
+          for env in job.template[0].template[0].containers[0].env : env
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ]) == 1
+        && alltrue([
+          for env in job.template[0].template[0].containers[0].env :
+          env.value_source[0].secret_key_ref[0].version
+          == var.agent_secret_versions[env.value_source[0].secret_key_ref[0].secret]
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ])
         && job.deletion_protection
       ])
       && alltrue([
         for environment, job in google_cloud_run_v2_job.grant_probe :
-        job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
+        job.template[0].template[0].containers[0].image == (
+          environment == "preview"
+          ? var.agent_preview_bootstrap_image
+          : var.agent_bootstrap_image
+        )
         && job.template[0].template[0].containers[0].args == tolist(["-m", "agent.neon_grant_probe"])
         && job.template[0].template[0].max_retries == 0
+        && length([
+          for env in job.template[0].template[0].containers[0].env : env
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ]) == 1
+        && alltrue([
+          for env in job.template[0].template[0].containers[0].env :
+          env.value_source[0].secret_key_ref[0].version
+          == var.agent_secret_versions[env.value_source[0].secret_key_ref[0].secret]
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ])
         && job.deletion_protection
       ])
     )
-    error_message = "Every environment must run same-image one-shot migration and grant-probe jobs."
+    error_message = "Every environment must run same-image one-shot jobs using exact numeric secret pins."
   }
 
   assert {
@@ -337,5 +472,133 @@ run "foundation_security_contract" {
   assert {
     condition     = google_storage_bucket.terraform_state.versioning[0].enabled && google_storage_bucket.terraform_state.soft_delete_policy[0].retention_duration_seconds >= 2592000
     error_message = "The Terraform state bucket must retain recoverable generations."
+  }
+}
+
+run "foundation_bootstrap_contract" {
+  command = plan
+
+  variables {
+    agent_delivery_stage          = "foundation"
+    agent_bootstrap_image         = null
+    agent_preview_bootstrap_image = null
+    agent_secret_versions         = null
+  }
+
+  assert {
+    condition = (
+      length(google_cloud_run_v2_service.agent) == 0
+      && length(google_cloud_run_v2_job.migration) == 0
+      && length(google_cloud_run_v2_job.grant_probe) == 0
+      && length(google_cloud_run_v2_service_iam_member.public_invoker) == 0
+      && length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 0
+      && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 0
+      && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 0
+    )
+    error_message = "The foundation stage must create no Cloud Run service, job, or resource-scoped delivery binding."
+  }
+
+  assert {
+    condition = (
+      length(google_secret_manager_secret.runtime) == 5
+      && length(google_secret_manager_secret.preview_runtime) == 5
+      && length(google_secret_manager_secret.migration) == 2
+      && google_artifact_registry_repository.agent.repository_id == "agent"
+      && google_artifact_registry_repository.preview_agent.repository_id == "agent-preview"
+    )
+    error_message = "The foundation stage must still create the registry and all empty secret resources needed before delivery."
+  }
+
+  assert {
+    condition = (
+      output.preview_cloud_run_service == null
+      && output.production_cloud_run_service == null
+      && output.preview_migration_job == null
+      && output.production_migration_job == null
+      && output.preview_grant_probe_job == null
+      && output.production_grant_probe_job == null
+    )
+    error_message = "Foundation-stage Cloud Run outputs must remain null."
+  }
+}
+
+run "jobs_bootstrap_contract" {
+  command = plan
+
+  variables {
+    agent_delivery_stage          = "jobs"
+    agent_bootstrap_image         = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    agent_preview_bootstrap_image = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    agent_secret_versions = {
+      agent-auth-secret                    = "11"
+      agent-database-url                   = "12"
+      agent-migration-database-url         = "13"
+      agent-preview-anthropic-api-key      = "21"
+      agent-preview-auth-secret            = "22"
+      agent-preview-database-url           = "23"
+      agent-preview-langsmith-api-key      = "24"
+      agent-preview-migration-database-url = "25"
+      agent-preview-openai-api-key         = "26"
+      anthropic-api-key                    = "14"
+      langsmith-api-key                    = "15"
+      openai-api-key                       = "16"
+    }
+  }
+
+  assert {
+    condition = (
+      length(google_cloud_run_v2_service.agent) == 0
+      && length(google_cloud_run_v2_service_iam_member.public_invoker) == 0
+      && length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 0
+      && length(google_cloud_run_v2_job.migration) == 2
+      && length(google_cloud_run_v2_job.grant_probe) == 2
+      && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 2
+      && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 2
+    )
+    error_message = "The jobs stage must create both environments' jobs and bindings without creating a serving surface."
+  }
+
+  assert {
+    condition = (
+      alltrue([
+        for environment, job in google_cloud_run_v2_job.migration :
+        job.template[0].template[0].containers[0].image == (
+          environment == "preview"
+          ? var.agent_preview_bootstrap_image
+          : var.agent_bootstrap_image
+        )
+        && alltrue([
+          for env in job.template[0].template[0].containers[0].env :
+          can(regex("^[1-9][0-9]*$", env.value_source[0].secret_key_ref[0].version))
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ])
+      ])
+      && alltrue([
+        for environment, job in google_cloud_run_v2_job.grant_probe :
+        job.template[0].template[0].containers[0].image == (
+          environment == "preview"
+          ? var.agent_preview_bootstrap_image
+          : var.agent_bootstrap_image
+        )
+        && alltrue([
+          for env in job.template[0].template[0].containers[0].env :
+          can(regex("^[1-9][0-9]*$", env.value_source[0].secret_key_ref[0].version))
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ])
+      ])
+    )
+    error_message = "The jobs stage must use the reviewed digest and positive numeric secret versions."
+  }
+
+  assert {
+    condition = (
+      output.preview_cloud_run_service == null
+      && output.production_cloud_run_service == null
+      && output.preview_migration_job == "agent-preview-migrate"
+      && output.production_migration_job == "agent-migrate"
+      && output.preview_grant_probe_job == "agent-preview-grants"
+      && output.production_grant_probe_job == "agent-grants"
+    )
+    error_message = "The jobs stage must expose only the four one-shot job names."
   }
 }

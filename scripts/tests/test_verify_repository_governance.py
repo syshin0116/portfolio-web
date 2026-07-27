@@ -243,6 +243,12 @@ def copy_local_governance_fixture(directory: str) -> Path:
         REPO_ROOT / governance.PUBLICATION_DOCKERIGNORE,
         publication_ignore,
     )
+    identity_validator = root / governance.AGENT_DELIVERY_IDENTITY_SCRIPT
+    identity_validator.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        REPO_ROOT / governance.AGENT_DELIVERY_IDENTITY_SCRIPT,
+        identity_validator,
+    )
     return root
 
 
@@ -368,6 +374,90 @@ class LocalGovernanceTests(unittest.TestCase):
                 ),
                 errors,
             )
+
+    def test_agent_delivery_rejects_identity_mapping_and_build_reuse_mutations(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "builder",
+                "${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}",
+                "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}",
+                "validate the exact provider, builder, and deployer",
+            ),
+            (
+                "deployer",
+                "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}",
+                "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
+                "validate the exact provider, builder, and deployer",
+            ),
+            (
+                "provider",
+                "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
+                "projects/72919926064/locations/global/"
+                "workloadIdentityPools/github/providers/github-production",
+                "validate the exact provider, builder, and deployer",
+            ),
+            (
+                "tag-reuse",
+                "docker buildx build \\\n",
+                'docker buildx imagetools inspect "$image_tag" \\\n',
+                "pre-existing tags are forbidden",
+            ),
+            (
+                "environment-gate",
+                "    environment: ${{ inputs.environment }}",
+                "    environment: Agent Preview",
+                "independent approvals",
+            ),
+            (
+                "deploy-order",
+                "    needs:\n      - build",
+                "    needs:\n      - rollback",
+                "separately approved build job",
+            ),
+        )
+        for label, old, new, expected in mutations:
+            with (
+                self.subTest(mutation=label),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = copy_local_governance_fixture(directory)
+                workflow = root / governance.AGENT_DELIVERY_WORKFLOW
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(expected in error for error in errors),
+                errors,
+            )
+
+    def test_agent_delivery_rejects_identity_validator_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            validator = root / governance.AGENT_DELIVERY_IDENTITY_SCRIPT
+            validator.write_text(
+                validator.read_text(encoding="utf-8").replace(
+                    "agent-preview-image-builder",
+                    "agent-image-builder",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "exact reviewed environment identity validator" in error
+                for error in errors
+            ),
+            errors,
+        )
 
     def assert_agent_ci_job_mutation_rejected(
         self,

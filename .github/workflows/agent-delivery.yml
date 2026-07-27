@@ -46,24 +46,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate immutable delivery inputs
+      - name: Validate exact environment identities
+        id: delivery_identity
         env:
           BUILDER_SERVICE_ACCOUNT: ${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}
           DELIVERY_ENVIRONMENT: ${{ inputs.environment }}
+          DEPLOYER_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
           WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
         shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$DELIVERY_ENVIRONMENT" == "Agent Preview" || "$DELIVERY_ENVIRONMENT" == "Agent Production" ]]
-          [[ "$BUILDER_SERVICE_ACCOUNT" == "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com" ]]
-          case "$DELIVERY_ENVIRONMENT" in
-            "Agent Preview")
-              [[ "$WORKLOAD_IDENTITY_PROVIDER" == "projects/72919926064/locations/global/workloadIdentityPools/github/providers/github-preview" ]]
-              ;;
-            "Agent Production")
-              [[ "$WORKLOAD_IDENTITY_PROVIDER" == "projects/72919926064/locations/global/workloadIdentityPools/github/providers/github-production" ]]
-              ;;
-          esac
+        run: scripts/validate_agent_delivery_identity.sh >>"$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -73,32 +64,32 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           version: "577.0.0"
-      - name: Build once and resolve the registry digest
+      - name: Build fresh and resolve the registry digest
         id: image
         env:
-          IMAGE_REPOSITORY: us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent
+          DELIVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DELIVERY_RUN_ID: ${{ github.run_id }}
+          IMAGE_REPOSITORY: ${{ steps.delivery_identity.outputs.image_repository }}
           SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DELIVERY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$DELIVERY_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
           gcloud auth configure-docker us-east4-docker.pkg.dev --quiet
-          image_tag="${IMAGE_REPOSITORY}:git-${SOURCE_SHA}"
-          if manifest_json="$(docker buildx imagetools inspect "$image_tag" --format '{{json .}}' 2>/dev/null)"; then
-            digest="$(jq -er '.manifest.digest' <<<"$manifest_json")"
-          else
-            metadata_file="$RUNNER_TEMP/agent-image-metadata.json"
-            docker buildx build \
-              --platform linux/amd64 \
-              --provenance=mode=max \
-              --sbom=true \
-              --build-arg "VCS_REF=${SOURCE_SHA}" \
-              --tag "$image_tag" \
-              --metadata-file "$metadata_file" \
-              --push \
-              .
-            digest="$(jq -er '."containerimage.digest"' "$metadata_file")"
-          fi
+          image_tag="${IMAGE_REPOSITORY}:git-${SOURCE_SHA}-run-${DELIVERY_RUN_ID}-attempt-${DELIVERY_RUN_ATTEMPT}"
+          metadata_file="$RUNNER_TEMP/agent-image-metadata.json"
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=mode=max \
+            --sbom=true \
+            --build-arg "VCS_REF=${SOURCE_SHA}" \
+            --tag "$image_tag" \
+            --metadata-file "$metadata_file" \
+            --push \
+            .
+          digest="$(jq -er '."containerimage.digest"' "$metadata_file")"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           image_digest="${IMAGE_REPOSITORY}@${digest}"
           docker buildx imagetools inspect "$image_digest" >/dev/null
@@ -122,6 +113,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Validate exact environment identities
+        env:
+          BUILDER_SERVICE_ACCOUNT: ${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}
+          DELIVERY_ENVIRONMENT: ${{ inputs.environment }}
+          DEPLOYER_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        shell: bash
+        run: scripts/validate_agent_delivery_identity.sh >/dev/null
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -137,6 +136,8 @@ jobs:
       - name: Execute fail-closed delivery
         env:
           CLOUD_RUN_SERVICE: ${{ inputs.service }}
+          DELIVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DELIVERY_RUN_ID: ${{ github.run_id }}
           GCP_PROJECT_ID: festive-ally-503605-v7
           GCP_REGION: us-east4
           GRANT_PROBE_JOB: ${{ inputs.grant_probe_job }}
@@ -162,6 +163,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Validate exact environment identities
+        env:
+          BUILDER_SERVICE_ACCOUNT: ${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}
+          DELIVERY_ENVIRONMENT: ${{ inputs.environment }}
+          DEPLOYER_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        shell: bash
+        run: scripts/validate_agent_delivery_identity.sh >/dev/null
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}

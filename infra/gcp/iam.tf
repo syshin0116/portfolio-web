@@ -79,11 +79,19 @@ resource "google_service_account_iam_member" "github_production" {
 }
 
 resource "google_service_account_iam_member" "github_builder" {
-  for_each = local.github_environment_principals
+  for_each = {
+    production = local.github_environment_principals.production
+  }
 
   service_account_id = google_service_account.builder.name
   role               = "roles/iam.workloadIdentityUser"
   member             = each.value
+}
+
+resource "google_service_account_iam_member" "github_preview_builder" {
+  service_account_id = google_service_account.preview_builder.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = local.github_environment_principals.preview
 }
 
 resource "google_artifact_registry_repository_iam_member" "builder_writer" {
@@ -94,8 +102,18 @@ resource "google_artifact_registry_repository_iam_member" "builder_writer" {
   member     = "serviceAccount:${google_service_account.builder.email}"
 }
 
+resource "google_artifact_registry_repository_iam_member" "preview_builder_writer" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.preview_agent.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.preview_builder.email}"
+}
+
 resource "google_artifact_registry_repository_iam_member" "deployer_reader" {
-  for_each = local.deployer_service_accounts
+  for_each = {
+    production = local.deployer_service_accounts.production
+  }
 
   project    = var.project_id
   location   = var.region
@@ -104,10 +122,28 @@ resource "google_artifact_registry_repository_iam_member" "deployer_reader" {
   member     = "serviceAccount:${each.value}"
 }
 
+resource "google_artifact_registry_repository_iam_member" "preview_deployer_reader" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.preview_agent.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${local.deployer_service_accounts.preview}"
+}
+
 resource "google_artifact_registry_repository_iam_member" "cloud_run_reader" {
   project    = var.project_id
   location   = var.region
   repository = google_artifact_registry_repository.agent.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = local.cloud_run_image_pull_principal
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_artifact_registry_repository_iam_member" "preview_cloud_run_reader" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.preview_agent.repository_id
   role       = "roles/artifactregistry.reader"
   member     = local.cloud_run_image_pull_principal
 

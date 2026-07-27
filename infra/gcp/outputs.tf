@@ -2,6 +2,10 @@ output "artifact_registry_repository" {
   value = google_artifact_registry_repository.agent.name
 }
 
+output "preview_artifact_registry_repository" {
+  value = google_artifact_registry_repository.preview_agent.name
+}
+
 output "runtime_service_account" {
   description = "Production runtime service account; retained for compatibility."
   value       = google_service_account.runtime.email
@@ -27,6 +31,10 @@ output "builder_service_account" {
   value = google_service_account.builder.email
 }
 
+output "preview_builder_service_account" {
+  value = google_service_account.preview_builder.email
+}
+
 output "preview_migrator_service_account" {
   value = google_service_account.migrator["preview"].email
 }
@@ -36,27 +44,27 @@ output "production_migrator_service_account" {
 }
 
 output "preview_cloud_run_service" {
-  value = google_cloud_run_v2_service.agent["preview"].name
+  value = try(google_cloud_run_v2_service.agent["preview"].name, null)
 }
 
 output "production_cloud_run_service" {
-  value = google_cloud_run_v2_service.agent["production"].name
+  value = try(google_cloud_run_v2_service.agent["production"].name, null)
 }
 
 output "preview_migration_job" {
-  value = google_cloud_run_v2_job.migration["preview"].name
+  value = try(google_cloud_run_v2_job.migration["preview"].name, null)
 }
 
 output "production_migration_job" {
-  value = google_cloud_run_v2_job.migration["production"].name
+  value = try(google_cloud_run_v2_job.migration["production"].name, null)
 }
 
 output "preview_grant_probe_job" {
-  value = google_cloud_run_v2_job.grant_probe["preview"].name
+  value = try(google_cloud_run_v2_job.grant_probe["preview"].name, null)
 }
 
 output "production_grant_probe_job" {
-  value = google_cloud_run_v2_job.grant_probe["production"].name
+  value = try(google_cloud_run_v2_job.grant_probe["production"].name, null)
 }
 
 output "preview_workload_identity_provider" {

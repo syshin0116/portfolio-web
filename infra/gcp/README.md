@@ -2,15 +2,18 @@
 
 This directory declares the keyless GCP foundation and the reviewed Cloud Run delivery
 topology for the syshin0116.dev native Aegra agent. Terraform still never owns a secret
-payload, secret version, Neon project, or Neon credential.
+payload, creates a secret version, or owns a Neon project/credential. It does own the
+reviewed positive numeric Secret Manager version ID selected by each Cloud Run template;
+mutable aliases such as `latest` are forbidden.
 
 ## Managed resources
 
 - required Google APIs;
 - one versioned, public-access-blocked GCS Terraform backend;
-- one regional Docker Artifact Registry repository with immutable tags;
-- distinct production/preview runtime, migrator, and deployer service accounts plus one
-  image-builder identity;
+- isolated regional Docker Artifact Registry repositories for production and preview,
+  with active 90-day/30-version and 14-day/20-version cleanup floors respectively;
+- distinct production/preview runtime, migrator, deployer, and image-builder service
+  accounts;
 - separate GitHub OIDC providers for exact `Agent Preview` and `Agent Production`
   caller/reusable workflow paths;
 - environment-specific act-as, service/job update, and secret-access bindings;
@@ -18,13 +21,19 @@ payload, secret version, Neon project, or Neon credential.
   migration URL resource per environment;
 - production and preview Cloud Run services fixed to one instance/one Uvicorn worker;
 - same-image migration and real-Neon runtime-grant jobs for each service;
-- repository writer only for the builder and readers only for the deployers plus the
-  Cloud Run service agent.
+- each repository writable only by its matching builder and readable only by its matching
+  deployer plus the Cloud Run service agent.
 
 The existing `agent-runtime` resource remains the production runtime. Deployers have no
 project-wide Cloud Run role, Artifact Registry write, or Secret Manager payload access.
 They receive repository-scoped Artifact Registry read and `roles/run.developer` only on
 the exact service and two jobs they operate.
+Repository tags are intentionally mutable because Artifact Registry cannot delete tagged
+versions when immutable tags are enabled. Delivery never trusts or reuses a pre-existing
+tag: each run attempt pushes a fresh run/attempt-scoped tag, resolves it in the same job,
+and passes only the digest. The live verifier requires active cleanup policies and exact
+retention floors; run the documented dry-run review before the first foundation apply
+that enables deletion.
 The services are publicly invokable at the Cloud Run layer so Vercel-hosted browsers can
 reach them; fail-closed Aegra bearer authentication protects APv2 operations.
 
@@ -37,13 +46,14 @@ members fail. Every sensitive, custom-role, group/domain/principal-set, and dire
 state-bucket binding must match an explicit reviewed JSON record by exact scope, role, and
 member. Custom roles additionally pin the digest of the full included-permission set, and
 conditional bindings pin their condition digest. The verifier also rejects extra direct
-members for the managed roles and direct project or ancestor roles on the seven
+members for the managed roles and direct project or ancestor roles on the eight
 user-managed workload identities. That rejection covers exact service-account members plus
 project, containing-folder, and containing-organization `ServiceAccount` principal sets;
 those encompassing sets cannot be allowlisted as reviewed. The complete repository policy
-must contain only the builder writer and the two deployer plus Cloud Run service-agent
-readers. An unreadable policy or role and any other failure require a separate reviewed
-IAM remediation; they are never ignored or overwritten blindly. Google Group membership
+must contain only its environment's builder writer, deployer reader, and Cloud Run
+service-agent reader. Production and preview builders cannot write across repositories.
+An unreadable policy or role and any other failure require a separate reviewed IAM
+remediation; they are never ignored or overwritten blindly. Google Group membership
 is not expanded by the policy API, so any reviewed `group:` binding also requires a
 separately reviewed directory-membership export.
 
@@ -86,13 +96,31 @@ From the repository root, routine operator commands are:
 ```sh
 scripts/verify_ops_foundation.sh --static
 terraform -chdir=infra/gcp init
-terraform -chdir=infra/gcp plan
+terraform -chdir=infra/gcp plan \
+  -var 'agent_delivery_stage=services' \
+  -var 'agent_bootstrap_image=REVIEWED_PRODUCTION_REGISTRY_DIGEST' \
+  -var 'agent_preview_bootstrap_image=REVIEWED_PREVIEW_REGISTRY_DIGEST' \
+  -var-file=/absolute/private/path/agent-secret-versions.tfvars
 ```
 
 Terraform is pinned to `1.13.5` in both configuration and `.terraform-version`. Every
 remote plan is mandatory review material. Do not apply until the operator has confirmed
 that the plan contains only the intended imports, additions, metadata changes, and IAM
 member removals; any resource replacement or persistent-resource destroy is a blocker.
+
+Initial setup is an explicit complete-root progression:
+
+1. `foundation` with null image/version inputs creates the registries, identities, WIF,
+   IAM, state bucket, and twelve empty secrets, but no Cloud Run resources;
+2. `jobs` with isolated production and preview digests plus the exact twelve-key numeric
+   version map creates only the two migration jobs and two grant-probe jobs plus resource
+   IAM;
+3. after all four jobs pass, `services` adds the two serving surfaces and service IAM.
+
+Never use `-target` to emulate a stage. After bootstrap, retain `services`, both current
+exact digests, and the complete external version file on every plan; omission proposes
+protected removal and fails closed. Payload injection and version creation remain
+out-of-band.
 
 Use an ephemeral access token or Application Default Credentials. Never pass a service
 account JSON key to Terraform. Do not run `apply` from CI.
@@ -119,7 +147,7 @@ variable, provider/data/backend block, and import target/live object ID. It reje
 unreviewed modules, `moved` and `removed` blocks, every provisioner, external
 provider/data, `terraform_remote_state`, and executable escape resources. The seven
 deeply nested Cloud Run resources are protected by a byte-exact hash of `cloud_run.tf`;
-the reviewed inventory totals 32 resources. The reviewed
+the reviewed inventory totals 38 resources. The reviewed
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
 Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
 uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or
@@ -129,9 +157,9 @@ or non-regular candidate.
 It permits `.terraform/` only as an ignored, untracked real directory, checks that
 boundary without traversing it, and never opens state, plan, secret, or rejected-extra
 contents. `--terraform-test` validates Terraform's JSON event stream and requires the
-exact single reviewed run and summary `1 passed, 0 failed, 0 errored, 0 skipped`; a green
-zero-test command is rejected. Formatting, fresh initialization, and validation remain
-separate gates.
+exact reviewed service, foundation-only, and jobs-only runs with summary
+`3 passed, 0 failed, 0 errored, 0 skipped`; a green zero-test command is rejected.
+Formatting, fresh initialization, and validation remain separate gates.
 
 Run `scripts/verify_ops_foundation.sh --static` before review and `--live` only after an
 explicitly approved apply. Live mode requires

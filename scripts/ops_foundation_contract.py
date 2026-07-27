@@ -31,7 +31,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "98f257881e80f4334af4d19c38aa53a2744c0d11d4c028e1ac1c7c66b95ea573"
+        "685fe53cbff9a6e9c0221c7580f1906f656de532e63cccd8ef2221e8f3d3820d"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -39,7 +39,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "3efc5605dc0064cfbb1b034b42eac0db70fb7a4aa927e7c4725f5d73598db955"
+        "d0b580b5b08ab01641a92430c087c37ccd6303b462c337a473c9d2190bc1513b"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
@@ -54,11 +54,15 @@ EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
     }
 )
 EXPECTED_TERRAFORM_TEST_ABSTRACT = {
-    "tests/foundation.tftest.hcl": ["foundation_security_contract"]
+    "tests/foundation.tftest.hcl": [
+        "foundation_security_contract",
+        "foundation_bootstrap_contract",
+        "jobs_bootstrap_contract",
+    ]
 }
 EXPECTED_TERRAFORM_TEST_SUMMARY = {
     "status": "pass",
-    "passed": 1,
+    "passed": 3,
     "failed": 0,
     "errored": 0,
     "skipped": 0,
@@ -328,24 +332,125 @@ EXPECTED_VARIABLES = {
             }
         ],
     },
-    "agent_bootstrap_image": {
+    "agent_delivery_stage": {
         "description": (
-            "Reviewed immutable agent image used only to create Cloud Run resources; "
-            "CD owns later digest changes."
+            "Explicit bootstrap stage: foundation creates prerequisites, jobs "
+            "creates migration/probe jobs, and services creates the serving surface."
         ),
         "type": "string",
+        "default": "foundation",
         "validation": [
             {
                 "condition": (
-                    '${can(regex("^us-east4-docker\\\\.pkg\\\\.dev/'
-                    "festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$\", "
+                    "${contains([foundation, jobs, services], "
+                    "var.agent_delivery_stage)}"
+                ),
+                "error_message": (
+                    "agent_delivery_stage must be exactly foundation, jobs, "
+                    "or services."
+                ),
+            },
+            {
+                "condition": (
+                    '${var.agent_delivery_stage == "foundation" ? '
+                    "(var.agent_bootstrap_image == null && "
+                    "var.agent_preview_bootstrap_image == null && "
+                    "var.agent_secret_versions == null) : "
+                    "(var.agent_bootstrap_image != null && "
+                    "var.agent_preview_bootstrap_image != null && "
+                    "var.agent_secret_versions != null)}"
+                ),
+                "error_message": (
+                    "foundation requires null image/version inputs; jobs and "
+                    "services require immutable production/preview images plus "
+                    "the complete reviewed numeric version map."
+                ),
+            },
+        ],
+    },
+    "agent_bootstrap_image": {
+        "description": (
+            "Reviewed immutable agent image for the jobs and services stages; null "
+            "during foundation bootstrap, after which CD owns digest changes."
+        ),
+        "type": "string",
+        "default": None,
+        "validation": [
+            {
+                "condition": (
+                    "${var.agent_bootstrap_image == None || "
+                    'can(regex("^us-east4-docker\\\\.pkg\\\\.dev/'
+                    'festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$", '
                     "var.agent_bootstrap_image))}"
                 ),
                 "error_message": (
-                    "agent_bootstrap_image must be the exact regional agent "
-                    "repository path at a lowercase sha256 digest."
+                    "When set, agent_bootstrap_image must be the exact regional "
+                    "agent repository path at a lowercase sha256 digest."
                 ),
             }
+        ],
+    },
+    "agent_preview_bootstrap_image": {
+        "description": (
+            "Reviewed immutable preview image in the isolated preview repository "
+            "for the jobs and services stages; null during foundation bootstrap."
+        ),
+        "type": "string",
+        "default": None,
+        "validation": [
+            {
+                "condition": (
+                    "${var.agent_preview_bootstrap_image == None || "
+                    'can(regex("^us-east4-docker\\\\.pkg\\\\.dev/'
+                    "festive-ally-503605-v7/agent-preview/agent@sha256:"
+                    '[0-9a-f]{64}$", var.agent_preview_bootstrap_image))}'
+                ),
+                "error_message": (
+                    "When set, agent_preview_bootstrap_image must be the exact "
+                    "preview repository path at a lowercase sha256 digest."
+                ),
+            }
+        ],
+    },
+    "agent_secret_versions": {
+        "description": (
+            "Reviewed Secret Manager numeric versions keyed by all twelve managed "
+            "secret IDs; null only during foundation bootstrap. Secret payloads "
+            "never enter Terraform."
+        ),
+        "type": "${map(string)}",
+        "default": None,
+        "validation": [
+            {
+                "condition": (
+                    "${var.agent_secret_versions == null ? True : "
+                    "alltrue([for version in values(var.agent_secret_versions) : "
+                    'can(regex("^[1-9][0-9]*$", version))])}'
+                ),
+                "error_message": (
+                    "Every agent_secret_versions value must be a positive numeric "
+                    "Secret Manager version; latest and aliases are forbidden."
+                ),
+            },
+            {
+                "condition": (
+                    "${var.agent_secret_versions == null ? True : "
+                    "toset(keys(var.agent_secret_versions)) == toset(["
+                    "agent-auth-secret, agent-database-url, "
+                    "agent-migration-database-url, "
+                    "agent-preview-anthropic-api-key, "
+                    "agent-preview-auth-secret, "
+                    "agent-preview-database-url, "
+                    "agent-preview-langsmith-api-key, "
+                    "agent-preview-migration-database-url, "
+                    "agent-preview-openai-api-key, anthropic-api-key, "
+                    "langsmith-api-key, openai-api-key])}"
+                ),
+                "error_message": (
+                    "agent_secret_versions must contain exactly the twelve "
+                    "managed secret IDs, with no missing or extra keys."
+                ),
+            },
         ],
     },
 }
@@ -368,9 +473,45 @@ EXPECTED_RESOURCE_CONFIGS = {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository_id": "agent",
-        "description": "Immutable agent images",
+        "description": "Production agent images with bounded rollback retention",
         "format": "DOCKER",
-        "docker_config": [{"immutable_tags": True}],
+        "docker_config": [{"immutable_tags": False}],
+        "cleanup_policy_dry_run": False,
+        "cleanup_policies": [
+            {
+                "id": "delete-after-90-days",
+                "action": "DELETE",
+                "condition": [{"tag_state": "ANY", "older_than": "7776000s"}],
+            },
+            {
+                "id": "keep-last-30",
+                "action": "KEEP",
+                "most_recent_versions": [{"keep_count": 30}],
+            },
+        ],
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_artifact_registry_repository", "preview_agent"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository_id": "agent-preview",
+        "description": "Preview agent images with short-lived retention",
+        "format": "DOCKER",
+        "docker_config": [{"immutable_tags": False}],
+        "cleanup_policy_dry_run": False,
+        "cleanup_policies": [
+            {
+                "id": "delete-after-14-days",
+                "action": "DELETE",
+                "condition": [{"tag_state": "ANY", "older_than": "1209600s"}],
+            },
+            {
+                "id": "keep-last-20",
+                "action": "KEEP",
+                "most_recent_versions": [{"keep_count": 20}],
+            },
+        ],
         "depends_on": ["${google_project_service.required}"],
         "lifecycle": [{"prevent_destroy": True}],
     },
@@ -396,7 +537,13 @@ EXPECTED_RESOURCE_CONFIGS = {
     ("google_service_account", "builder"): {
         "project": "${var.project_id}",
         "account_id": "agent-image-builder",
-        "display_name": "GitHub immutable agent image builder",
+        "display_name": "GitHub production agent image builder",
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_service_account", "preview_builder"): {
+        "project": "${var.project_id}",
+        "account_id": "agent-preview-image-builder",
+        "display_name": "GitHub preview agent image builder",
         "lifecycle": [{"prevent_destroy": True}],
     },
     ("google_service_account", "migrator"): {
@@ -509,10 +656,17 @@ EXPECTED_RESOURCE_CONFIGS = {
         "member": "${local.github_environment_principals.production}",
     },
     ("google_service_account_iam_member", "github_builder"): {
-        "for_each": "${local.github_environment_principals}",
+        "for_each": {
+            "production": "${local.github_environment_principals.production}",
+        },
         "service_account_id": "${google_service_account.builder.name}",
         "role": "roles/iam.workloadIdentityUser",
         "member": "${each.value}",
+    },
+    ("google_service_account_iam_member", "github_preview_builder"): {
+        "service_account_id": "${google_service_account.preview_builder.name}",
+        "role": "roles/iam.workloadIdentityUser",
+        "member": "${local.github_environment_principals.preview}",
     },
     ("google_artifact_registry_repository_iam_member", "builder_writer"): {
         "project": "${var.project_id}",
@@ -521,18 +675,48 @@ EXPECTED_RESOURCE_CONFIGS = {
         "role": "roles/artifactregistry.writer",
         "member": "serviceAccount:${google_service_account.builder.email}",
     },
+    ("google_artifact_registry_repository_iam_member", "preview_builder_writer"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository": (
+            "${google_artifact_registry_repository.preview_agent.repository_id}"
+        ),
+        "role": "roles/artifactregistry.writer",
+        "member": "serviceAccount:${google_service_account.preview_builder.email}",
+    },
     ("google_artifact_registry_repository_iam_member", "deployer_reader"): {
-        "for_each": "${local.deployer_service_accounts}",
+        "for_each": {
+            "production": "${local.deployer_service_accounts.production}",
+        },
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": "${google_artifact_registry_repository.agent.repository_id}",
         "role": "roles/artifactregistry.reader",
         "member": "serviceAccount:${each.value}",
     },
+    ("google_artifact_registry_repository_iam_member", "preview_deployer_reader"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository": (
+            "${google_artifact_registry_repository.preview_agent.repository_id}"
+        ),
+        "role": "roles/artifactregistry.reader",
+        "member": "serviceAccount:${local.deployer_service_accounts.preview}",
+    },
     ("google_artifact_registry_repository_iam_member", "cloud_run_reader"): {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "role": "roles/artifactregistry.reader",
+        "member": "${local.cloud_run_image_pull_principal}",
+        "depends_on": ["${google_project_service.required}"],
+    },
+    ("google_artifact_registry_repository_iam_member", "preview_cloud_run_reader"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository": (
+            "${google_artifact_registry_repository.preview_agent.repository_id}"
+        ),
         "role": "roles/artifactregistry.reader",
         "member": "${local.cloud_run_image_pull_principal}",
         "depends_on": ["${google_project_service.required}"],
@@ -576,6 +760,11 @@ EXPECTED_LOCALS_BY_FILE = {
                 "preview": "agent-preview-migration-database-url",
                 "production": "agent-migration-database-url",
             },
+            "required_agent_secret_names": (
+                "${setunion(local.production_secret_names, "
+                "local.preview_secret_names, "
+                "toset(values(local.migration_secret_names)))}"
+            ),
             "deployers": {
                 "preview": {
                     "account_id": "agent-preview-deployer",
@@ -661,11 +850,54 @@ EXPECTED_CHECK_BLOCKS = [
                 }
             ]
         }
-    }
+    },
+    {
+        "agent_delivery_stage_inputs": {
+            "assert": [
+                {
+                    "condition": (
+                        '${var.agent_delivery_stage == "foundation" ? '
+                        "(var.agent_bootstrap_image == null && "
+                        "var.agent_preview_bootstrap_image == null && "
+                        "var.agent_secret_versions == null) : "
+                        "(var.agent_bootstrap_image != null && "
+                        "var.agent_preview_bootstrap_image != null && "
+                        "var.agent_secret_versions != null)}"
+                    ),
+                    "error_message": (
+                        "foundation requires null image/version inputs; jobs and "
+                        "services require immutable production/preview images plus "
+                        "the complete reviewed numeric version map."
+                    ),
+                }
+            ]
+        }
+    },
+    {
+        "agent_secret_version_inventory": {
+            "assert": [
+                {
+                    "condition": (
+                        '${var.agent_delivery_stage == "foundation" ? True : '
+                        "(var.agent_secret_versions != null && "
+                        "toset(keys(var.agent_secret_versions)) == "
+                        "local.required_agent_secret_names)}"
+                    ),
+                    "error_message": (
+                        "jobs and services require exactly the twelve managed "
+                        "secret IDs, with no missing or extra version keys."
+                    ),
+                }
+            ]
+        }
+    },
 ]
 EXPECTED_OUTPUTS = {
     "artifact_registry_repository": {
         "value": "${google_artifact_registry_repository.agent.name}",
+    },
+    "preview_artifact_registry_repository": {
+        "value": "${google_artifact_registry_repository.preview_agent.name}",
     },
     "runtime_service_account": {
         "description": (
@@ -688,6 +920,9 @@ EXPECTED_OUTPUTS = {
     "builder_service_account": {
         "value": "${google_service_account.builder.email}",
     },
+    "preview_builder_service_account": {
+        "value": "${google_service_account.preview_builder.email}",
+    },
     "preview_migrator_service_account": {
         "value": '${google_service_account.migrator["preview"].email}',
     },
@@ -695,22 +930,22 @@ EXPECTED_OUTPUTS = {
         "value": '${google_service_account.migrator["production"].email}',
     },
     "preview_cloud_run_service": {
-        "value": '${google_cloud_run_v2_service.agent["preview"].name}',
+        "value": '${try(google_cloud_run_v2_service.agent["preview"].name, null)}',
     },
     "production_cloud_run_service": {
-        "value": '${google_cloud_run_v2_service.agent["production"].name}',
+        "value": '${try(google_cloud_run_v2_service.agent["production"].name, null)}',
     },
     "preview_migration_job": {
-        "value": '${google_cloud_run_v2_job.migration["preview"].name}',
+        "value": '${try(google_cloud_run_v2_job.migration["preview"].name, null)}',
     },
     "production_migration_job": {
-        "value": '${google_cloud_run_v2_job.migration["production"].name}',
+        "value": '${try(google_cloud_run_v2_job.migration["production"].name, null)}',
     },
     "preview_grant_probe_job": {
-        "value": '${google_cloud_run_v2_job.grant_probe["preview"].name}',
+        "value": '${try(google_cloud_run_v2_job.grant_probe["preview"].name, null)}',
     },
     "production_grant_probe_job": {
-        "value": '${google_cloud_run_v2_job.grant_probe["production"].name}',
+        "value": '${try(google_cloud_run_v2_job.grant_probe["production"].name, null)}',
     },
     "preview_workload_identity_provider": {
         "value": "${google_iam_workload_identity_pool_provider.preview.name}",
@@ -1258,7 +1493,7 @@ def validate_terraform_test_result(
     ]
     if abstracts != [EXPECTED_TERRAFORM_TEST_ABSTRACT]:
         _fail(
-            "Terraform test discovery must exactly equal one reviewed file/run; "
+            "Terraform test discovery must exactly equal the reviewed file/run inventory; "
             f"expected={EXPECTED_TERRAFORM_TEST_ABSTRACT}, got={abstracts}"
         )
 
@@ -1275,11 +1510,23 @@ def validate_terraform_test_result(
             "run": "foundation_security_contract",
             "progress": "complete",
             "status": "pass",
-        }
+        },
+        {
+            "path": "tests/foundation.tftest.hcl",
+            "run": "foundation_bootstrap_contract",
+            "progress": "complete",
+            "status": "pass",
+        },
+        {
+            "path": "tests/foundation.tftest.hcl",
+            "run": "jobs_bootstrap_contract",
+            "progress": "complete",
+            "status": "pass",
+        },
     ]
     if completed_runs != expected_runs:
         _fail(
-            "Terraform test completion inventory must exactly equal the reviewed run; "
+            "Terraform test completion inventory must exactly equal the reviewed runs; "
             f"expected={expected_runs}, got={completed_runs}"
         )
 
@@ -1290,7 +1537,7 @@ def validate_terraform_test_result(
     ]
     if summaries != [EXPECTED_TERRAFORM_TEST_SUMMARY]:
         _fail(
-            "Terraform test summary must report exactly 1 passed, 0 failed, "
+            "Terraform test summary must report exactly 3 passed, 0 failed, "
             f"0 errored, 0 skipped; got={summaries}"
         )
 

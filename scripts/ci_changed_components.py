@@ -39,9 +39,11 @@ OPS_FOUNDATION_PATHS = frozenset(
     {
         "scripts/deploy_cloud_run.sh",
         "scripts/ops_foundation_contract.py",
+        "scripts/tests/test_agent_delivery_identity.py",
         "scripts/tests/test_deploy_cloud_run.py",
         "scripts/tests/test_ops_foundation_contract.py",
         "scripts/tests/test_verify_ops_foundation.py",
+        "scripts/validate_agent_delivery_identity.sh",
         "scripts/verify_ops_foundation.sh",
     }
 )

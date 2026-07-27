@@ -13,6 +13,7 @@ on:
       - "scripts/build_index.py"
       - "scripts/deploy_cloud_run.sh"
       - "scripts/smoke.py"
+      - "scripts/validate_agent_delivery_identity.sh"
       - ".github/workflows/agent-delivery.yml"
       - ".github/workflows/deploy-agent.yml"
   workflow_dispatch:

@@ -97,7 +97,11 @@ def _terraform_test_records() -> list[dict[str, object]]:
         {
             "type": "test_abstract",
             "test_abstract": {
-                "tests/foundation.tftest.hcl": ["foundation_security_contract"]
+                "tests/foundation.tftest.hcl": [
+                    "foundation_security_contract",
+                    "foundation_bootstrap_contract",
+                    "jobs_bootstrap_contract",
+                ]
             },
         },
         {
@@ -110,10 +114,28 @@ def _terraform_test_records() -> list[dict[str, object]]:
             },
         },
         {
+            "type": "test_run",
+            "test_run": {
+                "path": "tests/foundation.tftest.hcl",
+                "run": "foundation_bootstrap_contract",
+                "progress": "complete",
+                "status": "pass",
+            },
+        },
+        {
+            "type": "test_run",
+            "test_run": {
+                "path": "tests/foundation.tftest.hcl",
+                "run": "jobs_bootstrap_contract",
+                "progress": "complete",
+                "status": "pass",
+            },
+        },
+        {
             "type": "test_summary",
             "test_summary": {
                 "status": "pass",
-                "passed": 1,
+                "passed": 3,
                 "failed": 0,
                 "errored": 0,
                 "skipped": 0,
@@ -123,13 +145,13 @@ def _terraform_test_records() -> list[dict[str, object]]:
 
 
 class TerraformTestResultContractTests(unittest.TestCase):
-    def test_exactly_one_reviewed_run_passes(self) -> None:
+    def test_exact_reviewed_run_inventory_passes(self) -> None:
         validate_terraform_test_result(_terraform_test_records())
 
     def test_zero_discovered_tests_fails_closed(self) -> None:
         records = _terraform_test_records()
         records[1]["test_abstract"] = {}
-        records.pop(2)
+        del records[2:5]
         records[2]["test_summary"] = {
             "status": "pass",
             "passed": 0,
@@ -140,7 +162,7 @@ class TerraformTestResultContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ContractError,
-            "discovery must exactly equal one reviewed file/run",
+            "discovery must exactly equal the reviewed file/run inventory",
         ):
             validate_terraform_test_result(records)
 

@@ -7,14 +7,31 @@ locals {
       runtime_service_account  = google_service_account.preview_runtime.email
       migrator_service_account = google_service_account.migrator["preview"].email
       deployer_service_account = google_service_account.deployer["preview"].email
+      bootstrap_image          = var.agent_preview_bootstrap_image
       migration_secret         = google_secret_manager_secret.migration["preview"].secret_id
+      migration_secret_version = try(var.agent_secret_versions["agent-preview-migration-database-url"], null)
       project_label            = "syshin0116-agent-preview"
       runtime_secrets = {
-        AGENT_AUTH_SECRET = google_secret_manager_secret.preview_runtime["agent-preview-auth-secret"].secret_id
-        ANTHROPIC_API_KEY = google_secret_manager_secret.preview_runtime["agent-preview-anthropic-api-key"].secret_id
-        DATABASE_URL      = google_secret_manager_secret.preview_runtime["agent-preview-database-url"].secret_id
-        LANGCHAIN_API_KEY = google_secret_manager_secret.preview_runtime["agent-preview-langsmith-api-key"].secret_id
-        OPENAI_API_KEY    = google_secret_manager_secret.preview_runtime["agent-preview-openai-api-key"].secret_id
+        AGENT_AUTH_SECRET = {
+          secret  = google_secret_manager_secret.preview_runtime["agent-preview-auth-secret"].secret_id
+          version = try(var.agent_secret_versions["agent-preview-auth-secret"], null)
+        }
+        ANTHROPIC_API_KEY = {
+          secret  = google_secret_manager_secret.preview_runtime["agent-preview-anthropic-api-key"].secret_id
+          version = try(var.agent_secret_versions["agent-preview-anthropic-api-key"], null)
+        }
+        DATABASE_URL = {
+          secret  = google_secret_manager_secret.preview_runtime["agent-preview-database-url"].secret_id
+          version = try(var.agent_secret_versions["agent-preview-database-url"], null)
+        }
+        LANGCHAIN_API_KEY = {
+          secret  = google_secret_manager_secret.preview_runtime["agent-preview-langsmith-api-key"].secret_id
+          version = try(var.agent_secret_versions["agent-preview-langsmith-api-key"], null)
+        }
+        OPENAI_API_KEY = {
+          secret  = google_secret_manager_secret.preview_runtime["agent-preview-openai-api-key"].secret_id
+          version = try(var.agent_secret_versions["agent-preview-openai-api-key"], null)
+        }
       }
     }
     production = {
@@ -24,14 +41,31 @@ locals {
       runtime_service_account  = google_service_account.runtime.email
       migrator_service_account = google_service_account.migrator["production"].email
       deployer_service_account = google_service_account.deployer["production"].email
+      bootstrap_image          = var.agent_bootstrap_image
       migration_secret         = google_secret_manager_secret.migration["production"].secret_id
+      migration_secret_version = try(var.agent_secret_versions["agent-migration-database-url"], null)
       project_label            = "syshin0116-agent-production"
       runtime_secrets = {
-        AGENT_AUTH_SECRET = google_secret_manager_secret.runtime["agent-auth-secret"].secret_id
-        ANTHROPIC_API_KEY = google_secret_manager_secret.runtime["anthropic-api-key"].secret_id
-        DATABASE_URL      = google_secret_manager_secret.runtime["agent-database-url"].secret_id
-        LANGCHAIN_API_KEY = google_secret_manager_secret.runtime["langsmith-api-key"].secret_id
-        OPENAI_API_KEY    = google_secret_manager_secret.runtime["openai-api-key"].secret_id
+        AGENT_AUTH_SECRET = {
+          secret  = google_secret_manager_secret.runtime["agent-auth-secret"].secret_id
+          version = try(var.agent_secret_versions["agent-auth-secret"], null)
+        }
+        ANTHROPIC_API_KEY = {
+          secret  = google_secret_manager_secret.runtime["anthropic-api-key"].secret_id
+          version = try(var.agent_secret_versions["anthropic-api-key"], null)
+        }
+        DATABASE_URL = {
+          secret  = google_secret_manager_secret.runtime["agent-database-url"].secret_id
+          version = try(var.agent_secret_versions["agent-database-url"], null)
+        }
+        LANGCHAIN_API_KEY = {
+          secret  = google_secret_manager_secret.runtime["langsmith-api-key"].secret_id
+          version = try(var.agent_secret_versions["langsmith-api-key"], null)
+        }
+        OPENAI_API_KEY = {
+          secret  = google_secret_manager_secret.runtime["openai-api-key"].secret_id
+          version = try(var.agent_secret_versions["openai-api-key"], null)
+        }
       }
     }
   }
@@ -52,7 +86,7 @@ locals {
 }
 
 resource "google_cloud_run_v2_service" "agent" {
-  for_each = local.cloud_run_environments
+  for_each = var.agent_delivery_stage == "services" ? local.cloud_run_environments : {}
 
   project             = var.project_id
   name                = each.value.service_name
@@ -73,7 +107,7 @@ resource "google_cloud_run_v2_service" "agent" {
 
     containers {
       name    = "agent"
-      image   = var.agent_bootstrap_image
+      image   = each.value.bootstrap_image
       command = ["uvicorn"]
       args = [
         "aegra_api.main:app",
@@ -113,8 +147,8 @@ resource "google_cloud_run_v2_service" "agent" {
           name = env.key
           value_source {
             secret_key_ref {
-              secret  = env.value
-              version = "latest"
+              secret  = env.value.secret
+              version = env.value.version
             }
           }
         }
@@ -153,6 +187,7 @@ resource "google_cloud_run_v2_service" "agent" {
 
   depends_on = [
     google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
     google_secret_manager_secret_iam_member.preview_runtime_accessor,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
@@ -167,7 +202,7 @@ resource "google_cloud_run_v2_service" "agent" {
 }
 
 resource "google_cloud_run_v2_job" "migration" {
-  for_each = local.cloud_run_environments
+  for_each = var.agent_delivery_stage == "foundation" ? {} : local.cloud_run_environments
 
   project             = var.project_id
   name                = each.value.migration_job_name
@@ -182,7 +217,7 @@ resource "google_cloud_run_v2_job" "migration" {
 
       containers {
         name    = "migration"
-        image   = var.agent_bootstrap_image
+        image   = each.value.bootstrap_image
         command = ["python"]
         args    = ["-m", "agent.migrate"]
 
@@ -208,7 +243,7 @@ resource "google_cloud_run_v2_job" "migration" {
           value_source {
             secret_key_ref {
               secret  = each.value.migration_secret
-              version = "latest"
+              version = each.value.migration_secret_version
             }
           }
         }
@@ -218,6 +253,7 @@ resource "google_cloud_run_v2_job" "migration" {
 
   depends_on = [
     google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
     google_secret_manager_secret_iam_member.migrator_accessor,
   ]
 
@@ -230,7 +266,7 @@ resource "google_cloud_run_v2_job" "migration" {
 }
 
 resource "google_cloud_run_v2_job" "grant_probe" {
-  for_each = local.cloud_run_environments
+  for_each = var.agent_delivery_stage == "foundation" ? {} : local.cloud_run_environments
 
   project             = var.project_id
   name                = each.value.grant_probe_job_name
@@ -245,7 +281,7 @@ resource "google_cloud_run_v2_job" "grant_probe" {
 
       containers {
         name    = "grant-probe"
-        image   = var.agent_bootstrap_image
+        image   = each.value.bootstrap_image
         command = ["python"]
         args    = ["-m", "agent.neon_grant_probe"]
 
@@ -270,8 +306,8 @@ resource "google_cloud_run_v2_job" "grant_probe" {
           name = "DATABASE_URL"
           value_source {
             secret_key_ref {
-              secret  = each.value.runtime_secrets.DATABASE_URL
-              version = "latest"
+              secret  = each.value.runtime_secrets.DATABASE_URL.secret
+              version = each.value.runtime_secrets.DATABASE_URL.version
             }
           }
         }
@@ -281,6 +317,7 @@ resource "google_cloud_run_v2_job" "grant_probe" {
 
   depends_on = [
     google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
     google_secret_manager_secret_iam_member.preview_runtime_accessor,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]

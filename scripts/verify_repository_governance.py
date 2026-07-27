@@ -199,6 +199,49 @@ AGENT_DELIVERY_PERMISSIONS = {
     "contents": "read",
     "id-token": "write",
 }
+AGENT_DELIVERY_AUTH_ACTION = (
+    "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093"
+)
+AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
+AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
+    "ddd15599a7b7363bf24221d2eb0874499868ba9775877f873b6b766ef8b34279"
+)
+AGENT_DELIVERY_IDENTITY_ENV = {
+    "BUILDER_SERVICE_ACCOUNT": "${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}",
+    "DELIVERY_ENVIRONMENT": "${{ inputs.environment }}",
+    "DEPLOYER_SERVICE_ACCOUNT": "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}",
+    "WORKLOAD_IDENTITY_PROVIDER": "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
+}
+AGENT_DELIVERY_ENVIRONMENT = "${{ inputs.environment }}"
+AGENT_DELIVERY_BUILD_ENV = {
+    "DELIVERY_RUN_ATTEMPT": "${{ github.run_attempt }}",
+    "DELIVERY_RUN_ID": "${{ github.run_id }}",
+    "IMAGE_REPOSITORY": ("${{ steps.delivery_identity.outputs.image_repository }}"),
+    "SOURCE_SHA": "${{ github.sha }}",
+}
+AGENT_DELIVERY_BUILD_SCRIPT = """\
+set -euo pipefail
+[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$DELIVERY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+[[ "$DELIVERY_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+gcloud auth configure-docker us-east4-docker.pkg.dev --quiet
+image_tag="${IMAGE_REPOSITORY}:git-${SOURCE_SHA}-run-${DELIVERY_RUN_ID}-attempt-${DELIVERY_RUN_ATTEMPT}"
+metadata_file="$RUNNER_TEMP/agent-image-metadata.json"
+docker buildx build \\
+  --platform linux/amd64 \\
+  --provenance=mode=max \\
+  --sbom=true \\
+  --build-arg "VCS_REF=${SOURCE_SHA}" \\
+  --tag "$image_tag" \\
+  --metadata-file "$metadata_file" \\
+  --push \\
+  .
+digest="$(jq -er '."containerimage.digest"' "$metadata_file")"
+[[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+image_digest="${IMAGE_REPOSITORY}@${digest}"
+docker buildx imagetools inspect "$image_digest" >/dev/null
+printf 'image_digest=%s\\n' "$image_digest" >>"$GITHUB_OUTPUT"
+"""
 AGENT_CI_SERVICES = {
     "postgres": {
         "image": (
@@ -1144,7 +1187,7 @@ def validate_agent_delivery_permission_chain(
     root: Path,
     documents: dict[Path, YamlDocument],
 ) -> list[str]:
-    """Require OIDC permission at both ends of every reusable-workflow call."""
+    """Require exact OIDC permissions, identities, and fresh-image provenance."""
     errors: list[str] = []
     repository_root = root.resolve()
 
@@ -1187,6 +1230,23 @@ def validate_agent_delivery_permission_chain(
             errors.append(f"{relative}:delivery permission contract: {exc}")
 
     reusable_path = (repository_root / AGENT_DELIVERY_WORKFLOW).resolve()
+    identity_script_path = repository_root / AGENT_DELIVERY_IDENTITY_SCRIPT
+    try:
+        identity_script_sha256 = hashlib.sha256(
+            identity_script_path.read_bytes()
+        ).hexdigest()
+    except OSError:
+        identity_script_sha256 = None
+    if (
+        not identity_script_path.is_file()
+        or identity_script_path.is_symlink()
+        or identity_script_sha256 != AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256
+    ):
+        errors.append(
+            f"{AGENT_DELIVERY_IDENTITY_SCRIPT} must be the exact reviewed "
+            "environment identity validator"
+        )
+
     reusable = documents.get(reusable_path)
     if reusable is None:
         errors.append(
@@ -1213,6 +1273,96 @@ def validate_agent_delivery_permission_chain(
                     f"{actual_permissions!r}; expected "
                     f"{AGENT_DELIVERY_PERMISSIONS!r}"
                 )
+            environment_node = _mapping_value(job, "environment")
+            actual_environment = (
+                _scalar_value(
+                    environment_node,
+                    context=f"{AGENT_DELIVERY_WORKFLOW}:{job_name} environment",
+                )
+                if environment_node is not None
+                else None
+            )
+            if actual_environment != AGENT_DELIVERY_ENVIRONMENT:
+                errors.append(
+                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} must remain a "
+                    "separate exact environment-gated job; production build "
+                    "and deploy intentionally require independent approvals"
+                )
+            if job_name == "deploy":
+                needs_node = _mapping_value(job, "needs")
+                actual_needs = (
+                    _node_to_data(needs_node) if needs_node is not None else None
+                )
+                if actual_needs != ["build"]:
+                    errors.append(
+                        f"{AGENT_DELIVERY_WORKFLOW}:deploy must wait only for "
+                        "the separately approved build job"
+                    )
+            steps_node = _mapping_value(job, "steps")
+            if not isinstance(steps_node, SequenceNode):
+                errors.append(
+                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} steps must be a list"
+                )
+                continue
+            steps = _node_to_data(steps_node)
+            expected_identity_step: JsonObject = {
+                "name": "Validate exact environment identities",
+                "env": AGENT_DELIVERY_IDENTITY_ENV,
+                "shell": "bash",
+                "run": (
+                    f'{AGENT_DELIVERY_IDENTITY_SCRIPT} >>"$GITHUB_OUTPUT"'
+                    if job_name == "build"
+                    else f"{AGENT_DELIVERY_IDENTITY_SCRIPT} >/dev/null"
+                ),
+            }
+            if job_name == "build":
+                expected_identity_step["id"] = "delivery_identity"
+            expected_auth_step = {
+                "uses": AGENT_DELIVERY_AUTH_ACTION,
+                "with": {
+                    "workload_identity_provider": (
+                        "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
+                    ),
+                    "service_account": (
+                        "${{ vars.GCP_BUILDER_SERVICE_ACCOUNT }}"
+                        if job_name == "build"
+                        else "${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}"
+                    ),
+                    "create_credentials_file": "true",
+                    "export_environment_variables": "true",
+                },
+            }
+            if (
+                not isinstance(steps, list)
+                or len(steps) < 3
+                or not _json_exact(steps[1], expected_identity_step)
+                or not _json_exact(steps[2], expected_auth_step)
+            ):
+                errors.append(
+                    f"{AGENT_DELIVERY_WORKFLOW}:{job_name} must validate the "
+                    "exact provider, builder, and deployer immediately before "
+                    "the reviewed OIDC auth step"
+                )
+
+            if job_name == "build":
+                image_steps = [
+                    step
+                    for step in steps
+                    if isinstance(step, dict) and step.get("id") == "image"
+                ]
+                expected_image_step = {
+                    "name": "Build fresh and resolve the registry digest",
+                    "id": "image",
+                    "env": AGENT_DELIVERY_BUILD_ENV,
+                    "shell": "bash",
+                    "run": AGENT_DELIVERY_BUILD_SCRIPT,
+                }
+                if image_steps != [expected_image_step]:
+                    errors.append(
+                        f"{AGENT_DELIVERY_WORKFLOW}:build must always build a "
+                        "new run/attempt-scoped tag and pass only its same-job "
+                        "immutable registry digest; pre-existing tags are forbidden"
+                    )
     except GovernanceError as exc:
         errors.append(f"{AGENT_DELIVERY_WORKFLOW} permission contract: {exc}")
     return errors

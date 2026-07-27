@@ -454,7 +454,7 @@ printf '%s\n' \
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "discovery must exactly equal one reviewed file/run",
+            "discovery must exactly equal the reviewed file/run inventory",
             result.stderr,
         )
 
@@ -524,8 +524,24 @@ printf '%s\n' \
             ),
             "artifact_registry": (
                 "infra/gcp/main.tf",
-                "    immutable_tags = true",
-                "    immutable_tags = false",
+                (
+                    '  description   = "Production agent images with bounded rollback retention"\n'
+                    '  format        = "DOCKER"\n\n'
+                    "  docker_config {\n"
+                    "    # Each delivery writes a never-reused run/attempt tag and deploys the\n"
+                    "    # resolved digest. Tags must remain mutable so cleanup policies can remove\n"
+                    "    # expired tagged versions.\n"
+                    "    immutable_tags = false"
+                ),
+                (
+                    '  description   = "Production agent images with bounded rollback retention"\n'
+                    '  format        = "DOCKER"\n\n'
+                    "  docker_config {\n"
+                    "    # Each delivery writes a never-reused run/attempt tag and deploys the\n"
+                    "    # resolved digest. Tags must remain mutable so cleanup policies can remove\n"
+                    "    # expired tagged versions.\n"
+                    "    immutable_tags = true"
+                ),
             ),
             "production_runtime": (
                 "infra/gcp/main.tf",
@@ -633,9 +649,11 @@ output "unreviewed_sensitive_value" {
             main_source = main_path.read_text(encoding="utf-8")
             main_path.write_text(
                 main_source.replace(
-                    "    immutable_tags = true", "    immutable_tags = false"
+                    "  cleanup_policy_dry_run = false",
+                    "  cleanup_policy_dry_run = true",
+                    1,
                 )
-                + "\n# immutable_tags = true\n",
+                + "\n# cleanup_policy_dry_run = false\n",
                 encoding="utf-8",
             )
             state_path = root / "infra/gcp/state.tf"
@@ -1231,6 +1249,80 @@ class LiveShellGuardTests(unittest.TestCase):
             text=True,
         )
 
+    @staticmethod
+    def _artifact_metadata() -> dict[str, object]:
+        return {
+            "name": (
+                "projects/festive-ally-503605-v7/locations/us-east4/repositories/agent"
+            ),
+            "dockerConfig": {"immutableTags": False},
+            "cleanupPolicyDryRun": False,
+            "cleanupPolicies": {
+                "delete-after-90-days": {
+                    "id": "delete-after-90-days",
+                    "action": "DELETE",
+                    "condition": {
+                        "tagState": "ANY",
+                        "olderThan": "7776000s",
+                    },
+                },
+                "keep-last-30": {
+                    "id": "keep-last-30",
+                    "action": "KEEP",
+                    "mostRecentVersions": {"keepCount": 30},
+                },
+            },
+        }
+
+    def _run_artifact_metadata(
+        self,
+        metadata: dict[str, object],
+    ) -> subprocess.CompletedProcess[str]:
+        payload = shlex.quote(json.dumps(metadata, separators=(",", ":")))
+        return self._run_helper(
+            f"printf '%s\\n' {payload} | "
+            "verify_artifact_repository_metadata "
+            "agent delete-after-90-days 7776000s keep-last-30 30"
+        )
+
+    def test_artifact_metadata_accepts_exact_active_retention(self) -> None:
+        result = self._run_artifact_metadata(self._artifact_metadata())
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_artifact_metadata_rejects_cleanup_and_mutability_drift(self) -> None:
+        mutations: dict[str, Callable[[dict[str, object]], None]] = {
+            "immutable_tags": lambda metadata: metadata["dockerConfig"].__setitem__(
+                "immutableTags", True
+            ),
+            "dry_run": lambda metadata: metadata.__setitem__(
+                "cleanupPolicyDryRun", True
+            ),
+            "delete_age": lambda metadata: metadata["cleanupPolicies"][
+                "delete-after-90-days"
+            ]["condition"].__setitem__("olderThan", "86400s"),
+            "delete_scope": lambda metadata: metadata["cleanupPolicies"][
+                "delete-after-90-days"
+            ]["condition"].__setitem__("tagPrefixes", ["temporary-"]),
+            "keep_count": lambda metadata: metadata["cleanupPolicies"]["keep-last-30"][
+                "mostRecentVersions"
+            ].__setitem__("keepCount", 3),
+            "extra_policy": lambda metadata: metadata["cleanupPolicies"].__setitem__(
+                "unreviewed", {"action": "KEEP"}
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                metadata = self._artifact_metadata()
+                mutate(metadata)
+                result = self._run_artifact_metadata(metadata)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "active cleanup retention policy drifted",
+                    result.stderr,
+                )
+
     def test_every_workload_account_is_forbidden_on_ancestor_policies(self) -> None:
         accounts = (
             "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
@@ -1238,6 +1330,7 @@ class LiveShellGuardTests(unittest.TestCase):
             "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
         )
@@ -1368,7 +1461,7 @@ class LiveShellGuardTests(unittest.TestCase):
             verifier,
         )
 
-    def test_project_key_scan_checks_accounts_outside_the_managed_seven(self) -> None:
+    def test_project_key_scan_checks_accounts_outside_the_managed_eight(self) -> None:
         legacy_account = "legacy@festive-ally-503605-v7.iam.gserviceaccount.com"
         inventory = json.dumps(
             [
@@ -1396,6 +1489,12 @@ class LiveShellGuardTests(unittest.TestCase):
                 {
                     "email": (
                         "agent-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-image-builder@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },
@@ -1496,6 +1595,12 @@ verify_project_has_no_user_managed_service_account_keys
                 {
                     "email": (
                         "agent-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-image-builder@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },

@@ -345,11 +345,13 @@ jobs:
         run: |
           uv run --no-project --with ruff==0.15.8 ruff check \
             scripts/ops_foundation_contract.py \
+            scripts/tests/test_agent_delivery_identity.py \
             scripts/tests/test_deploy_cloud_run.py \
             scripts/tests/test_ops_foundation_contract.py \
             scripts/tests/test_verify_ops_foundation.py
           uv run --no-project --with ruff==0.15.8 ruff format --check \
             scripts/ops_foundation_contract.py \
+            scripts/tests/test_agent_delivery_identity.py \
             scripts/tests/test_deploy_cloud_run.py \
             scripts/tests/test_ops_foundation_contract.py \
             scripts/tests/test_verify_ops_foundation.py
@@ -359,7 +361,10 @@ jobs:
       - name: Check the operations verifier
         if: needs.changes.outputs.infra == 'true'
         run: |
-          shellcheck scripts/deploy_cloud_run.sh scripts/verify_ops_foundation.sh
+          shellcheck \
+            scripts/deploy_cloud_run.sh \
+            scripts/validate_agent_delivery_identity.sh \
+            scripts/verify_ops_foundation.sh
           scripts/verify_ops_foundation.sh --static
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         if: needs.changes.outputs.infra == 'true'
@@ -375,7 +380,7 @@ jobs:
       - name: Validate Terraform configuration
         if: needs.changes.outputs.infra == 'true'
         run: scripts/verify_ops_foundation.sh --terraform-validate
-      - name: Test exactly one Terraform security contract run
+      - name: Test the exact Terraform stage contracts
         if: needs.changes.outputs.infra == 'true'
         run: scripts/verify_ops_foundation.sh --terraform-test
 

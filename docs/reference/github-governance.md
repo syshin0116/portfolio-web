@@ -241,7 +241,7 @@ Keep the Vercel and agent delivery environments explicit and disjoint:
 |---|---|
 | `Preview` | No branch restriction and no required reviewer, so every contributor branch can receive a routine preview |
 | `Production` | Selected branches and tags: branch `main` only; required reviewer `syshin0116`, with self-review allowed |
-| `Agent Preview` | No branch restriction and no required reviewer; same-repository pull requests only are enforced by the workflow and WIF condition |
+| `Agent Preview` | No branch restriction and no required reviewer; in-repository pull requests only are enforced by the workflow and WIF condition |
 | `Agent Production` | Selected branches and tags: branch `main` only; required reviewer `syshin0116`, with self-review allowed |
 
 The verifier compares these settings exactly, including branch policy,
@@ -255,6 +255,14 @@ owner gate and explicitly permit self-review so a solo owner cannot deadlock. Cr
 the two `Agent ...` environments and reconciling any existing `Preview` mismatch are
 external rollout items; the checked-in contract does not claim they have already been
 applied.
+
+The reusable agent workflow intentionally references `Agent Production` from two
+sequential jobs. GitHub protects each environment-referencing job independently, so a
+normal production delivery needs one approval for the isolated builder and a second
+approval for the deployer after the candidate digest exists. Manual rollback uses one
+environment-referencing job and needs one approval. This two-stage shape is part of the
+local governance contract because it keeps registry-writer and deployer credentials on
+different runners.
 
 Environment reviewers are independent of branch policy. A solo-owner approval
 is safe only when `prevent_self_review` is disabled. Keep routine previews free

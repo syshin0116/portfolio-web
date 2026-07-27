@@ -84,8 +84,27 @@ verify_service_contract() {
         "--workers",
         "1"
       ]
+      and (
+        [
+          (
+            .spec.template.spec.containers[0].env
+            // .template.containers[0].env
+            // []
+          )[]
+          | (
+              .valueFrom.secretKeyRef.key
+              // .valueSource.secretKeyRef.version
+              // empty
+            )
+        ] as $secret_versions
+        | ($secret_versions | length) == 5
+          and all(
+            $secret_versions[];
+            type == "string" and test("^[1-9][0-9]*$")
+          )
+      )
     ' >/dev/null <<<"$document" || {
-    printf 'Cloud Run service contract drifted from one instance/one worker.\n' >&2
+    printf 'Cloud Run service contract drifted from runtime or numeric secret pins.\n' >&2
     return 1
   }
 }
@@ -104,6 +123,125 @@ verify_revision_digest() {
       ) == $expected_image
     ' >/dev/null <<<"$document" || {
     printf 'Cloud Run revision does not run the selected immutable digest.\n' >&2
+    return 1
+  }
+}
+
+verify_revision_contract() {
+  local revision="$1"
+  local document
+  local expected_image_prefix
+  local expected_runtime_service_account
+  local expected_secret_names
+
+  case "$CLOUD_RUN_SERVICE" in
+    agent-preview)
+      expected_image_prefix="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
+      expected_runtime_service_account="agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+      expected_secret_names="$(
+        jq -cn '[
+          "agent-preview-anthropic-api-key",
+          "agent-preview-auth-secret",
+          "agent-preview-database-url",
+          "agent-preview-langsmith-api-key",
+          "agent-preview-openai-api-key"
+        ]'
+      )"
+      ;;
+    agent)
+      expected_image_prefix="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
+      expected_runtime_service_account="agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+      expected_secret_names="$(
+        jq -cn '[
+          "agent-auth-secret",
+          "agent-database-url",
+          "anthropic-api-key",
+          "langsmith-api-key",
+          "openai-api-key"
+        ]'
+      )"
+      ;;
+  esac
+
+  document="$(revision_json "$revision")"
+  jq -e \
+    --arg expected_image_prefix "$expected_image_prefix" \
+    --arg expected_revision "$revision" \
+    --arg expected_runtime_service_account "$expected_runtime_service_account" \
+    --arg expected_service "$CLOUD_RUN_SERVICE" \
+    --argjson expected_secret_names "$expected_secret_names" \
+    '
+      .metadata.name == $expected_revision
+      and (
+        .metadata.labels["serving.knative.dev/service"] == $expected_service
+        or (
+          (.service // "")
+          | endswith("/services/" + $expected_service)
+        )
+      )
+      and any(
+        .status.conditions[]?;
+        .type == "Ready"
+        and (.status == "True" or .state == "CONDITION_SUCCEEDED")
+      )
+      and (
+        .spec.serviceAccountName
+        // .spec.serviceAccount
+        // .serviceAccount
+      ) == $expected_runtime_service_account
+      and (
+        .metadata.annotations["autoscaling.knative.dev/maxScale"] == "1"
+        or .scaling.maxInstanceCount == 1
+      )
+      and (
+        .spec.containerConcurrency == 8
+        or .maxInstanceRequestConcurrency == 8
+      )
+      and .spec.containers[0].command == ["uvicorn"]
+      and .spec.containers[0].args == [
+        "aegra_api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "1"
+      ]
+      and (
+        .spec.containers[0].image as $image
+        | ($image | type) == "string"
+          and ($image | startswith($expected_image_prefix))
+          and (
+            $image
+            | ltrimstr($expected_image_prefix)
+            | test("^[0-9a-f]{64}$")
+          )
+      )
+      and (
+        [
+          .spec.containers[0].env[]?
+          | (
+              .valueFrom.secretKeyRef.name
+              // .valueSource.secretKeyRef.secret
+              // empty
+            ) as $secret
+          | (
+              .valueFrom.secretKeyRef.key
+              // .valueSource.secretKeyRef.version
+              // empty
+            ) as $version
+          | {secret: $secret, version: $version}
+        ] as $secrets
+        | ($secrets | length) == 5
+          and ([$secrets[].secret] | sort) == ($expected_secret_names | sort)
+          and all(
+            $secrets[].version;
+            type == "string" and test("^[1-9][0-9]*$")
+          )
+      )
+    ' >/dev/null <<<"$document" || {
+    printf 'Cloud Run revision %s is not a ready, environment-matched immutable runtime contract.\n' \
+      "$revision" >&2
     return 1
   }
 }
@@ -178,11 +316,23 @@ set_revision_traffic() {
 }
 
 remove_smoke_tag() {
-  gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
-    --project "$GCP_PROJECT_ID" \
-    --region "$GCP_REGION" \
-    --remove-tags smoke \
-    --quiet >/dev/null 2>&1 || true
+  local document
+  document="$(service_json)"
+
+  if jq -e 'any(.status.traffic[]?; .tag == "smoke")' \
+    >/dev/null <<<"$document"; then
+    gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+      --project "$GCP_PROJECT_ID" \
+      --region "$GCP_REGION" \
+      --remove-tags smoke \
+      --quiet
+  fi
+
+  service_json |
+    jq -e 'all(.status.traffic[]?; (.tag // "") != "smoke")' >/dev/null || {
+    printf 'Cloud Run smoke tag cleanup did not reach verified absence.\n' >&2
+    return 1
+  }
 }
 
 revision_belongs_to_service() {
@@ -227,15 +377,25 @@ validate_inputs() {
 }
 
 validate_deploy_inputs() {
-  for variable_name in GRANT_PROBE_JOB IMAGE_DIGEST MIGRATION_JOB SOURCE_SHA; do
+  for variable_name in \
+    DELIVERY_RUN_ATTEMPT \
+    DELIVERY_RUN_ID \
+    GRANT_PROBE_JOB \
+    IMAGE_DIGEST \
+    MIGRATION_JOB \
+    SOURCE_SHA; do
     require_value "$variable_name"
   done
-  [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-    printf 'SOURCE_SHA must be a full lowercase commit SHA.\n' >&2
+  [[ "$DELIVERY_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] || {
+    printf 'DELIVERY_RUN_ID must be a positive numeric GitHub run ID.\n' >&2
     exit 1
   }
-  [[ "$IMAGE_DIGEST" =~ ^us-east4-docker\.pkg\.dev/festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$ ]] || {
-    printf 'IMAGE_DIGEST is outside the reviewed immutable repository.\n' >&2
+  [[ "$DELIVERY_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]] || {
+    printf 'DELIVERY_RUN_ATTEMPT must be a positive numeric GitHub run attempt.\n' >&2
+    exit 1
+  }
+  [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+    printf 'SOURCE_SHA must be a full lowercase commit SHA.\n' >&2
     exit 1
   }
   [[ "$MIGRATION_JOB" =~ ^agent(-preview)?-migrate$ ]] || {
@@ -248,18 +408,26 @@ validate_deploy_inputs() {
   }
   case "$CLOUD_RUN_SERVICE" in
     agent-preview)
-      [[ "$MIGRATION_JOB" == "agent-preview-migrate" ]] &&
-        [[ "$GRANT_PROBE_JOB" == "agent-preview-grants" ]] || {
+      [[ "$IMAGE_DIGEST" =~ ^us-east4-docker\.pkg\.dev/festive-ally-503605-v7/agent-preview/agent@sha256:[0-9a-f]{64}$ ]] || {
+        printf 'preview image digest is outside the isolated preview repository\n' >&2
+        exit 1
+      }
+      if [[ "$MIGRATION_JOB" != "agent-preview-migrate" ]] ||
+        [[ "$GRANT_PROBE_JOB" != "agent-preview-grants" ]]; then
         printf 'preview service must use only preview one-shot jobs\n' >&2
         exit 1
-      }
+      fi
       ;;
     agent)
-      [[ "$MIGRATION_JOB" == "agent-migrate" ]] &&
-        [[ "$GRANT_PROBE_JOB" == "agent-grants" ]] || {
-        printf 'production service must use only production one-shot jobs\n' >&2
+      [[ "$IMAGE_DIGEST" =~ ^us-east4-docker\.pkg\.dev/festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$ ]] || {
+        printf 'production image digest is outside the production repository\n' >&2
         exit 1
       }
+      if [[ "$MIGRATION_JOB" != "agent-migrate" ]] ||
+        [[ "$GRANT_PROBE_JOB" != "agent-grants" ]]; then
+        printf 'production service must use only production one-shot jobs\n' >&2
+        exit 1
+      fi
       ;;
   esac
 }
@@ -277,15 +445,29 @@ deploy() {
     printf 'current ready revision is outside the selected service.\n' >&2
     return 1
   }
+  # A stale public smoke URL is removed before jobs or revision creation.
+  remove_smoke_tag
 
   rollback_on_error() {
     local status=$?
+    local cleanup_failed="false"
+    local restore_failed="false"
     trap - ERR
-    remove_smoke_tag
+    if ! remove_smoke_tag; then
+      cleanup_failed="true"
+    fi
     if [[ -n "$new_revision" || "$promoted" == "true" ]]; then
       printf 'Deployment failed; restoring traffic to %s.\n' \
         "$previous_revision" >&2
-      set_revision_traffic "$previous_revision" || true
+      if ! set_revision_traffic "$previous_revision"; then
+        restore_failed="true"
+      fi
+    fi
+    if [[ "$cleanup_failed" == "true" ]]; then
+      printf 'Deployment failed and the public smoke tag could not be removed.\n' >&2
+    fi
+    if [[ "$restore_failed" == "true" ]]; then
+      printf 'Deployment failed and previous revision traffic restoration also failed.\n' >&2
     fi
     exit "$status"
   }
@@ -299,18 +481,19 @@ deploy() {
     --project "$GCP_PROJECT_ID" \
     --region "$GCP_REGION" \
     --image "$IMAGE_DIGEST" \
-    --revision-suffix "g${SOURCE_SHA:0:10}" \
+    --revision-suffix "g${SOURCE_SHA:0:8}-r${DELIVERY_RUN_ID}-a${DELIVERY_RUN_ATTEMPT}" \
     --no-traffic \
     --quiet
 
   new_revision="$(
     service_json | jq -er '.status.latestCreatedRevisionName'
   )"
-  [[ "$new_revision" == "${CLOUD_RUN_SERVICE}-g${SOURCE_SHA:0:10}" ]] || {
+  [[ "$new_revision" == "${CLOUD_RUN_SERVICE}-g${SOURCE_SHA:0:8}-r${DELIVERY_RUN_ID}-a${DELIVERY_RUN_ATTEMPT}" ]] || {
     printf 'Cloud Run created an unexpected revision name.\n' >&2
     return 1
   }
   verify_revision_digest "$new_revision"
+  verify_revision_contract "$new_revision"
   verify_service_contract
 
   gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
@@ -332,6 +515,7 @@ deploy() {
   health_smoke "$(service_url)"
   protocol_smoke "$(service_url)"
   [[ "$(serving_revision)" == "$new_revision" ]]
+  remove_smoke_tag
 
   trap - ERR
   printf 'Cloud Run deployment passed: service=%s revision=%s\n' \
@@ -350,14 +534,29 @@ rollback() {
     exit 1
   }
   previous_revision="$(serving_revision)"
-  revision_json "$REQUESTED_ROLLBACK_REVISION" >/dev/null
+  verify_revision_contract "$REQUESTED_ROLLBACK_REVISION"
+  # Manual rollback never retains or creates a public smoke tag.
+  remove_smoke_tag
 
   rollback_on_error() {
     local status=$?
+    local cleanup_failed="false"
+    local restore_failed="false"
     trap - ERR
+    if ! remove_smoke_tag; then
+      cleanup_failed="true"
+    fi
     printf 'Rollback smoke failed; restoring traffic to %s.\n' \
       "$previous_revision" >&2
-    set_revision_traffic "$previous_revision" || true
+    if ! set_revision_traffic "$previous_revision"; then
+      restore_failed="true"
+    fi
+    if [[ "$cleanup_failed" == "true" ]]; then
+      printf 'Rollback failed and the public smoke tag could not be removed.\n' >&2
+    fi
+    if [[ "$restore_failed" == "true" ]]; then
+      printf 'Rollback failed and previous revision traffic restoration also failed.\n' >&2
+    fi
     exit "$status"
   }
   trap rollback_on_error ERR
@@ -365,6 +564,7 @@ rollback() {
   set_revision_traffic "$REQUESTED_ROLLBACK_REVISION"
   health_smoke "$(service_url)"
   protocol_smoke "$(service_url)"
+  remove_smoke_tag
   trap - ERR
   printf 'Cloud Run rollback passed: service=%s revision=%s\n' \
     "$CLOUD_RUN_SERVICE" "$REQUESTED_ROLLBACK_REVISION"

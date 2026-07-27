@@ -43,9 +43,9 @@ runtime. Those are the pre-hardening facts, not the accepted target.
 
 After this foundation is reviewed and applied, the target is:
 
-- immutable image tags;
-- distinct builder, preview/production runtime, preview/production migrator, and
-  preview/production deployer identities;
+- isolated `agent` and `agent-preview` repositories with never-reused delivery tags,
+  digest-only deployment, and bounded cleanup retention;
+- distinct preview/production builder, runtime, migrator, and deployer identities;
 - the managed direct act-as role on each runtime containing only its matching deployer,
   with known project- and resource-level bypasses rejected by the live verifier;
 - no project-wide Cloud Run role and no image-writer role on either deployer;
@@ -62,13 +62,13 @@ After this foundation is reviewed and applied, the target is:
 - evaluation publication isolated in a separate `Evaluation Publication` environment
   that is not accepted by either GCP workload-identity provider and carries no GCP or
   deployment secrets;
-- an Artifact Registry writer binding only for the builder and reader bindings only for
-  the deployers plus the Google-managed Cloud Run service agent;
+- each Artifact Registry repository writable only by its matching builder and readable
+  only by its matching deployer plus the Google-managed Cloud Run service agent;
 - resource-scoped Cloud Run developer access only for the matching deployer;
 - no user-managed service-account keys.
 
 The live verifier reads direct policies at the project, every reported folder and
-organization ancestor, the Artifact Registry repository, the state bucket, service
+organization ancestor, both Artifact Registry repositories, the state bucket, service
 accounts, and each managed secret. It resolves every role, including project and
 organization custom roles, before classifying impersonation, secret read or mutation,
 Artifact Registry read or write, state-object access, and IAM-policy escalation. Sensitive
@@ -77,20 +77,20 @@ operator-supplied JSON records by exact `scope` + `role` + `member`. Custom role
 the SHA-256 of their complete included-permission inventory; conditional bindings pin the
 condition digest. Group, domain, and unrelated principal-set members therefore fail unless
 that exact binding was reviewed; public members always fail. A project, containing folder,
-or containing organization `ServiceAccount` principal set includes the seven workload
+or containing organization `ServiceAccount` principal set includes the eight workload
 identities and is forbidden at the project and ancestor scopes even when
 listed as reviewed. An unreadable ancestor, role, or policy is a blocker.
 
 Terraform uses additive IAM member resources so an unreviewed apply cannot erase unrelated
-or Google-managed members. The verifier additionally rejects any direct role on the seven
+or Google-managed members. The verifier additionally rejects any direct role on the eight
 user-managed workload identities at the project or ancestor scopes, whether granted to
 their exact addresses or through an encompassing Resource Manager service-account
 principal set, project-level
 `serviceAccountUser`/`serviceAccountTokenCreator`/`secretAccessor`/Secret Manager admin,
 extra members in the managed resource roles, and direct token-creator bindings. If it
 finds drift, remediate the exact binding in a separately reviewed plan. At the repository
-scope, the complete direct policy must be exactly builder writer plus the two deployer and
-Cloud Run service-agent readers.
+scope, each complete direct policy must be exactly its environment's builder writer,
+deployer reader, and Cloud Run service-agent reader.
 
 The policy API does not expand Google Group membership. A reviewed `group:` binding proves
 only that the exact policy binding was reviewed, not that directory membership is unchanged;
@@ -178,14 +178,19 @@ Routine operator flow:
 ```sh
 scripts/verify_ops_foundation.sh --static
 terraform -chdir=infra/gcp init
-terraform -chdir=infra/gcp plan
+terraform -chdir=infra/gcp plan \
+  -var 'agent_delivery_stage=services' \
+  -var 'agent_bootstrap_image=REVIEWED_PRODUCTION_REGISTRY_DIGEST' \
+  -var 'agent_preview_bootstrap_image=REVIEWED_PREVIEW_REGISTRY_DIGEST' \
+  -var-file=/absolute/private/path/agent-secret-versions.tfvars
 ```
 
 Use Terraform `1.13.5`; `required_version` and `infra/gcp/.terraform-version` pin the same
 exact release. A fresh remote plan is mandatory before every apply. Review the full plan,
 including imports and IAM removals, and stop on any persistent-resource replacement or
 destroy. The mock plan in CI is not evidence of live safety and cannot substitute for
-this review.
+this review. During first-time setup, use the explicit `foundation → jobs → services`
+sequence in the [Cloud Run delivery runbook](cloud-run-delivery.md), never `-target`.
 
 CI deliberately uses `terraform init -backend=false` and mock-provider tests. It never
 receives GCP credentials and cannot read or modify remote state.
@@ -221,8 +226,11 @@ Production resource names:
 
 Preview resource names use the same suffixes with the `agent-preview-` prefix. Terraform
 manages resource metadata and required additive runtime IAM members only; it never manages
-secret versions or claims that unrelated direct policy members do not exist. The
-post-apply live verifier is the acceptance gate for the effective direct policies.
+secret payloads or creates versions. It does manage the non-secret positive numeric
+version ID selected by each Cloud Run service and job. `latest`, `0`, and aliases are
+rejected so scale-to-zero restart cannot silently change a revision's environment. The
+post-apply live verifier is the acceptance gate for effective direct policies and numeric
+secret references.
 
 Inject each value out of band:
 
@@ -270,9 +278,10 @@ does not copy new Auth.js rows back into the old database.
 
 The target agent project starts empty. Do not copy test threads or legacy checkpoint
 tables. The repository migration entrypoint is `python -m agent.migrate`; it upgrades
-Aegra metadata and initializes the LangGraph checkpointer and store schema. This repository
-does not yet contain the one-shot deployment job that must run it. Runtime startup
-Alembic migration must be disabled with the non-secret setting
+Aegra metadata and initializes the LangGraph checkpointer and store schema. The checked-in
+Cloud Run migration jobs execute that entrypoint before service delivery, followed by
+separate least-privileged grant-probe jobs. Runtime startup Alembic migration must be
+disabled with the non-secret setting
 `RUN_MIGRATIONS_ON_STARTUP=false`; a service revision is never the migration runner.
 
 The migration job uses the same immutable image digest as the service, receives an
@@ -300,8 +309,9 @@ offers a supported startup path that skips saver/store schema setup.
 1. Confirm or create `syshin0116-agent-prod`.
 2. Create an isolated preview branch and credentials that cannot access the `production`
    branch.
-3. Land and test a one-shot migration job that runs `python -m agent.migrate` from the
-   exact image digest selected for deployment.
+3. Provision the checked-in one-shot migration and grant-probe jobs at the explicit
+   `jobs` Terraform stage, using the exact image digest selected for deployment and
+   positive numeric secret versions.
 4. Give the preview migration job its separately held direct `DATABASE_URL`, run it, and
    require success before creating or updating the service revision.
 5. Inject only the preview branch's least-privileged direct runtime endpoint into
@@ -320,14 +330,14 @@ offers a supported startup path that skips saver/store schema setup.
     elevated direct endpoint, inject only its least-privileged direct runtime endpoint,
     repeat the real-Neon grant tests, and shift traffic after all gates pass.
 
-Rollback reassigns Cloud Run traffic to the previous healthy revision and restores the
-previous secret version. Database migrations must remain compatible with one previous
-application revision.
+Rollback reassigns Cloud Run traffic to the previous healthy revision. That revision
+already retains its previous numeric secret references; do not mutate them in place.
+Database migrations must remain compatible with one previous application revision.
 
 ## Cloud Run and CD
 
 The repository-side follow-up is implemented. It declares preview/production services,
-separate runtime/migration identities and URLs, a dedicated image builder, exact
+separate runtime/migration identities and URLs, isolated image builders and registries, exact
 caller/reusable-workflow WIF conditions, same-digest migration and grant-probe jobs,
 no-traffic rollout, APv2 smoke, and revision-traffic rollback.
 
@@ -348,7 +358,8 @@ scripts/verify_ops_foundation.sh --terraform-fmt
 scripts/verify_ops_foundation.sh --terraform-init
 scripts/verify_ops_foundation.sh --terraform-validate
 scripts/verify_ops_foundation.sh --terraform-test
-shellcheck scripts/deploy_cloud_run.sh scripts/verify_ops_foundation.sh
+shellcheck scripts/deploy_cloud_run.sh scripts/verify_ops_foundation.sh \
+  scripts/validate_agent_delivery_identity.sh
 ```
 
 Each `--terraform-*` wrapper performs an on-disk preflight before invoking Terraform.
@@ -363,21 +374,22 @@ contents and does not inspect state, plan, or secret contents.
 
 The static command runs `uv run --no-project --with python-hcl2==7.3.1` and uses that
 pinned parser, not regular expressions or source-string grep. It compares the complete
-parsed bodies of the foundation resources, all locals, the root check, every output and variable,
+parsed bodies of the foundation resources, all locals, every root check, every output and variable,
 the provider/data/backend blocks, and every import target and live object ID. It rejects
 unreviewed modules, `moved` and `removed` blocks, provisioners, `local-exec`,
 `remote-exec`, external providers/data, `terraform_remote_state`, and other executable
 resource types after HCL comments and line breaks are parsed. The seven deeply nested
 Cloud Run service/job resources are additionally covered by a byte-exact SHA-256 pin over
-`cloud_run.tf`; the total reviewed inventory is 32 resources.
+`cloud_run.tf`; the total reviewed inventory is 38 resources.
 
 The only reviewed Terraform test file is
 `infra/gcp/tests/foundation.tftest.hcl`; static verification pins its exact SHA-256.
-`--terraform-test` runs Terraform's JSON test output through the contract and succeeds only
-when that exact file and `foundation_security_contract` run are discovered and the summary
-is exactly `1 passed, 0 failed, 0 errored, 0 skipped`. Terraform's otherwise-successful
-zero-test result is a failure. `fmt`, fresh `init -backend=false`, and `validate` remain
-independent gates.
+`--terraform-test` runs Terraform's JSON test output through the contract and succeeds
+only when that exact file's service, foundation-only, and jobs-only runs are discovered in
+the reviewed order and the summary is exactly
+`3 passed, 0 failed, 0 errored, 0 skipped`. Terraform's otherwise-successful zero-test
+result is a failure. `fmt`, fresh `init -backend=false`, and `validate` remain independent
+gates.
 
 After an explicitly approved foundation apply, run the live metadata checks:
 
@@ -395,7 +407,8 @@ requires `permissions_sha256`; a conditional binding additionally requires
 
 Canonical scope strings are `projects/<project-id>`, `folders/<folder-id>`,
 `organizations/<organization-id>`,
-`projects/<project-id>/locations/<region>/repositories/agent`, and
+`projects/<project-id>/locations/<region>/repositories/agent`,
+`projects/<project-id>/locations/<region>/repositories/agent-preview`, and
 `buckets/<bucket-name>`. Records are compared only against the matching audited scope;
 missing or extra records within that scope fail.
 
@@ -409,8 +422,9 @@ records for an audited scope fail closed, and public members cannot be reviewed 
 this input.
 
 The live verifier inspects API, direct IAM, role definitions, keys, bucket, repository,
-WIF provider, Cloud Run service/job metadata and resource IAM, and secret-resource
-metadata only. It never reads secret payloads or Terraform state values. If the canonical
+WIF provider, Cloud Run service/job metadata, exact positive numeric secret references,
+resource IAM, and secret-resource metadata only. It never reads secret payloads or
+Terraform state values. If the canonical
 repository-governance files are present, it also delegates GitHub environment verification
 to that verifier; otherwise it makes no GitHub environment claim.
 

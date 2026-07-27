@@ -205,7 +205,7 @@ AGENT_DOCKER_UV_IMAGE = (
 AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
 AGENT_CI_JOB = "agent"
 AGENT_CI_JOB_AST_SHA256 = (
-    "2d3e5077775066b2ad47b774f8cd10b0a4cda428d99f5bd46579fec321eafbc8"
+    "72666ed578d9bc559bd6009fb396093d0395ec1e85c165dd1b24e9d40d4acea5"
 )
 AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
@@ -242,6 +242,11 @@ AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
     "a8c0dc770b0314d9b08843c16abae6bac24b405e51ac75e3dd14c6775e2006d3"
 )
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
+UPSTREAM_VERSION_AUDIT_SCRIPT = "scripts/upstream_version_audit.py"
+EXPECTED_DEPENDENCY_AUDIT_JOB_AST_SHA256 = {
+    "upstream": "69d71776cf99461e058269b3aec66b5730c661a820d6360b355f6031c13601f3",
+    "check": "2d800e0c036d1864cdd81c1771d280d49612483ded70171ef0dca13786fbca8e",
+}
 EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
     {
         "uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
@@ -1259,6 +1264,27 @@ def validate_dependency_audit_agent_setup(document: YamlDocument) -> list[str]:
         f"expected={EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP!r}, "
         f"actual={actual_setup!r}"
     ]
+
+
+def validate_dependency_audit_job_contract(document: YamlDocument) -> list[str]:
+    """Bind the upstream audit and final aggregation to reviewed exact jobs."""
+    errors: list[str] = []
+    jobs = _workflow_jobs(document)
+    for job_name, expected_digest in EXPECTED_DEPENDENCY_AUDIT_JOB_AST_SHA256.items():
+        job = jobs.get(job_name)
+        if job is None:
+            errors.append(
+                f"{document.path}: dependency audit job {job_name!r} is missing"
+            )
+            continue
+        actual_digest = _canonical_ast_sha256(_node_to_data(job))
+        if actual_digest != expected_digest:
+            errors.append(
+                f"{document.path}: dependency audit job {job_name!r} exact AST "
+                f"differs; expected_sha256={expected_digest}, "
+                f"actual_sha256={actual_digest}"
+            )
+    return errors
 
 
 def validate_uv_toolchain_contract(
@@ -2536,6 +2562,18 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
                     documents[dependency_audit]
                 )
             )
+            errors.extend(
+                f"local: {error}"
+                for error in validate_dependency_audit_job_contract(
+                    documents[dependency_audit]
+                )
+            )
+            upstream_script = root / UPSTREAM_VERSION_AUDIT_SCRIPT
+            if not upstream_script.is_file() or upstream_script.is_symlink():
+                errors.append(
+                    "local: dependency audit upstream script must be a regular "
+                    f"repository file: {UPSTREAM_VERSION_AUDIT_SCRIPT}"
+                )
             audit_commands = [
                 _scalar_value(
                     node,

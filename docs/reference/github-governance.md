@@ -5,7 +5,8 @@ description: >
   work behind the same pull-request, CI, action-pinning, and deployment gates.
 when_to_read: >
   Before changing GitHub rulesets, Actions policy, Dependabot behavior, required
-  check names, CODEOWNERS, or deployment environment branch policies.
+  check names, CODEOWNERS, deployment environment branch policies, or the scheduled
+  dependency and upstream-version audit.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
 updated: "2026-07-28"
@@ -15,6 +16,7 @@ refs:
   - ../../.github/workflows/ci.yml
   - ../../.github/workflows/protocol-compat.yml
   - ../../.github/workflows/wiki-verify.yml
+  - ../runbooks/upstream-version-audit.md
   - ../adr/0003-agent-code-changes-via-pr.md
 template: spec
 ---
@@ -361,10 +363,22 @@ summary, so disabling or pausing either feature is external policy drift.
 [`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs
 weekly and manually. It verifies the web and root Python lockfiles, runs the web
 policy below, exports only the agent workspace member, audits that exact Python
-resolution with pinned `pip-audit`, and reports
+resolution with pinned `pip-audit`, compares the reviewed framework pins with
+stable official upstream releases, and reports
 one stable `dependency/audit` result. It is an alerting workflow, not a required
 main check; a discovered vulnerability should create a focused fix PR rather
 than making every unrelated PR permanently pending.
+
+The `dependency/upstream-versions` job invokes the dependency-free
+[`upstream_version_audit.py`](../../scripts/upstream_version_audit.py) with Python 3.12.
+Its job AST and the final aggregation job AST are hardcoded in the local governance
+verifier so removing the audit from `needs`, changing its source command, or masking its
+result is deliberate reviewed drift. The script reads exact manifest and lock pins but
+never changes them. It emits deterministic JSON and a GitHub step summary; exit `1`
+means a newer stable release exists, while transport, redirect, response-size, schema,
+pin, and canonical-repository failures exit `2`. Both fail the scheduled/manual run.
+The full target, stable-release, triage, and extension contract is in the
+[upstream version audit runbook](../runbooks/upstream-version-audit.md).
 
 Its agent job uses the repository-wide uv 0.11.29 and setup-uv v9.0.0 pins, including
 the reviewed official archive SHA-256 rather than allowing an unverified download. Local
@@ -435,8 +449,8 @@ re-resolution or add temporary transitive packages to `package.json`.
    `syshin0116`, self-review allowed, admin bypass disabled, the branch policies above,
    only `AGENT_SMOKE_BEARER_TOKEN`, and zero variables.
 8. Run the `--live` command from this runbook; it must pass.
-9. Manually dispatch **Dependency audit** once and triage any reported
-   vulnerabilities in separate PRs.
+9. Manually dispatch **Dependency audit** once. Require the web vulnerability, Python
+   vulnerability, and upstream-version jobs to pass; triage each finding in a focused PR.
 
 The settings in steps 3–7 live outside Git. A green local verifier does not mean
 they have been applied.

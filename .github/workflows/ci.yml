@@ -179,6 +179,7 @@ jobs:
           agent/tests
           scripts/build_index.py
           scripts/ci_changed_components.py
+          scripts/upstream_version_audit.py
           scripts/verify_repository_governance.py
           scripts/tests
       - if: needs.changes.outputs.agent == 'true'
@@ -188,6 +189,7 @@ jobs:
           agent/tests
           scripts/build_index.py
           scripts/ci_changed_components.py
+          scripts/upstream_version_audit.py
           scripts/verify_repository_governance.py
           scripts/tests
       - name: Build and audit the published corpus and BM25 artifacts

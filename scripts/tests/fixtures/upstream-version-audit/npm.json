@@ -1,0 +1,26 @@
+{
+  "name": "@assistant-ui/react",
+  "dist-tags": {
+    "latest": "0.14.28",
+    "next": "0.15.0-rc.1"
+  },
+  "versions": {
+    "0.14.27": {
+      "name": "@assistant-ui/react",
+      "version": "0.14.27"
+    },
+    "0.14.28": {
+      "name": "@assistant-ui/react",
+      "version": "0.14.28"
+    },
+    "0.15.0-rc.1": {
+      "name": "@assistant-ui/react",
+      "version": "0.15.0-rc.1"
+    },
+    "1.0.0": {
+      "name": "@assistant-ui/react",
+      "version": "1.0.0",
+      "deprecated": "This release is not intended for use."
+    }
+  }
+}

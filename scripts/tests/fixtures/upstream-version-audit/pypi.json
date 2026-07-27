@@ -1,0 +1,28 @@
+{
+  "info": {
+    "name": "aegra-api",
+    "version": "0.9.24"
+  },
+  "releases": {
+    "0.9.23": [
+      {
+        "yanked": false
+      }
+    ],
+    "0.9.24": [
+      {
+        "yanked": false
+      }
+    ],
+    "0.10.0rc1": [
+      {
+        "yanked": false
+      }
+    ],
+    "1.0.0": [
+      {
+        "yanked": true
+      }
+    ]
+  }
+}

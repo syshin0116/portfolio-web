@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import Footer from "@/components/footer";
 import { Navbar } from "@/components/navbar";
-import ChatSection from "@/components/chat-section";
+import ChatSection from "@/components/assistant/chat-section";
 import { RecentPosts } from "@/components/recent-posts";
 import { RecentProjects } from "@/components/recent-projects";
 

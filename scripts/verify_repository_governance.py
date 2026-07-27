@@ -44,6 +44,10 @@ REQUIRED_CHECK_TRIGGERS = {
     "merge_group": {"types": ["checks_requested"]},
     "workflow_dispatch": {},
 }
+EXPECTED_REPOSITORY = "syshin0116/syshin0116.dev"
+EXPECTED_API_VERSION = "2026-03-10"
+EXPECTED_DEFAULT_BRANCH = "main"
+EXPECTED_MAIN_REF = "refs/heads/main"
 MAIN_RULE_TYPES = [
     "deletion",
     "non_fast_forward",
@@ -73,6 +77,152 @@ SOLO_PULL_REQUEST_PARAMETERS = {
 MAIN_STATUS_CHECK_PARAMETERS = {
     "do_not_enforce_on_create": False,
     "strict_required_status_checks_policy": True,
+}
+EXPECTED_REQUIRED_CHECKS = [
+    {
+        "context": "ci/check",
+        "integration_id": 15368,
+        "workflow": ".github/workflows/ci.yml",
+        "job": "check",
+        "triggers": REQUIRED_CHECK_TRIGGERS,
+    },
+    {
+        "context": "protocol/compat",
+        "integration_id": 15368,
+        "workflow": ".github/workflows/protocol-compat.yml",
+        "job": "protocol-compat",
+        "triggers": REQUIRED_CHECK_TRIGGERS,
+    },
+    {
+        "context": "wiki/verify",
+        "integration_id": 15368,
+        "workflow": ".github/workflows/wiki-verify.yml",
+        "job": "verify-wiki",
+        "triggers": REQUIRED_CHECK_TRIGGERS,
+    },
+]
+EXPECTED_ACTIONS = {
+    "enabled": True,
+    "allowed_actions": "all",
+    "sha_pinning_required": True,
+}
+EXPECTED_ENVIRONMENTS = {
+    "Preview": {
+        "can_admins_bypass": True,
+        "deployment_branch_policy": None,
+        "branch_policies": [],
+        "protection_rules": [],
+    },
+    "Production": {
+        "can_admins_bypass": True,
+        "deployment_branch_policy": {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
+        "branch_policies": [{"name": "main", "type": "branch"}],
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "prevent_self_review": False,
+                "reviewers": [{"type": "User", "login": "syshin0116"}],
+            },
+            {"type": "branch_policy"},
+        ],
+    },
+}
+EXPECTED_DEPENDABOT = {
+    "version": 2,
+    "updates": [
+        {
+            "package_ecosystem": "npm",
+            "directory": "/web",
+            "schedule": {
+                "interval": "weekly",
+                "day": "monday",
+                "time": "04:00",
+                "timezone": "Asia/Seoul",
+            },
+            "open_pull_requests_limit": 3,
+            "cooldown": {
+                "default_days": 7,
+                "semver_major_days": 14,
+                "semver_minor_days": 7,
+                "semver_patch_days": 3,
+            },
+            "groups": [
+                {
+                    "name": "web-routine",
+                    "applies_to": "version-updates",
+                    "patterns": ["*"],
+                    "exclude_patterns": [
+                        "@assistant-ui/*",
+                        "@auth/*",
+                        "@langchain/*",
+                        "next",
+                        "next-auth",
+                    ],
+                    "update_types": ["minor", "patch"],
+                }
+            ],
+        },
+        {
+            "package_ecosystem": "pip",
+            "directory": "/agent",
+            "schedule": {
+                "interval": "weekly",
+                "day": "monday",
+                "time": "04:20",
+                "timezone": "Asia/Seoul",
+            },
+            "open_pull_requests_limit": 3,
+            "cooldown": {
+                "default_days": 7,
+                "semver_major_days": 14,
+                "semver_minor_days": 7,
+                "semver_patch_days": 3,
+            },
+            "groups": [
+                {
+                    "name": "agent-routine",
+                    "applies_to": "version-updates",
+                    "patterns": ["*"],
+                    "exclude_patterns": [
+                        "aegra-*",
+                        "deepagents",
+                        "langchain",
+                        "langchain-*",
+                        "langgraph",
+                        "langgraph-*",
+                        "langsmith",
+                    ],
+                    "update_types": ["minor", "patch"],
+                }
+            ],
+        },
+        {
+            "package_ecosystem": "github-actions",
+            "directory": "/",
+            "schedule": {
+                "interval": "weekly",
+                "day": "monday",
+                "time": "04:40",
+                "timezone": "Asia/Seoul",
+            },
+            "open_pull_requests_limit": 3,
+            "cooldown": {
+                "default_days": 7,
+            },
+            "groups": [
+                {
+                    "name": "actions-routine",
+                    "applies_to": "version-updates",
+                    "patterns": ["*"],
+                    "exclude_patterns": [],
+                    "update_types": ["minor", "patch"],
+                }
+            ],
+        },
+    ],
 }
 
 JsonObject = dict[str, Any]
@@ -454,6 +604,160 @@ def validate_required_job_graph(
     return errors
 
 
+def validate_required_execution_safety(
+    root: Path,
+    documents: dict[Path, YamlDocument],
+    document: YamlDocument,
+    emitter_job: str,
+) -> list[str]:
+    """Forbid false-green execution on every repository-owned required path."""
+    repository_root = root.resolve()
+    errors: list[str] = []
+    inspected_actions: set[Path] = set()
+    inspected_workflows: set[Path] = set()
+    inspected_required_jobs: set[str] = set()
+
+    def display(path: Path) -> str:
+        return _display_path(path.resolve(), repository_root)
+
+    def reject_continue_on_error(node: MappingNode, *, context: str) -> None:
+        if _mapping_value(node, "continue-on-error") is not None:
+            errors.append(
+                f"{context} sets continue-on-error on a required-check execution path"
+            )
+
+    def inspect_steps(steps: Node, *, source: Path, context: str) -> None:
+        if not isinstance(steps, SequenceNode):
+            errors.append(f"{context} steps must be a list")
+            return
+        for index, step in enumerate(steps.value):
+            step_context = f"{context} step[{index}]"
+            if not isinstance(step, MappingNode):
+                errors.append(f"{step_context} must be a mapping")
+                continue
+            reject_continue_on_error(step, context=step_context)
+            uses = _mapping_value(step, "uses")
+            if uses is None:
+                continue
+            try:
+                reference = _scalar_value(uses, context=f"{step_context} uses")
+                if not reference.startswith("./"):
+                    continue
+                target = _resolve_local_action_reference(
+                    repository_root,
+                    source,
+                    uses.start_mark.line + 1,
+                    reference,
+                )
+            except GovernanceError as exc:
+                errors.append(str(exc))
+                continue
+            inspect_action(target)
+
+    def inspect_job(
+        job: MappingNode,
+        *,
+        source: Path,
+        job_name: str,
+    ) -> None:
+        context = f"{display(source)}: job {job_name!r}"
+        reject_continue_on_error(job, context=context)
+        uses = _mapping_value(job, "uses")
+        if uses is not None:
+            try:
+                reference = _scalar_value(uses, context=f"{context} uses")
+                if not reference.startswith("./"):
+                    return
+                target = _resolve_local_workflow_reference(
+                    repository_root,
+                    source,
+                    uses.start_mark.line + 1,
+                    reference,
+                )
+            except GovernanceError as exc:
+                errors.append(str(exc))
+                return
+            inspect_workflow(target)
+            return
+        steps = _mapping_value(job, "steps")
+        if steps is not None:
+            inspect_steps(steps, source=source, context=context)
+
+    def inspect_action(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved in inspected_actions:
+            return
+        inspected_actions.add(resolved)
+        action = documents.get(resolved)
+        if action is None:
+            errors.append(
+                "required-check safety cannot inspect local action "
+                f"{display(resolved)!r}"
+            )
+            return
+        runs = _mapping_value(action.root, "runs")
+        if not isinstance(runs, MappingNode):
+            errors.append(f"{display(resolved)}: action runs must be a mapping")
+            return
+        steps = _mapping_value(runs, "steps")
+        if steps is None:
+            errors.append(f"{display(resolved)}: composite action has no steps")
+            return
+        inspect_steps(
+            steps,
+            source=resolved,
+            context=f"{display(resolved)}: composite action",
+        )
+
+    def inspect_workflow(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved in inspected_workflows:
+            return
+        inspected_workflows.add(resolved)
+        workflow = documents.get(resolved)
+        if workflow is None:
+            errors.append(
+                "required-check safety cannot inspect local reusable workflow "
+                f"{display(resolved)!r}"
+            )
+            return
+        try:
+            jobs = _workflow_jobs(workflow)
+        except GovernanceError as exc:
+            errors.append(str(exc))
+            return
+        for job_name, job in jobs.items():
+            inspect_job(job, source=resolved, job_name=job_name)
+
+    try:
+        root_jobs = _workflow_jobs(document)
+    except GovernanceError as exc:
+        return [str(exc)]
+
+    def inspect_required_job(job_name: str) -> None:
+        if job_name in inspected_required_jobs:
+            return
+        inspected_required_jobs.add(job_name)
+        job = root_jobs.get(job_name)
+        if job is None:
+            return
+        inspect_job(job, source=document.path, job_name=job_name)
+        try:
+            needs = _job_needs(
+                job,
+                context=f"{display(document.path)}: job {job_name!r}",
+            )
+        except GovernanceError as exc:
+            errors.append(str(exc))
+            return
+        for dependency in needs:
+            inspect_required_job(dependency)
+
+    inspected_workflows.add(document.path.resolve())
+    inspect_required_job(emitter_job)
+    return errors
+
+
 def _display_path(path: Path, root: Path) -> str:
     try:
         return str(path.relative_to(root))
@@ -821,140 +1125,259 @@ def _string_list(value: Any, *, context: str) -> list[str]:
     return value
 
 
-def _normalized_dependabot_groups(document: YamlDocument) -> dict[str, JsonObject]:
+def _integer_scalar(value: Any, *, context: str) -> int:
+    if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
+        raise GovernanceError(f"{context} must be a non-negative integer")
+    return int(value)
+
+
+def _require_exact_keys(
+    value: Any,
+    expected: set[str],
+    *,
+    context: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise GovernanceError(f"{context} must be a mapping")
+    actual = set(value)
+    if actual != expected:
+        raise GovernanceError(
+            f"{context} keys differ exactly; "
+            f"missing={sorted(expected - actual)!r}, "
+            f"extra={sorted(actual - expected)!r}"
+        )
+    return value
+
+
+def _normalized_dependabot(document: YamlDocument) -> JsonObject:
+    """Normalize the complete Dependabot contract while preserving exact sets."""
     payload = _node_to_data(document.root)
+    _require_exact_keys(
+        payload,
+        {"version", "updates"},
+        context=str(document.path),
+    )
+    version = _integer_scalar(
+        payload.get("version"),
+        context=f"{document.path}: version",
+    )
     updates = payload.get("updates")
     if not isinstance(updates, list):
         raise GovernanceError(f"{document.path}: updates must be a list")
 
-    normalized: dict[str, JsonObject] = {}
+    normalized_updates: dict[str, JsonObject] = {}
     for update_index, update in enumerate(updates):
-        if not isinstance(update, dict):
-            raise GovernanceError(
-                f"{document.path}: updates[{update_index}] must be a mapping"
-            )
+        update_context = f"{document.path}: updates[{update_index}]"
+        update = _require_exact_keys(
+            update,
+            {
+                "package-ecosystem",
+                "directory",
+                "schedule",
+                "open-pull-requests-limit",
+                "cooldown",
+                "groups",
+            },
+            context=update_context,
+        )
         ecosystem = update.get("package-ecosystem")
         directory = update.get("directory")
-        groups = update.get("groups", {})
         if not isinstance(ecosystem, str) or not isinstance(directory, str):
             raise GovernanceError(
                 f"{document.path}: update ecosystem and directory must be strings"
             )
+        identity = f"{ecosystem}:{directory}"
+        if identity in normalized_updates:
+            raise GovernanceError(
+                f"{document.path}: duplicate Dependabot update {identity!r}"
+            )
+
+        schedule = _require_exact_keys(
+            update.get("schedule"),
+            {"interval", "day", "time", "timezone"},
+            context=f"{update_context} schedule",
+        )
+        if not all(isinstance(value, str) for value in schedule.values()):
+            raise GovernanceError(
+                f"{update_context} schedule values must all be strings"
+            )
+
+        cooldown = update.get("cooldown")
+        if not isinstance(cooldown, dict):
+            raise GovernanceError(f"{update_context} cooldown must be a mapping")
+        allowed_cooldown_keys = {
+            "default-days",
+            "semver-major-days",
+            "semver-minor-days",
+            "semver-patch-days",
+        }
+        unknown_cooldown_keys = set(cooldown) - allowed_cooldown_keys
+        if unknown_cooldown_keys:
+            raise GovernanceError(
+                f"{update_context} cooldown has unsupported keys "
+                f"{sorted(unknown_cooldown_keys)!r}"
+            )
+        normalized_cooldown = {
+            key.replace("-", "_"): _integer_scalar(
+                value,
+                context=f"{update_context} cooldown.{key}",
+            )
+            for key, value in cooldown.items()
+        }
+
+        groups = update.get("groups")
         if not isinstance(groups, dict):
             raise GovernanceError(
                 f"{document.path}: groups for {ecosystem}:{directory} must be a mapping"
             )
+        normalized_groups: dict[str, JsonObject] = {}
         for group_name, group in groups.items():
             if not isinstance(group_name, str) or not isinstance(group, dict):
                 raise GovernanceError(
                     f"{document.path}: Dependabot group must be a named mapping"
                 )
-            key = f"{ecosystem}:{directory}:{group_name}"
-            if key in normalized:
+            group_key = f"{identity}:{group_name}"
+            if group_name in normalized_groups:
                 raise GovernanceError(
-                    f"{document.path}: duplicate Dependabot group {key!r}"
+                    f"{document.path}: duplicate Dependabot group {group_key!r}"
+                )
+            required_group_keys = {"applies-to", "patterns", "update-types"}
+            allowed_group_keys = {*required_group_keys, "exclude-patterns"}
+            actual_group_keys = set(group)
+            missing_group_keys = required_group_keys - actual_group_keys
+            extra_group_keys = actual_group_keys - allowed_group_keys
+            if missing_group_keys or extra_group_keys:
+                raise GovernanceError(
+                    f"{document.path}: {group_key} keys differ; "
+                    f"missing={sorted(missing_group_keys)!r}, "
+                    f"extra={sorted(extra_group_keys)!r}"
                 )
             applies_to = group.get("applies-to")
             if not isinstance(applies_to, str):
                 raise GovernanceError(
-                    f"{document.path}: {key} applies-to must be a string"
+                    f"{document.path}: {group_key} applies-to must be a string"
                 )
-            normalized[key] = {
+            normalized_groups[group_name] = {
                 "applies_to": applies_to,
                 "patterns": sorted(
                     _string_list(
                         group.get("patterns"),
-                        context=f"{document.path}: {key} patterns",
+                        context=f"{document.path}: {group_key} patterns",
                     )
                 ),
                 "exclude_patterns": sorted(
                     _string_list(
                         group.get("exclude-patterns", []),
-                        context=f"{document.path}: {key} exclude-patterns",
+                        context=f"{document.path}: {group_key} exclude-patterns",
                     )
                 ),
                 "update_types": sorted(
                     _string_list(
                         group.get("update-types"),
-                        context=f"{document.path}: {key} update-types",
+                        context=f"{document.path}: {group_key} update-types",
                     )
                 ),
             }
-    return normalized
+        normalized_updates[identity] = {
+            "package_ecosystem": ecosystem,
+            "directory": directory,
+            "schedule": schedule,
+            "open_pull_requests_limit": _integer_scalar(
+                update.get("open-pull-requests-limit"),
+                context=f"{update_context} open-pull-requests-limit",
+            ),
+            "cooldown": normalized_cooldown,
+            "groups": normalized_groups,
+        }
+    return {"version": version, "updates": normalized_updates}
 
 
-def validate_dependabot_grouping(path: Path, policy: JsonObject) -> list[str]:
-    """Compare every routine group with the exact machine-readable contract."""
-    expected_groups = policy.get("dependabot", {}).get("routine_groups")
-    if not isinstance(expected_groups, list):
-        return ["local: policy.dependabot.routine_groups must be a list"]
+def _canonical_dependabot_policy(policy: JsonObject) -> JsonObject:
+    updates = policy["updates"]
+    normalized_updates: dict[str, JsonObject] = {}
+    for update in updates:
+        identity = f"{update['package_ecosystem']}:{update['directory']}"
+        normalized_updates[identity] = {
+            "package_ecosystem": update["package_ecosystem"],
+            "directory": update["directory"],
+            "schedule": update["schedule"],
+            "open_pull_requests_limit": update["open_pull_requests_limit"],
+            "cooldown": update["cooldown"],
+            "groups": {
+                group["name"]: {
+                    "applies_to": group["applies_to"],
+                    "patterns": sorted(group["patterns"]),
+                    "exclude_patterns": sorted(group["exclude_patterns"]),
+                    "update_types": sorted(group["update_types"]),
+                }
+                for group in update["groups"]
+            },
+        }
+    return {"version": policy["version"], "updates": normalized_updates}
 
-    expected: dict[str, JsonObject] = {}
-    for index, group in enumerate(expected_groups):
-        if not isinstance(group, dict):
-            return [f"local: policy Dependabot group {index} must be an object"]
-        required_strings = (
-            "package_ecosystem",
-            "directory",
-            "name",
-            "applies_to",
-        )
-        if not all(isinstance(group.get(key), str) for key in required_strings):
-            return [f"local: policy Dependabot group {index} has invalid identity"]
-        key = f"{group['package_ecosystem']}:{group['directory']}:{group['name']}"
-        if key in expected:
-            return [f"local: policy has duplicate Dependabot group {key!r}"]
-        try:
-            expected[key] = {
-                "applies_to": group["applies_to"],
-                "patterns": sorted(
-                    _string_list(
-                        group.get("patterns"),
-                        context=f"policy Dependabot group {key} patterns",
-                    )
-                ),
-                "exclude_patterns": sorted(
-                    _string_list(
-                        group.get("exclude_patterns", []),
-                        context=(f"policy Dependabot group {key} exclude_patterns"),
-                    )
-                ),
-                "update_types": sorted(
-                    _string_list(
-                        group.get("update_types"),
-                        context=f"policy Dependabot group {key} update_types",
-                    )
-                ),
-            }
-        except GovernanceError as exc:
-            return [f"local: {exc}"]
 
+def _normalized_dependabot_groups(document: YamlDocument) -> dict[str, JsonObject]:
+    groups: dict[str, JsonObject] = {}
+    for identity, update in _normalized_dependabot(document)["updates"].items():
+        for name, group in update["groups"].items():
+            groups[f"{identity}:{name}"] = group
+    return groups
+
+
+def validate_dependabot_configuration(path: Path, policy: JsonObject) -> list[str]:
+    """Compare the complete Dependabot file with the reviewed baseline."""
+    policy_dependabot = policy.get("dependabot")
+    if not _json_exact(policy_dependabot, EXPECTED_DEPENDABOT):
+        return [
+            "local: policy.dependabot differs from the complete reviewed "
+            f"baseline; actual={policy_dependabot!r}, "
+            f"expected={EXPECTED_DEPENDABOT!r}"
+        ]
     try:
-        actual = _normalized_dependabot_groups(load_yaml_document(path))
+        actual = _normalized_dependabot(load_yaml_document(path))
     except GovernanceError as exc:
         return [f"local: invalid Dependabot YAML: {exc}"]
-    if actual == expected:
+    expected = _canonical_dependabot_policy(EXPECTED_DEPENDABOT)
+    if _json_exact(actual, expected):
         return []
 
     errors: list[str] = []
-    missing = sorted(expected.keys() - actual.keys())
-    extra = sorted(actual.keys() - expected.keys())
+    if actual.get("version") != expected["version"]:
+        errors.append(
+            f"local: Dependabot version is {actual.get('version')!r}; "
+            f"expected {expected['version']!r}"
+        )
+    actual_updates = actual.get("updates", {})
+    expected_updates = expected["updates"]
+    missing = sorted(expected_updates.keys() - actual_updates.keys())
+    extra = sorted(actual_updates.keys() - expected_updates.keys())
     if missing or extra:
         errors.append(
-            "local: Dependabot group identities differ; "
+            "local: Dependabot update identities differ exactly; "
             f"missing={missing!r}, extra={extra!r}"
         )
-    for key in sorted(expected.keys() & actual.keys()):
-        if actual[key] != expected[key]:
+    for key in sorted(expected_updates.keys() & actual_updates.keys()):
+        if not _json_exact(actual_updates[key], expected_updates[key]):
             errors.append(
-                f"local: Dependabot group {key!r} is {actual[key]!r}; "
-                f"expected {expected[key]!r}"
+                f"local: Dependabot update {key!r} is {actual_updates[key]!r}; "
+                f"expected {expected_updates[key]!r}"
             )
     return errors
 
 
+def validate_dependabot_grouping(path: Path, policy: JsonObject) -> list[str]:
+    """Backward-compatible name for the complete Dependabot validator."""
+    return validate_dependabot_configuration(path, policy)
+
+
 def _required_check_contracts(main: JsonObject) -> list[RequiredCheckContract]:
     required_checks = main.get("required_checks")
+    if not _json_exact(required_checks, EXPECTED_REQUIRED_CHECKS):
+        raise GovernanceError(
+            "policy.main.required_checks differs from the complete reviewed "
+            f"baseline; actual={required_checks!r}, "
+            f"expected={EXPECTED_REQUIRED_CHECKS!r}"
+        )
     if not isinstance(required_checks, list):
         raise GovernanceError("policy.main.required_checks must be a list")
     contracts: list[RequiredCheckContract] = []
@@ -1052,8 +1475,8 @@ def _required_check_bindings(main: JsonObject) -> list[tuple[str, int]]:
 def _main_ruleset_contract(policy: JsonObject) -> JsonObject:
     repository = policy.get("repository")
     main = policy.get("main")
-    if not isinstance(repository, str) or not repository:
-        raise GovernanceError("policy.repository must be a non-empty string")
+    if repository != EXPECTED_REPOSITORY or type(repository) is not str:
+        raise GovernanceError(f"policy.repository must remain {EXPECTED_REPOSITORY!r}")
     if not isinstance(main, dict):
         raise GovernanceError("policy.main must be an object")
     ruleset = main.get("ruleset")
@@ -1061,7 +1484,7 @@ def _main_ruleset_contract(policy: JsonObject) -> JsonObject:
         "name": "main",
         "target": "branch",
         "source_type": "Repository",
-        "source": repository,
+        "source": EXPECTED_REPOSITORY,
         "enforcement": "active",
         "conditions": MAIN_RULESET_CONDITIONS,
     }
@@ -1103,10 +1526,20 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     errors.extend(reference_errors)
     workflow_paths = {path.resolve() for path in workflows}
 
+    repository = policy.get("repository")
+    if repository != EXPECTED_REPOSITORY or type(repository) is not str:
+        errors.append(f"local: policy.repository must remain {EXPECTED_REPOSITORY!r}")
+    api_version = policy.get("api_version")
+    if api_version != EXPECTED_API_VERSION or type(api_version) is not str:
+        errors.append(f"local: policy.api_version must remain {EXPECTED_API_VERSION!r}")
+
     main = policy.get("main")
     if not isinstance(main, dict):
         errors.append("local: policy.main must be an object")
         return errors
+    main_ref = main.get("ref")
+    if main_ref != EXPECTED_MAIN_REF or type(main_ref) is not str:
+        errors.append(f"local: policy.main.ref must remain {EXPECTED_MAIN_REF!r}")
     active_ruleset_count = main.get("active_ruleset_count")
     if active_ruleset_count != 1 or type(active_ruleset_count) is not int:
         errors.append(
@@ -1193,6 +1626,15 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
                     contract.job,
                 )
             )
+            errors.extend(
+                f"local: {error}"
+                for error in validate_required_execution_safety(
+                    root,
+                    documents,
+                    document,
+                    contract.job,
+                )
+            )
         except GovernanceError as exc:
             errors.append(f"local: required check {context!r}: {exc}")
 
@@ -1230,22 +1672,21 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
 
     dependabot = root / ".github/dependabot.yml"
     if dependabot.is_file():
-        errors.extend(validate_dependabot_grouping(dependabot, policy))
+        errors.extend(validate_dependabot_configuration(dependabot, policy))
 
     actions_policy = policy.get("actions")
-    required_actions_policy = {
-        "enabled": True,
-        "allowed_actions": "all",
-        "sha_pinning_required": True,
-    }
-    if not isinstance(actions_policy, dict) or any(
-        actions_policy.get(key) != value
-        or type(actions_policy.get(key)) is not type(value)
-        for key, value in required_actions_policy.items()
-    ):
+    if not _json_exact(actions_policy, EXPECTED_ACTIONS):
         errors.append(
-            "local: policy.actions must keep Actions enabled, allow all "
-            "actions, and require full-SHA pinning"
+            "local: policy.actions differs exactly from the reviewed Actions "
+            f"object; actual={actions_policy!r}, expected={EXPECTED_ACTIONS!r}"
+        )
+
+    environments_policy = policy.get("environments")
+    if not _json_exact(environments_policy, EXPECTED_ENVIRONMENTS):
+        errors.append(
+            "local: policy.environments differs from the complete reviewed "
+            f"Preview/Production payload; actual={environments_policy!r}, "
+            f"expected={EXPECTED_ENVIRONMENTS!r}"
         )
 
     return errors
@@ -1379,13 +1820,23 @@ def _single_page_items(
     return items
 
 
-def _ref_pattern_matches(pattern: str, main_ref: str) -> bool:
-    if pattern in {"~ALL", "~DEFAULT_BRANCH"}:
+def _ref_pattern_matches(
+    pattern: str,
+    candidate_ref: str,
+    default_ref: str,
+) -> bool:
+    if pattern == "~ALL":
         return True
-    return fnmatch.fnmatchcase(main_ref, pattern)
+    if pattern == "~DEFAULT_BRANCH":
+        return candidate_ref == default_ref
+    return fnmatch.fnmatchcase(candidate_ref, pattern)
 
 
-def _ruleset_targets_main(ruleset: JsonObject, main_ref: str) -> bool:
+def _ruleset_targets_main(
+    ruleset: JsonObject,
+    main_ref: str,
+    default_ref: str,
+) -> bool:
     if ruleset.get("target") != "branch":
         return False
     conditions = ruleset.get("conditions")
@@ -1407,8 +1858,12 @@ def _ruleset_targets_main(ruleset: JsonObject, main_ref: str) -> bool:
             "branch ruleset ref_name include/exclude must be string lists "
             "and include must not be empty"
         )
-    includes_main = any(_ref_pattern_matches(pattern, main_ref) for pattern in include)
-    excludes_main = any(_ref_pattern_matches(pattern, main_ref) for pattern in exclude)
+    includes_main = any(
+        _ref_pattern_matches(pattern, main_ref, default_ref) for pattern in include
+    )
+    excludes_main = any(
+        _ref_pattern_matches(pattern, main_ref, default_ref) for pattern in exclude
+    )
     return includes_main and not excludes_main
 
 
@@ -1429,15 +1884,18 @@ def _rules(rulesets: Iterable[JsonObject], rule_type: str) -> list[JsonObject]:
 def _verify_main_rulesets(
     policy: JsonObject,
     rulesets: list[JsonObject],
+    default_ref: str,
 ) -> list[str]:
     errors: list[str] = []
     main = policy["main"]
     expected_ruleset = _main_ruleset_contract(policy)
     expected_pull_request = _pull_request_parameters(main)
     expected_status_base = _status_check_parameters(main)
-    main_ref = main["ref"]
+    main_ref = EXPECTED_MAIN_REF
     targeting = [
-        ruleset for ruleset in rulesets if _ruleset_targets_main(ruleset, main_ref)
+        ruleset
+        for ruleset in rulesets
+        if _ruleset_targets_main(ruleset, main_ref, default_ref)
     ]
     inactive = [
         ruleset for ruleset in targeting if ruleset.get("enforcement") != "active"
@@ -1733,6 +2191,25 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
     """Read GitHub settings and compare them with the checked-in policy."""
     errors: list[str] = []
     repository_settings = _api_payload(api_get, "")
+    if not isinstance(repository_settings, dict):
+        raise GovernanceError("GitHub repository response must be an object")
+    full_name = repository_settings.get("full_name")
+    if full_name != EXPECTED_REPOSITORY or type(full_name) is not str:
+        errors.append(
+            f"external: repository full_name is {full_name!r}; "
+            f"expected {EXPECTED_REPOSITORY!r}"
+        )
+    default_branch = repository_settings.get("default_branch")
+    if not isinstance(default_branch, str) or not default_branch:
+        raise GovernanceError(
+            "GitHub repository default_branch must be a non-empty string"
+        )
+    if default_branch != EXPECTED_DEFAULT_BRANCH:
+        errors.append(
+            f"external: repository default_branch is {default_branch!r}; "
+            f"expected {EXPECTED_DEFAULT_BRANCH!r}"
+        )
+    default_ref = f"refs/heads/{default_branch}"
     actual_merge_methods = _repository_merge_methods(repository_settings)
     expected_merge_methods = _pull_request_parameters(policy["main"])[
         "allowed_merge_methods"
@@ -1756,11 +2233,9 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
         if not isinstance(detail, dict):
             raise GovernanceError("GitHub ruleset detail must be an object")
         rulesets.append(detail)
-    errors.extend(_verify_main_rulesets(policy, rulesets))
+    errors.extend(_verify_main_rulesets(policy, rulesets, default_ref))
 
-    main_ref = policy["main"]["ref"]
-    if not isinstance(main_ref, str) or not main_ref.startswith("refs/heads/"):
-        raise GovernanceError("policy.main.ref must be a branch ref")
+    main_ref = EXPECTED_MAIN_REF
     branch_name = main_ref.removeprefix("refs/heads/")
     protection_endpoint = f"branches/{quote(branch_name, safe='')}/protection"
     protection = _api_response(api_get(protection_endpoint))
@@ -1785,20 +2260,25 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
     actions = _api_payload(api_get, "actions/permissions")
     if not isinstance(actions, dict):
         raise GovernanceError("GitHub Actions permissions response must be an object")
-    for key, label in (
-        ("enabled", "enabled policy"),
-        ("allowed_actions", "allowed-actions policy"),
-        ("sha_pinning_required", "full-SHA policy"),
-    ):
-        expected_value = policy["actions"][key]
-        actual_value = actions.get(key)
-        if actual_value != expected_value or type(actual_value) is not type(
-            expected_value
+    if not _json_exact(actions, EXPECTED_ACTIONS):
+        errors.append(
+            "external: GitHub Actions permissions differ exactly; "
+            f"actual={actions!r}, expected={EXPECTED_ACTIONS!r}"
+        )
+        for key, label in (
+            ("enabled", "enabled policy"),
+            ("allowed_actions", "allowed-actions policy"),
+            ("sha_pinning_required", "full-SHA policy"),
         ):
-            errors.append(
-                f"external: GitHub Actions {label} is "
-                f"{actual_value!r}; expected {expected_value!r}"
-            )
+            actual_value = actions.get(key)
+            expected_value = EXPECTED_ACTIONS[key]
+            if actual_value != expected_value or type(actual_value) is not type(
+                expected_value
+            ):
+                errors.append(
+                    f"external: GitHub Actions {label} is "
+                    f"{actual_value!r}; expected {expected_value!r}"
+                )
 
     environment_items = _single_page_items(
         api_get,
@@ -1815,7 +2295,7 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
     if len(environment_names) != len(set(environment_names)):
         raise GovernanceError("GitHub environments contain duplicate names")
     available = set(environment_names)
-    expected_names = set(policy["environments"])
+    expected_names = set(EXPECTED_ENVIRONMENTS)
     missing_environments = sorted(expected_names - available)
     extra_environments = sorted(available - expected_names)
     if missing_environments or extra_environments:
@@ -1823,7 +2303,7 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
             "external: GitHub environments differ exactly; "
             f"missing={missing_environments!r}, extra={extra_environments!r}"
         )
-    for name, expected in policy["environments"].items():
+    for name, expected in EXPECTED_ENVIRONMENTS.items():
         if name not in available:
             continue
         encoded_name = quote(name, safe="")

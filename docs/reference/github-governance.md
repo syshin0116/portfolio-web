@@ -62,6 +62,10 @@ Each emitter workflow must have exactly `pull_request`, `push` restricted to
 extra triggers, or a renamed/missing emitter fail. The emitter's complete
 `needs` graph must exist without cycles; jobs with dependencies use
 `if: always()`, and no job in that graph may have another skipping condition.
+Neither those jobs nor their steps may set `continue-on-error`, including
+`false`: presence would make a future expression or edit an easy false-green
+escape. The same ban is followed recursively through every reachable local
+composite action and reusable workflow, including nested local calls.
 This keeps a required check from remaining permanently pending after an
 upstream failure or merge-queue run.
 
@@ -79,6 +83,11 @@ only and verifies that GitHub selected the API version pinned in the manifest.
 An inaccessible endpoint, unexpected status/body, or API-version downgrade
 fails closed. It reads the repository's enabled merge methods as well, so the
 pull-request rule cannot require a method that the repository has disabled.
+The repository response must also report the exact `full_name`
+`syshin0116/syshin0116.dev` and `default_branch: main`; a rename, transfer, API
+redirect, or default-branch change is explicit drift. `~DEFAULT_BRANCH` is
+evaluated against that live default ref, not treated as an alias that always
+matches the manifest's `refs/heads/main`.
 Rulesets, environments, and branch policies request an explicit
 `per_page=100&page=1`; any pagination `Link`, inconsistent `total_count`, or
 second-page requirement fails closed:
@@ -137,6 +146,14 @@ missing rule, or a duplicate type is policy drift. GitHub-supplied ruleset
 metadata such as IDs, links, and timestamps is ignored; owned identity, target,
 conditions, rule types, and parameter objects are not.
 
+The verifier also contains a deliberately hardcoded reviewed baseline for the
+repository/API/main identities, required-check emitters, Actions object,
+environment payloads, Dependabot configuration, and ruleset parameters. This
+prevents changing the manifest and implementation under test together from
+silently redefining the contract. An intentional evolution—such as adding a
+Cloud Run `Staging` environment—updates the manifest, hardcoded baseline,
+mutation tests, and this runbook in the same PR.
+
 ## Full-SHA Actions policy
 
 First run the local verifier. Then enable **Settings → Actions → General →
@@ -145,7 +162,8 @@ Require actions to be pinned to a full-length commit SHA**. Dependabot's
 version comment together.
 
 Repository Actions must also remain enabled and the allowed-actions policy must
-remain `all`; the live verifier compares all three settings exactly.
+remain `all`; the live verifier compares the complete three-key response
+exactly, including its key set.
 
 GitHub documents a full commit SHA as the only immutable release reference for
 an action. The checked-in verifier fails before an unpinned action can make this
@@ -181,15 +199,21 @@ production or spend-bearing preview.
 
 ## Dependabot and scheduled audit
 
-Dependabot groups routine minor/patch updates per ecosystem and cools new
-releases before opening version-update PRs. Security updates are not grouped or
-cooled, so one vulnerable package is not held behind unrelated upgrades.
+Dependabot version 2 has exactly three update identities: npm at `/web`, pip at
+`/agent`, and GitHub Actions at `/`. They run weekly on Monday in
+`Asia/Seoul`, staggered at 04:00, 04:20, and 04:40, with three open PRs per
+ecosystem. npm and pip use the reviewed 7-day default, 14-day major, 7-day
+minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day default
+cooldown. Routine minor/patch updates are grouped per ecosystem. Security
+updates are not grouped or cooled, so one vulnerable package is not held behind
+unrelated upgrades.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
 LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
 `@langchain/*`, Next.js, NextAuth, and `@auth/*` remain isolated bump PRs because
 each can change an agent, protocol, framework, or authentication compatibility
-surface. The local verifier compares these groups with the machine-readable
-manifest exactly.
+surface. The local verifier compares version, update identity set, schedule,
+open-PR limit, full cooldown object, and every group exactly; missing,
+duplicate, changed, or extra updates/groups fail.
 
 [`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs
 weekly and manually. It verifies both lockfiles, runs Bun's high/critical audit,

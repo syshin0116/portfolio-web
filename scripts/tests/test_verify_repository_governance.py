@@ -25,6 +25,8 @@ LEGACY_MAIN_PROTECTION = "branches/main/protection"
 def desired_live_responses() -> dict[str, object]:
     return {
         "": {
+            "full_name": "syshin0116/syshin0116.dev",
+            "default_branch": "main",
             "allow_merge_commit": True,
             "allow_squash_merge": True,
             "allow_rebase_merge": True,
@@ -179,6 +181,158 @@ class LocalGovernanceTests(unittest.TestCase):
                 and "pull_request_parameters" in error
                 for error in errors
             )
+        )
+
+    def test_policy_identity_and_api_baseline_is_hardcoded(self) -> None:
+        mutations = (
+            ("repository", "renamed-owner/renamed-repository", "policy.repository"),
+            ("api_version", "2022-11-28", "policy.api_version"),
+        )
+        for field, value, expected_error in mutations:
+            with self.subTest(field=field):
+                policy = json.loads(json.dumps(governance.load_policy()))
+                policy[field] = value
+
+                errors = governance.validate_local(REPO_ROOT, policy)
+
+                self.assertTrue(
+                    any(expected_error in error for error in errors),
+                    errors,
+                )
+
+        policy = json.loads(json.dumps(governance.load_policy()))
+        policy["main"]["ref"] = "refs/heads/develop"
+
+        errors = governance.validate_local(REPO_ROOT, policy)
+
+        self.assertTrue(any("policy.main.ref" in error for error in errors), errors)
+
+    def test_required_check_manifest_baseline_is_exact(self) -> None:
+        mutations = (
+            ("context", "renamed/check"),
+            ("integration_id", 999),
+            ("workflow", ".github/workflows/dependency-audit.yml"),
+            ("job", "renamed-job"),
+            ("triggers", {"pull_request": {}}),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                policy = json.loads(json.dumps(governance.load_policy()))
+                policy["main"]["required_checks"][0][field] = value
+
+                errors = governance.validate_local(REPO_ROOT, policy)
+
+                self.assertTrue(
+                    any(
+                        "required_checks differs from the complete reviewed baseline"
+                        in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_actions_policy_object_and_keyset_are_exact(self) -> None:
+        mutations = (
+            ("value", {"enabled": False}),
+            ("type", {"enabled": 1}),
+            ("missing", {"sha_pinning_required": None}),
+            ("extra", {"undocumented_setting": True}),
+        )
+        for label, mutation in mutations:
+            with self.subTest(label=label):
+                policy = json.loads(json.dumps(governance.load_policy()))
+                if label == "missing":
+                    del policy["actions"]["sha_pinning_required"]
+                else:
+                    policy["actions"].update(mutation)
+
+                errors = governance.validate_local(REPO_ROOT, policy)
+
+                self.assertTrue(
+                    any("policy.actions differs exactly" in error for error in errors),
+                    errors,
+                )
+
+    def test_environment_policy_reviewer_and_name_mutations_are_exact(self) -> None:
+        def mutate_preview_reviewer(policy: dict[str, object]) -> None:
+            policy["environments"]["Preview"]["protection_rules"] = [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [{"type": "User", "login": "syshin0116"}],
+                }
+            ]
+
+        def mutate_remove_reviewer(policy: dict[str, object]) -> None:
+            policy["environments"]["Production"]["protection_rules"][0][
+                "reviewers"
+            ] = []
+
+        def mutate_reviewer_type(policy: dict[str, object]) -> None:
+            policy["environments"]["Production"]["protection_rules"][0]["reviewers"][
+                0
+            ] = {"type": "Team", "slug": "owners"}
+
+        def mutate_reviewer_identity(policy: dict[str, object]) -> None:
+            policy["environments"]["Production"]["protection_rules"][0]["reviewers"][0][
+                "login"
+            ] = "another-owner"
+
+        def mutate_duplicate_reviewer(policy: dict[str, object]) -> None:
+            reviewers = policy["environments"]["Production"]["protection_rules"][0][
+                "reviewers"
+            ]
+            reviewers.append(json.loads(json.dumps(reviewers[0])))
+
+        def mutate_self_review(policy: dict[str, object]) -> None:
+            policy["environments"]["Production"]["protection_rules"][0][
+                "prevent_self_review"
+            ] = True
+
+        def mutate_staging(policy: dict[str, object]) -> None:
+            policy["environments"]["Staging"] = {
+                "can_admins_bypass": True,
+                "deployment_branch_policy": None,
+                "branch_policies": [],
+                "protection_rules": [],
+            }
+
+        mutations = (
+            ("preview-reviewer", mutate_preview_reviewer),
+            ("reviewer-removal", mutate_remove_reviewer),
+            ("reviewer-type", mutate_reviewer_type),
+            ("reviewer-identity", mutate_reviewer_identity),
+            ("reviewer-duplicate", mutate_duplicate_reviewer),
+            ("self-review", mutate_self_review),
+            ("staging", mutate_staging),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                policy = json.loads(json.dumps(governance.load_policy()))
+                mutate(policy)
+
+                errors = governance.validate_local(REPO_ROOT, policy)
+
+                self.assertTrue(
+                    any(
+                        "policy.environments differs from the complete reviewed"
+                        in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_dependabot_policy_cannot_move_with_yaml_without_baseline_review(
+        self,
+    ) -> None:
+        policy = json.loads(json.dumps(governance.load_policy()))
+        policy["dependabot"]["updates"][0]["schedule"]["day"] = "tuesday"
+
+        errors = governance.validate_local(REPO_ROOT, policy)
+
+        self.assertTrue(
+            any("policy.dependabot differs" in error for error in errors),
+            errors,
         )
 
     def test_policy_keeps_status_checks_enforced_on_existing_main(self) -> None:
@@ -798,6 +952,145 @@ runs:
             any("@auth/*" in error and "web-routine" in error for error in errors)
         )
 
+    def test_dependabot_full_contract_field_mutations_are_rejected(self) -> None:
+        original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+        mutations = (
+            ("version-change", "version: 2\n", "version: 1\n"),
+            ("version-removal", "version: 2\n", ""),
+            (
+                "schedule-interval",
+                '      interval: "weekly"\n',
+                '      interval: "daily"\n',
+            ),
+            ("schedule-day-removal", '      day: "monday"\n', ""),
+            ("schedule-time", '      time: "04:00"\n', '      time: "05:00"\n'),
+            (
+                "schedule-timezone",
+                '      timezone: "Asia/Seoul"\n',
+                '      timezone: "UTC"\n',
+            ),
+            (
+                "open-limit-removal",
+                "    open-pull-requests-limit: 3\n",
+                "",
+            ),
+            (
+                "open-limit-change",
+                "    open-pull-requests-limit: 3\n",
+                "    open-pull-requests-limit: 4\n",
+            ),
+            ("cooldown-removal", "      semver-major-days: 14\n", ""),
+            (
+                "cooldown-change",
+                "      semver-patch-days: 3\n",
+                "      semver-patch-days: 4\n",
+            ),
+            (
+                "cooldown-extra",
+                "      semver-patch-days: 3\n",
+                "      semver-patch-days: 3\n      unsupported-days: 5\n",
+            ),
+            (
+                "group-value-change",
+                '        applies-to: "version-updates"\n',
+                '        applies-to: "security-updates"\n',
+            ),
+        )
+        policy = governance.load_policy()
+        for label, old, new in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                mutated_text = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated_text)
+                mutated = Path(directory) / "dependabot.yml"
+                mutated.write_text(mutated_text, encoding="utf-8")
+
+                errors = governance.validate_dependabot_configuration(
+                    mutated,
+                    policy,
+                )
+
+                self.assertTrue(errors, label)
+
+    def test_dependabot_update_removal_duplicate_and_extra_are_rejected(self) -> None:
+        original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+        npm_start = original.index('  - package-ecosystem: "npm"')
+        pip_start = original.index('  - package-ecosystem: "pip"')
+        actions_start = original.index('  - package-ecosystem: "github-actions"')
+        npm_update = original[npm_start:pip_start].rstrip()
+        mutations = {
+            "removal": original[:actions_start].rstrip() + "\n",
+            "duplicate": original.rstrip() + "\n\n" + npm_update + "\n",
+            "extra": (
+                original.rstrip()
+                + "\n\n"
+                + npm_update.replace(
+                    'package-ecosystem: "npm"',
+                    'package-ecosystem: "docker"',
+                    1,
+                )
+                .replace('directory: "/web"', 'directory: "/extra"', 1)
+                .replace("web-routine:", "extra-routine:", 1)
+                + "\n"
+            ),
+            "identity-change": original.replace(
+                '    directory: "/web"\n',
+                '    directory: "/renamed-web"\n',
+                1,
+            ),
+        }
+        policy = governance.load_policy()
+        for label, text in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                mutated = Path(directory) / "dependabot.yml"
+                mutated.write_text(text, encoding="utf-8")
+
+                errors = governance.validate_dependabot_configuration(
+                    mutated,
+                    policy,
+                )
+
+                self.assertTrue(errors, label)
+                self.assertTrue(
+                    any(
+                        "update identities differ exactly" in error
+                        or "duplicate Dependabot update" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_dependabot_group_removal_duplicate_and_extra_are_rejected(self) -> None:
+        original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+        groups_start = original.index("    groups:\n      web-routine:")
+        pip_start = original.index('\n  - package-ecosystem: "pip"')
+        group_block = original[groups_start + len("    groups:\n") : pip_start].rstrip()
+        mutations = {
+            "removal": (
+                original[:groups_start] + "    groups: {}\n" + original[pip_start + 1 :]
+            ),
+            "duplicate": (
+                original[:pip_start] + "\n" + group_block + original[pip_start:]
+            ),
+            "extra": (
+                original[:pip_start]
+                + "\n"
+                + group_block.replace("web-routine:", "web-extra:", 1)
+                + original[pip_start:]
+            ),
+        }
+        policy = governance.load_policy()
+        for label, text in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                mutated = Path(directory) / "dependabot.yml"
+                mutated.write_text(text, encoding="utf-8")
+
+                errors = governance.validate_dependabot_configuration(
+                    mutated,
+                    policy,
+                )
+
+                self.assertTrue(errors, label)
+
     def test_duplicate_required_check_name_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
@@ -992,6 +1285,265 @@ jobs:
             )
         )
 
+    def test_required_jobs_and_steps_forbid_continue_on_error(self) -> None:
+        mutations = (
+            (
+                "emitter-job",
+                "  check:\n    name: ci/check\n",
+                "  check:\n    name: ci/check\n    continue-on-error: false\n",
+                "job 'check'",
+            ),
+            (
+                "dependency-job",
+                "  changes:\n    name: ci/changes\n",
+                "  changes:\n    name: ci/changes\n    continue-on-error: true\n",
+                "job 'changes'",
+            ),
+            (
+                "emitter-step",
+                "      - name: Require every Application CI job to pass\n",
+                (
+                    "      - name: Require every Application CI job to pass\n"
+                    "        continue-on-error: false\n"
+                ),
+                "job 'check' step[0]",
+            ),
+            (
+                "dependency-step",
+                (
+                    "      - uses: "
+                    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 "
+                    "# v7.0.1\n"
+                    "        with:\n"
+                    "          fetch-depth: 0\n"
+                ),
+                (
+                    "      - uses: "
+                    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 "
+                    "# v7.0.1\n"
+                    "        continue-on-error: false\n"
+                    "        with:\n"
+                    "          fetch-depth: 0\n"
+                ),
+                "job 'changes' step[0]",
+            ),
+        )
+        for label, old, new, expected_context in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/ci.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        expected_context in error
+                        and "continue-on-error" in error
+                        and "required-check execution path" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_reachable_local_composite_actions_forbid_continue_on_error(
+        self,
+    ) -> None:
+        manifests = {
+            ".github/actions/required/outer/action.yml": """
+name: outer
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/required/inner
+""",
+            ".github/actions/required/inner/action.yml": """
+name: inner
+runs:
+  using: composite
+  steps:
+    - run: echo required
+      shell: bash
+      continue-on-error: false
+""",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            for relative, content in manifests.items():
+                manifest = root / relative
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_text(content.lstrip(), encoding="utf-8")
+            workflow = root / ".github/workflows/ci.yml"
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "    steps:\n      - name: Require every Application CI job to pass\n",
+                "    steps:\n"
+                "      - uses: ./.github/actions/required/outer\n"
+                "      - name: Require every Application CI job to pass\n",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                ".github/actions/required/inner/action.yml" in error
+                and "continue-on-error" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_directly_reachable_composite_action_forbids_continue_on_error(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            action = root / ".github/actions/required/action.yml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                """
+name: required
+runs:
+  using: composite
+  steps:
+    - run: echo required
+      shell: bash
+      continue-on-error: true
+""".lstrip(),
+                encoding="utf-8",
+            )
+            workflow = root / ".github/workflows/ci.yml"
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "    steps:\n      - name: Require every Application CI job to pass\n",
+                "    steps:\n"
+                "      - uses: ./.github/actions/required\n"
+                "      - name: Require every Application CI job to pass\n",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                ".github/actions/required/action.yml" in error
+                and "continue-on-error" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_reachable_reusable_workflows_forbid_continue_on_error(self) -> None:
+        workflow_mutations = (
+            (
+                "reusable-job",
+                """
+name: delegated
+on:
+  workflow_call:
+jobs:
+  delegated:
+    continue-on-error: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo delegated
+""",
+                "job 'delegated'",
+            ),
+            (
+                "reusable-step",
+                """
+name: delegated
+on:
+  workflow_call:
+jobs:
+  delegated:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo delegated
+        continue-on-error: true
+""",
+                "job 'delegated' step[0]",
+            ),
+            (
+                "nested-reusable-step",
+                """
+name: delegated
+on:
+  workflow_call:
+jobs:
+  delegated:
+    uses: ./.github/workflows/required-nested.yml
+""",
+                "required-nested.yml",
+            ),
+        )
+        for label, delegated_content, expected_context in workflow_mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                delegated = root / ".github/workflows/required-delegated.yml"
+                delegated.write_text(delegated_content.lstrip(), encoding="utf-8")
+                if label == "nested-reusable-step":
+                    nested = root / ".github/workflows/required-nested.yml"
+                    nested.write_text(
+                        """
+name: nested
+on:
+  workflow_call:
+jobs:
+  nested:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo nested
+        continue-on-error: false
+""".lstrip(),
+                        encoding="utf-8",
+                    )
+                ci = root / ".github/workflows/ci.yml"
+                original = ci.read_text(encoding="utf-8")
+                mutated = original.replace(
+                    "  check:\n",
+                    (
+                        "  delegated-required:\n"
+                        "    uses: ./.github/workflows/required-delegated.yml\n\n"
+                        "  check:\n"
+                    ),
+                    1,
+                ).replace(
+                    "  check:\n"
+                    "    name: ci/check\n"
+                    "    if: always()\n"
+                    "    needs:\n"
+                    "      - changes\n",
+                    "  check:\n"
+                    "    name: ci/check\n"
+                    "    if: always()\n"
+                    "    needs:\n"
+                    "      - delegated-required\n"
+                    "      - changes\n",
+                    1,
+                )
+                self.assertNotEqual(original, mutated)
+                ci.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        expected_context in error and "continue-on-error" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
 
 class LiveGovernanceTests(unittest.TestCase):
     @classmethod
@@ -1017,6 +1569,74 @@ class LiveGovernanceTests(unittest.TestCase):
             any(
                 "repository merge methods" in error and "'rebase'" in error
                 for error in errors
+            )
+        )
+
+    def test_repository_full_name_rejects_rename_or_redirect(self) -> None:
+        for full_name in (
+            "syshin0116/renamed.dev",
+            "redirect-owner/syshin0116.dev",
+        ):
+            with self.subTest(full_name=full_name):
+                responses = desired_live_responses()
+                repository = json.loads(json.dumps(responses[""]))
+                repository["full_name"] = full_name
+                responses[""] = repository
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "repository full_name" in error
+                        and full_name in error
+                        and governance.EXPECTED_REPOSITORY in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_default_branch_develop_does_not_make_default_token_target_main(
+        self,
+    ) -> None:
+        responses = desired_live_responses()
+        repository = json.loads(json.dumps(responses[""]))
+        repository["default_branch"] = "develop"
+        responses[""] = repository
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any("repository default_branch is 'develop'" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any(
+                "0 active branch rulesets target refs/heads/main" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_default_branch_token_and_explicit_ref_have_distinct_semantics(
+        self,
+    ) -> None:
+        ruleset = json.loads(json.dumps(desired_live_responses()["rulesets/7"]))
+        self.assertFalse(
+            governance._ruleset_targets_main(
+                ruleset,
+                "refs/heads/main",
+                "refs/heads/develop",
+            )
+        )
+        ruleset["conditions"]["ref_name"]["include"] = ["refs/heads/main"]
+        self.assertTrue(
+            governance._ruleset_targets_main(
+                ruleset,
+                "refs/heads/main",
+                "refs/heads/develop",
             )
         )
 
@@ -1257,6 +1877,34 @@ class LiveGovernanceTests(unittest.TestCase):
             errors,
         )
 
+    def test_actions_response_object_and_keyset_are_exact(self) -> None:
+        mutations = (
+            {"enabled": True, "allowed_actions": "all"},
+            {
+                "enabled": True,
+                "allowed_actions": "all",
+                "sha_pinning_required": True,
+                "undocumented_setting": False,
+            },
+        )
+        for actions in mutations:
+            with self.subTest(actions=actions):
+                responses = desired_live_responses()
+                responses["actions/permissions"] = actions
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "GitHub Actions permissions differ exactly" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
     def test_required_check_bindings_compare_wrong_and_duplicates_exactly(self) -> None:
         responses = desired_live_responses()
         ruleset = json.loads(json.dumps(responses["rulesets/7"]))
@@ -1428,6 +2076,103 @@ class LiveGovernanceTests(unittest.TestCase):
                 for error in errors
             )
         )
+
+    def test_production_reviewer_set_and_type_mutations_are_rejected(self) -> None:
+        def remove_reviewers(required_reviewers: dict[str, object]) -> None:
+            required_reviewers["reviewers"] = []
+
+        def change_type(required_reviewers: dict[str, object]) -> None:
+            required_reviewers["reviewers"] = [
+                {
+                    "type": "Team",
+                    "reviewer": {"slug": "owners"},
+                }
+            ]
+
+        def duplicate_reviewer(required_reviewers: dict[str, object]) -> None:
+            reviewers = required_reviewers["reviewers"]
+            reviewers.append(json.loads(json.dumps(reviewers[0])))
+
+        def add_reviewer(required_reviewers: dict[str, object]) -> None:
+            required_reviewers["reviewers"].append(
+                {
+                    "type": "User",
+                    "reviewer": {"login": "another-owner"},
+                }
+            )
+
+        mutations = (
+            ("removal", remove_reviewers),
+            ("type", change_type),
+            ("duplicate", duplicate_reviewer),
+            ("extra", add_reviewer),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                responses = desired_live_responses()
+                production = json.loads(
+                    json.dumps(responses["environments/Production"])
+                )
+                required_reviewers = production["protection_rules"][0]
+                mutate(required_reviewers)
+                responses["environments/Production"] = production
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "environment 'Production' protection rules" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_production_reviewer_rule_removal_extra_and_duplicate_are_rejected(
+        self,
+    ) -> None:
+        for label in ("removal", "extra", "duplicate"):
+            with self.subTest(label=label):
+                responses = desired_live_responses()
+                production = json.loads(
+                    json.dumps(responses["environments/Production"])
+                )
+                reviewer_rule = production["protection_rules"][0]
+                if label == "removal":
+                    production["protection_rules"] = [production["protection_rules"][1]]
+                elif label == "extra":
+                    production["protection_rules"].append(
+                        {
+                            "type": "required_reviewers",
+                            "prevent_self_review": False,
+                            "reviewers": [
+                                {
+                                    "type": "User",
+                                    "reviewer": {"login": "another-owner"},
+                                }
+                            ],
+                        }
+                    )
+                else:
+                    production["protection_rules"].append(
+                        json.loads(json.dumps(reviewer_rule))
+                    )
+                responses["environments/Production"] = production
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "environment 'Production' protection rules" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
 
     def test_extra_environment_is_rejected_as_policy_drift(self) -> None:
         responses = desired_live_responses()

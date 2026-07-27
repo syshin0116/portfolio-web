@@ -25,23 +25,116 @@ def _normalize(value: str) -> str:
     return unicodedata.normalize("NFC", value).casefold()
 
 
-def _normalization_units(text: str) -> tuple[tuple[str, int, int], ...]:
-    """Split text only where NFC+casefold cannot interact across the boundary."""
+def _ordered_nfd_atoms(text: str) -> tuple[tuple[str, int], ...]:
+    """Return canonically ordered NFD atoms with their input-character owner.
 
-    if not text:
-        return ()
-    units: list[tuple[str, int, int]] = []
-    start = 0
-    raw = text[0]
-    for index, character in enumerate(text[1:], start=1):
-        if _normalize(raw + character) == _normalize(raw) + _normalize(character):
-            units.append((_normalize(raw), start, index))
-            start = index
-            raw = character
+    Normalizing one source character at a time is not enough: combining marks can
+    reorder across character boundaries. Carrying the owner through canonical ordering
+    gives both the source and NFC forms the same atom stream without guessing where a
+    normalization boundary might be.
+    """
+
+    decomposed = [
+        (atom, owner)
+        for owner, character in enumerate(text)
+        for atom in unicodedata.normalize("NFD", character)
+    ]
+    ordered: list[tuple[str, int]] = []
+    segment: list[tuple[str, int]] = []
+
+    def flush_segment() -> None:
+        if not segment:
+            return
+        if unicodedata.combining(segment[0][0]) == 0:
+            ordered.append(segment[0])
+            ordered.extend(
+                sorted(segment[1:], key=lambda item: unicodedata.combining(item[0]))
+            )
         else:
-            raw += character
-    units.append((_normalize(raw), start, len(text)))
-    return tuple(units)
+            ordered.extend(
+                sorted(segment, key=lambda item: unicodedata.combining(item[0]))
+            )
+        segment.clear()
+
+    for atom in decomposed:
+        if unicodedata.combining(atom[0]) == 0:
+            flush_segment()
+        segment.append(atom)
+    flush_segment()
+
+    if "".join(atom for atom, _ in ordered) != unicodedata.normalize("NFD", text):
+        raise RuntimeError("exact-substring canonical decomposition alignment failed")
+    return tuple(ordered)
+
+
+def _normalized_source_spans(
+    text: str,
+    normalized_text: str,
+) -> tuple[tuple[int, int], ...]:
+    """Map every NFC+casefold output character to a conservative source span."""
+
+    nfc_text = unicodedata.normalize("NFC", text)
+    if nfc_text == text:
+        folded_parts = [character.casefold() for character in text]
+        if "".join(folded_parts) != normalized_text:
+            raise RuntimeError("exact-substring casefold alignment failed")
+        return tuple(
+            (source_index, source_index + 1)
+            for source_index, folded in enumerate(folded_parts)
+            for _ in folded
+        )
+
+    source_atoms = _ordered_nfd_atoms(text)
+    nfc_atoms = _ordered_nfd_atoms(nfc_text)
+    if tuple(atom for atom, _ in source_atoms) != tuple(atom for atom, _ in nfc_atoms):
+        raise RuntimeError("exact-substring source and NFC decompositions differ")
+
+    source_count = len(text)
+    parents = list(range(source_count + len(nfc_text)))
+
+    def find(owner: int) -> int:
+        while parents[owner] != owner:
+            parents[owner] = parents[parents[owner]]
+            owner = parents[owner]
+        return owner
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for (_, source_owner), (_, nfc_owner) in zip(
+        source_atoms,
+        nfc_atoms,
+        strict=True,
+    ):
+        union(source_owner, source_count + nfc_owner)
+
+    source_owners_by_component: dict[int, list[int]] = {}
+    for source_owner in range(source_count):
+        source_owners_by_component.setdefault(find(source_owner), []).append(
+            source_owner
+        )
+
+    nfc_spans: list[tuple[int, int]] = []
+    for nfc_owner in range(len(nfc_text)):
+        owners = source_owners_by_component.get(find(source_count + nfc_owner), [])
+        if not owners:
+            raise RuntimeError("exact-substring NFC character has no source provenance")
+        nfc_spans.append((min(owners), max(owners) + 1))
+
+    folded_parts = [character.casefold() for character in nfc_text]
+    if "".join(folded_parts) != normalized_text:
+        raise RuntimeError("exact-substring casefold alignment failed")
+    spans = tuple(
+        span
+        for folded, span in zip(folded_parts, nfc_spans, strict=True)
+        for _ in folded
+    )
+    if len(spans) != len(normalized_text):
+        raise RuntimeError("exact-substring normalized span count mismatch")
+    return spans
 
 
 def _snippet(text: str, normalized_text: str, normalized_query: str) -> str:
@@ -49,22 +142,13 @@ def _snippet(text: str, normalized_text: str, normalized_query: str) -> str:
     if normalized_start < 0:
         return ""
     normalized_end = normalized_start + len(normalized_query)
-    normalized_offset = 0
-    match_start: int | None = None
-    match_end: int | None = None
-    rebuilt: list[str] = []
-    for normalized_unit, source_start, source_end in _normalization_units(text):
-        rebuilt.append(normalized_unit)
-        unit_end = normalized_offset + len(normalized_unit)
-        if unit_end > normalized_start and normalized_offset < normalized_end:
-            if match_start is None:
-                match_start = source_start
-            match_end = source_end
-        normalized_offset = unit_end
-    if "".join(rebuilt) != normalized_text:
-        raise RuntimeError("exact-substring normalization alignment failed")
-    if match_start is None or match_end is None:
+    spans = _normalized_source_spans(text, normalized_text)[
+        normalized_start:normalized_end
+    ]
+    if not spans:
         raise RuntimeError("exact-substring match could not be aligned to source text")
+    match_start = min(start for start, _ in spans)
+    match_end = max(end for _, end in spans)
     if normalized_query not in _normalize(text[match_start:match_end]):
         raise RuntimeError("exact-substring source span does not contain the match")
 

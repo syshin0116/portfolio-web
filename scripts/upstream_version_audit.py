@@ -1140,7 +1140,13 @@ def _latest_npm(source: Source, response: JsonResponse) -> LatestRelease:
                 f"{source.package}: npm version record {version_text!r} has "
                 "inconsistent name/version fields"
             )
-        if version is not None:
+        deprecated = record.get("deprecated")
+        if deprecated is not None and type(deprecated) is not str:
+            raise SourceError(
+                f"{source.package}: npm version record {version_text!r} "
+                f"deprecated must be a string when present, got {deprecated!r}"
+            )
+        if version is not None and deprecated is None:
             candidates.append(version)
     latest = _highest_stable(candidates, context=source.package)
     reported = _parse_stable_version(
@@ -1152,7 +1158,8 @@ def _latest_npm(source: Source, response: JsonResponse) -> LatestRelease:
     if reported is None or reported.text != latest.text:
         raise SourceError(
             f"{source.package}: npm latest tag {reported_latest!r} does not "
-            f"identify the highest stable release {latest.text!r}"
+            "identify the highest non-deprecated stable release "
+            f"{latest.text!r}"
         )
     encoded = quote(source.package, safe="")
     return LatestRelease(

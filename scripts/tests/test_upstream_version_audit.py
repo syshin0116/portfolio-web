@@ -265,7 +265,7 @@ class OfficialShapeTests(unittest.TestCase):
 
         self.assertEqual("0.9.24", release.version.text)
 
-    def test_npm_fixture_ignores_prerelease(self) -> None:
+    def test_npm_fixture_ignores_prerelease_and_deprecated_release(self) -> None:
         source = audit._npm_source("@assistant-ui/react")
         release = audit._latest_npm(
             source,
@@ -362,6 +362,25 @@ class OfficialShapeTests(unittest.TestCase):
         source = audit._npm_source("@assistant-ui/react")
 
         with self.assertRaisesRegex(audit.SourceError, "expected an object"):
+            audit._latest_npm(
+                source,
+                audit.JsonResponse(payload, source.canonical_url, {}),
+            )
+
+    def test_npm_deprecated_field_rejects_boolean_string_confusion(self) -> None:
+        payload = copy.deepcopy(fixture("npm.json"))
+        if not isinstance(payload, dict):
+            self.fail("invalid fixture")
+        versions = payload["versions"]
+        if not isinstance(versions, dict) or not isinstance(versions["1.0.0"], dict):
+            self.fail("invalid fixture")
+        versions["1.0.0"]["deprecated"] = False
+        source = audit._npm_source("@assistant-ui/react")
+
+        with self.assertRaisesRegex(
+            audit.SourceError,
+            "deprecated must be a string",
+        ):
             audit._latest_npm(
                 source,
                 audit.JsonResponse(payload, source.canonical_url, {}),

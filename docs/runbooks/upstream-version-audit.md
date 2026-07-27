@@ -48,10 +48,11 @@ oversized, pagination, and schema errors fail closed.
 
 ### assistant-ui activation
 
-The exact `87af455` baseline does not yet contain `@assistant-ui/react` or
-`@assistant-ui/react-langgraph`; planned versions in a document are not product pins.
-The report therefore includes the `assistant-ui` group as explicitly `inactive`, with
-`installed` and `latest` left `null`, and makes no registry request for it.
+The current repository state at this change does not yet contain
+`@assistant-ui/react` or `@assistant-ui/react-langgraph`; planned versions in a document
+are not product pins. The report therefore includes the `assistant-ui` group as
+explicitly `inactive`, with `installed` and `latest` left `null`, and makes no registry
+request for it.
 
 As soon as either package appears in `web/package.json` or `web/bun.lock`, the whole group
 becomes mandatory:
@@ -79,9 +80,10 @@ each run reads the official endpoint again and exposes normalized `installed`, `
 - PyPI releases must parse as PEP 440, have at least one non-yanked file, and exclude
   alpha, beta, release-candidate, and dev releases. `info.version` must identify the
   highest remaining release.
-- npm versions must parse as semantic versions. Pre-release identifiers are excluded,
-  every version record must repeat the canonical package and version, and the `latest`
-  dist-tag must identify the highest stable version.
+- npm versions must parse as semantic versions. Pre-release identifiers and versions
+  carrying npm's string-valued `deprecated` field are excluded, every version record
+  must repeat the canonical package and version, and the `latest` dist-tag must identify
+  the highest remaining stable version.
 - Agent Protocol uses only non-draft, non-prerelease GitHub Releases whose tag begins
   `langchain-protocol==`. The suffix follows the package's PEP 440 final-release
   semantics. Other release families in the same repository are ignored.

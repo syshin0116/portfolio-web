@@ -1,5 +1,5 @@
-"""LangGraph agent — graph, tools, state."""
+"""Blog retrieval and LangGraph runtime package.
 
-from agent.graph import create_graph, graph
-
-__all__ = ["create_graph", "graph"]
+Import runtime entry points from :mod:`agent.graph`.  Keeping package initialization
+side-effect free lets the shared retrieval contract run without agent dependencies.
+"""

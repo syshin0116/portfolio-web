@@ -1,0 +1,108 @@
+name: Protocol compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  NPM_CONFIG_IGNORE_SCRIPTS: "true"
+  PNPM_IGNORE_SCRIPTS: "true"
+
+jobs:
+  protocol-compat:
+    name: protocol/compat
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: agent/uv.lock
+      - name: Install the locked protocol test environment
+        run: uv sync --project agent --frozen --all-extras --dev
+      - name: Lint protocol consumers
+        run: >-
+          uv run --project agent --frozen ruff check
+          scripts/protocol_typescript_contract.py
+          scripts/protocol_contract.py
+          scripts/smoke.py
+          scripts/verify_protocol_codegen.py
+          scripts/verify_protocol_upstream.py
+          protocol/tests
+      - name: Check protocol consumer formatting
+        run: >-
+          uv run --project agent --frozen ruff format --check
+          scripts/protocol_typescript_contract.py
+          scripts/protocol_contract.py
+          scripts/smoke.py
+          scripts/verify_protocol_codegen.py
+          scripts/verify_protocol_upstream.py
+          protocol/tests
+      - name: Verify pinned upstream schemas and generated bindings
+        run: >-
+          uv run --project agent --frozen
+          python scripts/verify_protocol_upstream.py
+      - name: Prepare the locked codegen toolchain
+        run: >-
+          python scripts/verify_protocol_codegen.py prepare
+          --workspace "$RUNNER_TEMP/protocol-codegen"
+      - name: Install the locked TypeScript fixture compiler
+        working-directory: protocol/tests/typescript
+        run: >-
+          corepack pnpm@10.33.0 install
+          --frozen-lockfile
+          --ignore-scripts
+          --store-dir "$RUNNER_TEMP/protocol-typescript-store"
+      - name: Regenerate bindings and verify three-way byte equality offline
+        env:
+          COREPACK_ENABLE_NETWORK: "0"
+          NPM_CONFIG_OFFLINE: "true"
+        run: >-
+          python scripts/verify_protocol_codegen.py verify
+          --workspace "$RUNNER_TEMP/protocol-codegen"
+          --repeat 2
+      - name: Validate protocol fixtures
+        run: >-
+          uv run --project agent --frozen
+          python scripts/protocol_contract.py
+      - name: Run protocol contract tests
+        run: >-
+          uv run --project agent --frozen
+          python -m unittest discover -s protocol/tests -v
+      - name: Compile and replay every fixture through generated TypeScript types
+        env:
+          COREPACK_ENABLE_NETWORK: "0"
+          NPM_CONFIG_OFFLINE: "true"
+        run: |
+          python scripts/protocol_typescript_contract.py \
+            --output-dir "$RUNNER_TEMP/protocol-typescript-contract/src" \
+            --compile-with protocol/tests/typescript
+      - name: Replay the offline smoke fixtures
+        run: >-
+          uv run --project agent --frozen
+          python scripts/smoke.py

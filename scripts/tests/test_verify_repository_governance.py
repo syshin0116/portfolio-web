@@ -783,6 +783,67 @@ class LocalGovernanceTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assert_agent_ci_job_mutation_rejected(replacements)
 
+    def test_agent_ci_container_smoke_rejects_unreviewed_mutations(self) -> None:
+        mutations = {
+            "cleanup-trap": (("          trap cleanup EXIT\n", ""),),
+            "cleanup-logs": (
+                (
+                    '              docker container logs "$container_name" || true\n',
+                    "",
+                ),
+            ),
+            "migration-host-network": (
+                (
+                    "            --rm \\\n"
+                    "            --network host \\\n"
+                    "            --entrypoint python \\\n",
+                    "            --rm \\\n"
+                    "            --network bridge \\\n"
+                    "            --entrypoint python \\\n",
+                ),
+            ),
+            "migration-entrypoint": (
+                ("            -m agent.migrate\n", "            -m agent.graph\n"),
+            ),
+            "runtime-host-network": (
+                (
+                    '            --name "$container_name" \\\n'
+                    "            --network host \\\n",
+                    '            --name "$container_name" \\\n'
+                    "            --network bridge \\\n",
+                ),
+            ),
+            "production-mode": (
+                (
+                    "            --env ENV_MODE=PRODUCTION \\\n",
+                    "            --env ENV_MODE=LOCAL \\\n",
+                ),
+            ),
+            "startup-migrations": (
+                (
+                    "            --env REDIS_BROKER_ENABLED=false \\\n"
+                    "            --env RUN_MIGRATIONS_ON_STARTUP=false \\\n",
+                    "            --env REDIS_BROKER_ENABLED=false \\\n"
+                    "            --env RUN_MIGRATIONS_ON_STARTUP=true \\\n",
+                ),
+            ),
+            "readiness": (
+                (
+                    "                http://127.0.0.1:8080/ready\n",
+                    "                http://127.0.0.1:8080/live\n",
+                ),
+            ),
+            "unauthenticated-command": (
+                (
+                    '          test "$unauthenticated_status" = "401"\n',
+                    '          test "$unauthenticated_status" = "200"\n',
+                ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_agent_ci_job_mutation_rejected(replacements)
+
     def test_agent_ci_exact_step_inventory_rejects_action_mutations(self) -> None:
         checkout = (
             "      - uses: "

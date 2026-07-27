@@ -71,7 +71,13 @@ cloud_run_api_request() (
   body="$(mktemp "${temp_root%/}/cloud-run-body.XXXXXX")"
   request="$(mktemp "${temp_root%/}/cloud-run-request.XXXXXX")"
   chmod 600 "$auth_config" "$body" "$request"
-  trap 'rm -f -- "$auth_config" "$body" "$request"' EXIT
+  CLOUD_RUN_API_CLEANUP_AUTH_CONFIG="$auth_config"
+  CLOUD_RUN_API_CLEANUP_BODY="$body"
+  CLOUD_RUN_API_CLEANUP_REQUEST="$request"
+  trap 'rm -f -- \
+    "$CLOUD_RUN_API_CLEANUP_AUTH_CONFIG" \
+    "$CLOUD_RUN_API_CLEANUP_BODY" \
+    "$CLOUD_RUN_API_CLEANUP_REQUEST"' EXIT
 
   token="$(gcloud auth print-access-token --quiet)"
   [[ "${#token}" -ge 20 && "${#token}" -le 4096 ]] &&

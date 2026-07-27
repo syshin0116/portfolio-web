@@ -87,7 +87,9 @@ inventory, so variable executables, wrapper commands, deletions, renames, and
 extra direct or indirect runs require a deliberate contract change. The final
 reviewed step is the one intentional exception to the ordinary run-step key
 set: it uses `shell: bash` to build the actual root `Dockerfile` for
-`linux/amd64` and inspect the resulting platform. No job or workflow
+`linux/amd64`, inspect the resulting platform, run that image's migration
+entrypoint against the job's PostgreSQL service, and boot the same image for
+health and unauthenticated-boundary checks. No job or workflow
 `defaults.run.working-directory` is allowed, because the root `pyproject.toml`,
 root `uv.lock`, `agent/`, `eval/`, scripts, and Docker context are one reviewed
 workspace contract. A comment, `echo`, or quoted command string therefore
@@ -96,7 +98,13 @@ cannot stand in for an executable gate.
 The same exact job AST pins a PostgreSQL 17 service, database credentials, published test
 port, `pg_isready` health check, and `AEGRA_POSTGRES_TEST_URL`. The ordinary pytest command
 therefore executes migration, checkpointer, real `/memories/` isolation, and pool-recreation
-coverage instead of reporting a green job with that integration test skipped.
+coverage instead of reporting a green job with that integration test skipped. The final
+step reuses that database to run `python -m agent.migrate` inside the exact built image,
+boots the image with startup migration, Redis dispatch, and background retries disabled,
+waits for `/live` and `/ready`, and requires an unauthenticated AP v2 command to return
+401. It always emits container logs and removes the container. It deliberately makes no
+provider or model request; real Neon, provider, browser, and capability evidence remain
+deployment gates.
 
 That contract binds the complete `agent` job AST, not only its `run` strings.
 The only job keys are the reviewed name, `always()` condition, `changes`
@@ -108,8 +116,8 @@ are exact and ordered: checkout is pinned to its
 reviewed SHA with only `persist-credentials: false`; setup-python v7.0.0 is
 pinned with Python 3.12; setup-uv v9.0.0 is pinned with uv 0.11.29, its reviewed
 checksum, and the reviewed cache inputs; the eight ordinary run steps retain their exact
-names, conditions, commands, and allowed keys; and the twelfth step builds and inspects
-the real delivery image.
+names, conditions, commands, and allowed keys; and the twelfth step builds, inspects,
+migrates, boots, probes, logs, and removes the real delivery image.
 Adding, deleting, moving, replacing, or changing an action or step, including a pinned or
 local composite action, is a deliberate baseline change in the verifier and its mutation
 tests.
@@ -274,6 +282,14 @@ The sole active `github-production` WIF provider explicitly maps numeric reposit
 owner IDs plus the four phase-specific delivery roles, and its condition references only
 those mapped attributes. The legacy `github-preview` provider is managed disabled as
 described in the [Cloud Run delivery runbook](../runbooks/cloud-run-delivery.md).
+
+When `AGENT_CLOUD_RUN_ENABLED=true`, the agent preview caller handles only
+`opened`, `reopened`, and `synchronize` events from same-repository, non-Dependabot pull
+requests. Its secretless builder resolves the exact PR head before the owner-gated
+`Agent Preview` release targets the fixed shared `agent-preview` service. A single global
+caller concurrency group serializes that shared service with
+`cancel-in-progress=false`; there is no label, per-PR service, URL comment, or expiry
+automation.
 
 After the reviewer releases `agent-release.yml` and before GCP authentication, a pinned
 repository validator binds the exact target/environment/mode, source SHA, isolated digest

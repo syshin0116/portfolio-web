@@ -205,7 +205,7 @@ AGENT_DOCKER_UV_IMAGE = (
 AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
 AGENT_CI_JOB = "agent"
 AGENT_CI_JOB_AST_SHA256 = (
-    "283b88b111253264ab6edffd8e65a196a697a94045a7ca26eba99a062d65b1ad"
+    "765ed789b1bdb10e9a377fee2a777788cf7549887ec2e054220b0f3a11e4abee"
 )
 AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",

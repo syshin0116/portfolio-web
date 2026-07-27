@@ -199,12 +199,24 @@ jobs:
       - if: needs.changes.outputs.agent == 'true'
         run: >-
           uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q agent/tests
-      - name: Build and inspect the Linux amd64 delivery image
+      - name: Build, inspect, and smoke the Linux amd64 delivery image
         if: needs.changes.outputs.agent == 'true'
         shell: bash
         run: |
           set -euo pipefail
           image_tag="agent-ci:$GITHUB_SHA"
+          container_name="agent-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            exit_code=$?
+            trap - EXIT
+            if docker container inspect "$container_name" >/dev/null 2>&1; then
+              docker container logs "$container_name" || true
+              docker container rm --force "$container_name" >/dev/null || true
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup EXIT
+
           docker build \
             --file Dockerfile \
             --platform linux/amd64 \
@@ -216,6 +228,83 @@ jobs:
               --format '{{.Os}}/{{.Architecture}}' \
               "$image_tag"
           )" = "linux/amd64"
+
+          docker run \
+            --rm \
+            --network host \
+            --entrypoint python \
+            --env "DATABASE_URL=$AEGRA_POSTGRES_TEST_URL" \
+            --env ENV_MODE=PRODUCTION \
+            --env RUN_MIGRATIONS_ON_STARTUP=false \
+            "$image_tag" \
+            -m agent.migrate
+
+          docker run \
+            --detach \
+            --name "$container_name" \
+            --network host \
+            --env AEGRA_CONFIG=/app/aegra.json \
+            --env AGENT_AUTH_SECRET=ci-only-agent-secret-ci-only-agent-secret \
+            --env ANTHROPIC_API_KEY=ci-only-not-a-real-anthropic-key \
+            --env BG_JOB_MAX_RETRIES=0 \
+            --env "DATABASE_URL=$AEGRA_POSTGRES_TEST_URL" \
+            --env ENV_MODE=PRODUCTION \
+            --env FF_V2_EVENT_STREAMING=true \
+            --env HOST=0.0.0.0 \
+            --env LANGCHAIN_API_KEY=ci-only-not-a-real-langchain-key \
+            --env LANGGRAPH_MAX_POOL_SIZE=4 \
+            --env LANGGRAPH_MIN_POOL_SIZE=1 \
+            --env MODEL=anthropic:claude-sonnet-4-6 \
+            --env OPENAI_API_KEY=ci-only-not-a-real-openai-key \
+            --env PORT=8080 \
+            --env REDIS_BROKER_ENABLED=false \
+            --env RUN_MIGRATIONS_ON_STARTUP=false \
+            --env SQLALCHEMY_MAX_OVERFLOW=0 \
+            --env SQLALCHEMY_POOL_SIZE=2 \
+            "$image_tag" \
+            >/dev/null
+
+          health_ready=false
+          for _ in {1..120}; do
+            test "$(
+              docker container inspect \
+                --format '{{.State.Running}}' \
+                "$container_name"
+            )" = "true"
+            if curl \
+              --fail \
+              --silent \
+              --max-time 3 \
+              --output /dev/null \
+              http://127.0.0.1:8080/live \
+              && curl \
+                --fail \
+                --silent \
+                --max-time 3 \
+                --output /dev/null \
+                http://127.0.0.1:8080/ready
+            then
+              health_ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$health_ready" = "true"
+
+          unauthenticated_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --max-time 5 \
+              --max-redirs 0 \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              --header 'content-type: application/json' \
+              --data \
+                '{"id":1,"method":"run.start","params":{"assistant_id":"agent","input":{"messages":[{"role":"user","content":"ci"}]}}}' \
+              http://127.0.0.1:8080/threads/00000000-0000-4000-8000-000000000001/commands
+          )"
+          test "$unauthenticated_status" = "401"
 
   eval:
     name: ci/eval

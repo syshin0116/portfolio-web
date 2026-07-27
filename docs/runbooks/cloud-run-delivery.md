@@ -71,9 +71,10 @@ the Vercel site must reach them. Aegra's outer bearer-token middleware remains t
 application authorization boundary: the delivery gate proves `/live` and `/ready` are
 public while an unauthenticated APv2 `run.start` returns 401.
 
-Both services are fixed to one instance and one Uvicorn worker. This is a correctness
-constraint, not a cost optimization: Aegra 0.9.24's same-thread mutation guard is
-process-local.
+Both services use 1 GiB memory, `cpu_idle=true`, `startup_cpu_boost=true`, a 300-second
+request timeout, `max_instances=1`, concurrency 8, and one Uvicorn worker. The instance
+and worker limits are correctness constraints, not cost optimizations: Aegra 0.9.24's
+same-thread mutation guard is process-local.
 
 Each service revision has exactly 18 environment entries: 13 reviewed plain values and
 five numeric-version secret references. The plain set includes
@@ -302,12 +303,16 @@ reducing a boundary, inventory revision digests again and first repeat the dry r
 
 ## Normal delivery
 
-`preview-agent.yml` deploys in-repository, non-Dependabot pull requests to
-`agent-preview`. Fork pull requests never receive the deployment job. `deploy-agent.yml`
-deploys reviewed `main` pushes to `agent`.
+When the repository variable `AGENT_CLOUD_RUN_ENABLED=true`, `preview-agent.yml` handles
+`opened`, `reopened`, and `synchronize` events from same-repository, non-Dependabot pull
+requests and deploys to the fixed shared `agent-preview` service. Fork pull requests never
+receive the deployment job. The secretless builder resolves the exact PR head before the
+owner-approved release; there is no label trigger, per-PR service, PR URL comment, or
+expiry automation. `deploy-agent.yml` deploys reviewed `main` pushes to `agent`.
 
-The caller owns the only concurrency group for its target, with
-`cancel-in-progress=false`; the reusable workflows declare no nested concurrency group.
+The preview caller owns one global concurrency group for its shared service, with
+`cancel-in-progress=false`; callers own the only delivery concurrency groups and the
+reusable workflows declare no nested concurrency group.
 After environment approval and before any GCP authentication, the release gate binds the
 exact target/environment/mode tuple, source SHA, isolated-registry digest or rollback
 revision, and fresh bounded smoke token. Preview requires the still-open same-repository
@@ -328,8 +333,14 @@ The caller composes two reusable workflows. `agent-image-build.yml`:
 3. emits only the registry-resolved digest.
 
 It uses the root frozen uv workspace and the Dockerfile-specific context allowlist.
-`ci/agent` also builds and inspects the real Linux amd64 delivery image, so a lock,
-workspace-member, context, corpus, or architecture error fails before release.
+`ci/agent` also builds and inspects the real Linux amd64 delivery image, runs
+`python -m agent.migrate` inside that exact image against the job's PostgreSQL 17 service,
+boots the image against the same database with startup migration, Redis dispatch, and
+background retries disabled, waits for `/live` and `/ready`, and requires an
+unauthenticated AP v2 command to return 401. Cleanup always logs and removes the
+container. This bounded PR smoke makes no provider or model request, so a lock,
+workspace-member, context, corpus, architecture, migration, startup, or fail-closed
+routing error fails before release without pretending to prove the deployed environment.
 
 After owner approval, `agent-release.yml` passes that digest to
 `scripts/deploy_cloud_run.sh`, which:
@@ -417,6 +428,9 @@ Restore a prior secret version only as a separately reviewed operation.
   variable inventory, and sole `AGENT_SMOKE_BEARER_TOKEN` secret still need external
   configuration and read-only live verification.
 - The first provider-backed Korean two-turn APv2 smoke is still a live deployment gate.
+- The real-Neon grant/denial result, provider-backed smoke, browser journey, and
+  capability-policy evidence remain P2/P3 operational gates; the PostgreSQL 17 PR
+  container smoke does not satisfy them.
 - Anonymous visitor access remains a later reviewed production release after ADR-0006's
   isolation, concurrency, retention, and spend gates. An unreviewed preview build never
   becomes the public guest path.

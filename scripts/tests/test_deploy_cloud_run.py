@@ -918,8 +918,13 @@ class CloudRunDeliveryTests(unittest.TestCase):
             state = json.loads(
                 (Path(directory) / "state.json").read_text(encoding="utf-8")
             )
+            rest_artifacts = sorted(
+                path.name for path in Path(directory).glob("cloud-run-*")
+            )
 
         self.assertNotEqual(0, result.returncode)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertEqual([], rest_artifacts)
         self.assertIn("/jobs/agent-migrate:run", operations)
         self.assertNotIn("gcloud run services update agent", operations)
         self.assertEqual(

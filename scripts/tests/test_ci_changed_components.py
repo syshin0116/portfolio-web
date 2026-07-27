@@ -31,6 +31,7 @@ class PathClassificationTests(unittest.TestCase):
     def test_shared_contract_paths_run_every_component(self) -> None:
         for path in (
             ".github/workflows/ci.yml",
+            ".github/workflows/dependency-audit.yml",
             "content/AI/example.md",
             "protocol/fixtures/content-tool-run.json",
         ):

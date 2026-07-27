@@ -1,0 +1,266 @@
+{
+  "repository": "syshin0116/syshin0116.dev",
+  "api_version": "2026-03-10",
+  "main": {
+    "ref": "refs/heads/main",
+    "legacy_branch_protection": "absent",
+    "ruleset": {
+      "name": "main",
+      "target": "branch",
+      "source_type": "Repository",
+      "source": "syshin0116/syshin0116.dev",
+      "enforcement": "active",
+      "conditions": {
+        "ref_name": {
+          "include": [
+            "~DEFAULT_BRANCH"
+          ],
+          "exclude": []
+        }
+      }
+    },
+    "active_ruleset_count": 1,
+    "bypass_actors": [],
+    "required_checks": [
+      {
+        "context": "ci/check",
+        "integration_id": 15368,
+        "workflow": ".github/workflows/ci.yml",
+        "job": "check",
+        "triggers": {
+          "pull_request": {},
+          "push": {
+            "branches": [
+              "main"
+            ]
+          },
+          "merge_group": {
+            "types": [
+              "checks_requested"
+            ]
+          },
+          "workflow_dispatch": {}
+        }
+      },
+      {
+        "context": "protocol/compat",
+        "integration_id": 15368,
+        "workflow": ".github/workflows/protocol-compat.yml",
+        "job": "protocol-compat",
+        "triggers": {
+          "pull_request": {},
+          "push": {
+            "branches": [
+              "main"
+            ]
+          },
+          "merge_group": {
+            "types": [
+              "checks_requested"
+            ]
+          },
+          "workflow_dispatch": {}
+        }
+      },
+      {
+        "context": "wiki/verify",
+        "integration_id": 15368,
+        "workflow": ".github/workflows/wiki-verify.yml",
+        "job": "verify-wiki",
+        "triggers": {
+          "pull_request": {},
+          "push": {
+            "branches": [
+              "main"
+            ]
+          },
+          "merge_group": {
+            "types": [
+              "checks_requested"
+            ]
+          },
+          "workflow_dispatch": {}
+        }
+      }
+    ],
+    "rule_types": [
+      "deletion",
+      "non_fast_forward",
+      "pull_request",
+      "required_status_checks"
+    ],
+    "pull_request_parameters": {
+      "allowed_merge_methods": [
+        "merge",
+        "squash",
+        "rebase"
+      ],
+      "dismiss_stale_reviews_on_push": false,
+      "require_code_owner_review": false,
+      "require_last_push_approval": false,
+      "required_approving_review_count": 0,
+      "required_review_thread_resolution": false,
+      "required_reviewers": []
+    },
+    "required_status_checks_parameters": {
+      "do_not_enforce_on_create": false,
+      "strict_required_status_checks_policy": true
+    }
+  },
+  "actions": {
+    "enabled": true,
+    "allowed_actions": "all",
+    "sha_pinning_required": true
+  },
+  "environments": {
+    "Preview": {
+      "can_admins_bypass": true,
+      "deployment_branch_policy": null,
+      "branch_policies": [],
+      "protection_rules": []
+    },
+    "Production": {
+      "can_admins_bypass": true,
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      },
+      "branch_policies": [
+        {
+          "name": "main",
+          "type": "branch"
+        }
+      ],
+      "protection_rules": [
+        {
+          "type": "required_reviewers",
+          "prevent_self_review": false,
+          "reviewers": [
+            {
+              "type": "User",
+              "login": "syshin0116"
+            }
+          ]
+        },
+        {
+          "type": "branch_policy"
+        }
+      ]
+    }
+  },
+  "dependabot": {
+    "vulnerability_alerts_enabled": true,
+    "automated_security_fixes": {
+      "enabled": true,
+      "paused": false
+    },
+    "repository_security_updates_status": "enabled",
+    "version": 2,
+    "updates": [
+      {
+        "package_ecosystem": "npm",
+        "directory": "/web",
+        "schedule": {
+          "interval": "weekly",
+          "day": "monday",
+          "time": "04:00",
+          "timezone": "Asia/Seoul"
+        },
+        "open_pull_requests_limit": 3,
+        "cooldown": {
+          "default_days": 7,
+          "semver_major_days": 14,
+          "semver_minor_days": 7,
+          "semver_patch_days": 3
+        },
+        "groups": [
+          {
+            "name": "web-routine",
+            "applies_to": "version-updates",
+            "patterns": [
+              "*"
+            ],
+            "exclude_patterns": [
+              "@assistant-ui/*",
+              "@auth/*",
+              "@langchain/*",
+              "next",
+              "next-auth"
+            ],
+            "update_types": [
+              "minor",
+              "patch"
+            ]
+          }
+        ]
+      },
+      {
+        "package_ecosystem": "pip",
+        "directory": "/agent",
+        "schedule": {
+          "interval": "weekly",
+          "day": "monday",
+          "time": "04:20",
+          "timezone": "Asia/Seoul"
+        },
+        "open_pull_requests_limit": 3,
+        "cooldown": {
+          "default_days": 7,
+          "semver_major_days": 14,
+          "semver_minor_days": 7,
+          "semver_patch_days": 3
+        },
+        "groups": [
+          {
+            "name": "agent-routine",
+            "applies_to": "version-updates",
+            "patterns": [
+              "*"
+            ],
+            "exclude_patterns": [
+              "aegra-*",
+              "deepagents",
+              "langchain",
+              "langchain-*",
+              "langgraph",
+              "langgraph-*",
+              "langsmith"
+            ],
+            "update_types": [
+              "minor",
+              "patch"
+            ]
+          }
+        ]
+      },
+      {
+        "package_ecosystem": "github-actions",
+        "directory": "/",
+        "schedule": {
+          "interval": "weekly",
+          "day": "monday",
+          "time": "04:40",
+          "timezone": "Asia/Seoul"
+        },
+        "open_pull_requests_limit": 3,
+        "cooldown": {
+          "default_days": 7
+        },
+        "groups": [
+          {
+            "name": "actions-routine",
+            "applies_to": "version-updates",
+            "patterns": [
+              "*"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "minor",
+              "patch"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

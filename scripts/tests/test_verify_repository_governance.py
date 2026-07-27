@@ -957,6 +957,10 @@ runs:
                     "@langchain/*",
                     "next",
                     "next-auth",
+                    "react",
+                    "react-dom",
+                    "@types/react",
+                    "@types/react-dom",
                 ]
             ),
             groups["bun:/web:web-routine"]["exclude_patterns"],
@@ -971,6 +975,7 @@ runs:
                     "langgraph",
                     "langgraph-*",
                     "langsmith",
+                    "numpy",
                 ]
             ),
             groups["uv:/agent:agent-routine"]["exclude_patterns"],

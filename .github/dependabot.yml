@@ -25,6 +25,10 @@ updates:
           - "@langchain/*"
           - "next"
           - "next-auth"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
         update-types:
           - "minor"
           - "patch"
@@ -56,6 +60,7 @@ updates:
           - "langgraph"
           - "langgraph-*"
           - "langsmith"
+          - "numpy"
         update-types:
           - "minor"
           - "patch"

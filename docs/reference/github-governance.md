@@ -229,11 +229,13 @@ updates are not grouped or cooled, so one vulnerable package is not held behind
 unrelated upgrades.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
 LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
-`@langchain/*`, Next.js, NextAuth, and `@auth/*` remain isolated bump PRs because
-each can change an agent, protocol, framework, or authentication compatibility
-surface. The local verifier compares version, update identity set, schedule,
-open-PR limit, full cooldown object, and every group exactly; missing,
-duplicate, changed, or extra updates/groups fail.
+`@langchain/*`, Next.js, NextAuth, `@auth/*`, React/React DOM and their type
+packages, and NumPy remain isolated bump PRs. React updates require focused
+build/browser evidence, while NumPy is part of the persisted BM25 artifact
+provenance contract; the other exclusions can change an agent, protocol,
+framework, or authentication compatibility surface. The local verifier compares
+version, update identity set, schedule, open-PR limit, full cooldown object, and
+every group exactly; missing, duplicate, changed, or extra updates/groups fail.
 
 The version-update schedule in `dependabot.yml` does not itself enable GitHub's
 repository security features. The external contract separately requires

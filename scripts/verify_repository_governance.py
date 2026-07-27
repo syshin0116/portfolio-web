@@ -164,6 +164,10 @@ EXPECTED_DEPENDABOT = {
                         "@langchain/*",
                         "next",
                         "next-auth",
+                        "react",
+                        "react-dom",
+                        "@types/react",
+                        "@types/react-dom",
                     ],
                     "update_types": ["minor", "patch"],
                 }
@@ -198,6 +202,7 @@ EXPECTED_DEPENDABOT = {
                         "langgraph",
                         "langgraph-*",
                         "langsmith",
+                        "numpy",
                     ],
                     "update_types": ["minor", "patch"],
                 }

@@ -110,10 +110,12 @@ whose OIDC identity can reach GCP deployment resources.
 Promotion into the retrieval-method catalogue requires all of these external checks:
 
 1. The repository `Evaluation Publication` environment exists with the exact governance
-   policy (main branch only, `syshin0116` required reviewer, no admin bypass) and contains
-   no deployment secrets or variables. Run the live repository-governance verifier
-   before dispatch. This environment is not configured in GitHub as of 2026-07-28, so
-   publication dispatch is blocked until that external setup and verification finish.
+   policy (main branch only, `syshin0116` required reviewer, no admin bypass). Run the
+   live repository-governance verifier for those policy fields, then separately confirm
+   in the GitHub UI/API that the environment contains no secrets or variables; the live
+   verifier does not inspect either inventory. This environment is not configured in
+   GitHub as of 2026-07-28, so publication dispatch is blocked until that external setup
+   and both checks finish.
 2. The reviewer approves the manual workflow for the intended main commit.
 3. Download the `blogeval-publication-candidate-<sha>` artifact and run:
 

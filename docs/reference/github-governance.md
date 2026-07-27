@@ -95,12 +95,18 @@ dependency, Ubuntu runner, 20-minute timeout, agent working directory, exact CI
 environment, and ordered steps. `container`, `services`, `strategy`,
 `environment`, a self-hosted runner, or any other extra or changed job key
 fails. All eleven steps are exact and ordered: checkout is pinned to its
-reviewed SHA with only `persist-credentials: false`; setup-python is pinned
-with Python 3.12; setup-uv is pinned with only the reviewed cache inputs; and
-the eight run steps retain their exact names, conditions, commands, and
-allowed keys. Adding, deleting, moving, replacing, or changing an action,
+reviewed SHA with only `persist-credentials: false`; setup-python v7.0.0 is
+pinned with Python 3.12; setup-uv v8.3.2 is pinned with only the reviewed cache
+inputs; and the eight run steps retain their exact names, conditions, commands,
+and allowed keys. Adding, deleting, moving, replacing, or changing an action,
 including a pinned or local composite action, is a deliberate baseline change
 in the verifier and its mutation tests.
+
+The setup-python v7 major removes only the unused `pip-install` input from this
+repository's surface. setup-uv v8 removes the deprecated custom
+`manifest-file` format and mutable major/minor tags; this repository uses
+neither, keeps full-SHA pins, and uses inputs still declared by v8.3.2:
+`version`, `checksum`, `enable-cache`, and `cache-dependency-glob`.
 
 No job in the required-check emitter or its transitive `needs` graph may use
 job-level `uses`, whether it calls a local or external reusable workflow.
@@ -284,6 +290,15 @@ audits the exact exported Python resolution with pinned `pip-audit`, and reports
 one stable `dependency/audit` result. It is an alerting workflow, not a required
 main check; a discovered vulnerability should create a focused fix PR rather
 than making every unrelated PR permanently pending.
+
+Its agent job deliberately pins uv 0.11.29 under setup-uv v8.3.2. That action's
+built-in checksum table ends at uv 0.11.28, so the workflow also pins the
+official Linux x64 0.11.29 archive SHA-256 rather than allowing an unverified
+download. Local uv commands validate the lock/export semantics but cannot
+emulate the GitHub Action's Node runtime, release download, checksum, and cache
+path. After this action rollup is pushed, manually dispatch **Dependency
+audit** and require its agent job to install uv 0.11.29 and pass before
+considering that scheduled path verified.
 
 The web policy is executable in
 [`audit-dependencies.ts`](../../web/scripts/audit-dependencies.ts) and fails

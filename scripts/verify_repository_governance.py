@@ -244,14 +244,14 @@ EXPECTED_AGENT_CI_JOB = {
             ),
         },
         {
-            "uses": ("actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"),
+            "uses": ("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"),
             "if": AGENT_CI_CHANGED_CONDITION,
             "with": {
                 "python-version": "3.12",
             },
         },
         {
-            "uses": ("astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78"),
+            "uses": ("astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990"),
             "if": AGENT_CI_CHANGED_CONDITION,
             "with": {
                 "enable-cache": "true",
@@ -286,6 +286,25 @@ EXPECTED_AGENT_CI_JOB = {
         },
     ],
 }
+EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
+    {
+        "uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+        "with": {
+            "python-version": "3.12",
+        },
+    },
+    {
+        "uses": "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990",
+        "with": {
+            "version": "0.11.29",
+            "checksum": (
+                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
+            ),
+            "enable-cache": "true",
+            "cache-dependency-glob": "agent/uv.lock",
+        },
+    },
+]
 EXPECTED_DEPENDABOT = {
     "vulnerability_alerts_enabled": True,
     "automated_security_fixes": EXPECTED_AUTOMATED_SECURITY_FIXES,
@@ -835,6 +854,37 @@ def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
             f"actual={tuple(run_step_inventory)!r}"
         )
     return errors
+
+
+def validate_dependency_audit_agent_setup(document: YamlDocument) -> list[str]:
+    """Require the reviewed interpreter and checksummed uv setup sequence."""
+    jobs = _workflow_jobs(document)
+    agent = jobs.get("agent")
+    if agent is None:
+        return [f"{document.path}: required dependency audit job 'agent' is missing"]
+
+    steps = _mapping_value(agent, "steps")
+    if not isinstance(steps, SequenceNode):
+        return [f"{document.path}: dependency audit job 'agent' steps must be a list"]
+
+    actual_setup: list[dict[str, Any]] = []
+    setup_prefixes = ("actions/setup-python@", "astral-sh/setup-uv@")
+    for step in steps.value:
+        if not isinstance(step, MappingNode):
+            continue
+        data = _node_to_data(step)
+        uses = data.get("uses")
+        if isinstance(uses, str) and uses.startswith(setup_prefixes):
+            actual_setup.append(data)
+
+    if _json_exact(actual_setup, EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP):
+        return []
+    return [
+        f"{document.path}: dependency audit agent setup differs from the "
+        "reviewed interpreter/checksum baseline; "
+        f"expected={EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP!r}, "
+        f"actual={actual_setup!r}"
+    ]
 
 
 def validate_required_job_graph(
@@ -1978,6 +2028,12 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
                     "local: dependency audit must fail honestly; "
                     "continue-on-error is forbidden"
                 )
+            errors.extend(
+                f"local: {error}"
+                for error in validate_dependency_audit_agent_setup(
+                    documents[dependency_audit]
+                )
+            )
             audit_commands = [
                 _scalar_value(
                     node,

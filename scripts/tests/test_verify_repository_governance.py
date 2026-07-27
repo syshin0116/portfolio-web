@@ -261,16 +261,16 @@ class LocalGovernanceTests(unittest.TestCase):
         )
         setup_python = (
             "      - uses: "
-            "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 "
-            "# v6.3.0\n"
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 "
+            "# v7.0.0\n"
             "        if: needs.changes.outputs.agent == 'true'\n"
             "        with:\n"
             '          python-version: "3.12"\n'
         )
         setup_uv = (
             "      - uses: "
-            "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 "
-            "# v7.6.0\n"
+            "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 "
+            "# v8.3.2\n"
             "        if: needs.changes.outputs.agent == 'true'\n"
             "        with:\n"
             "          enable-cache: true\n"
@@ -309,7 +309,7 @@ class LocalGovernanceTests(unittest.TestCase):
                 (
                     setup_python,
                     setup_python.replace(
-                        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+                        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
                         "actions/cache@" + "a" * 40,
                     ),
                 ),
@@ -1397,6 +1397,47 @@ runs:
             1,
             audit_commands.count(governance.DEPENDENCY_WEB_AUDIT_COMMAND),
         )
+
+    def test_dependency_audit_setup_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "checksum",
+                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829",
+                "0" * 64,
+            ),
+            (
+                "uv-version",
+                'version: "0.11.29"',
+                'version: "0.11.28"',
+            ),
+            (
+                "setup-python",
+                "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "actions/setup-python@" + "a" * 40,
+            ),
+            (
+                "setup-uv",
+                "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990",
+                "astral-sh/setup-uv@" + "b" * 40,
+            ),
+        )
+        for label, old, new in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/dependency-audit.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(
+                    "dependency audit agent setup differs" in error for error in errors
+                ),
+                errors,
+            )
 
     def test_dependabot_groups_match_the_exact_policy(self) -> None:
         policy = governance.load_policy()

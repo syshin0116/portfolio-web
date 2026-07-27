@@ -10,9 +10,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from protocol_contract import (  # noqa: E402
-    ContractError,
+from protocol_contract import (
     LOCK_PATH,
+    ContractError,
     load_lock,
     normalize_aegra_event,
     validate_all,

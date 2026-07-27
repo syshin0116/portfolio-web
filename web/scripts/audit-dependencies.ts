@@ -55,7 +55,7 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@eslint/compat", "@eslint/compat@2.1.0"],
   ["@giscus/react", "@giscus/react@3.1.0"],
   ["@langchain/core", "@langchain/core@1.2.3"],
-  ["@neondatabase/serverless", "@neondatabase/serverless@1.1.0"],
+  ["@neondatabase/serverless", "@neondatabase/serverless@1.0.2"],
   ["@radix-ui/react-accordion", "@radix-ui/react-accordion@1.2.20"],
   ["@radix-ui/react-avatar", "@radix-ui/react-avatar@1.2.6"],
   ["@radix-ui/react-checkbox", "@radix-ui/react-checkbox@1.3.11"],

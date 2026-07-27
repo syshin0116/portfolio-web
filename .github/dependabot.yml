@@ -7,23 +7,31 @@ updates:
       day: "monday"
       time: "04:00"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      web-weekly:
+      web-routine:
         applies-to: "version-updates"
         patterns:
           - "*"
-    ignore:
-      # These majors fail the current lint/type contract and need an app migration.
-      - dependency-name: "lucide-react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
+        exclude-patterns:
+          # Framework/protocol/auth bumps need focused compatibility evidence.
+          - "@assistant-ui/*"
+          - "@auth/*"
+          - "@langchain/*"
+          - "next"
+          - "next-auth"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Bun version updates include bun.lock, but GitHub does not yet support
   # Dependabot security updates for the Bun ecosystem. Keep npm as a
@@ -44,17 +52,30 @@ updates:
       day: "monday"
       time: "04:20"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      agent-weekly:
+      agent-routine:
         applies-to: "version-updates"
         patterns:
           - "*"
+        exclude-patterns:
+          # These are compatibility surfaces and must remain isolated bump PRs.
+          - "aegra-*"
+          - "deepagents"
+          - "langchain"
+          - "langchain-*"
+          - "langgraph"
+          - "langgraph-*"
+          - "langsmith"
+          - "numpy"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -63,11 +84,14 @@ updates:
       day: "monday"
       time: "04:40"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 7
     groups:
-      actions-weekly:
+      actions-routine:
         applies-to: "version-updates"
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"

@@ -15,11 +15,10 @@ import sys
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urljoin
 
 import httpx
-
 from protocol_contract import (
     ContractError,
     load_lock,
@@ -179,7 +178,7 @@ class LiveSmoke:
         self._next_command_id = 1
         self._responded_interrupts: set[tuple[tuple[str, ...], str]] = set()
 
-    async def __aenter__(self) -> LiveSmoke:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_args: object) -> None:
@@ -314,9 +313,12 @@ class LiveSmoke:
                 event = self._normalize_sse_frame(frame, index)
                 result.events.append(event)
 
-                if event["method"] == "input.requested":
-                    if await self._respond_to_interrupt(thread_id, event):
-                        result.hitl_responses += 1
+                if event[
+                    "method"
+                ] == "input.requested" and await self._respond_to_interrupt(
+                    thread_id, event
+                ):
+                    result.hitl_responses += 1
 
                 data = event["params"]["data"]
                 if (

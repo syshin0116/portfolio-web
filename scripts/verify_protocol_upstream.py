@@ -132,7 +132,7 @@ def _raw_url(repository: str, commit: str, upstream_path: str) -> str:
 def _fetch(url: str) -> bytes:
     request = Request(url, headers={"User-Agent": "syshin0116.dev-protocol-ci/1"})
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310
+        with urlopen(request, timeout=30) as response:
             payload = response.read(MAX_ARTIFACT_BYTES + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
         raise UpstreamVerificationError(f"cannot fetch {url}: {exc}") from exc

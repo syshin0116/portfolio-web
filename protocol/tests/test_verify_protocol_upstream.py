@@ -9,7 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import verify_protocol_upstream as upstream  # noqa: E402
+import verify_protocol_upstream as upstream
 
 
 class UpstreamUrlTests(unittest.TestCase):

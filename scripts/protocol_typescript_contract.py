@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import verify_protocol_upstream as upstream
 import verify_protocol_codegen as codegen
+import verify_protocol_upstream as upstream
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL_ROOT = REPO_ROOT / "protocol"

@@ -112,7 +112,7 @@ verify_state_bucket_metadata() {
   jq -e \
     --arg expected_location "$REGION" \
     '
-      .location == $expected_location
+      (.location | ascii_upcase) == ($expected_location | ascii_upcase)
       and (.public_access_prevention // .iamConfiguration.publicAccessPrevention) == "enforced"
       and (.uniform_bucket_level_access // .iamConfiguration.uniformBucketLevelAccess.enabled) == true
       and (.versioning_enabled // .versioning.enabled) == true

@@ -1174,7 +1174,7 @@ data "terraform_remote_state" "escape" # parser-bypass
 
 class StateBucketMetadataTests(unittest.TestCase):
     @staticmethod
-    def _metadata(location: str) -> dict[str, object]:
+    def _metadata(location: object) -> dict[str, object]:
         return {
             "location": location,
             "public_access_prevention": "enforced",
@@ -1185,26 +1185,58 @@ class StateBucketMetadataTests(unittest.TestCase):
             },
         }
 
-    def _run(self, location: str) -> subprocess.CompletedProcess[str]:
+    @staticmethod
+    def _run_metadata(
+        metadata: dict[str, object],
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", "scripts/verify_ops_foundation.sh", "--state-bucket-metadata"],
             cwd=REPO_ROOT,
             check=False,
             capture_output=True,
             text=True,
-            input=json.dumps(self._metadata(location)),
+            input=json.dumps(metadata),
         )
 
-    def test_state_bucket_metadata_accepts_exact_us_east4_location(self) -> None:
-        result = self._run("us-east4")
+    def _run(self, location: object) -> subprocess.CompletedProcess[str]:
+        return self._run_metadata(self._metadata(location))
 
-        self.assertEqual(0, result.returncode, result.stderr)
+    def test_state_bucket_metadata_accepts_configured_and_canonical_casing(
+        self,
+    ) -> None:
+        for location in ("us-east4", "US-EAST4"):
+            with self.subTest(location=location):
+                result = self._run(location)
 
-    def test_state_bucket_metadata_rejects_asia_location(self) -> None:
-        result = self._run("ASIA")
+                self.assertEqual(0, result.returncode, result.stderr)
 
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("location must be exactly us-east4", result.stderr)
+    def test_state_bucket_metadata_rejects_other_regions(self) -> None:
+        for location in ("ASIA", "US-EAST5"):
+            with self.subTest(location=location):
+                result = self._run(location)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("location must be exactly us-east4", result.stderr)
+
+    def test_state_bucket_metadata_rejects_missing_and_non_string_location(
+        self,
+    ) -> None:
+        invalid_locations = {
+            "missing": None,
+            "null": None,
+            "number": 123,
+            "array": ["US-EAST4"],
+        }
+        for case, location in invalid_locations.items():
+            with self.subTest(case=case):
+                metadata = self._metadata(location)
+                if case == "missing":
+                    del metadata["location"]
+
+                result = self._run_metadata(metadata)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("location must be exactly us-east4", result.stderr)
 
 
 if __name__ == "__main__":

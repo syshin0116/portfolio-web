@@ -88,6 +88,22 @@ def test_manifest_protects_every_derived_artifact(tmp_path: Path) -> None:
     assert {"catalog.json", "wikilinks.json"} <= set(artifact_paths)
 
 
+def test_artifact_reads_reverify_bytes_and_reject_unmanifested_paths(
+    tmp_path: Path,
+) -> None:
+    index = _fixture_index(tmp_path)
+    corpus = PublishedCorpus(index)
+
+    assert json.loads(corpus.read_artifact("catalog.json"))["document_count"] == 1
+    with pytest.raises(KeyError, match="not a manifested corpus artifact"):
+        corpus.read_artifact("unknown.json")
+
+    catalog = index / "catalog.json"
+    catalog.write_bytes(catalog.read_bytes() + b" ")
+    with pytest.raises(CorpusManifestError, match="catalog.json.*checksum|byte count"):
+        corpus.read_artifact("catalog.json")
+
+
 @pytest.mark.parametrize("artifact_name", ["catalog.json", "wikilinks.json"])
 def test_loader_rejects_a_tampered_derived_artifact(
     tmp_path: Path,

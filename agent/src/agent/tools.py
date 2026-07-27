@@ -1,37 +1,124 @@
-"""Blog RAG tools — thin wrappers delegating to lib/ search modules."""
+"""Curated blog tools over the verified published-corpus serving facade."""
+
+from __future__ import annotations
+
+from datetime import date
 
 from langchain_core.tools import tool
 
-from agent.lib.bm25_search import bm25_search as _bm25
-from agent.lib.content_loader import get_cached_docs, load_one
-from agent.lib.frontmatter_index import metadata_filter as _metadata
-from agent.lib.result_formatter import format_results
-from agent.lib.ripgrep_search import ripgrep_search as _ripgrep
-from agent.lib.wikilink_graph import graph_traverse as _graph
+from agent.retrieval.protocol import Retrieval
+from agent.retrieval.serving import (
+    CatalogEntry,
+    ServingRuntime,
+    get_serving_runtime,
+)
+
+_MAX_RESULTS = 50
+
+
+def _limit(value: int, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer")
+    if not 1 <= value <= _MAX_RESULTS:
+        raise ValueError(f"{field} must be between 1 and {_MAX_RESULTS}")
+    return value
+
+
+def _date(value: str | None, *, field: str) -> date | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be YYYY-MM-DD")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be YYYY-MM-DD") from exc
+
+
+def _snippet(runtime: ServingRuntime, entry: CatalogEntry) -> str:
+    if entry.description:
+        return entry.description
+    body = runtime.body(entry.doc_id).strip()
+    paragraph = body.split("\n\n", 1)[0].replace("\n", " ").strip()
+    return paragraph[:297] + "..." if len(paragraph) > 300 else paragraph
+
+
+def _format_retrieval(
+    runtime: ServingRuntime,
+    retrieval: Retrieval,
+    *,
+    method_id: str,
+) -> str:
+    if not retrieval.hits:
+        return f"[{method_id}] No results found for {retrieval.query!r}."
+    lines = [
+        f"Found {len(retrieval.hits)} result(s) via {method_id} "
+        f"for {retrieval.query!r}:",
+        "",
+    ]
+    for hit in retrieval.hits:
+        entry = runtime.entry(hit.doc_id)
+        score = "none" if hit.score is None else format(hit.score, ".12g")
+        lines.append(
+            f'{hit.rank}. [{entry.doc_id}] "{entry.title}" (raw score: {score})'
+        )
+        snippet = hit.text or _snippet(runtime, entry)
+        if snippet:
+            lines.append(f"   {snippet.replace(chr(10), ' ').strip()}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _format_entries(
+    entries: tuple[CatalogEntry, ...],
+    *,
+    source: str,
+) -> str:
+    if not entries:
+        return f"[{source}] No results found."
+    lines = [f"Found {len(entries)} result(s) via {source}:", ""]
+    for rank, entry in enumerate(entries, start=1):
+        published = entry.published_label or "unknown date"
+        tags = ", ".join(entry.tags[:5])
+        suffix = f" — {tags}" if tags else ""
+        lines.append(f'{rank}. [{entry.doc_id}] "{entry.title}" ({published}){suffix}')
+    return "\n".join(lines)
 
 
 @tool
 def keyword_search(query: str, top_k: int = 10) -> str:
-    """Search blog posts by keyword/regex using ripgrep. Fast exact matching.
+    """Rank published posts by literal substring occurrence count.
 
     Args:
-        query: The keyword or regex pattern to search for.
-        top_k: Number of results to return.
+        query: A literal keyword or phrase. Regular expressions are not accepted.
+        top_k: Number of results to return, from 1 to 50.
     """
-    results = _ripgrep(query, max_results=top_k)
-    return format_results(results, source="keyword_search", query=query)
+
+    runtime = get_serving_runtime()
+    result = runtime.exact(query, limit=_limit(top_k, field="top_k"))
+    return _format_retrieval(
+        runtime,
+        result,
+        method_id=runtime.exact_retriever.method_id,
+    )
 
 
 @tool
 def semantic_search(query: str, top_k: int = 10) -> str:
-    """Search blog posts by semantic relevance using BM25 ranking. Korean-aware.
+    """Rank published posts with the configured registry retriever (BM25 by default).
 
     Args:
-        query: The search query in natural language.
-        top_k: Number of results to return.
+        query: The natural-language retrieval query.
+        top_k: Number of results to return, from 1 to 50.
     """
-    results = _bm25(query, top_k=top_k)
-    return format_results(results, source="semantic_search", query=query)
+
+    runtime = get_serving_runtime()
+    result = runtime.retrieve(query, limit=_limit(top_k, field="top_k"))
+    return _format_retrieval(
+        runtime,
+        result,
+        method_id=runtime.retriever.method_id,
+    )
 
 
 @tool
@@ -41,78 +128,91 @@ def metadata_filter(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> str:
-    """Filter blog posts by metadata (tags, category, date range).
+    """Filter the published catalogue by tags, category, and inclusive date range.
 
     Args:
-        tags: List of tags to filter by (e.g. ["AI", "LangChain"]).
-        category: Category folder name (AI, Dev, Study, Projects, Tools, Events, Others).
-        date_from: Start date in YYYY-MM-DD format.
-        date_to: End date in YYYY-MM-DD format.
+        tags: Tags matched with OR semantics.
+        category: Exact top-level category, case-insensitive.
+        date_from: Inclusive lower date in YYYY-MM-DD format.
+        date_to: Inclusive upper date in YYYY-MM-DD format.
     """
-    results = _metadata(
-        tags=tags, category=category, date_from=date_from, date_to=date_to
+
+    runtime = get_serving_runtime()
+    lower = _date(date_from, field="date_from")
+    upper = _date(date_to, field="date_to")
+    if lower and upper and lower > upper:
+        raise ValueError("date_from cannot be after date_to")
+    entries = runtime.filter(
+        tags=tags,
+        category=category,
+        date_from=lower,
+        date_to=upper,
     )
-    return format_results(results, source="metadata_filter")
+    return _format_entries(entries[:_MAX_RESULTS], source="metadata_filter")
 
 
 @tool
 def graph_traverse(slug: str, depth: int = 1) -> str:
-    """Find related blog posts by following wikilink connections.
+    """Find related published posts through the built-time wikilink graph.
 
     Args:
-        slug: The blog post path or title to start from.
-        depth: How many levels of links to follow (1-3).
+        slug: An exact path, title, or unique filename stem.
+        depth: Number of graph hops, from 1 to 3.
     """
-    results = _graph(slug, depth=min(depth, 3))
-    return format_results(results, source="graph_traverse", query=slug)
 
-
-@tool
-def list_posts(category: str | None = None, limit: int = 20) -> str:
-    """List recent blog posts, optionally filtered by category.
-
-    Args:
-        category: Optional category to filter (AI, Dev, Study, Projects, Tools, Events, Others).
-        limit: Maximum number of posts to return.
-    """
-    # The loader cache is shared with the BM25 index, so never reorder it in place.
-    docs = list(get_cached_docs())
-    if category:
-        docs = [d for d in docs if d.meta.category.lower() == category.lower()]
-
-    # Sort by date descending
-    docs.sort(
-        key=lambda d: d.meta.date or __import__("datetime").date.min, reverse=True
-    )
-
-    lines = [f"Blog posts ({len(docs)} total):\n"]
-    for d in docs[:limit]:
-        date_str = str(d.meta.date) if d.meta.date else "no date"
-        tags = ", ".join(d.meta.tags[:5]) if d.meta.tags else ""
-        lines.append(f'- [{d.meta.path}] "{d.meta.title}" ({date_str}) {tags}')
-
+    runtime = get_serving_runtime()
+    results = runtime.traverse(slug, depth=depth)
+    if not results:
+        return f"[graph_traverse] No results found for {slug!r}."
+    lines = [
+        f"Found {len(results)} related post(s) via graph_traverse for {slug!r}:",
+        "",
+    ]
+    for rank, (doc_id, distance) in enumerate(results, start=1):
+        entry = runtime.entry(doc_id)
+        lines.append(f'{rank}. [{entry.doc_id}] "{entry.title}" (distance: {distance})')
     return "\n".join(lines)
 
 
 @tool
-def read_post(path: str) -> str:
-    """Read the full content of a specific blog post.
+def list_posts(category: str | None = None, limit: int = 20) -> str:
+    """List recent published posts, optionally within one category.
 
     Args:
-        path: Relative path to the blog post (e.g. "AI/2024-my-post.md").
+        category: Optional exact top-level category, case-insensitive.
+        limit: Number of posts to return, from 1 to 50.
     """
-    doc = load_one(path)
-    if not doc:
-        return f"[read_post] File not found: '{path}'"
 
-    header = (
-        f"# {doc.meta.title}\n"
-        f"Date: {doc.meta.date or 'unknown'}\n"
-        f"Category: {doc.meta.category}\n"
-        f"Tags: {', '.join(doc.meta.tags)}\n"
-        f"---\n"
+    runtime = get_serving_runtime()
+    entries = runtime.filter(category=category)
+    return _format_entries(
+        entries[: _limit(limit, field="limit")],
+        source="list_posts",
     )
-    return header + doc.body
+
+
+@tool
+def read_post(path: str) -> str:
+    """Read one verified published Markdown document by content-relative path.
+
+    Args:
+        path: Canonical content-relative Markdown path returned by another tool.
+    """
+
+    runtime = get_serving_runtime()
+    try:
+        entry = runtime.entry(path)
+        body = runtime.body(entry.doc_id)
+    except (KeyError, TypeError, ValueError):
+        return f"[read_post] Published file not found: {path!r}"
+    return (
+        f"# {entry.title}\n"
+        f"Date: {entry.published_label or 'unknown'}\n"
+        f"Category: {entry.category}\n"
+        f"Tags: {', '.join(entry.tags)}\n"
+        "---\n"
+        f"{body}"
+    )
 
 
 TOOLS = [
@@ -122,4 +222,14 @@ TOOLS = [
     graph_traverse,
     list_posts,
     read_post,
+]
+
+__all__ = [
+    "TOOLS",
+    "graph_traverse",
+    "keyword_search",
+    "list_posts",
+    "metadata_filter",
+    "read_post",
+    "semantic_search",
 ]

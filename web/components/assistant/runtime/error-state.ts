@@ -42,25 +42,39 @@ export class SanitizedAgentError extends Error {
     super(message)
     this.name = "SanitizedAgentError"
     this.status = status
+    this.stack = undefined
   }
+}
+
+function allowlistedStatus(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    (value === 401 ||
+      value === 403 ||
+      value === 409 ||
+      value === 429 ||
+      (value >= 500 && value <= 599))
+    ? value
+    : undefined
 }
 
 function statusFromUnknown(error: unknown): number | undefined {
   if (error instanceof AgentAuthenticationError && error.status) {
-    return error.status
+    return allowlistedStatus(error.status)
   }
   if (error && typeof error === "object") {
-    if ("status" in error && typeof error.status === "number") {
-      return error.status
+    if ("status" in error) {
+      const status = allowlistedStatus(error.status)
+      if (status !== undefined) return status
     }
     if (
       "response" in error &&
       error.response &&
       typeof error.response === "object" &&
-      "status" in error.response &&
-      typeof error.response.status === "number"
+      "status" in error.response
     ) {
-      return error.response.status
+      const status = allowlistedStatus(error.response.status)
+      if (status !== undefined) return status
     }
   }
   const message =

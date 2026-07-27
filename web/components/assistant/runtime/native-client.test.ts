@@ -312,11 +312,19 @@ describe("APv2 state and HITL normalization", () => {
     )
 
     expect(responded).toEqual([
-      {
+      expect.objectContaining({
         namespace: [],
         interrupt_id: "0123456789abcdef0123456789abcdef",
         response: { action: "approve" },
-      },
+        config: {
+          metadata: {
+            syshin_ui_submit_nonce: expect.any(String),
+          },
+        },
+        metadata: expect.objectContaining({
+          syshin_ui_submit_nonce: expect.any(String),
+        }),
+      }),
     ])
     expect(fakeClient.testing.runStarts).toBe(1)
   })
@@ -364,11 +372,14 @@ describe("APv2 state and HITL normalization", () => {
     )
 
     expect(responded).toEqual([
-      {
+      expect.objectContaining({
         namespace: [],
         interrupt_id: "interrupt-with-secret",
         response: "reject",
-      },
+        metadata: expect.objectContaining({
+          syshin_ui_submit_nonce: expect.any(String),
+        }),
+      }),
     ])
     expect(JSON.stringify(responded)).not.toContain(secret)
     expect(JSON.stringify(responded)).not.toContain("private plan")
@@ -608,6 +619,7 @@ describe("APv2 state and HITL normalization", () => {
         } as unknown as Pick<Client, "runs">,
         "thread-1",
         new Set(),
+        "00000000-0000-4000-8000-000000000000",
         controller.signal
       )
       .catch((caught: unknown) => caught)
@@ -617,6 +629,58 @@ describe("APv2 state and HITL normalization", () => {
     expect((error as Error).message).toBe(
       "재개된 실행 식별자를 확인하지 못했습니다."
     )
+  })
+
+  test("binds only a fresh same-thread run with the exact internal nonce", async () => {
+    const nonce = "00000000-0000-4000-8000-000000000000"
+    const correlatedConfig = {
+      metadata: { syshin_ui_submit_nonce: nonce },
+    }
+    const resolved = await nativeClientTesting.resolveResumedRunIdOrThrow(
+      {
+        runs: {
+          list: async () =>
+            [
+              {
+                run_id: "stale-run",
+                thread_id: "thread-1",
+                config: correlatedConfig,
+              },
+              {
+                run_id: "foreign-run",
+                thread_id: "thread-2",
+                config: correlatedConfig,
+              },
+              {
+                run_id: "wrong-nonce-run",
+                thread_id: "thread-1",
+                config: {
+                  metadata: { syshin_ui_submit_nonce: "wrong" },
+                },
+              },
+              {
+                run_id: "conflicting-run",
+                thread_id: "thread-1",
+                metadata: { syshin_ui_submit_nonce: nonce },
+                config: {
+                  metadata: { syshin_ui_submit_nonce: "wrong" },
+                },
+              },
+              {
+                run_id: "exact-run",
+                thread_id: "thread-1",
+                config: correlatedConfig,
+              },
+            ] as never,
+        },
+      } as unknown as Pick<Client, "runs">,
+      "thread-1",
+      new Set(["stale-run"]),
+      nonce,
+      new AbortController().signal
+    )
+
+    expect(resolved).toBe("exact-run")
   })
 })
 
@@ -686,11 +750,14 @@ describe("native stream lifecycle", () => {
       })
     )
     expect(responded).toEqual([
-      {
+      expect.objectContaining({
         namespace: ["nested_worker:task-1"],
         interrupt_id: "interrupt-nested-1",
         response: "approve",
-      },
+        metadata: expect.objectContaining({
+          syshin_ui_submit_nonce: expect.any(String),
+        }),
+      }),
     ])
     expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
     expect(fakeClient.testing.subscriptions).toEqual([
@@ -883,13 +950,7 @@ describe("native stream lifecycle", () => {
         onRespond: (params) => responded.push(params),
       },
     ])
-    const auth = makeAuthHarness("user-1", {
-      runLists: [
-        [],
-        [],
-        [{ run_id: "resumed-run-retry", status: "running" }],
-      ],
-    })
+    const auth = makeAuthHarness("user-1")
     const native = makeNative(fakeClient, {}, auth)
     await collect(
       native.stream(
@@ -915,11 +976,14 @@ describe("native stream lifecycle", () => {
       })
     )
     expect(responded).toEqual([
-      {
+      expect.objectContaining({
         namespace: [],
         interrupt_id: "interrupt-retry",
         response: "approve",
-      },
+        metadata: expect.objectContaining({
+          syshin_ui_submit_nonce: expect.any(String),
+        }),
+      }),
     ])
     expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
     expect(JSON.stringify(responded)).not.toContain("respond-secret")
@@ -1055,7 +1119,19 @@ describe("native stream lifecycle", () => {
         },
       },
     ])
-    const native = makeNative(fakeClient)
+    const auth = makeAuthHarness("user-1", {
+      runListFactory: (metadata) =>
+        metadata
+          ? [
+              {
+                run_id: "late-run-id",
+                status: "running",
+                metadata,
+              },
+            ]
+          : [],
+    })
+    const native = makeNative(fakeClient, {}, auth)
     const controller = new AbortController()
     const iterator = await native.stream(
       [{ id: "human-1", type: "human", content: "시작 중 취소" }],
@@ -1146,12 +1222,30 @@ describe("native stream lifecycle", () => {
         waitForClose: () => undefined,
       },
     ])
+    const nonces: string[] = []
+    const pollsByNonce = new Map<string, number>()
     const auth = makeAuthHarness("user-1", {
-      runLists: [
-        [],
-        [],
-        [{ run_id: "resumed-run-after-stop", status: "running" }],
-      ],
+      runListFactory: (metadata) => {
+        const nonce =
+          typeof metadata?.syshin_ui_submit_nonce === "string"
+            ? metadata.syshin_ui_submit_nonce
+            : undefined
+        if (!nonce) return []
+        if (!nonces.includes(nonce)) nonces.push(nonce)
+        const polls = (pollsByNonce.get(nonce) ?? 0) + 1
+        pollsByNonce.set(nonce, polls)
+        if (nonces.indexOf(nonce) === 1 && polls < 2) return []
+        return [
+          {
+            run_id:
+              nonces.indexOf(nonce) === 1
+                ? "resumed-run-after-stop"
+                : "initial-run-before-stop",
+            status: "running",
+            metadata,
+          },
+        ]
+      },
     })
     const native = makeNative(fakeClient, {}, auth)
     await collect(
@@ -1168,7 +1262,11 @@ describe("native stream lifecycle", () => {
       abortSignal: controller.signal,
     })
     const pending = iterator.next()
-    await waitUntil(() => auth.runListCalls === 2)
+    await waitUntil(
+      () =>
+        nonces.length === 2 &&
+        (pollsByNonce.get(nonces[1]!) ?? 0) === 1
+    )
     controller.abort(
       new DOMException("stop while resolving resumed run", "AbortError")
     )
@@ -1286,9 +1384,17 @@ describe("native stream lifecycle", () => {
     expect(cancels[0]!.authorization).toBe(`Bearer ${oldAuth.token}`)
     expect(cancels[0]!.authorization).not.toBe(`Bearer ${newToken}`)
     expect(oldAuth.mintCalls).toBe(1)
+    const oldReads = oldAuth.requests.filter(
+      (request) => request.method === "GET"
+    )
+    expect(oldReads.length).toBeGreaterThan(0)
     expect(
-      oldAuth.requests.filter((request) => request.method === "GET")
-    ).toEqual([])
+      oldReads.every(
+        (request) =>
+          request.authorization === `Bearer ${oldAuth.token}` &&
+          new URL(request.url).pathname === "/threads/thread-1/runs"
+      )
+    ).toBe(true)
     expect(tokenBrokerTesting.inspect(oldAuth.broker)).toEqual({
       cached: false,
       refreshing: false,
@@ -1349,7 +1455,497 @@ describe("native stream lifecycle", () => {
       pendingInterrupts: 0,
     })
   })
+
+  test("fails and cancels when a non-paused APv2 iterator ends without a terminal lifecycle", async () => {
+    const fakeClient = makeClient([{ events: [] }])
+    const native = makeNative(fakeClient)
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "끝나면 안 돼" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(cancellationRequests(authFor(native))).toHaveLength(1)
+  })
+
+  test("does not mistake an internal AbortError for caller cancellation", async () => {
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("running")],
+        streamError: new DOMException(
+          "private reconnect exhaustion",
+          "AbortError"
+        ),
+      },
+    ])
+    const observed: Error[] = []
+    const native = makeNative(fakeClient, {
+      onError: (error) => observed.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "재연결" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(cancellationRequests(authFor(native))).toHaveLength(1)
+    expect(observed).toHaveLength(1)
+    expect(observed[0]!.stack).toBeUndefined()
+    expect(JSON.stringify(observed)).not.toContain("reconnect exhaustion")
+  })
+
+  test("uses the public ordering watermark to drop fresh-client Aegra history", async () => {
+    const activities: AgentActivity[] = []
+    const fakeClient = makeClient([
+      {
+        preserveSequence: true,
+        appliedThroughSeq: 0,
+        preDispatchEvents: [
+          sequenced(lifecycle("interrupted"), 1, "historical-terminal"),
+        ],
+        events: [
+          sequenced(lifecycle("running"), 2, "current-running"),
+          sequenced(lifecycle("completed"), 3, "current-completed"),
+        ],
+      },
+    ])
+    const native = makeNative(fakeClient, {
+      onActivity: (activity) => activities.push(activity),
+    })
+
+    await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "새 실행" }],
+        streamConfig()
+      )
+    )
+    expect(activities.map((activity) => activity.status)).toEqual([
+      "running",
+      "completed",
+    ])
+    expect(cancellationRequests(authFor(native))).toEqual([])
+  })
+
+  test.each([
+    {
+      label: "missing",
+      events: [lifecycle("completed")],
+    },
+    {
+      label: "non-monotonic",
+      events: [
+        sequenced(lifecycle("running"), 1, "seq-running"),
+        sequenced(lifecycle("completed"), 1, "seq-completed"),
+      ],
+    },
+  ])("fails closed and cancels on $label APv2 sequence", async ({ events }) => {
+    const fakeClient = makeClient([
+      { events, preserveSequence: true, appliedThroughSeq: 0 },
+    ])
+    const native = makeNative(fakeClient)
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "순서 검증" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(cancellationRequests(authFor(native))).toHaveLength(1)
+  })
+
+  test("deduplicates lifecycle event IDs without projecting root activity twice", async () => {
+    const activities: AgentActivity[] = []
+    const duplicate = sequenced(
+      lifecycle("running"),
+      1,
+      "same-running-event"
+    )
+    const fakeClient = makeClient([
+      {
+        preserveSequence: true,
+        appliedThroughSeq: 0,
+        events: [
+          duplicate,
+          duplicate,
+          sequenced(lifecycle("completed"), 2, "terminal-event"),
+        ],
+      },
+    ])
+    await collect(
+      makeNative(fakeClient, {
+        onActivity: (activity) => activities.push(activity),
+      }).stream(
+        [{ id: "human-1", type: "human", content: "중복" }],
+        streamConfig()
+      )
+    )
+
+    expect(
+      activities.filter((activity) => activity.status === "running")
+    ).toHaveLength(1)
+    expect(
+      activities.filter((activity) => activity.status === "completed")
+    ).toHaveLength(1)
+  })
+
+  test("recovers an empty run.start result only through the exact nonce metadata", async () => {
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("running"), lifecycle("completed")],
+        startRun: async () => ({}),
+      },
+    ])
+    const auth = makeAuthHarness("user-1", {
+      runListFactory: (metadata) =>
+        metadata
+          ? [
+              {
+                run_id: "unrelated-new-run",
+                status: "running",
+                config: {
+                  metadata: { syshin_ui_submit_nonce: "wrong" },
+                },
+              },
+              {
+                run_id: "nonce-matched-run",
+                status: "running",
+                config: { metadata },
+              },
+            ]
+          : [],
+    })
+    const native = makeNative(fakeClient, {}, auth)
+
+    await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "빈 응답" }],
+        streamConfig()
+      )
+    )
+    expect(cancellationRequests(auth)).toEqual([])
+    expect(fakeClient.testing.lastMetadata).toMatchObject({
+      syshin_ui_submit_nonce: expect.any(String),
+    })
+    expect(fakeClient.testing.lastConfig).toMatchObject({
+      metadata: {
+        syshin_ui_submit_nonce: expect.any(String),
+      },
+    })
+  })
+
+  test("cancels the nonce-matched run when run.start response is lost", async () => {
+    const sentinel = "PRIVATE_RUN_START_FAILURE"
+    const fakeClient = makeClient([
+      {
+        events: [],
+        startRun: async () => {
+          throw new Error(sentinel)
+        },
+      },
+    ])
+    const observed: Error[] = []
+    const native = makeNative(fakeClient, {
+      onError: (error) => observed.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "응답 유실" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(cancellationRequests(authFor(native))).toHaveLength(1)
+    expect(JSON.stringify(observed)).not.toContain(sentinel)
+  })
+
+  test("merges caller metadata while overriding an untrusted submit nonce", async () => {
+    const fakeClient = makeClient([
+      { events: [lifecycle("completed")] },
+    ])
+    await collect(
+      makeNative(fakeClient).stream(
+        [{ id: "human-1", type: "human", content: "메타데이터" }],
+        {
+          ...streamConfig(),
+          runConfig: {
+            configurable: { mode: "hybrid" },
+            metadata: {
+              experiment: "rrf-v2",
+              syshin_ui_submit_nonce: "attacker-controlled",
+            },
+          },
+        }
+      )
+    )
+
+    const submission = fakeClient.testing.submissions[0] as Record<
+      string,
+      unknown
+    >
+    const submittedMetadata =
+      submission.metadata as Record<string, unknown>
+    const submittedConfigMetadata = (
+      submission.config as Record<string, unknown>
+    ).metadata as Record<string, unknown>
+    expect(submittedConfigMetadata.syshin_ui_submit_nonce).toBe(
+      submittedMetadata.syshin_ui_submit_nonce
+    )
+    expect(submittedMetadata.syshin_ui_submit_nonce).not.toBe(
+      "attacker-controlled"
+    )
+    expect(submittedConfigMetadata.syshin_ui_submit_nonce).not.toBe(
+      "attacker-controlled"
+    )
+    expect(submission.config).toMatchObject({
+      configurable: { mode: "hybrid" },
+      metadata: {
+        experiment: "rrf-v2",
+        syshin_ui_submit_nonce: expect.any(String),
+      },
+    })
+    expect(submission.metadata).toMatchObject({
+      experiment: "rrf-v2",
+      syshin_ui_submit_nonce: expect.any(String),
+    })
+  })
+
+  test("redacts and cancels oversized or startless message events", async () => {
+    const sentinel = `PRIVATE_OVERSIZE_${"x".repeat(300_000)}`
+    const oversized = {
+      type: "event",
+      method: "custom",
+      params: {
+        namespace: [],
+        timestamp: 1,
+        data: { sentinel },
+      },
+    } as unknown as Event
+    const startless = {
+      type: "event",
+      method: "messages",
+      params: {
+        namespace: [],
+        timestamp: 2,
+        data: {
+          event: "message-error",
+          error: "PRIVATE_STARTLESS_ERROR",
+        },
+      },
+    } as unknown as Event
+
+    for (const event of [oversized, startless]) {
+      const observed: Error[] = []
+      const fakeClient = makeClient([{ events: [event] }])
+      const native = makeNative(fakeClient, {
+        onError: (error) => observed.push(error),
+      })
+      await expect(
+        collect(
+          native.stream(
+            [{ id: "human-1", type: "human", content: "경계" }],
+            streamConfig()
+          )
+        )
+      ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+      expect(cancellationRequests(authFor(native))).toHaveLength(1)
+      expect(JSON.stringify(observed)).not.toContain("PRIVATE_")
+      expect(observed[0]!.stack).toBeUndefined()
+    }
+  })
+
+  test("bounds replay buffered before the dispatch barrier", async () => {
+    const sentinel = `PRIVATE_PRE_BARRIER_${"가".repeat(80_000)}`
+    const fakeClient = makeClient([
+      {
+        preDispatchEvents: Array.from({ length: 9 }, (_, index) =>
+          customEvent(
+            { sentinel, index },
+            [`nested:${index}`]
+          )
+        ),
+        events: [lifecycle("completed")],
+      },
+    ])
+    const observed: Error[] = []
+    const native = makeNative(fakeClient, {
+      onError: (error) => observed.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "재생 경계" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(cancellationRequests(authFor(native))).toHaveLength(1)
+    expect(JSON.stringify(observed)).not.toContain("PRIVATE_PRE_BARRIER")
+  })
+
+  test("fails immediately on a malformed nested watcher namespace", async () => {
+    const malformed = {
+      ...lifecycle("running"),
+      params: {
+        namespace: null,
+        timestamp: 1,
+        data: {
+          event: "running",
+          graph_name: "PRIVATE_MALFORMED_WATCHER",
+        },
+      },
+    } as unknown as Event
+    const observed: Error[] = []
+    const fakeClient = makeClient([
+      {
+        watcherEvents: [malformed],
+        events: [lifecycle("completed")],
+      },
+    ])
+    const native = makeNative(fakeClient, {
+      onError: (error) => observed.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "watcher 경계" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(cancellationRequests(authFor(native))).toHaveLength(1)
+    expect(JSON.stringify(observed)).not.toContain("PRIVATE_MALFORMED")
+  })
+
+  test.each([
+    {
+      label: "delta without start",
+      events: [
+        messageEvent({ event: "message-start", role: "ai", id: "message-1" }),
+        messageEvent({
+          event: "content-block-delta",
+          index: 0,
+          delta: { type: "text-delta", text: "PRIVATE_DELTA" },
+        }),
+      ],
+    },
+    {
+      label: "finish without start",
+      events: [
+        messageEvent({ event: "message-start", role: "ai", id: "message-1" }),
+        messageEvent({
+          event: "content-block-finish",
+          index: 0,
+          content: { type: "text", text: "PRIVATE_FINISH" },
+        }),
+      ],
+    },
+    {
+      label: "duplicate start",
+      events: [
+        messageEvent({ event: "message-start", role: "ai", id: "message-1" }),
+        messageEvent({
+          event: "content-block-start",
+          index: 0,
+          content: { type: "text", text: "" },
+        }),
+        messageEvent({
+          event: "content-block-start",
+          index: 0,
+          content: { type: "text", text: "PRIVATE_DUPLICATE" },
+        }),
+      ],
+    },
+    {
+      label: "out-of-range index",
+      events: [
+        messageEvent({ event: "message-start", role: "ai", id: "message-1" }),
+        messageEvent({
+          event: "content-block-start",
+          index: 256,
+          content: { type: "text", text: "PRIVATE_INDEX" },
+        }),
+      ],
+    },
+    {
+      label: "cumulative block overflow",
+      events: [
+        messageEvent({ event: "message-start", role: "ai", id: "message-1" }),
+        messageEvent({
+          event: "content-block-start",
+          index: 0,
+          content: { type: "text", text: "" },
+        }),
+        messageEvent({
+          event: "content-block-delta",
+          index: 0,
+          delta: { type: "text-delta", text: "가".repeat(44_000) },
+        }),
+        messageEvent({
+          event: "content-block-delta",
+          index: 0,
+          delta: {
+            type: "text-delta",
+            text: `PRIVATE_BLOCK_OVERFLOW_${"가".repeat(44_000)}`,
+          },
+        }),
+      ],
+    },
+    {
+      label: "finalized text overflow across blocks",
+      events: [
+        messageEvent({ event: "message-start", role: "ai", id: "message-1" }),
+        ...[0, 1, 2].flatMap((index) => [
+          messageEvent({
+            event: "content-block-start",
+            index,
+            content: { type: "text", text: "" },
+          }),
+          messageEvent({
+            event: "content-block-finish",
+            index,
+            content: {
+              type: "text",
+              text: `PRIVATE_FINAL_TEXT_${"가".repeat(60_000)}`,
+            },
+          }),
+        ]),
+      ],
+    },
+  ])("fails closed on $label content-block lifecycle", async ({ events }) => {
+    const observed: Error[] = []
+    const fakeClient = makeClient([{ events }])
+    const native = makeNative(fakeClient, {
+      onError: (error) => observed.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "블록 경계" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(cancellationRequests(authFor(native))).toHaveLength(1)
+    expect(JSON.stringify(observed)).not.toContain("PRIVATE_")
+  })
 })
+
+function sequenced(event: Event, seq: number, eventId: string): Event {
+  return { ...event, seq, event_id: eventId } as Event
+}
 
 function lifecycle(
   status: "started" | "running" | "completed" | "failed" | "interrupted",
@@ -1390,14 +1986,52 @@ function inputRequested(
   } as Event
 }
 
+function messageEvent(
+  data: Record<string, unknown>,
+  namespace: string[] = []
+): Event {
+  return {
+    type: "event",
+    method: "messages",
+    params: {
+      namespace,
+      timestamp: 1,
+      data,
+    },
+  } as unknown as Event
+}
+
+function customEvent(
+  data: Record<string, unknown>,
+  namespace: string[] = []
+): Event {
+  return {
+    type: "event",
+    method: "custom",
+    params: {
+      namespace,
+      timestamp: 1,
+      data,
+    },
+  } as unknown as Event
+}
+
 interface FakeStreamPlan {
-  events: Event[]
+  events: readonly Event[]
+  preDispatchEvents?: Event[]
   watcherEvents?: Event[]
   delayedWatcherEvents?: Event[]
   watcherDelayMs?: number
-  onRespond?: (params: unknown) => void
-  startRun?: () => Promise<{ run_id: string }>
+  onRespond?: (params: unknown) => unknown | Promise<unknown>
+  startRun?: (params: unknown) => Promise<unknown>
   waitForClose?: (resolve: () => void) => void
+  appliedThroughSeq?: number
+  preserveSequence?: boolean
+  streamError?: unknown
+}
+
+function isTestRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
 function makeClient(
@@ -1407,12 +2041,20 @@ function makeClient(
   } = {}
 ): Client & {
   testing: {
+    lastConfig?: Record<string, unknown>
     runStarts: number
+    lastMetadata?: Record<string, unknown>
+    responds: unknown[]
+    submissions: unknown[]
     subscriptions: Array<{ channels: unknown; options: unknown }>
   }
 } {
   const testing = {
+    lastConfig: undefined as Record<string, unknown> | undefined,
     runStarts: 0,
+    lastMetadata: undefined as Record<string, unknown> | undefined,
+    responds: [] as unknown[],
+    submissions: [] as unknown[],
     subscriptions: [] as Array<{ channels: unknown; options: unknown }>,
   }
   const client = {
@@ -1427,7 +2069,30 @@ function makeClient(
           namespace: string[]
           payload: unknown
         }> = []
-        const emit = (event: Event) => {
+        const ordering: {
+          lastSeenSeq?: number
+          lastAppliedThroughSeq?: number
+          lastEventId?: string
+        } = {}
+        let nextSequence = 1
+        const emit = (rawEvent: Event): Event => {
+          const rawSequence = (rawEvent as Event & { seq?: number }).seq
+          const sequence = plan.preserveSequence
+            ? rawSequence
+            : nextSequence++
+          const rawEventId = (
+            rawEvent as Event & { event_id?: string }
+          ).event_id
+          const eventId = plan.preserveSequence
+            ? rawEventId
+            : `fake-event-${sequence}`
+          const event = {
+            ...rawEvent,
+            ...(sequence === undefined ? {} : { seq: sequence }),
+            ...(eventId === undefined ? {} : { event_id: eventId }),
+          } as Event
+          if (sequence !== undefined) ordering.lastSeenSeq = sequence
+          if (eventId !== undefined) ordering.lastEventId = eventId
           if (
             event.method === "input.requested" &&
             Array.isArray(event.params.namespace)
@@ -1449,6 +2114,7 @@ function makeClient(
               // wedge the shared transport.
             }
           }
+          return event
         }
         let close: (() => void) | undefined
         const closed = new Promise<void>((resolve) => {
@@ -1458,8 +2124,8 @@ function makeClient(
         const subscription = {
           unsubscribe: async () => undefined,
           async *[Symbol.asyncIterator]() {
-            for (const event of plan.events) {
-              emit(event)
+            for (const rawEvent of plan.events) {
+              const event = emit(rawEvent)
               if (
                 event.method === "lifecycle" &&
                 event.params.namespace.length === 0 &&
@@ -1472,24 +2138,60 @@ function makeClient(
                   }
                 }, plan.watcherDelayMs ?? 10)
               }
-              yield event
+              if (
+                event.params.namespace.length === 0 &&
+                (event.method === "messages" ||
+                  event.method === "lifecycle" ||
+                  event.method === "input.requested" ||
+                  event.method === "tools" ||
+                  event.method === "custom")
+              ) {
+                yield event
+              }
             }
+            if (plan.streamError !== undefined) throw plan.streamError
             if (plan.waitForClose) await closed
           },
         }
         return {
-          submitRun: async () => {
+          ordering,
+          submitRun: async (params: unknown) => {
             testing.runStarts += 1
+            testing.submissions.push(params)
+            testing.lastMetadata = isTestRecord(params) &&
+              isTestRecord(params.metadata)
+              ? params.metadata
+              : undefined
+            testing.lastConfig = isTestRecord(params) &&
+              isTestRecord(params.config)
+              ? params.config
+              : undefined
+            ordering.lastAppliedThroughSeq =
+              plan.appliedThroughSeq ?? 0
             for (const event of plan.watcherEvents ?? []) emit(event)
-            if (plan.startRun) return await plan.startRun()
+            if (plan.startRun) return await plan.startRun(params)
             return { run_id: `run-${testing.runStarts}` }
           },
-          respondInput: async (params: unknown) => plan.onRespond?.(params),
+          respondInput: async (params: unknown) => {
+            testing.responds.push(params)
+            testing.lastMetadata = isTestRecord(params) &&
+              isTestRecord(params.metadata)
+              ? params.metadata
+              : undefined
+            testing.lastConfig = isTestRecord(params) &&
+              isTestRecord(params.config)
+              ? params.config
+              : undefined
+            ordering.lastAppliedThroughSeq =
+              plan.appliedThroughSeq ?? 0
+            for (const event of plan.watcherEvents ?? []) emit(event)
+            await plan.onRespond?.(params)
+          },
           interrupts,
           run: {
             start: async () => {
               testing.runStarts += 1
-              if (plan.startRun) return await plan.startRun()
+              if (plan.startRun) return await plan.startRun(undefined)
               return { run_id: `run-${testing.runStarts}` }
             },
           },
@@ -1501,6 +2203,7 @@ function makeClient(
               channels,
               options: streamOptions,
             })
+            for (const event of plan.preDispatchEvents ?? []) emit(event)
             return subscription
           },
           onEvent: (listener: (event: Event) => void) => {
@@ -1519,7 +2222,11 @@ function makeClient(
   }
   return client as unknown as Client & {
     testing: {
+      lastConfig?: Record<string, unknown>
       runStarts: number
+      lastMetadata?: Record<string, unknown>
+      responds: unknown[]
+      submissions: unknown[]
       subscriptions: Array<{ channels: unknown; options: unknown }>
     }
   }
@@ -1536,7 +2243,9 @@ interface AuthHarness {
   mintCalls: number
   requests: AuthRequest[]
   runListCalls: number
+  runConfig?: () => Record<string, unknown> | undefined
   token: string
+  runMetadata?: () => Record<string, unknown> | undefined
 }
 
 const nativeAuthHarnesses = new WeakMap<NativeAgentClient, AuthHarness>()
@@ -1547,6 +2256,9 @@ function jwtToken(exp: number, subject: string): string {
   return `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
     exp,
     sub: subject,
+    iss: "syshin0116.dev",
+    aud: "agent-api",
+    iat: 900,
   })}.signature`
 }
 
@@ -1559,10 +2271,14 @@ function makeAuthHarness(
       token: string
     ) => Promise<Response>
     onCancel?: () => void
+    runListFactory?: (
+      metadata: Record<string, unknown> | undefined,
+      call: number
+    ) => unknown[]
     runLists?: unknown[][]
   } = {}
 ): AuthHarness {
-  const harness = {
+  const harness: AuthHarness = {
     broker: undefined as unknown as AgentTokenBroker,
     mintCalls: 0,
     requests: [] as AuthRequest[],
@@ -1570,6 +2286,7 @@ function makeAuthHarness(
     token: jwtToken(2_000, identity),
   }
   harness.broker = new AgentTokenBroker(identity, {
+    agentOrigin: "https://agent.example",
     nowSeconds: () => 1_000,
     fetch: async (input, init) => {
       const url = String(input)
@@ -1597,15 +2314,46 @@ function makeAuthHarness(
         parsedUrl.searchParams.get("limit") === "10" &&
         parsedUrl.searchParams.get("offset") === "0"
       ) {
-        const runLists =
-          options.runLists ??
-          [
-            [],
-            [{ run_id: "resumed-run-1", status: "running" }],
-          ]
-        const index = Math.min(harness.runListCalls, runLists.length - 1)
+        const metadata = harness.runMetadata?.()
+        const config = harness.runConfig?.()
+        const pathParts = parsedUrl.pathname.split("/")
+        const listedThreadId = decodeURIComponent(pathParts[2] ?? "")
+        const defaultRuns =
+          metadata &&
+          typeof metadata.syshin_ui_submit_nonce === "string"
+            ? [
+                {
+                  run_id: `run-${metadata.syshin_ui_submit_nonce}`,
+                  status: "running",
+                  thread_id: listedThreadId,
+                  config,
+                  metadata,
+                },
+              ]
+            : []
+        const factoryRuns = options.runListFactory?.(
+          metadata,
+          harness.runListCalls
+        )
+        const runLists = options.runLists
+        const index = runLists
+          ? Math.min(harness.runListCalls, runLists.length - 1)
+          : 0
         harness.runListCalls += 1
-        return new Response(JSON.stringify(runLists[index] ?? []), {
+        const runs = (
+          factoryRuns ??
+          runLists?.[index] ??
+          defaultRuns
+        ).map((run) => {
+          if (!isTestRecord(run)) return run
+          return {
+            ...run,
+            ...(typeof run.thread_id === "string"
+              ? {}
+              : { thread_id: listedThreadId }),
+          }
+        })
+        return new Response(JSON.stringify(runs), {
           status: 200,
           headers: { "content-type": "application/json" },
         })
@@ -1660,6 +2408,16 @@ function makeNative(
     ...callbacks,
   })
   nativeAuthHarnesses.set(native, auth)
+  const fakeTesting = (
+    client as Client & {
+      testing?: {
+        lastConfig?: Record<string, unknown>
+        lastMetadata?: Record<string, unknown>
+      }
+    }
+  ).testing
+  auth.runMetadata = () => fakeTesting?.lastMetadata
+  auth.runConfig = () => fakeTesting?.lastConfig
   return native
 }
 
@@ -1687,7 +2445,7 @@ async function collect(
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (predicate()) return
-    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 1))
   }
   throw new Error("Condition was not reached")
 }

@@ -4,6 +4,8 @@ const MAX_CANCELLATION_STATUS_POLLS = 32
 const MAX_RUN_RESOLUTION_POLLS = 32
 const MAX_RUN_IDENTIFIER_CODE_UNITS = 128
 const RUN_IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]+$/
+const TOKEN_ISSUER = "syshin0116.dev"
+const TOKEN_AUDIENCE = "agent-api"
 
 export class AgentAuthenticationError extends Error {
   readonly status?: number
@@ -30,6 +32,7 @@ interface RefreshFlight {
 }
 
 interface AgentTokenBrokerOptions {
+  agentOrigin: string
   fetch?: FetchLike
   nowSeconds?: () => number
   refreshMarginSeconds?: number
@@ -69,6 +72,20 @@ const brokerInspectionReaders = new WeakMap<
   () => BrokerInspection
 >()
 
+function decodeJwtSegment(value: string): unknown {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/")
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")
+  const json =
+    typeof atob === "function"
+      ? decodeURIComponent(
+          Array.from(atob(padded), (character) =>
+            `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`
+          ).join("")
+        )
+      : Buffer.from(padded, "base64").toString("utf8")
+  return JSON.parse(json) as unknown
+}
+
 function decodeJwtExpiration(token: string): number {
   const parts = token.split(".")
   if (parts.length !== 3) {
@@ -76,17 +93,7 @@ function decodeJwtExpiration(token: string): number {
   }
 
   try {
-    const base64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/")
-    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")
-    const json =
-      typeof atob === "function"
-        ? decodeURIComponent(
-            Array.from(atob(padded), (character) =>
-              `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`
-            ).join("")
-          )
-        : Buffer.from(padded, "base64").toString("utf8")
-    const payload = JSON.parse(json) as { exp?: unknown }
+    const payload = decodeJwtSegment(parts[1]!) as { exp?: unknown }
     if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
       throw new Error("missing exp")
     }
@@ -94,6 +101,59 @@ function decodeJwtExpiration(token: string): number {
   } catch (error) {
     if (error instanceof AgentAuthenticationError) throw error
     throw new AgentAuthenticationError("Agent token has an invalid exp claim")
+  }
+}
+
+function validateAgentToken(
+  token: string,
+  identity: string,
+  nowSeconds: number
+): number {
+  const parts = token.split(".")
+  if (parts.length !== 3 || parts[2]!.length === 0) {
+    throw new AgentAuthenticationError("Agent token is not a JWT")
+  }
+  try {
+    const header = decodeJwtSegment(parts[0]!)
+    const payload = decodeJwtSegment(parts[1]!)
+    if (
+      header === null ||
+      typeof header !== "object" ||
+      Array.isArray(header) ||
+      (header as Record<string, unknown>).alg !== "HS256" ||
+      (header as Record<string, unknown>).typ !== "JWT"
+    ) {
+      throw new Error("invalid header")
+    }
+    if (
+      payload === null ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    ) {
+      throw new Error("invalid payload")
+    }
+    const claims = payload as Record<string, unknown>
+    const issuedAt = claims.iat
+    const expiresAt = claims.exp
+    if (
+      claims.sub !== identity ||
+      claims.iss !== TOKEN_ISSUER ||
+      claims.aud !== TOKEN_AUDIENCE ||
+      typeof issuedAt !== "number" ||
+      !Number.isSafeInteger(issuedAt) ||
+      typeof expiresAt !== "number" ||
+      !Number.isSafeInteger(expiresAt) ||
+      expiresAt <= issuedAt
+    ) {
+      throw new Error("invalid claims")
+    }
+    if (expiresAt <= nowSeconds) {
+      throw new AgentAuthenticationError("Agent token is already expired")
+    }
+    return expiresAt
+  } catch (error) {
+    if (error instanceof AgentAuthenticationError) throw error
+    throw new AgentAuthenticationError("Agent token has invalid claims")
   }
 }
 
@@ -391,16 +451,36 @@ export class AgentTokenBroker {
   readonly #fetch: FetchLike
   readonly #nowSeconds: () => number
   readonly #refreshMarginSeconds: number
+  readonly #agentOrigin: string
   #identity: string
   #cached?: CachedToken
   #flight?: RefreshFlight
   #sealed = false
 
-  constructor(identity: string, options: AgentTokenBrokerOptions = {}) {
+  constructor(identity: string, options: AgentTokenBrokerOptions) {
     if (!identity) {
       throw new AgentAuthenticationError("Agent identity is required")
     }
     this.#identity = identity
+    const agentUrl = new URL(options.agentOrigin)
+    const loopbackHttp =
+      agentUrl.protocol === "http:" &&
+      (agentUrl.hostname === "127.0.0.1" ||
+        agentUrl.hostname === "localhost" ||
+        agentUrl.hostname === "[::1]")
+    if (
+      agentUrl.username ||
+      agentUrl.password ||
+      agentUrl.pathname !== "/" ||
+      agentUrl.search ||
+      agentUrl.hash ||
+      (agentUrl.protocol !== "https:" && !loopbackHttp)
+    ) {
+      throw new AgentAuthenticationError(
+        "Agent API origin must be an HTTPS origin"
+      )
+    }
+    this.#agentOrigin = agentUrl.origin
     // Browser `window.fetch` rejects an arbitrary receiver. Wrap the global
     // instead of storing it as a method-valued field that would be invoked
     // with the broker instance as `this`.
@@ -490,7 +570,8 @@ export class AgentTokenBroker {
     }
   }
 
-  async onRequest(_url: URL, init: RequestInit): Promise<RequestInit> {
+  async onRequest(url: URL, init: RequestInit): Promise<RequestInit> {
+    this.#assertAgentOrigin(url)
     const signal =
       init.signal instanceof AbortSignal
         ? init.signal
@@ -507,6 +588,13 @@ export class AgentTokenBroker {
    */
   readonly fetchWithAuthRetry: FetchLike = async (input, init) => {
     this.#assertOpen()
+    this.#assertAgentOrigin(
+      new URL(
+        typeof Request !== "undefined" && input instanceof Request
+          ? input.url
+          : String(input)
+      )
+    )
     const requestInit = init ?? {}
     const signal =
       requestInit.signal instanceof AbortSignal
@@ -580,11 +668,24 @@ export class AgentTokenBroker {
       throw new AgentAuthenticationError("Agent token response is malformed")
     }
     const token = body.token.trim()
-    const expiresAt = decodeJwtExpiration(token)
-    if (expiresAt <= this.#nowSeconds()) {
-      throw new AgentAuthenticationError("Agent token is already expired")
-    }
+    const expiresAt = validateAgentToken(
+      token,
+      identity,
+      this.#nowSeconds()
+    )
     return { token, expiresAt, identity }
+  }
+
+  #assertAgentOrigin(url: URL): void {
+    if (
+      url.origin !== this.#agentOrigin ||
+      url.username ||
+      url.password
+    ) {
+      throw new AgentAuthenticationError(
+        "Agent credential rejected a cross-origin request"
+      )
+    }
   }
 
   #assertOpen(): void {

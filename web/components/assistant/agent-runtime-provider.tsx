@@ -79,7 +79,17 @@ function ConfiguredAgentRuntimeProvider({
   const [errorRouting, setErrorRouting] = useState<AgentErrorRoutingState>({
     connectionStatus: "connecting",
   })
-  const handleActivity = useCallback((activity: AgentActivity) => {
+  const handleActivity = useCallback((
+    activity: AgentActivity,
+    sourceThreadId?: string
+  ) => {
+    if (
+      sourceThreadId !== undefined &&
+      activeThreadIdRef.current !== undefined &&
+      activeThreadIdRef.current !== sourceThreadId
+    ) {
+      return
+    }
     setInspectionAvailability("live")
     setActivities((current) => {
       const withoutCurrent = current.filter(
@@ -101,7 +111,17 @@ function ConfiguredAgentRuntimeProvider({
       }))
     }
   }, [])
-  const handleRuntimeError = useCallback((error: unknown) => {
+  const handleRuntimeError = useCallback((
+    error: unknown,
+    sourceThreadId?: string
+  ) => {
+    if (
+      sourceThreadId !== undefined &&
+      activeThreadIdRef.current !== undefined &&
+      activeThreadIdRef.current !== sourceThreadId
+    ) {
+      return
+    }
     setErrorRouting((current) =>
       reduceAgentError(current, error, "turn")
     )
@@ -160,7 +180,7 @@ function ConfiguredAgentRuntimeProvider({
         if (config?.signal.aborted) {
           return { messages: [], interrupts: [], uiMessages: [] }
         }
-        handleRuntimeError(error)
+        handleRuntimeError(error, threadId)
         setInspectionAvailability("waiting")
         // react-langgraph logs rejected load promises. Resolve with a closed,
         // empty projection after routing the safe inline error instead.

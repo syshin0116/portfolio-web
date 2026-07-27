@@ -17,6 +17,7 @@ import { projectInterruptForUi } from "../../components/assistant/runtime/interr
 
 const INSPECTION_EVENT_NAME = "syshin.rag.inspection.v1"
 const PRIVATE_STATE_SENTINEL = "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"
+const SUBMIT_NONCE_METADATA_KEY = "syshin_ui_submit_nonce"
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim()
@@ -35,6 +36,21 @@ function invariant(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function runHasPersistedCorrelation(
+  run: unknown,
+  phase: string,
+  nonce: string
+): run is { run_id: string } {
+  if (!isRecord(run) || typeof run.run_id !== "string") return false
+  const config = isRecord(run.config) ? run.config : undefined
+  const metadata =
+    config && isRecord(config.metadata) ? config.metadata : undefined
+  return (
+    metadata?.integration_phase === phase &&
+    metadata?.[SUBMIT_NONCE_METADATA_KEY] === nonce
+  )
 }
 
 function assembledText(
@@ -132,6 +148,29 @@ async function openPhase() {
     thread,
     unsubscribeEvent,
   }
+}
+
+async function replayWatermark(
+  thread: Awaited<ReturnType<typeof openPhase>>["thread"]
+): Promise<number> {
+  let previous = thread.ordering.lastSeenSeq
+  let stable = 0
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const current = thread.ordering.lastSeenSeq
+    if (current === previous) stable += 1
+    else {
+      previous = current
+      stable = 0
+    }
+    if (stable >= 5) break
+  }
+  const value = thread.ordering.lastSeenSeq ?? 0
+  invariant(
+    Number.isSafeInteger(value) && value >= 0,
+    "SDK replay watermark was invalid"
+  )
+  return value
 }
 
 const assembler = new MessageAssembler()
@@ -336,6 +375,7 @@ async function closePhase(
 try {
   const initial = await openPhase()
   phases.push(initial)
+  const initialNonce = crypto.randomUUID()
   const started = await initial.thread.submitRun({
     input: {
       messages: [
@@ -344,6 +384,16 @@ try {
           content: "Official JavaScript SDK APv2 persistence proof",
         },
       ],
+    },
+    metadata: {
+      integration_phase: "initial",
+      [SUBMIT_NONCE_METADATA_KEY]: initialNonce,
+    },
+    config: {
+      metadata: {
+        integration_phase: "initial",
+        [SUBMIT_NONCE_METADATA_KEY]: initialNonce,
+      },
     },
   })
   invariant(
@@ -364,29 +414,58 @@ try {
 
   const resumed = await openPhase()
   phases.push(resumed)
+  const resumedNonce = crypto.randomUUID()
+  const beforeRespond = await replayWatermark(resumed.thread)
   await resumed.thread.respondInput({
     namespace: interruptTarget.namespace,
     interrupt_id: interruptTarget.interruptId,
     response: "approved-via-js-sdk",
+    config: {
+      metadata: {
+        integration_phase: "resumed",
+        [SUBMIT_NONCE_METADATA_KEY]: resumedNonce,
+      },
+    },
+    metadata: {
+      integration_phase: "resumed",
+      [SUBMIT_NONCE_METADATA_KEY]: resumedNonce,
+    },
   })
+  const appliedThrough = resumed.thread.ordering.lastAppliedThroughSeq
+  invariant(
+    typeof appliedThrough === "number" &&
+      Number.isSafeInteger(appliedThrough) &&
+      appliedThrough >= 0,
+    "SDK command response omitted applied_through_seq"
+  )
+  // Aegra 0.9.24's stateless command POST returns zero. Its fresh SSE
+  // session replays history, so the pre-dispatch public ordering watermark
+  // is the dialect-compatible side of the barrier.
+  invariant(
+    appliedThrough === 0,
+    `unexpected Aegra applied_through_seq: ${String(appliedThrough)}`
+  )
+  const resumeBarrier = Math.max(appliedThrough, beforeRespond)
   let resumedTerminal: ReturnType<typeof recordEvent>
-  let sawResumedRunning = false
+  let lastAcceptedSequence = resumeBarrier
   while (!resumedTerminal) {
     for await (const event of resumed.subscription) {
-      if (
-        event.method === "lifecycle" &&
-        event.params.namespace.length === 0 &&
-        event.params.data.event === "running"
-      ) {
-        sawResumedRunning = true
-      }
+      invariant(
+        typeof event.seq === "number" &&
+          Number.isSafeInteger(event.seq) &&
+          event.seq >= 0,
+        "fresh-client APv2 event omitted a valid sequence"
+      )
+      if (event.seq <= resumeBarrier) continue
+      invariant(
+        event.seq > lastAcceptedSequence,
+        "fresh-client APv2 sequence was not strictly monotonic"
+      )
+      lastAcceptedSequence = event.seq
       const terminal = recordEvent(event)
       if (terminal === "completed") {
         resumedTerminal = terminal
         break
-      }
-      if (terminal === "interrupted" && !sawResumedRunning) {
-        continue
       }
     }
     if (resumedTerminal || !resumed.subscription.isPaused) break
@@ -401,6 +480,26 @@ try {
         return `${lifecycle.params.namespace.join("/") || "root"}:${lifecycle.params.data.event}`
       })
       .join(", ")}`
+  )
+  const persistedRuns = await client.runs.list(threadId, {
+    limit: 10,
+    offset: 0,
+  })
+  const initialCorrelationMatches = persistedRuns.filter((run) =>
+    runHasPersistedCorrelation(run, "initial", initialNonce)
+  )
+  const resumedCorrelationMatches = persistedRuns.filter((run) =>
+    runHasPersistedCorrelation(run, "resumed", resumedNonce)
+  )
+  invariant(
+    initialCorrelationMatches.length === 1 &&
+      initialCorrelationMatches[0]!.run_id === started.run_id,
+    "initial run correlation was not persisted on the exact run"
+  )
+  invariant(
+    resumedCorrelationMatches.length === 1 &&
+      resumedCorrelationMatches[0]!.run_id !== started.run_id,
+    "resumed run correlation was not persisted on one fresh run"
   )
 
   const canonicalInspection =
@@ -495,12 +594,17 @@ try {
   console.log(
     JSON.stringify({
       assistantText,
+      aegraAppliedThroughSeq: appliedThrough,
       inspectionEvents: inspectionPayloads.length,
       protocol: "v2",
       interruptProjectionRecognized,
       nestedInputOnContent: sawNestedInputOnContent,
       nestedInterruptNamespace: interruptTarget.namespace.length > 0,
       rawPrivateStateObserved,
+      replayBarrierUsesOrdering: resumeBarrier >= beforeRespond,
+      runCorrelationPersisted:
+        initialCorrelationMatches.length === 1 &&
+        resumedCorrelationMatches.length === 1,
       runtimeBoundarySafe: true,
       sawNestedLifecycle,
       sawToolFinish,

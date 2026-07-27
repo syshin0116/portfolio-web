@@ -52,16 +52,33 @@ const RESUMED_RUN_ID_POLL_MS = 50
 const INTERRUPT_WATCHER_WAIT_MS = 1_000
 const INTERRUPT_WATCHER_POLL_MS = 10
 const INTERRUPT_WATCHER_STABLE_POLLS = 5
+const REPLAY_QUIESCENCE_WAIT_MS = 250
+const REPLAY_QUIESCENCE_POLL_MS = 10
+const REPLAY_QUIESCENCE_STABLE_POLLS = 5
 const MAX_STATE_MESSAGES = 500
 const MAX_STATE_CONTENT_BLOCKS = 256
-const MAX_STATE_TEXT_CODE_UNITS = 100_000
-const MAX_STATE_MESSAGE_ID_CODE_UNITS = 256
+const MAX_STATE_TEXT_BYTES = 100_000
+const MAX_STATE_MESSAGE_ID_BYTES = 512
 const SAFE_STATE_MESSAGE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
-const MAX_INTERRUPT_ID_CODE_UNITS = 256
+const MAX_INTERRUPT_ID_BYTES = 512
 const MAX_INTERRUPT_NAMESPACE_PARTS = 32
-const MAX_INTERRUPT_NAMESPACE_PART_CODE_UNITS = 256
+const MAX_INTERRUPT_NAMESPACE_PART_BYTES = 512
 const SAFE_INTERRUPT_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
 const SAFE_INTERRUPT_NAMESPACE_PART = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
+const SUBMIT_NONCE_METADATA_KEY = "syshin_ui_submit_nonce"
+const SAFE_SUBMIT_NONCE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const MAX_EVENT_BYTES = 256 * 1_024
+const MAX_RUN_BYTES = 8 * 1_024 * 1_024
+const MAX_LIVE_MESSAGES = 256
+const MAX_MESSAGE_BYTES = 1 * 1_024 * 1_024
+const MAX_CONTENT_BLOCKS_PER_MESSAGE = 256
+const MAX_BLOCK_BYTES = 256 * 1_024
+const MAX_LIVE_ID_BYTES = 512
+const MAX_TEXT_BYTES_PER_MESSAGE = 512 * 1_024
+const MAX_TOOL_ARGUMENT_BYTES_PER_MESSAGE = 256 * 1_024
+const MAX_PRE_BARRIER_BYTES = 2 * 1_024 * 1_024
+const textEncoder = new TextEncoder()
 
 export type { AgentActivity } from "./inspection"
 
@@ -79,8 +96,8 @@ export interface NativeAgentClientOptions {
   identity: string
   tokenBroker?: AgentTokenBroker
   client?: Client
-  onActivity?: (activity: AgentActivity) => void
-  onError?: (error: Error) => void
+  onActivity?: (activity: AgentActivity, threadId?: string) => void
+  onError?: (error: Error, threadId?: string) => void
 }
 
 interface ActiveNativeStream {
@@ -180,6 +197,43 @@ type MessageAssemblyUpdate = NonNullable<
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
 
+class AgentProtocolBoundaryError extends Error {
+  constructor() {
+    super("Agent protocol boundary rejected an unsafe event")
+    this.name = "AgentProtocolBoundaryError"
+    this.stack = undefined
+  }
+}
+
+function isUnicodeScalarString(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (next < 0xdc00 || next > 0xdfff) return false
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false
+    }
+  }
+  return !value.includes("\0")
+}
+
+function utf8Bytes(value: string): number {
+  return textEncoder.encode(value).byteLength
+}
+
+function boundedUtf8String(
+  value: unknown,
+  maxBytes: number
+): value is string {
+  return (
+    typeof value === "string" &&
+    isUnicodeScalarString(value) &&
+    utf8Bytes(value) <= maxBytes
+  )
+}
+
 function parseJsonObject(value: unknown): LangChainToolCall["args"] {
   if (isRecord(value)) return value as LangChainToolCall["args"]
   if (typeof value !== "string" || value.trim() === "") return {}
@@ -200,9 +254,7 @@ function unknownBlockLabel(block: Record<string, unknown>): string {
 }
 
 function boundedStateText(value: unknown): string | undefined {
-  return typeof value === "string" &&
-    value.length <= MAX_STATE_TEXT_CODE_UNITS &&
-    !value.includes("\0")
+  return boundedUtf8String(value, MAX_STATE_TEXT_BYTES)
     ? value
     : undefined
 }
@@ -256,7 +308,7 @@ export function normalizeStateMessages(value: unknown): LangChainMessage[] {
           : rawType
     const id =
       typeof candidate.id === "string" &&
-      candidate.id.length <= MAX_STATE_MESSAGE_ID_CODE_UNITS &&
+      boundedUtf8String(candidate.id, MAX_STATE_MESSAGE_ID_BYTES) &&
       SAFE_STATE_MESSAGE_ID.test(candidate.id)
         ? candidate.id
         : `checkpoint-message-${index}`
@@ -401,7 +453,7 @@ function assembledMessageToLangChain(
           status: {
             type: "incomplete" as const,
             reason: "error" as const,
-            error: message.error.message,
+            error: "에이전트 메시지를 완료하지 못했습니다.",
           },
         }
       : {}),
@@ -457,8 +509,7 @@ export class NativeMessageProjection {
 }
 
 function safeInterruptIdentifier(value: unknown): string | undefined {
-  return typeof value === "string" &&
-    value.length <= MAX_INTERRUPT_ID_CODE_UNITS &&
+  return boundedUtf8String(value, MAX_INTERRUPT_ID_BYTES) &&
     SAFE_INTERRUPT_ID.test(value)
     ? value
     : undefined
@@ -476,7 +527,7 @@ function safeInterruptNamespace(value: unknown): string[] | undefined {
     if (
       typeof part !== "string" ||
       part.length === 0 ||
-      part.length > MAX_INTERRUPT_NAMESPACE_PART_CODE_UNITS ||
+      !boundedUtf8String(part, MAX_INTERRUPT_NAMESPACE_PART_BYTES) ||
       !SAFE_INTERRUPT_NAMESPACE_PART.test(part)
     ) {
       return undefined
@@ -615,6 +666,455 @@ function toRunMessages(messages: LangChainMessage[]) {
   }))
 }
 
+interface LiveMessageBudget {
+  blockBytes: Map<number, number>
+  blockCount: number
+  blockIndexes: Set<number>
+  blockTextBytes: Map<number, number>
+  blockToolArgumentBytes: Map<number, number>
+  bytes: number
+  textBytes: number
+  toolArgumentBytes: number
+}
+
+function serializedUtf8Bytes(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value)
+    if (serialized === undefined) throw new AgentProtocolBoundaryError()
+    return utf8Bytes(serialized)
+  } catch {
+    throw new AgentProtocolBoundaryError()
+  }
+}
+
+function safeLiveIdentifier(value: unknown): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    !boundedUtf8String(value, MAX_LIVE_ID_BYTES)
+  ) {
+    throw new AgentProtocolBoundaryError()
+  }
+}
+
+function namespaceKey(namespace: readonly string[]): string {
+  return namespace.join("\u001f")
+}
+
+function messageScopeKey(
+  namespace: readonly string[],
+  node: unknown
+): string {
+  if (node !== undefined) safeLiveIdentifier(node)
+  return `${namespaceKey(namespace)}\u001e${node ?? ""}`
+}
+
+function stringBytes(value: unknown): number {
+  return typeof value === "string" && isUnicodeScalarString(value)
+    ? utf8Bytes(value)
+    : value === undefined
+      ? 0
+      : serializedUtf8Bytes(value)
+}
+
+function contentPayloadBytes(value: unknown): {
+  text: number
+  toolArguments: number
+} {
+  if (!isRecord(value)) return { text: 0, toolArguments: 0 }
+  return {
+    text: stringBytes(value.text) + stringBytes(value.reasoning),
+    toolArguments:
+      value.args === undefined ? 0 : stringBytes(value.args),
+  }
+}
+
+class LiveRunBudget {
+  readonly #messages = new Map<string, LiveMessageBudget>()
+  #messageCount = 0
+  #runBytes = 0
+
+  observe(event: ProtocolStreamEvent): void {
+    const eventBytes = serializedUtf8Bytes(event)
+    if (eventBytes > MAX_EVENT_BYTES) {
+      throw new AgentProtocolBoundaryError()
+    }
+    this.#runBytes += eventBytes
+    if (this.#runBytes > MAX_RUN_BYTES) {
+      throw new AgentProtocolBoundaryError()
+    }
+
+    if ("event_id" in event && event.event_id !== undefined) {
+      safeLiveIdentifier(event.event_id)
+    }
+    if (
+      !Array.isArray(event.params.namespace) ||
+      event.params.namespace.length > MAX_INTERRUPT_NAMESPACE_PARTS
+    ) {
+      throw new AgentProtocolBoundaryError()
+    }
+    for (const part of event.params.namespace) {
+      safeLiveIdentifier(part)
+    }
+    if (event.method !== "messages") return
+
+    const data = event.params.data as Record<string, unknown>
+    const eventName = data.event
+    const key = messageScopeKey(
+      event.params.namespace,
+      event.params.node
+    )
+    if (eventName === "message-start") {
+      safeLiveIdentifier(data.id)
+      this.#messageCount += 1
+      if (
+        this.#messageCount > MAX_LIVE_MESSAGES ||
+        this.#messages.has(key)
+      ) {
+        throw new AgentProtocolBoundaryError()
+      }
+      this.#messages.set(key, {
+        blockBytes: new Map(),
+        blockCount: 0,
+        blockIndexes: new Set(),
+        blockTextBytes: new Map(),
+        blockToolArgumentBytes: new Map(),
+        bytes: 0,
+        textBytes: 0,
+        toolArgumentBytes: 0,
+      })
+    }
+    const message = this.#messages.get(key)
+    if (!message) throw new AgentProtocolBoundaryError()
+    message.bytes += eventBytes
+    if (message.bytes > MAX_MESSAGE_BYTES) {
+      throw new AgentProtocolBoundaryError()
+    }
+
+    if (eventName === "content-block-start") {
+      const index = data.index
+      if (
+        !Number.isSafeInteger(index) ||
+        (index as number) < 0 ||
+        (index as number) >= MAX_CONTENT_BLOCKS_PER_MESSAGE ||
+        message.blockIndexes.has(index as number)
+      ) {
+        throw new AgentProtocolBoundaryError()
+      }
+      message.blockCount += 1
+      if (message.blockCount > MAX_CONTENT_BLOCKS_PER_MESSAGE) {
+        throw new AgentProtocolBoundaryError()
+      }
+      const content = data.content
+      const contentBytes = serializedUtf8Bytes(content)
+      if (contentBytes > MAX_BLOCK_BYTES) {
+        throw new AgentProtocolBoundaryError()
+      }
+      message.blockIndexes.add(index as number)
+      message.blockBytes.set(index as number, contentBytes)
+      const payloadBytes = contentPayloadBytes(content)
+      message.blockTextBytes.set(index as number, payloadBytes.text)
+      message.blockToolArgumentBytes.set(
+        index as number,
+        payloadBytes.toolArguments
+      )
+      message.textBytes += payloadBytes.text
+      message.toolArgumentBytes += payloadBytes.toolArguments
+      if (isRecord(content)) {
+        if (content.id !== undefined) safeLiveIdentifier(content.id)
+        if (content.tool_call_id !== undefined) {
+          safeLiveIdentifier(content.tool_call_id)
+        }
+      }
+    } else if (eventName === "content-block-delta") {
+      const index = data.index
+      if (
+        !Number.isSafeInteger(index) ||
+        !message.blockIndexes.has(index as number)
+      ) {
+        throw new AgentProtocolBoundaryError()
+      }
+      const delta = isRecord(data.delta) ? data.delta : {}
+      const blockBytes =
+        (message.blockBytes.get(index as number) ?? 0) +
+        serializedUtf8Bytes(delta)
+      if (blockBytes > MAX_BLOCK_BYTES) {
+        throw new AgentProtocolBoundaryError()
+      }
+      message.blockBytes.set(index as number, blockBytes)
+      const fields = isRecord(delta.fields) ? delta.fields : delta
+      const payloadBytes = contentPayloadBytes(fields)
+      message.blockTextBytes.set(
+        index as number,
+        (message.blockTextBytes.get(index as number) ?? 0) +
+          payloadBytes.text
+      )
+      message.blockToolArgumentBytes.set(
+        index as number,
+        (message.blockToolArgumentBytes.get(index as number) ?? 0) +
+          payloadBytes.toolArguments
+      )
+      message.textBytes += payloadBytes.text
+      message.toolArgumentBytes += payloadBytes.toolArguments
+    } else if (eventName === "content-block-finish") {
+      const index = data.index
+      if (
+        !Number.isSafeInteger(index) ||
+        !message.blockIndexes.has(index as number) ||
+        serializedUtf8Bytes(data.content) > MAX_BLOCK_BYTES
+      ) {
+        throw new AgentProtocolBoundaryError()
+      }
+      const content = data.content
+      const payloadBytes = contentPayloadBytes(content)
+      message.textBytes +=
+        payloadBytes.text -
+        (message.blockTextBytes.get(index as number) ?? 0)
+      message.toolArgumentBytes +=
+        payloadBytes.toolArguments -
+        (message.blockToolArgumentBytes.get(index as number) ?? 0)
+      if (isRecord(content)) {
+        if (content.id !== undefined) safeLiveIdentifier(content.id)
+        if (content.tool_call_id !== undefined) {
+          safeLiveIdentifier(content.tool_call_id)
+        }
+      }
+      message.blockIndexes.delete(index as number)
+      message.blockBytes.delete(index as number)
+      message.blockTextBytes.delete(index as number)
+      message.blockToolArgumentBytes.delete(index as number)
+    }
+    if (
+      message.textBytes > MAX_TEXT_BYTES_PER_MESSAGE ||
+      message.toolArgumentBytes > MAX_TOOL_ARGUMENT_BYTES_PER_MESSAGE
+    ) {
+      throw new AgentProtocolBoundaryError()
+    }
+    if (
+      eventName === "message-finish" &&
+      message.blockIndexes.size > 0
+    ) {
+      throw new AgentProtocolBoundaryError()
+    }
+    if (eventName === "message-finish" || eventName === "message-error") {
+      this.#messages.delete(key)
+    }
+  }
+}
+
+class RunEventBoundary {
+  readonly #budget: LiveRunBudget
+  readonly #accepted = new WeakMap<object, boolean>()
+  readonly #seenEventIds: Set<string>
+  readonly #queued: ProtocolStreamEvent[] = []
+  #barrier?: number
+  #lastSequence?: number
+  #queuedBytes = 0
+
+  constructor(
+    budget = new LiveRunBudget(),
+    seenEventIds = new Set<string>()
+  ) {
+    this.#budget = budget
+    this.#seenEventIds = seenEventIds
+  }
+
+  queueOrObserve(event: ProtocolStreamEvent): boolean | undefined {
+    const cached = this.#accepted.get(event)
+    if (cached !== undefined) return cached
+    if (this.#barrier === undefined) {
+      const eventBytes = serializedUtf8Bytes(event)
+      if (eventBytes > MAX_EVENT_BYTES) {
+        throw new AgentProtocolBoundaryError()
+      }
+      this.#queuedBytes += eventBytes
+      this.#queued.push(event)
+      if (
+        this.#queued.length > MAX_LIVE_MESSAGES * 8 ||
+        this.#queuedBytes > MAX_PRE_BARRIER_BYTES
+      ) {
+        throw new AgentProtocolBoundaryError()
+      }
+      return undefined
+    }
+    return this.#observe(event)
+  }
+
+  configure(barrier: number): void {
+    if (
+      this.#barrier !== undefined ||
+      !Number.isSafeInteger(barrier) ||
+      barrier < 0
+    ) {
+      throw new AgentProtocolBoundaryError()
+    }
+    this.#barrier = barrier
+    const queued = this.#queued.splice(0)
+    this.#queuedBytes = 0
+    for (const event of queued) this.#observe(event)
+  }
+
+  wasAccepted(event: ProtocolStreamEvent): boolean {
+    const accepted = this.queueOrObserve(event)
+    if (accepted === undefined) throw new AgentProtocolBoundaryError()
+    return accepted
+  }
+
+  #observe(event: ProtocolStreamEvent): boolean {
+    const cached = this.#accepted.get(event)
+    if (cached !== undefined) return cached
+    const eventId =
+      "event_id" in event && typeof event.event_id === "string"
+        ? event.event_id
+        : undefined
+    if (eventId !== undefined) {
+      safeLiveIdentifier(eventId)
+      if (this.#seenEventIds.has(eventId)) {
+        this.#accepted.set(event, false)
+        return false
+      }
+      this.#seenEventIds.add(eventId)
+    }
+    const sequence = "seq" in event ? event.seq : undefined
+    if (
+      typeof sequence !== "number" ||
+      !Number.isSafeInteger(sequence) ||
+      sequence < 0 ||
+      (this.#lastSequence !== undefined && sequence <= this.#lastSequence)
+    ) {
+      throw new AgentProtocolBoundaryError()
+    }
+    this.#lastSequence = sequence
+    const accepted = sequence > this.#barrier!
+    this.#accepted.set(event, accepted)
+    if (accepted) this.#budget.observe(event)
+    return accepted
+  }
+}
+
+function createSubmitNonce(): string {
+  const nonce = crypto.randomUUID()
+  if (!SAFE_SUBMIT_NONCE.test(nonce)) {
+    throw new AgentProtocolBoundaryError()
+  }
+  return nonce
+}
+
+function runMetadataWithNonce(
+  runConfig: unknown,
+  nonce: string
+): Record<string, unknown> {
+  const callerMetadata =
+    isRecord(runConfig) && isRecord(runConfig.metadata)
+      ? runConfig.metadata
+      : {}
+  return {
+    ...callerMetadata,
+    [SUBMIT_NONCE_METADATA_KEY]: nonce,
+  }
+}
+
+function runConfigWithNonce(
+  runConfig: unknown,
+  nonce: string
+): Record<string, unknown> {
+  const callerConfig = isRecord(runConfig) ? runConfig : {}
+  const callerMetadata = isRecord(callerConfig.metadata)
+    ? callerConfig.metadata
+    : {}
+  return {
+    ...callerConfig,
+    metadata: {
+      ...callerMetadata,
+      [SUBMIT_NONCE_METADATA_KEY]: nonce,
+    },
+  }
+}
+
+function runMatchesSubmitNonce(
+  run: unknown,
+  threadId: string,
+  submitNonce: string
+): run is { run_id: string } {
+  if (
+    !isRecord(run) ||
+    run.thread_id !== threadId ||
+    typeof run.run_id !== "string"
+  ) {
+    return false
+  }
+  const observed: unknown[] = []
+  if (
+    isRecord(run.metadata) &&
+    SUBMIT_NONCE_METADATA_KEY in run.metadata
+  ) {
+    observed.push(run.metadata[SUBMIT_NONCE_METADATA_KEY])
+  }
+  if (
+    isRecord(run.config) &&
+    isRecord(run.config.metadata) &&
+    SUBMIT_NONCE_METADATA_KEY in run.config.metadata
+  ) {
+    observed.push(
+      run.config.metadata[SUBMIT_NONCE_METADATA_KEY]
+    )
+  }
+  return (
+    observed.length > 0 &&
+    observed.every((candidate) => candidate === submitNonce)
+  )
+}
+
+async function snapshotReplayWatermark(
+  thread: ThreadStream,
+  signal: AbortSignal
+): Promise<number> {
+  const bounded = timeoutController(REPLAY_QUIESCENCE_WAIT_MS)
+  const waitSignal = AbortSignal.any([signal, bounded.controller.signal])
+  let previous = thread.ordering.lastSeenSeq
+  let stablePolls = 0
+  try {
+    while (!waitSignal.aborted) {
+      await waitForDelay(REPLAY_QUIESCENCE_POLL_MS, waitSignal)
+      const current = thread.ordering.lastSeenSeq
+      if (current === previous) stablePolls += 1
+      else {
+        previous = current
+        stablePolls = 0
+      }
+      if (stablePolls >= REPLAY_QUIESCENCE_STABLE_POLLS) break
+    }
+  } catch (error) {
+    if (!bounded.controller.signal.aborted || signal.aborted) throw error
+  } finally {
+    bounded.clear()
+  }
+  const watermark = thread.ordering.lastSeenSeq
+  if (watermark === undefined) return 0
+  if (!Number.isSafeInteger(watermark) || watermark < 0) {
+    throw new AgentProtocolBoundaryError()
+  }
+  return watermark
+}
+
+function appliedSequenceBarrier(
+  thread: ThreadStream,
+  replayWatermark: number
+): number {
+  const applied = thread.ordering.lastAppliedThroughSeq
+  if (
+    typeof applied !== "number" ||
+    !Number.isSafeInteger(applied) ||
+    applied < 0
+  ) {
+    throw new AgentProtocolBoundaryError()
+  }
+  // Aegra 0.9.24 reports zero for stateless command POSTs. Its fresh SSE
+  // session replays durable history first, so the public pre-dispatch
+  // lastSeenSeq watermark is the dialect-compatible lower bound.
+  return Math.max(applied, replayWatermark)
+}
+
 function timeoutController(milliseconds: number): {
   controller: AbortController
   clear: () => void
@@ -698,12 +1198,7 @@ export async function cancelRunAndWait(
       })
     }
   } catch (error) {
-    if (
-      !(error instanceof DOMException) ||
-      (error.name !== "AbortError" && error.name !== "TimeoutError")
-    ) {
-      throw error
-    }
+    if (!bounded.controller.signal.aborted) throw error
   } finally {
     bounded.clear()
   }
@@ -713,6 +1208,7 @@ async function waitForResumedRunId(
   client: Pick<Client, "runs">,
   threadId: string,
   knownRunIds: ReadonlySet<string>,
+  submitNonce: string,
   signal: AbortSignal
 ): Promise<string> {
   while (!signal.aborted) {
@@ -721,11 +1217,13 @@ async function waitForResumedRunId(
       offset: 0,
       signal,
     })
-    const created = runs.find(
+    const created = runs.filter(
       (run) =>
-        typeof run.run_id === "string" && !knownRunIds.has(run.run_id)
+        !knownRunIds.has(run.run_id) &&
+        runMatchesSubmitNonce(run, threadId, submitNonce)
     )
-    if (created) return created.run_id
+    if (created.length > 1) throw new AgentProtocolBoundaryError()
+    if (created.length === 1) return created[0]!.run_id
     await waitForDelay(RESUMED_RUN_ID_POLL_MS, signal)
   }
   throw signal.reason
@@ -735,6 +1233,7 @@ async function resolveResumedRunIdOrThrow(
   client: Pick<Client, "runs">,
   threadId: string,
   knownRunIds: ReadonlySet<string>,
+  submitNonce: string,
   signal: AbortSignal
 ): Promise<string> {
   try {
@@ -742,6 +1241,7 @@ async function resolveResumedRunIdOrThrow(
       client,
       threadId,
       knownRunIds,
+      submitNonce,
       signal
     )
   } catch {
@@ -750,6 +1250,31 @@ async function resolveResumedRunIdOrThrow(
     // cannot mistake resolver exhaustion for user Stop.
     throw new Error("재개된 실행 식별자를 확인하지 못했습니다.")
   }
+}
+
+type CommandSettlement =
+  | { status: "fulfilled"; value: unknown }
+  | { status: "rejected"; reason: unknown }
+
+function settleCommand(command: Promise<unknown>): Promise<CommandSettlement> {
+  return command.then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (reason) => ({ status: "rejected" as const, reason })
+  )
+}
+
+async function awaitCommandSettlement(
+  settlement: Promise<CommandSettlement>,
+  signal: AbortSignal
+): Promise<CommandSettlement> {
+  signal.throwIfAborted()
+  return await new Promise<CommandSettlement>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    signal.addEventListener("abort", onAbort, { once: true })
+    settlement.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort)
+    })
+  })
 }
 
 async function waitForDelay(
@@ -895,7 +1420,9 @@ async function* mergeContentAndNestedInputs(
       }
       continue
     }
-    if (!subscription.isPaused) return
+    if (!subscription.isPaused) {
+      throw new AgentProtocolBoundaryError()
+    }
 
     let resumed = false
     const resume = subscription.waitForResume().then(() => {
@@ -939,8 +1466,8 @@ export class NativeAgentClient {
   readonly tokenBroker: AgentTokenBroker
   readonly assistantId: string
   readonly #apiUrl: string
-  readonly #onActivity?: (activity: AgentActivity) => void
-  readonly #onError?: (error: Error) => void
+  readonly #onActivity?: (activity: AgentActivity, threadId?: string) => void
+  readonly #onError?: (error: Error, threadId?: string) => void
   readonly #pendingInterrupts = new Map<string, PendingInterrupt>()
   readonly #activeStreams = new Set<ActiveNativeStream>()
   #disposed = false
@@ -953,7 +1480,9 @@ export class NativeAgentClient {
     this.#onError = options.onError
     this.tokenBroker =
       options.tokenBroker ??
-      new AgentTokenBroker(options.identity)
+      new AgentTokenBroker(options.identity, {
+        agentOrigin: options.apiUrl,
+      })
     this.client =
       options.client ??
       new Client({
@@ -1056,6 +1585,18 @@ export class NativeAgentClient {
     const presentedInterruptKeys = new Set<string>()
     const nestedInputs = new NestedInputQueue()
     let nestedInputFailed = false
+    const liveRunBudget = new LiveRunBudget()
+    const seenEventIds = new Set<string>()
+    const contentBoundary = new RunEventBoundary(
+      liveRunBudget,
+      seenEventIds
+    )
+    const watcherBoundary = new RunEventBoundary(
+      liveRunBudget,
+      seenEventIds
+    )
+    const preBarrierWatcherEvents: ProtocolStreamEvent[] = []
+    let watcherFailure: Error | undefined
     let unsubscribeThreadEvents: (() => void) | undefined
     const closeOnAbort = () => {
       closeThreadBestEffort(thread)
@@ -1074,6 +1615,7 @@ export class NativeAgentClient {
       }
       threadId = initialized.externalId
       const boundThreadId = threadId
+      const inspection = new InspectionProjector()
       signal.throwIfAborted()
       thread = this.client.threads.stream(boundThreadId, {
         assistantId: this.assistantId,
@@ -1087,20 +1629,26 @@ export class NativeAgentClient {
             namespace: [],
             status: "reconnecting",
             label: `연결을 복구하는 중입니다 (${attempt}/5).`,
-          })
+          }, boundThreadId)
         },
       })
       active.stream = thread
       signal.addEventListener("abort", closeOnAbort, { once: true })
       if (signal.aborted) closeOnAbort()
-      unsubscribeThreadEvents = thread.onEvent((event) => {
-        if (event.method !== "input.requested") return
-        if (nestedInputFailed) return
+      const projectWatcherEvent = (event: ProtocolStreamEvent) => {
+        if (event.params.namespace.length === 0) return
+        if (event.method === "lifecycle") {
+          this.#onActivity?.(
+            inspection.consumeLifecycle(event),
+            boundThreadId
+          )
+          return
+        }
+        if (event.method !== "input.requested" || nestedInputFailed) return
+        if (!Array.isArray(event.params.namespace)) {
+          throw new AgentProtocolBoundaryError()
+        }
         try {
-          if (!Array.isArray(event.params.namespace)) {
-            throw new Error("승인 요청 식별 정보가 올바르지 않습니다.")
-          }
-          if (event.params.namespace.length === 0) return
           const pending = pendingFromInputEvent(event)
           const existing = this.#pendingInterrupts.get(boundThreadId)
           if (existing) {
@@ -1119,6 +1667,36 @@ export class NativeAgentClient {
           nestedInputFailed = true
           nestedInputs.fail()
         }
+      }
+      unsubscribeThreadEvents = thread.onEvent((rawEvent) => {
+        if (
+          rawEvent.method !== "messages" &&
+          rawEvent.method !== "lifecycle" &&
+          rawEvent.method !== "input.requested" &&
+          rawEvent.method !== "tools" &&
+          rawEvent.method !== "custom"
+        ) {
+          return
+        }
+        const event = rawEvent as ProtocolStreamEvent
+        try {
+          if (
+            !isRecord(event.params) ||
+            !Array.isArray(event.params.namespace)
+          ) {
+            throw new AgentProtocolBoundaryError()
+          }
+          if (event.params.namespace.length === 0) return
+          const accepted = watcherBoundary.queueOrObserve(event)
+          if (accepted === undefined) {
+            preBarrierWatcherEvents.push(event)
+          } else if (accepted) {
+            projectWatcherEvent(event)
+          }
+        } catch {
+          watcherFailure = new AgentProtocolBoundaryError()
+          nestedInputs.fail()
+        }
       })
       subscription = await thread.subscribe(
         [
@@ -1134,67 +1712,155 @@ export class NativeAgentClient {
         }
       )
 
-      if (config.command) {
-        const pending = this.#pendingInterrupts.get(boundThreadId)
-        if (!pending) {
-          throw new Error("재개할 승인 요청이 없습니다.")
-        }
-        const runResolution = timeoutController(RESUMED_RUN_ID_WAIT_MS)
-        try {
-          const runResolutionClient = new Client({
-            apiUrl: this.#apiUrl,
-            apiKey: null,
-            callerOptions: {
-              fetch: active.cancellationSnapshot.createRunResolverFetch({
-                apiUrl: this.#apiUrl,
-                threadId: boundThreadId,
-              }) as typeof fetch,
-              maxRetries: 0,
-            },
-          })
-          const knownRunIds = new Set(
-            (
-              await runResolutionClient.runs.list(boundThreadId, {
-                limit: 10,
-                offset: 0,
-                signal: runResolution.controller.signal,
+      const pending = config.command
+        ? this.#pendingInterrupts.get(boundThreadId)
+        : undefined
+      if (config.command && !pending) {
+        throw new Error("재개할 승인 요청이 없습니다.")
+      }
+      const runResolution = timeoutController(RESUMED_RUN_ID_WAIT_MS)
+      try {
+        const runResolutionClient = new Client({
+          apiUrl: this.#apiUrl,
+          apiKey: null,
+          callerOptions: {
+            fetch: active.cancellationSnapshot.createRunResolverFetch({
+              apiUrl: this.#apiUrl,
+              threadId: boundThreadId,
+            }) as typeof fetch,
+            maxRetries: 0,
+          },
+        })
+        const knownRunIds = new Set(
+          (
+            await runResolutionClient.runs.list(boundThreadId, {
+              limit: 10,
+              offset: 0,
+              signal: runResolution.controller.signal,
+            })
+          ).map((run) => run.run_id)
+        )
+        const submitNonce = createSubmitNonce()
+        const metadata = runMetadataWithNonce(
+          config.runConfig,
+          submitNonce
+        )
+        // Aegra 0.9.24 persists request metadata for tracing but omits it
+        // from Run responses. Mirror the internal nonce into standard
+        // RunnableConfig metadata, which Aegra persists and returns, so lost
+        // command responses can still bind only the exact created run.
+        const runConfig = runConfigWithNonce(
+          config.runConfig,
+          submitNonce
+        )
+        const replayWatermark = await snapshotReplayWatermark(thread, signal)
+        // This read is deliberately adjacent to dispatch. Aegra's stateless
+        // command response reports applied_through_seq=0, while the SDK's
+        // public ordering watermark records replay already observed here.
+        const immediateReplayWatermark =
+          thread.ordering.lastSeenSeq ?? replayWatermark
+        const commandSettlement = settleCommand(
+          config.command
+            ? thread.respondInput({
+                namespace: pending!.namespace,
+                interrupt_id: pending!.interruptId,
+                response: config.command.resume,
+                config: runConfig,
+                metadata,
               })
-            ).map((run) => run.run_id)
-          )
-          await thread.respondInput({
-            namespace: pending.namespace,
-            interrupt_id: pending.interruptId,
-            response: config.command.resume,
-          })
-          // The SDK intentionally returns void for input.respond. Resolve the
-          // newly-created run through a bounded, old-identity, read-only
-          // snapshot before clearing HITL so Stop can always target it.
-          runId = await resolveResumedRunIdOrThrow(
+            : thread.submitRun({
+                input: { messages: toRunMessages(messages) },
+                config: runConfig,
+                metadata,
+              })
+        )
+        const resolverSettlement = settleCommand(
+          resolveResumedRunIdOrThrow(
             runResolutionClient,
             boundThreadId,
             knownRunIds,
+            submitNonce,
             runResolution.controller.signal
           )
-        } finally {
-          runResolution.clear()
+        )
+
+        const first = await Promise.race([
+          commandSettlement.then((result) => ({
+            source: "command" as const,
+            result,
+          })),
+          resolverSettlement.then((result) => ({
+            source: "resolver" as const,
+            result,
+          })),
+        ])
+        let command: CommandSettlement
+        if (first.source === "resolver") {
+          if (first.result.status === "rejected") throw first.result.reason
+          runId = first.result.value as string
+          command = await awaitCommandSettlement(
+            commandSettlement,
+            runResolution.controller.signal
+          )
+        } else {
+          command = first.result
+          if (command.status === "rejected" || config.command) {
+            const resolved = await awaitCommandSettlement(
+              resolverSettlement,
+              runResolution.controller.signal
+            )
+            if (resolved.status === "rejected") throw resolved.reason
+            runId = resolved.value as string
+          } else {
+            const result = command.value
+            const responseRunId =
+              isRecord(result) && typeof result.run_id === "string"
+                ? result.run_id
+                : undefined
+            if (responseRunId) {
+              runId = responseRunId
+              runResolution.controller.abort(
+                new DOMException("Run ID returned by command", "AbortError")
+              )
+            } else {
+              const resolved = await awaitCommandSettlement(
+                resolverSettlement,
+                runResolution.controller.signal
+              )
+              if (resolved.status === "rejected") throw resolved.reason
+              runId = resolved.value as string
+            }
+          }
         }
-        signal.throwIfAborted()
+        if (command.status === "rejected") throw command.reason
+        if (
+          !config.command &&
+          isRecord(command.value) &&
+          typeof command.value.run_id === "string" &&
+          command.value.run_id !== runId
+        ) {
+          throw new AgentProtocolBoundaryError()
+        }
+        const barrier = appliedSequenceBarrier(
+          thread,
+          Math.max(replayWatermark, immediateReplayWatermark)
+        )
+        contentBoundary.configure(barrier)
+        watcherBoundary.configure(barrier)
+        for (const event of preBarrierWatcherEvents.splice(0)) {
+          if (watcherBoundary.wasAccepted(event)) projectWatcherEvent(event)
+        }
+        if (watcherFailure) throw watcherFailure
+      } finally {
+        runResolution.clear()
+      }
+      signal.throwIfAborted()
+      if (config.command) {
         this.#pendingInterrupts.delete(boundThreadId)
         yield { event: "updates", data: { __interrupt__: [] } }
-      } else {
-        const result = await thread.submitRun({
-          input: { messages: toRunMessages(messages) },
-          ...(isRecord(config.runConfig)
-            ? { config: config.runConfig }
-            : {}),
-        })
-        runId = result.run_id
       }
 
       const projection = new NativeMessageProjection()
-      const inspection = new InspectionProjector()
-      const resuming = config.command !== undefined
-      let sawRootRunning = false
 
       // The root-only content pump is merged locally with only bounded nested
       // input projections received from ThreadStream.onEvent. The watcher
@@ -1204,6 +1870,7 @@ export class NativeAgentClient {
         nestedInputs,
         signal
       )) {
+        if (watcherFailure) throw watcherFailure
         if (item.type === "error") throw item.error
         if (item.type === "pending") {
           presentedInterruptKeys.add(pendingInterruptKey(item.pending))
@@ -1219,9 +1886,10 @@ export class NativeAgentClient {
         }
         const event = item.event
         signal.throwIfAborted()
+        if (!contentBoundary.wasAccepted(event)) continue
         if (event.method === "messages") {
           const activity = inspection.consumeMessage(event)
-          if (activity) this.#onActivity?.(activity)
+          if (activity) this.#onActivity?.(activity, boundThreadId)
           // Nested-agent transcript text is not a user-facing answer.
           // Lifecycle/custom summaries remain visible; root-message reasoning
           // is locally removed but may already have crossed the SSE boundary.
@@ -1256,36 +1924,36 @@ export class NativeAgentClient {
           continue
         }
         if (event.method === "tools") {
-          this.#onActivity?.(inspection.consumeTool(event))
+          this.#onActivity?.(
+            inspection.consumeTool(event),
+            boundThreadId
+          )
           continue
         }
         if (event.method === "custom") {
           const activity = inspection.consumeCustom(event)
-          if (activity) this.#onActivity?.(activity)
+          if (activity) this.#onActivity?.(activity, boundThreadId)
           continue
         }
         if (event.method === "lifecycle") {
-          this.#onActivity?.(inspection.consumeLifecycle(event))
+          this.#onActivity?.(
+            inspection.consumeLifecycle(event),
+            boundThreadId
+          )
           const root = event.params.namespace.length === 0
-          if (root && event.params.data.event === "running") {
-            sawRootRunning = true
-          }
           if (root && event.params.data.event === "failed") {
-            this.#onError?.(new AgentLifecycleError())
+            this.#onError?.(
+              new AgentLifecycleError(),
+              boundThreadId
+            )
             yield {
               event: "error",
               data: { message: safeLifecycleError(event) },
             }
           }
-          const staleResumeInterrupt =
-            root &&
-            event.params.data.event === "interrupted" &&
-            resuming &&
-              !sawRootRunning
           if (
             root &&
-            event.params.data.event === "interrupted" &&
-            !staleResumeInterrupt
+            event.params.data.event === "interrupted"
           ) {
             const pending = await waitForInterruptedInput(
               thread,
@@ -1306,24 +1974,20 @@ export class NativeAgentClient {
               }
             }
           }
-          if (isRootTerminal(event) && !staleResumeInterrupt) {
+          if (isRootTerminal(event)) {
             terminal = true
             break
           }
         }
       }
     } catch (error) {
-      if (
-        !signal.aborted &&
-        !(error instanceof Error && error.name === "AbortError")
-      ) {
+      if (!signal.aborted) {
         const normalized = sanitizeAgentError(error)
-        this.#onError?.(normalized)
+        this.#onError?.(normalized, threadId)
         throw normalized
       }
     } finally {
       if (
-        signal.aborted &&
         !terminal &&
         threadId &&
         runId &&

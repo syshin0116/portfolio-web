@@ -142,4 +142,19 @@ describe("classifyAgentError", () => {
     expect(JSON.stringify(safe)).not.toContain("Bearer")
     expect(JSON.stringify(safe)).not.toContain("private backend body")
   })
+
+  test("drops stacks and rejects unallowlisted status fields at the UI boundary", () => {
+    const sentinel = "ultra-secret-sentinel"
+    const raw = Object.assign(new Error(sentinel), {
+      status: 418,
+      response: { status: 418, body: sentinel },
+      stack: `Error: ${sentinel}\n at postgres://${sentinel}`,
+    })
+    const safe = sanitizeAgentError(raw)
+
+    expect(safe.status).toBeUndefined()
+    expect(safe.stack).toBeUndefined()
+    expect(JSON.stringify(safe)).not.toContain(sentinel)
+    expect(Object.values(safe)).not.toContain(sentinel)
+  })
 })

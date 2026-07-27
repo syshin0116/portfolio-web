@@ -13,9 +13,11 @@ interface FixtureState {
     params?: unknown
   }>
   errors: string[]
+  reconnectDisconnects: number
   renameAttempts: number
   responses: Array<{
     interrupt_id?: unknown
+    metadata?: unknown
     namespace?: unknown
     response?: unknown
   }>
@@ -40,7 +42,7 @@ const revision =
 
 async function resetFixture(
   page: Page,
-  scenario: "default" | "load-error" = "default"
+  scenario: "default" | "load-error" | "reconnect" = "default"
 ): Promise<void> {
   const response = await page.request.post(
     `${fixtureOrigin}/__fixture/reset`,
@@ -63,7 +65,7 @@ async function attachEvidence(
   name: string
 ): Promise<void> {
   await testInfo.attach(`${name}-${revision}.png`, {
-    body: await page.screenshot({ fullPage: true }),
+    body: await page.screenshot(),
     contentType: "image/png",
   })
   await testInfo.attach(`${name}-${revision}.json`, {
@@ -159,6 +161,13 @@ test.describe.serial("native assistant-ui production journey", () => {
       name: "AI에게 보낼 메시지",
     })
     await expect(composer).toBeEnabled()
+    await composer.fill("첫째 줄")
+    await composer.press("Shift+Enter")
+    await composer.type("둘째 줄")
+    await expect(composer).toHaveValue("첫째 줄\n둘째 줄")
+    await expect
+      .poll(async () => (await fixtureState(page)).commands.length)
+      .toBe(0)
     await composer.dispatchEvent("compositionstart")
     await composer.fill("한글 조합 중 Enter")
     await composer.press("Enter")
@@ -170,7 +179,7 @@ test.describe.serial("native assistant-ui production journey", () => {
 
     await expect(
       page.getByText("브라우저 fixture 검색을 계속할까요?")
-    ).toBeVisible()
+    ).toBeVisible({ timeout: 12_000 })
     const initialState = await fixtureState(page)
     expect(initialState.errors).toEqual([])
     expect(initialState.commands).toHaveLength(1)
@@ -223,11 +232,14 @@ test.describe.serial("native assistant-ui production journey", () => {
     ).toBeVisible()
     await expect(composer).toBeFocused()
     expect((await fixtureState(page)).responses).toEqual([
-      {
+      expect.objectContaining({
         namespace: ["nested_subgraph:browser-task"],
         interrupt_id: "browser-interrupt-1",
         response: "approve",
-      },
+        metadata: expect.objectContaining({
+          syshin_ui_submit_nonce: expect.any(String),
+        }),
+      }),
     ])
 
     await approve.click()
@@ -235,22 +247,39 @@ test.describe.serial("native assistant-ui production journey", () => {
       page.getByText("브라우저 fixture 응답이 완료되었습니다.")
     ).toBeVisible()
     expect((await fixtureState(page)).responses).toEqual([
-      {
+      expect.objectContaining({
         namespace: ["nested_subgraph:browser-task"],
         interrupt_id: "browser-interrupt-1",
         response: "approve",
-      },
-      {
+        metadata: expect.objectContaining({
+          syshin_ui_submit_nonce: expect.any(String),
+        }),
+      }),
+      expect.objectContaining({
         namespace: ["nested_subgraph:browser-task"],
         interrupt_id: "browser-interrupt-1",
         response: "approve",
-      },
+        metadata: expect.objectContaining({
+          syshin_ui_submit_nonce: expect.any(String),
+        }),
+      }),
     ])
     expect((await fixtureState(page)).streamSubscriptions).toEqual([
       ...initialState.streamSubscriptions,
       ...initialState.streamSubscriptions,
       ...initialState.streamSubscriptions,
     ])
+    await expect(
+      page.getByText("중첩 작업이 끝났습니다.")
+    ).toBeVisible()
+
+    await page.reload()
+    await page
+      .getByRole("button", { name: /브라우저 테스트 대화/ })
+      .click()
+    await expect(
+      page.getByText("브라우저 fixture 응답이 완료되었습니다.")
+    ).toBeVisible()
 
     await expectA11yClean(page)
     await expectNoBrowserErrors(page, diagnostics)
@@ -290,6 +319,9 @@ test.describe.serial("native assistant-ui production journey", () => {
     await composer.press("Enter")
     const stop = page.getByRole("button", { name: "응답 중지" })
     await expect(stop).toBeVisible()
+    await expect
+      .poll(async () => (await fixtureState(page)).commands.length)
+      .toBe(1)
     await stop.click()
     await expect(stop).toBeHidden()
     await expect
@@ -320,6 +352,67 @@ test.describe.serial("native assistant-ui production journey", () => {
       )
     ).toBeVisible()
     await expect(page.getByText(/fixture_secret/)).toHaveCount(0)
+    await expectNoBrowserErrors(page, diagnostics)
+  })
+
+  test("reconnects the native APv2 content stream without duplicating the nested lifecycle", async ({
+    page,
+  }, testInfo) => {
+    const diagnostics = collectDiagnostics(page)
+    await resetFixture(page, "reconnect")
+    await page.goto("/")
+    await page
+      .getByRole("button", { name: /브라우저 테스트 대화/ })
+      .click()
+    const composer = page.getByRole("textbox", {
+      name: "AI에게 보낼 메시지",
+    })
+    await composer.fill("재연결 검증")
+    await composer.press("Enter")
+
+    await expect(
+      page.getByText("브라우저 fixture 검색을 계속할까요?")
+    ).toBeVisible({ timeout: 12_000 })
+    await expect
+      .poll(async () => (await fixtureState(page)).reconnectDisconnects)
+      .toBe(1)
+    await expect
+      .poll(
+        async () =>
+          (await fixtureState(page)).streamSubscriptions.length
+      )
+      .toBeGreaterThanOrEqual(3)
+    await expect(
+      page.getByText("중첩 작업이 입력을 기다립니다.")
+    ).toHaveCount(1)
+    expect(diagnostics.consoleIssues).toEqual([
+      expect.stringContaining(
+        "503 (Service Unavailable)"
+      ),
+    ])
+    diagnostics.consoleIssues.length = 0
+    await expectNoBrowserErrors(page, diagnostics)
+    await attachEvidence(page, testInfo, "native-reconnect")
+  })
+
+  test("blocks an over-byte composer submission before it reaches APv2", async ({
+    page,
+  }) => {
+    const diagnostics = collectDiagnostics(page)
+    await resetFixture(page)
+    await page.goto("/")
+    await page
+      .getByRole("button", { name: /브라우저 테스트 대화/ })
+      .click()
+    const composer = page.getByRole("textbox", {
+      name: "AI에게 보낼 메시지",
+    })
+    await composer.fill("가".repeat(6_000))
+    await page.getByRole("button", { name: "메시지 보내기" }).click()
+    await expect(
+      page.getByText("메시지가 너무 깁니다. 16KB 이하로 줄여 주세요.")
+    ).toBeVisible()
+    expect((await fixtureState(page)).commands).toEqual([])
     await expectNoBrowserErrors(page, diagnostics)
   })
 })
@@ -366,7 +459,7 @@ test("has no horizontal overflow at supported widths and honors reduced motion",
     await expectA11yClean(page)
     await expectNoBrowserErrors(page, diagnostics)
     await testInfo.attach(`responsive-${width}-${revision}.png`, {
-      body: await page.screenshot({ fullPage: true }),
+      body: await page.screenshot(),
       contentType: "image/png",
     })
     await context.close()

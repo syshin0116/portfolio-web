@@ -160,7 +160,16 @@ async def _run_official_js_sdk_e2e(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    except TimeoutError:
+        process.kill()
+        stdout, stderr = await process.communicate()
+        raise AssertionError(
+            "official JavaScript SDK APv2 integration timed out\n"
+            f"stdout:\n{stdout.decode('utf-8')}\n"
+            f"stderr:\n{stderr.decode('utf-8')}"
+        ) from None
     output = stdout.decode("utf-8")
     error_output = stderr.decode("utf-8")
     assert process.returncode == 0, (
@@ -473,6 +482,7 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
                 thread_id=js_sdk_thread_id,
             )
             assert summary == {
+                "aegraAppliedThroughSeq": 0,
                 "assistantText": "fixture-complete",
                 "inspectionEvents": 1,
                 "interruptProjectionRecognized": True,
@@ -480,6 +490,8 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
                 "nestedInterruptNamespace": True,
                 "protocol": "v2",
                 "rawPrivateStateObserved": False,
+                "replayBarrierUsesOrdering": True,
+                "runCorrelationPersisted": True,
                 "runtimeBoundarySafe": True,
                 "sawNestedLifecycle": True,
                 "sawToolFinish": True,

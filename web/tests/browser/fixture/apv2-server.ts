@@ -7,6 +7,7 @@ interface ThreadRow {
   updated_at: string
   state_updated_at: string
   status: "idle" | "busy" | "interrupted"
+  messages: JsonRecord[]
 }
 
 interface RunRow {
@@ -19,6 +20,7 @@ interface RunRow {
     | "success"
     | "timeout"
     | "interrupted"
+  metadata: JsonRecord
 }
 
 interface Subscriber {
@@ -37,8 +39,9 @@ interface FixtureState {
   nextSequence: number
   nextSubscriber: number
   renameAttempts: number
+  reconnectDisconnects: number
   responses: JsonRecord[]
-  scenario: "default" | "load-error"
+  scenario: "default" | "load-error" | "reconnect"
   streamSubscriptions: Array<{
     authorization: boolean
     body: JsonRecord
@@ -72,6 +75,7 @@ function fixtureThread(): ThreadRow {
     updated_at: now,
     state_updated_at: now,
     status: "idle",
+    messages: [],
   }
 }
 
@@ -87,6 +91,7 @@ function resetState(
     nextSequence: 1,
     nextSubscriber: 1,
     renameAttempts: 0,
+    reconnectDisconnects: 0,
     responses: [],
     scenario,
     streamSubscriptions: [],
@@ -227,7 +232,7 @@ function protocolEvent(
 }
 
 async function waitForStreams(threadId: string): Promise<void> {
-  for (let attempt = 0; attempt < 400; attempt += 1) {
+  for (let attempt = 0; attempt < 2_000; attempt += 1) {
     const streams = [...state.subscribers.values()].filter(
       (subscriber) => subscriber.threadId === threadId
     )
@@ -294,7 +299,7 @@ async function emitInitialRun(threadId: string, run: RunRow): Promise<void> {
     ["nested_subgraph:browser-task"],
     {
       interrupt_id: "browser-interrupt-1",
-      value: {
+      payload: {
         schema: "syshin.rag.interrupt.v1",
         kind: "approval",
         title: "브라우저 검색 승인",
@@ -312,6 +317,14 @@ async function emitInitialRun(threadId: string, run: RunRow): Promise<void> {
   emit(threadId, rootInterrupted, "content")
   await Bun.sleep(40)
   emit(threadId, nestedInput, "watcher")
+  emit(
+    threadId,
+    protocolEvent("lifecycle", ["nested_subgraph:browser-task"], {
+      event: "interrupted",
+      graph_name: "nested",
+    }),
+    "watcher"
+  )
   emit(threadId, rootInterrupted, "watcher")
   run.status = "interrupted"
   const thread = state.threads.get(threadId)
@@ -330,7 +343,23 @@ async function emitCompletedRun(
       graph_name: "agent",
     })
   )
+  emit(
+    threadId,
+    protocolEvent("lifecycle", ["nested_subgraph:browser-task"], {
+      event: "running",
+      graph_name: "nested",
+    }),
+    "watcher"
+  )
   for (const event of messageEvents()) emit(threadId, event)
+  emit(
+    threadId,
+    protocolEvent("lifecycle", ["nested_subgraph:browser-task"], {
+      event: "completed",
+      graph_name: "nested",
+    }),
+    "watcher"
+  )
   emit(
     threadId,
     protocolEvent("lifecycle", [], {
@@ -340,14 +369,29 @@ async function emitCompletedRun(
   )
   run.status = "success"
   const thread = state.threads.get(threadId)
-  if (thread) thread.status = "idle"
+  if (thread) {
+    thread.status = "idle"
+    thread.messages = [
+      {
+        id: "browser-persisted-answer",
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "브라우저 fixture 응답이 완료되었습니다.",
+          },
+        ],
+      },
+    ]
+  }
 }
 
-function newRun(threadId: string): RunRow {
+function newRun(threadId: string, metadata: JsonRecord): RunRow {
   const run: RunRow = {
     run_id: `browser-run-${state.nextRun++}`,
     thread_id: threadId,
     status: "running",
+    metadata,
   }
   const runs = state.runs.get(threadId) ?? []
   runs.push(run)
@@ -358,8 +402,9 @@ function newRun(threadId: string): RunRow {
 }
 
 function threadState(threadId: string): JsonRecord {
+  const thread = state.threads.get(threadId)
   return {
-    values: { messages: [] },
+    values: { messages: thread?.messages ?? [] },
     next: [],
     checkpoint: {
       thread_id: threadId,
@@ -388,6 +433,7 @@ function publicState(): JsonRecord {
     commands: state.commands,
     errors: state.errors,
     renameAttempts: state.renameAttempts,
+    reconnectDisconnects: state.reconnectDisconnects,
     responses: state.responses,
     revision: process.env.GITHUB_SHA ?? "local",
     scenario: state.scenario,
@@ -408,7 +454,11 @@ const server = Bun.serve({
     if (url.pathname === "/__fixture/reset" && request.method === "POST") {
       const body = await jsonBody(request)
       state = resetState(
-        body.scenario === "load-error" ? "load-error" : "default"
+        body.scenario === "load-error"
+          ? "load-error"
+          : body.scenario === "reconnect"
+            ? "reconnect"
+            : "default"
       )
       return responseJson(publicState())
     }
@@ -434,6 +484,7 @@ const server = Bun.serve({
         updated_at: now,
         state_updated_at: now,
         status: "idle",
+        messages: [],
       }
       state.threads.set(threadId, row)
       state.runs.set(threadId, [])
@@ -445,6 +496,21 @@ const server = Bun.serve({
     if (streamMatch && request.method === "POST") {
       const threadId = streamMatch[1]!
       const body = await jsonBody(request)
+      state.streamSubscriptions.push({
+        authorization: request.headers
+          .get("authorization")
+          ?.startsWith("Bearer ") === true,
+        body,
+        threadId,
+      })
+      if (
+        state.scenario === "reconnect" &&
+        state.reconnectDisconnects === 0 &&
+        Array.isArray(body.namespaces)
+      ) {
+        state.reconnectDisconnects += 1
+        return responseJson({ error: "temporary stream failure" }, 503)
+      }
       const id = state.nextSubscriber++
       let subscriber: Subscriber
       const stream = new ReadableStream<Uint8Array>({
@@ -458,13 +524,6 @@ const server = Bun.serve({
           }
           state.subscribers.set(id, subscriber)
           controller.enqueue(encoder.encode(": ready\n\n"))
-          state.streamSubscriptions.push({
-            authorization: request.headers
-              .get("authorization")
-              ?.startsWith("Bearer ") === true,
-            body,
-            threadId,
-          })
           request.signal.addEventListener(
             "abort",
             () => {
@@ -508,7 +567,13 @@ const server = Bun.serve({
           ? (command.params as JsonRecord)
           : {}
       if (command.method === "run.start") {
-        const run = newRun(threadId)
+        const metadata =
+          params.metadata &&
+          typeof params.metadata === "object" &&
+          !Array.isArray(params.metadata)
+            ? (params.metadata as JsonRecord)
+            : {}
+        const run = newRun(threadId, metadata)
         const serialized = JSON.stringify(params.input ?? "")
         if (serialized.includes("취소")) {
           void waitForStreams(threadId)
@@ -537,6 +602,7 @@ const server = Bun.serve({
           type: "success",
           id: command.id,
           result: { run_id: run.run_id },
+          meta: { applied_through_seq: state.nextSequence - 1 },
         })
       }
       if (command.method === "input.respond") {
@@ -553,7 +619,13 @@ const server = Bun.serve({
             200
           )
         }
-        const run = newRun(threadId)
+        const metadata =
+          params.metadata &&
+          typeof params.metadata === "object" &&
+          !Array.isArray(params.metadata)
+            ? (params.metadata as JsonRecord)
+            : {}
+        const run = newRun(threadId, metadata)
         void emitCompletedRun(threadId, run).catch((error: unknown) => {
           state.errors.push(
             error instanceof Error ? error.message : "resume emit failed"
@@ -563,6 +635,7 @@ const server = Bun.serve({
           type: "success",
           id: command.id,
           result: { run_id: run.run_id },
+          meta: { applied_through_seq: state.nextSequence - 1 },
         })
       }
       return responseJson(

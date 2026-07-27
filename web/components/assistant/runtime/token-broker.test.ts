@@ -12,6 +12,9 @@ function token(exp: number, subject = "user-1"): string {
     Buffer.from(JSON.stringify(value)).toString("base64url")
   return `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
     sub: subject,
+    iss: "syshin0116.dev",
+    aud: "agent-api",
+    iat: 900,
     exp,
   })}.signature`
 }
@@ -28,6 +31,7 @@ describe("AgentTokenBroker", () => {
     let now = 1_000
     let mintCalls = 0
     const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => now,
       fetch: async () => {
         mintCalls += 1
@@ -60,6 +64,7 @@ describe("AgentTokenBroker", () => {
     let observedSignal: AbortSignal | undefined
     let resolveFetch: ((response: Response) => void) | undefined
     const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async (_input, init) => {
         observedSignal = init?.signal as AbortSignal
@@ -80,6 +85,7 @@ describe("AgentTokenBroker", () => {
   test("propagates caller abort without caching a token", async () => {
     let networkSignal: AbortSignal | undefined
     const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       fetch: async (_input, init) => {
         networkSignal = init?.signal as AbortSignal
         return await new Promise<Response>((_resolve, reject) => {
@@ -103,12 +109,13 @@ describe("AgentTokenBroker", () => {
     const calls: Array<{ url: string; authorization: string | null }> = []
     let minted = 0
     const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async (input, init) => {
         const url = String(input)
         if (url === "/api/agent-token") {
           minted += 1
-          return jsonResponse({ token: token(2_000 + minted, `user-${minted}`) })
+          return jsonResponse({ token: token(2_000 + minted, "user-1") })
         }
         calls.push({
           url,
@@ -134,6 +141,7 @@ describe("AgentTokenBroker", () => {
 
   test("rejects malformed and expired JWTs even if route metadata says fresh", async () => {
     const malformed = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async () =>
         jsonResponse({ token: "not-a-jwt", expiresAt: 9_999 }),
@@ -143,6 +151,7 @@ describe("AgentTokenBroker", () => {
     ).rejects.toBeInstanceOf(AgentAuthenticationError)
 
     const expired = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async () =>
         jsonResponse({ token: token(999), expiresAt: 9_999 }),
@@ -165,6 +174,127 @@ describe("AgentTokenBroker", () => {
     expect(headers.get("Authorization")).toBe("Bearer fresh")
   })
 
+  test("rejects the wrong JWT subject, issuer, audience, or header shape", async () => {
+    const encode = (value: object) =>
+      Buffer.from(JSON.stringify(value)).toString("base64url")
+    const cases = [
+      `${encode({ alg: "none", typ: "JWT" })}.${encode({
+        sub: "user-1",
+        iss: "syshin0116.dev",
+        aud: "agent-api",
+        iat: 900,
+        exp: 2_000,
+      })}.signature`,
+      token(2_000, "user-2"),
+      `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
+        sub: "user-1",
+        iss: "evil.example",
+        aud: "agent-api",
+        iat: 900,
+        exp: 2_000,
+      })}.signature`,
+      `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
+        sub: "user-1",
+        iss: "syshin0116.dev",
+        aud: "other-api",
+        iat: 900,
+        exp: 2_000,
+      })}.signature`,
+    ]
+
+    for (const jwt of cases) {
+      const broker = new AgentTokenBroker("user-1", {
+        agentOrigin: "https://agent.example",
+        nowSeconds: () => 1_000,
+        fetch: async () => jsonResponse({ token: jwt }),
+      })
+      await expect(
+        broker.get(new AbortController().signal)
+      ).rejects.toBeInstanceOf(AgentAuthenticationError)
+    }
+  })
+
+  test("accepts only a normalized HTTPS or exact loopback origin", () => {
+    const options = {
+      nowSeconds: () => 1_000,
+      fetch: async () => jsonResponse({ token: token(2_000) }),
+    }
+    for (const agentOrigin of [
+      "https://agent.example/path",
+      "https://agent.example/?query=1",
+      "https://user@agent.example",
+      "http://agent.example",
+      "http://service.localhost:8000",
+    ]) {
+      expect(
+        () =>
+          new AgentTokenBroker("user-1", {
+            ...options,
+            agentOrigin,
+          })
+      ).toThrow(AgentAuthenticationError)
+    }
+    expect(
+      () =>
+        new AgentTokenBroker("user-1", {
+          ...options,
+          agentOrigin: "http://localhost:8000",
+        })
+    ).not.toThrow()
+  })
+
+  test("never attaches or refreshes a bearer token outside the exact agent origin", async () => {
+    let mintCalls = 0
+    let agentCalls = 0
+    let foreignCalls = 0
+    const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
+      nowSeconds: () => 1_000,
+      fetch: async (input) => {
+        const url = String(input)
+        if (url === "/api/agent-token") {
+          mintCalls += 1
+          return jsonResponse({ token: token(2_000) })
+        }
+        if (new URL(url).origin === "https://agent.example") {
+          agentCalls += 1
+          return new Response(null, { status: 401 })
+        }
+        foreignCalls += 1
+        return new Response(null, { status: 200 })
+      },
+    })
+    const signal = new AbortController().signal
+
+    await expect(
+      broker.onRequest(new URL("https://evil.example/steal"), { signal })
+    ).rejects.toBeInstanceOf(AgentAuthenticationError)
+    await expect(
+      broker.fetchWithAuthRetry("https://evil.example/steal", {
+        signal,
+        headers: { Authorization: "Bearer must-not-leak" },
+      })
+    ).rejects.toBeInstanceOf(AgentAuthenticationError)
+
+    const initial = await broker.onRequest(
+      new URL("https://agent.example/state"),
+      { signal }
+    )
+    expect(
+      (
+        await broker.fetchWithAuthRetry(
+          "https://agent.example/state",
+          initial
+        )
+      ).status
+    ).toBe(401)
+    expect({ mintCalls, agentCalls, foreignCalls }).toEqual({
+      mintCalls: 2,
+      agentCalls: 2,
+      foreignCalls: 0,
+    })
+  })
+
   test("pins one old-identity token to one bounded cancellation target", async () => {
     const apiCalls: Array<{
       authorization: string | null
@@ -176,6 +306,7 @@ describe("AgentTokenBroker", () => {
     const oldToken = token(2_000, "old-user")
     const newToken = token(2_100, "new-user")
     const broker = new AgentTokenBroker("old-user", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async (input, init) => {
         const url = String(input)
@@ -260,6 +391,7 @@ describe("AgentTokenBroker", () => {
   test("seal blocks general refresh while the captured cancellation remains usable", async () => {
     let mintCalls = 0
     const broker = new AgentTokenBroker("old-user", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async (input) => {
         if (String(input) === "/api/agent-token") {
@@ -311,6 +443,7 @@ describe("AgentTokenBroker", () => {
     }> = []
     let mintCalls = 0
     const broker = new AgentTokenBroker("old-user", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async (input, init) => {
         const url = String(input)
@@ -383,6 +516,7 @@ describe("AgentTokenBroker", () => {
 
   test("bounds resumed-run polling and seals discovery after exact run binding", async () => {
     const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async (input) =>
         String(input) === "/api/agent-token"
@@ -425,6 +559,7 @@ describe("AgentTokenBroker", () => {
 
   test("rejects credential-bearing restricted-fetch base URLs", async () => {
     const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
       fetch: async () => jsonResponse({ token: token(2_000) }),
     })

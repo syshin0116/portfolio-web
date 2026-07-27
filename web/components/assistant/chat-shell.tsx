@@ -382,7 +382,12 @@ type InterruptState = NonNullable<
 >
 const MAX_INTERRUPT_RESPONSE_CODE_UNITS = 1_000
 const MAX_INTERRUPT_RESPONSE_UTF8_BYTES = 3_000
+const MAX_COMPOSER_CODE_UNITS = 8_000
+const MAX_COMPOSER_UTF8_BYTES = 16_000
+const COMPOSER_LIMIT_ERROR =
+  "메시지가 너무 깁니다. 16KB 이하로 줄여 주세요."
 const interruptResponseEncoder = new TextEncoder()
+const composerEncoder = new TextEncoder()
 const interruptViewKeys = new WeakMap<object, number>()
 let nextInterruptViewKey = 1
 
@@ -524,6 +529,8 @@ function InterruptCard() {
 function Composer() {
   const runtimeUi = useAgentRuntimeUi()
   const compositionRef = useRef(false)
+  const composerInputRef = useRef<HTMLTextAreaElement>(null)
+  const [composerError, setComposerError] = useState<string>()
   const guardImeEnter = createImeEnterGuard(() => compositionRef.current)
   const ready = runtimeUi.connectionStatus === "ready"
   const connectionError = runtimeUi.connectionError
@@ -581,16 +588,49 @@ function Composer() {
           </button>
         </div>
       ) : null}
-      <ComposerPrimitive.Root className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border bg-card p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/20">
+      <ComposerPrimitive.Root
+        className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border bg-card p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/20"
+        onSubmitCapture={(event) => {
+          const value = composerInputRef.current?.value ?? ""
+          if (
+            value.length > MAX_COMPOSER_CODE_UNITS ||
+            composerEncoder.encode(value).byteLength >
+              MAX_COMPOSER_UTF8_BYTES
+          ) {
+            event.preventDefault()
+            event.stopPropagation()
+            setComposerError(COMPOSER_LIMIT_ERROR)
+            setTimeout(() => composerInputRef.current?.focus(), 0)
+            return
+          }
+          setComposerError(undefined)
+        }}
+      >
         <ComposerPrimitive.Input
+          ref={composerInputRef}
           aria-label={COMPOSER_ACCESSIBLE_NAME}
+          aria-describedby={
+            composerError ? "composer-size-error" : undefined
+          }
+          aria-invalid={composerError !== undefined}
           placeholder={
             ready ? "블로그와 프로젝트에 관해 물어보세요…" : "연결 중…"
           }
           disabled={!ready}
           rows={1}
           maxRows={8}
+          maxLength={MAX_COMPOSER_CODE_UNITS}
           submitMode="enter"
+          onInput={(event) => {
+            if (
+              composerEncoder.encode(event.currentTarget.value).byteLength <=
+              MAX_COMPOSER_UTF8_BYTES
+            ) {
+              setComposerError(undefined)
+            } else {
+              setComposerError(COMPOSER_LIMIT_ERROR)
+            }
+          }}
           onCompositionStart={() => {
             compositionRef.current = true
           }}
@@ -617,6 +657,15 @@ function Composer() {
           </ComposerPrimitive.Send>
         </ThreadPrimitive.If>
       </ComposerPrimitive.Root>
+      {composerError ? (
+        <p
+          id="composer-size-error"
+          role="alert"
+          className="mx-auto mt-2 max-w-3xl text-xs text-destructive"
+        >
+          {composerError}
+        </p>
+      ) : null}
       <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">
         AI 답변은 부정확할 수 있습니다. Enter로 전송 · Shift+Enter로 줄바꿈
       </p>

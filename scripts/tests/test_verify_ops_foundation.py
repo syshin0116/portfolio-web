@@ -150,23 +150,25 @@ resource "google_project_service" "required" {
             "infra/gcp/unreviewed.tfmock.json",
         )
         for relative_path in candidates:
-            with self.subTest(relative_path=relative_path):
-                with tempfile.TemporaryDirectory() as directory:
-                    root = self._fixture(directory)
-                    candidate = root / relative_path
-                    candidate.parent.mkdir(parents=True, exist_ok=True)
-                    candidate.write_text(
-                        "malformed and must not be read\n", encoding="utf-8"
-                    )
+            with (
+                self.subTest(relative_path=relative_path),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = self._fixture(directory)
+                candidate = root / relative_path
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                candidate.write_text(
+                    "malformed and must not be read\n", encoding="utf-8"
+                )
 
-                    result = self._run(root)
+                result = self._run(root)
 
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn(
-                        "on-disk Terraform loadable inventory mismatch",
-                        result.stderr,
-                    )
-                    self.assertIn(relative_path, result.stderr)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "on-disk Terraform loadable inventory mismatch",
+                    result.stderr,
+                )
+                self.assertIn(relative_path, result.stderr)
 
     def test_disk_inventory_rejects_allowlisted_path_when_untracked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -210,30 +212,32 @@ resource "google_project_service" "required" {
     def test_disk_inventory_rejects_invalid_terraform_entry_kinds(self) -> None:
         mutations = ("regular", "symlink", "fifo")
         for mutation in mutations:
-            with self.subTest(mutation=mutation):
-                with tempfile.TemporaryDirectory() as directory:
-                    root = self._fixture(directory)
-                    internal = root / "infra/gcp/.terraform"
-                    if mutation == "regular":
-                        internal.write_text("must not be read\n", encoding="utf-8")
-                    elif mutation == "symlink":
-                        internal.symlink_to(
-                            root / "does-not-exist",
-                            target_is_directory=True,
-                        )
-                        subprocess.run(
-                            ["git", "add", "--force", "infra/gcp/.terraform"],
-                            cwd=root,
-                            check=True,
-                        )
-                    else:
-                        os.mkfifo(internal)
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = self._fixture(directory)
+                internal = root / "infra/gcp/.terraform"
+                if mutation == "regular":
+                    internal.write_text("must not be read\n", encoding="utf-8")
+                elif mutation == "symlink":
+                    internal.symlink_to(
+                        root / "does-not-exist",
+                        target_is_directory=True,
+                    )
+                    subprocess.run(
+                        ["git", "add", "--force", "infra/gcp/.terraform"],
+                        cwd=root,
+                        check=True,
+                    )
+                else:
+                    os.mkfifo(internal)
 
-                    result = self._run(root)
+                result = self._run(root)
 
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn("infra/gcp/.terraform", result.stderr)
-                    self.assertIn(mutation, result.stderr)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("infra/gcp/.terraform", result.stderr)
+                self.assertIn(mutation, result.stderr)
 
     def test_disk_inventory_rejects_tracked_terraform_subtree_without_reading(
         self,
@@ -259,54 +263,58 @@ resource "google_project_service" "required" {
 
     def test_disk_inventory_rejects_symlinked_infra_path_components(self) -> None:
         for component in ("infra", "infra/gcp"):
-            with self.subTest(component=component):
-                with tempfile.TemporaryDirectory() as directory:
-                    root = self._fixture(directory)
-                    original = root / component
-                    relocated = root / f"{component.replace('/', '-')}-real"
-                    original.rename(relocated)
-                    original.symlink_to(relocated, target_is_directory=True)
+            with (
+                self.subTest(component=component),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = self._fixture(directory)
+                original = root / component
+                relocated = root / f"{component.replace('/', '-')}-real"
+                original.rename(relocated)
+                original.symlink_to(relocated, target_is_directory=True)
 
-                    result = self._run(root)
+                result = self._run(root)
 
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn(
-                        f"{component} must be a real directory",
-                        result.stderr,
-                    )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    f"{component} must be a real directory",
+                    result.stderr,
+                )
 
     def test_disk_inventory_rejects_untracked_symlink_and_non_regular_candidates(
         self,
     ) -> None:
         mutations = ("regular", "symlink", "fifo")
         for mutation in mutations:
-            with self.subTest(mutation=mutation):
-                with tempfile.TemporaryDirectory() as directory:
-                    root = self._fixture(directory)
-                    candidate = root / f"infra/gcp/unreviewed-{mutation}.tf"
-                    if mutation == "regular":
-                        candidate.write_text("# must not be read\n", encoding="utf-8")
-                    elif mutation == "symlink":
-                        candidate.symlink_to(root / "does-not-exist")
-                    else:
-                        os.mkfifo(candidate)
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = self._fixture(directory)
+                candidate = root / f"infra/gcp/unreviewed-{mutation}.tf"
+                if mutation == "regular":
+                    candidate.write_text("# must not be read\n", encoding="utf-8")
+                elif mutation == "symlink":
+                    candidate.symlink_to(root / "does-not-exist")
+                else:
+                    os.mkfifo(candidate)
 
-                    result = subprocess.run(
-                        ["bash", "scripts/verify_ops_foundation.sh", "--static"],
-                        cwd=root,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        timeout=20,
-                    )
+                result = subprocess.run(
+                    ["bash", "scripts/verify_ops_foundation.sh", "--static"],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
 
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn(
-                        "on-disk Terraform loadable inventory mismatch",
-                        result.stderr,
-                    )
-                    self.assertIn(str(candidate.relative_to(root)), result.stderr)
-                    self.assertIn(mutation, result.stderr)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "on-disk Terraform loadable inventory mismatch",
+                    result.stderr,
+                )
+                self.assertIn(str(candidate.relative_to(root)), result.stderr)
+                self.assertIn(mutation, result.stderr)
 
     def test_new_fmt_candidate_kinds_preflight_before_invoking_terraform(self) -> None:
         mutations = {
@@ -315,48 +323,50 @@ resource "google_project_service" "required" {
             "fifo": "infra/gcp/unreviewed-fifo.tfvars",
         }
         for mutation, relative_path in mutations.items():
-            with self.subTest(mutation=mutation):
-                with tempfile.TemporaryDirectory() as directory:
-                    root = self._fixture(directory)
-                    candidate = root / relative_path
-                    if mutation == "regular":
-                        candidate.write_text("must not be read\n", encoding="utf-8")
-                    elif mutation == "symlink":
-                        candidate.symlink_to(root / "does-not-exist")
-                    else:
-                        os.mkfifo(candidate)
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = self._fixture(directory)
+                candidate = root / relative_path
+                if mutation == "regular":
+                    candidate.write_text("must not be read\n", encoding="utf-8")
+                elif mutation == "symlink":
+                    candidate.symlink_to(root / "does-not-exist")
+                else:
+                    os.mkfifo(candidate)
 
-                    fake_bin = root / "fake-bin"
-                    fake_bin.mkdir()
-                    marker = root / "terraform-was-invoked"
-                    fake_terraform = fake_bin / "terraform"
-                    fake_terraform.write_text(
-                        '#!/bin/bash\n: > "$TERRAFORM_MARKER"\nexit 0\n',
-                        encoding="utf-8",
-                    )
-                    fake_terraform.chmod(0o755)
-                    environment = os.environ.copy()
-                    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
-                    environment["TERRAFORM_MARKER"] = str(marker)
+                fake_bin = root / "fake-bin"
+                fake_bin.mkdir()
+                marker = root / "terraform-was-invoked"
+                fake_terraform = fake_bin / "terraform"
+                fake_terraform.write_text(
+                    '#!/bin/bash\n: > "$TERRAFORM_MARKER"\nexit 0\n',
+                    encoding="utf-8",
+                )
+                fake_terraform.chmod(0o755)
+                environment = os.environ.copy()
+                environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+                environment["TERRAFORM_MARKER"] = str(marker)
 
-                    result = subprocess.run(
-                        [
-                            "bash",
-                            "scripts/verify_ops_foundation.sh",
-                            "--terraform-fmt",
-                        ],
-                        cwd=root,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        env=environment,
-                        timeout=20,
-                    )
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "scripts/verify_ops_foundation.sh",
+                        "--terraform-fmt",
+                    ],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                    timeout=20,
+                )
 
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn(relative_path, result.stderr)
-                    self.assertIn(mutation, result.stderr)
-                    self.assertFalse(marker.exists())
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(relative_path, result.stderr)
+                self.assertIn(mutation, result.stderr)
+                self.assertFalse(marker.exists())
 
     def test_terraform_wrapper_modes_preflight_before_invoking_terraform(self) -> None:
         modes = (
@@ -366,41 +376,43 @@ resource "google_project_service" "required" {
             "--terraform-test",
         )
         for mode in modes:
-            with self.subTest(mode=mode):
-                with tempfile.TemporaryDirectory() as directory:
-                    root = self._fixture(directory)
-                    (root / "infra/gcp/rogue.tf.json").write_text(
-                        "{}\n",
-                        encoding="utf-8",
-                    )
-                    fake_bin = root / "fake-bin"
-                    fake_bin.mkdir()
-                    marker = root / "terraform-was-invoked"
-                    fake_terraform = fake_bin / "terraform"
-                    fake_terraform.write_text(
-                        '#!/bin/bash\n: > "$TERRAFORM_MARKER"\nexit 0\n',
-                        encoding="utf-8",
-                    )
-                    fake_terraform.chmod(0o755)
-                    environment = os.environ.copy()
-                    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
-                    environment["TERRAFORM_MARKER"] = str(marker)
+            with (
+                self.subTest(mode=mode),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = self._fixture(directory)
+                (root / "infra/gcp/rogue.tf.json").write_text(
+                    "{}\n",
+                    encoding="utf-8",
+                )
+                fake_bin = root / "fake-bin"
+                fake_bin.mkdir()
+                marker = root / "terraform-was-invoked"
+                fake_terraform = fake_bin / "terraform"
+                fake_terraform.write_text(
+                    '#!/bin/bash\n: > "$TERRAFORM_MARKER"\nexit 0\n',
+                    encoding="utf-8",
+                )
+                fake_terraform.chmod(0o755)
+                environment = os.environ.copy()
+                environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+                environment["TERRAFORM_MARKER"] = str(marker)
 
-                    result = subprocess.run(
-                        ["bash", "scripts/verify_ops_foundation.sh", mode],
-                        cwd=root,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        env=environment,
-                    )
+                result = subprocess.run(
+                    ["bash", "scripts/verify_ops_foundation.sh", mode],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
 
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn(
-                        "on-disk Terraform loadable inventory mismatch",
-                        result.stderr,
-                    )
-                    self.assertFalse(marker.exists())
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "on-disk Terraform loadable inventory mismatch",
+                    result.stderr,
+                )
+                self.assertFalse(marker.exists())
 
     def test_terraform_test_runner_rejects_zero_discovered_tests(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1196,6 +1208,14 @@ class LiveShellGuardTests(unittest.TestCase):
             "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
         )
+        ancestors = json.dumps(
+            [
+                {"type": "project", "id": "festive-ally-503605-v7"},
+                {"type": "folder", "id": "123"},
+                {"type": "organization", "id": "456"},
+            ],
+            separators=(",", ":"),
+        )
         for account in accounts:
             with self.subTest(account=account):
                 policy = json.dumps(
@@ -1211,16 +1231,113 @@ class LiveShellGuardTests(unittest.TestCase):
                 )
                 result = self._run_helper(
                     "assert_workload_accounts_have_no_direct_roles "
-                    f"{shlex.quote(policy)} folders/123"
+                    f"{shlex.quote(policy)} folders/123 {shlex.quote(ancestors)}"
                 )
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(account, result.stderr)
                 self.assertIn("folders/123", result.stderr)
         accepted = self._run_helper(
             "assert_workload_accounts_have_no_direct_roles "
-            f"{shlex.quote(json.dumps({'bindings': []}))} organizations/456"
+            f"{shlex.quote(json.dumps({'bindings': []}))} organizations/456 "
+            f"{shlex.quote(ancestors)}"
         )
         self.assertEqual(0, accepted.returncode, accepted.stderr)
+
+    def test_encompassing_service_account_principal_sets_are_forbidden(self) -> None:
+        ancestors = json.dumps(
+            [
+                {"type": "project", "id": "festive-ally-503605-v7"},
+                {"type": "folder", "id": "123"},
+                {"type": "organization", "id": "456"},
+            ],
+            separators=(",", ":"),
+        )
+        dangerous_members = (
+            "principalSet://cloudresourcemanager.googleapis.com/"
+            "projects/72919926064/type/ServiceAccount",
+            "principalSet://cloudresourcemanager.googleapis.com/"
+            "folders/123/type/ServiceAccount",
+            "principalSet://cloudresourcemanager.googleapis.com/"
+            "organizations/456/type/ServiceAccount",
+        )
+        for member in dangerous_members:
+            with self.subTest(member=member):
+                policy = json.dumps(
+                    {
+                        "bindings": [
+                            {
+                                "role": "roles/logging.viewer",
+                                "members": [member],
+                            }
+                        ]
+                    },
+                    separators=(",", ":"),
+                )
+                result = self._run_helper(
+                    "assert_workload_accounts_have_no_direct_roles "
+                    f"{shlex.quote(policy)} folders/123 {shlex.quote(ancestors)}"
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(member, result.stderr)
+                self.assertIn("folders/123", result.stderr)
+
+    def test_unrelated_service_account_principal_sets_remain_reviewable(self) -> None:
+        ancestors = json.dumps(
+            [
+                {"type": "project", "id": "festive-ally-503605-v7"},
+                {"type": "folder", "id": "123"},
+                {"type": "organization", "id": "456"},
+            ],
+            separators=(",", ":"),
+        )
+        unrelated_members = (
+            "principalSet://cloudresourcemanager.googleapis.com/"
+            "projects/999/type/ServiceAccount",
+            "principalSet://cloudresourcemanager.googleapis.com/"
+            "folders/999/type/ServiceAccount",
+            "principalSet://cloudresourcemanager.googleapis.com/"
+            "organizations/999/type/ServiceAccount",
+        )
+        for member in unrelated_members:
+            with self.subTest(member=member):
+                policy = json.dumps(
+                    {
+                        "bindings": [
+                            {
+                                "role": "roles/logging.viewer",
+                                "members": [member],
+                            }
+                        ]
+                    },
+                    separators=(",", ":"),
+                )
+                result = self._run_helper(
+                    "assert_workload_accounts_have_no_direct_roles "
+                    f"{shlex.quote(policy)} folders/123 {shlex.quote(ancestors)}"
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_workload_role_guard_is_wired_to_every_broad_policy_scope(self) -> None:
+        verifier = (REPO_ROOT / "scripts/verify_ops_foundation.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            3,
+            verifier.count("assert_workload_accounts_have_no_direct_roles \\"),
+        )
+        self.assertIn(
+            '"projects/${PROJECT_ID}" \\\n    "$ancestors_json"',
+            verifier,
+        )
+        self.assertIn(
+            '"projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \\\n'
+            '    "$ancestors_json"',
+            verifier,
+        )
+        self.assertIn(
+            '"${ancestor_type}s/${ancestor_id}" \\\n      "$ancestors_json"',
+            verifier,
+        )
 
     def test_project_key_scan_checks_accounts_outside_the_managed_four(self) -> None:
         legacy_account = "legacy@festive-ally-503605-v7.iam.gserviceaccount.com"

@@ -31,11 +31,15 @@ members fail. Every sensitive, custom-role, group/domain/principal-set, and dire
 state-bucket binding must match an explicit reviewed JSON record by exact scope, role, and
 member. Custom roles additionally pin the digest of the full included-permission set, and
 conditional bindings pin their condition digest. The verifier also rejects extra direct
-members for the managed roles and direct project or repository roles on the four workload
-identities. Before builder and Cloud Run image-pull identities exist, it requires
-repository-level reader and writer roles to be empty. An unreadable policy or role and any
-other failure require a separate reviewed IAM remediation; they are never ignored or
-overwritten blindly.
+members for the managed roles and direct project, ancestor, or repository roles on the
+four workload identities. That rejection covers exact service-account members plus
+project, containing-folder, and containing-organization `ServiceAccount` principal sets;
+those encompassing sets cannot be allowlisted as reviewed. Before builder and Cloud Run
+image-pull identities exist, it requires repository-level reader and writer roles to be
+empty. An unreadable policy or role and any other failure require a separate reviewed IAM
+remediation; they are never ignored or overwritten blindly. Google Group membership is
+not expanded by the policy API, so any reviewed `group:` binding also requires a separately
+reviewed directory-membership export.
 
 The production OIDC provider is currently pinned to the repository and owner numeric IDs,
 the `push` event, `refs/heads/main`, and the `Production` environment. There is no

@@ -63,19 +63,28 @@ Artifact Registry read or write, state-object access, and IAM-policy escalation.
 bindings, every custom-role binding, and every direct state-bucket binding must match
 operator-supplied JSON records by exact `scope` + `role` + `member`. Custom roles also pin
 the SHA-256 of their complete included-permission inventory; conditional bindings pin the
-condition digest. Group, domain, and principal-set members therefore fail unless that exact
-binding was reviewed; public members always fail. An unreadable ancestor, role, or policy
-is a blocker.
+condition digest. Group, domain, and unrelated principal-set members therefore fail unless
+that exact binding was reviewed; public members always fail. A project, containing folder,
+or containing organization `ServiceAccount` principal set includes the four workload
+identities and is forbidden at the project, ancestor, and repository scopes even when
+listed as reviewed. An unreadable ancestor, role, or policy is a blocker.
 
 Terraform uses additive IAM member resources so an unreviewed apply cannot erase unrelated
-or Google-managed members. The verifier additionally rejects any direct project or
-repository role on the four workload identities, project-level
+or Google-managed members. The verifier additionally rejects any direct role on the four
+workload identities at the project, ancestor, or repository scopes, whether granted to
+their exact addresses or through an encompassing Resource Manager service-account
+principal set, project-level
 `serviceAccountUser`/`serviceAccountTokenCreator`/`secretAccessor`/Secret Manager admin,
 extra members in the managed resource roles, and direct token-creator bindings. If it
 finds drift, remediate the exact binding in a separately reviewed plan. Until the follow-up
 creates the builder and Cloud Run image-pull identities, direct repository-level Artifact
 Registry reader and writer bindings must also be empty; a Google-managed member discovered
 there is reviewed, not silently removed.
+
+The policy API does not expand Google Group membership. A reviewed `group:` binding proves
+only that the exact policy binding was reviewed, not that directory membership is unchanged;
+the operator must attach a separately reviewed group-membership export before approving
+such a binding. The service-account principal-set guard does not rely on group expansion.
 
 There is no production deployment workflow in the repository yet. The production
 provider therefore cannot honestly bind `job_workflow_ref`; `push` + `main` +

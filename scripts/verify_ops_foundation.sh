@@ -195,6 +195,9 @@ assert_member_has_no_direct_roles() {
 assert_workload_accounts_have_no_direct_roles() {
   local policy_json="$1"
   local scope="$2"
+  local ancestors_json="$3"
+  local principal_sets
+  local principal_set
   local service_account
 
   for service_account in "${WORKLOAD_SERVICE_ACCOUNTS[@]}"; do
@@ -203,6 +206,31 @@ assert_workload_accounts_have_no_direct_roles() {
       "serviceAccount:${service_account}" \
       "${service_account} must not inherit a direct role from ${scope}"
   done
+
+  principal_sets="$(
+    jq -er \
+      --arg project_number "$EXPECTED_PROJECT_NUMBER" \
+      '
+        [
+          "principalSet://cloudresourcemanager.googleapis.com/projects/\($project_number)/type/ServiceAccount",
+          (
+            .[]
+            | select(.type == "folder" or .type == "organization")
+            | "principalSet://cloudresourcemanager.googleapis.com/\(
+                if .type == "folder" then "folders" else "organizations" end
+              )/\(.id | tostring)/type/ServiceAccount"
+          )
+        ]
+        | unique[]
+      ' <<<"$ancestors_json"
+  )" || fail "validated ancestor inventory could not produce service-account principal sets"
+
+  while IFS= read -r principal_set; do
+    assert_member_has_no_direct_roles \
+      "$policy_json" \
+      "$principal_set" \
+      "${principal_set} includes the workload service accounts and must not hold a direct role on ${scope}"
+  done <<<"$principal_sets"
 }
 
 assert_policy_has_no_public_members() {
@@ -320,11 +348,8 @@ audit_iam_policy() {
     python3 "$CONTRACT_SCRIPT" "${audit_args[@]}"
 }
 
-verify_ancestor_policies() {
+read_project_ancestors() {
   local ancestors_json
-  local ancestor_type
-  local ancestor_id
-  local policy_json
 
   ancestors_json="$(
     gcloud projects get-ancestors "$PROJECT_ID" --format=json
@@ -349,9 +374,19 @@ verify_ancestor_policies() {
     ' >/dev/null <<<"$ancestors_json" ||
     fail "project ancestor inventory is unreadable or does not identify the reviewed project"
 
+  printf '%s\n' "$ancestors_json"
+}
+
+verify_ancestor_policies() {
+  local ancestors_json="$1"
+  local ancestor_type
+  local ancestor_id
+  local policy_json
+
   while IFS=$'\t' read -r ancestor_type ancestor_id; do
     case "$ancestor_type" in
       project)
+        continue
         ;;
       folder)
         policy_json="$(
@@ -363,9 +398,6 @@ verify_ancestor_policies() {
           "$policy_json" \
           "folders/${ancestor_id}" \
           "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
-        assert_workload_accounts_have_no_direct_roles \
-          "$policy_json" \
-          "folders/${ancestor_id}"
         ;;
       organization)
         policy_json="$(
@@ -377,14 +409,15 @@ verify_ancestor_policies() {
           "$policy_json" \
           "organizations/${ancestor_id}" \
           "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
-        assert_workload_accounts_have_no_direct_roles \
-          "$policy_json" \
-          "organizations/${ancestor_id}"
         ;;
       *)
         fail "unexpected ancestor type after validation: ${ancestor_type}"
         ;;
     esac
+    assert_workload_accounts_have_no_direct_roles \
+      "$policy_json" \
+      "${ancestor_type}s/${ancestor_id}" \
+      "$ancestors_json"
   done < <(
     jq -r '.[] | [.type, (.id | tostring)] | @tsv' <<<"$ancestors_json"
   )
@@ -488,6 +521,7 @@ verify_live_contract() {
   local bucket_policy
   local project_json
   local project_number
+  local ancestors_json
   local state_object_json
   local project_policy
   local repository_policy
@@ -519,6 +553,7 @@ verify_live_contract() {
   )"
   [[ "$project_number" == "$EXPECTED_PROJECT_NUMBER" ]] ||
     fail "live project number does not match the reviewed project inventory"
+  ancestors_json="$(read_project_ancestors)"
 
   enabled_apis="$(
     gcloud services list \
@@ -580,7 +615,11 @@ verify_live_contract() {
     "$project_policy" \
     "projects/${PROJECT_ID}" \
     "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
-  verify_ancestor_policies
+  assert_workload_accounts_have_no_direct_roles \
+    "$project_policy" \
+    "projects/${PROJECT_ID}" \
+    "$ancestors_json"
+  verify_ancestor_policies "$ancestors_json"
   for inherited_role in \
     "roles/iam.serviceAccountUser" \
     "roles/iam.serviceAccountTokenCreator" \
@@ -602,6 +641,10 @@ verify_live_contract() {
     "$repository_policy" \
     "projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \
     "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
+  assert_workload_accounts_have_no_direct_roles \
+    "$repository_policy" \
+    "projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \
+    "$ancestors_json"
   for repository_role in \
     "roles/artifactregistry.reader" \
     "roles/artifactregistry.writer"; do

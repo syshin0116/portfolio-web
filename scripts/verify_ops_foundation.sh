@@ -56,37 +56,6 @@ require_command() {
   command -v "$1" >/dev/null || fail "missing command: $1"
 }
 
-require_fragment() {
-  local file_path="$1"
-  local fragment="$2"
-  local description="$3"
-
-  grep -Fq -- "$fragment" "$file_path" || fail "$description"
-}
-
-require_exact_trimmed_line_once() {
-  local file_path="$1"
-  local expected_line="$2"
-  local description="$3"
-  local match_count
-
-  match_count="$(
-    awk -v expected="$expected_line" '
-      {
-        candidate = $0
-        sub(/^[[:space:]]+/, "", candidate)
-        sub(/[[:space:]]+$/, "", candidate)
-        gsub(/[[:space:]]+=[[:space:]]+/, " = ", candidate)
-        if (candidate == expected) {
-          count += 1
-        }
-      }
-      END { print count + 0 }
-    ' "$file_path"
-  )"
-  [[ "$match_count" == "1" ]] || fail "$description"
-}
-
 verify_static_contract() {
   require_command uv
   uv run \
@@ -99,70 +68,14 @@ verify_static_contract() {
     fail "canonical repository governance manifest and verifier must land together"
   fi
 
-  require_fragment \
-    "${TERRAFORM_DIR}/main.tf" \
-    "immutable_tags = true" \
-    "Artifact Registry immutable tags are not enforced"
-  require_fragment \
-    "${TERRAFORM_DIR}/main.tf" \
-    'account_id   = "agent-preview-runtime"' \
-    "preview runtime service account is missing"
-  require_fragment \
-    "${TERRAFORM_DIR}/iam.tf" \
-    "service_account_id = local.runtime_service_account_ids[each.key]" \
-    "deployers are not mapped to their environment-specific runtime"
-  require_fragment \
-    "${TERRAFORM_DIR}/iam.tf" \
-    "preview    = google_service_account.preview_runtime.name" \
-    "preview deployer does not act as the preview runtime"
-  require_fragment \
-    "${TERRAFORM_DIR}/iam.tf" \
-    "production = google_service_account.runtime.name" \
-    "production deployer does not act as the production runtime"
-  require_fragment \
-    "${TERRAFORM_DIR}/iam.tf" \
-    "projects/\${data.google_project.current.number}/locations/global/workloadIdentityPools/" \
-    "WIF principal sets must derive the project number from the current GCP project"
-  require_fragment \
-    "${TERRAFORM_DIR}/iam.tf" \
-    'resource "google_secret_manager_secret_iam_member" "preview_runtime_accessor"' \
-    "preview secret accessor bindings are missing"
-  require_fragment \
-    "${TERRAFORM_DIR}/state.tf" \
-    "force_destroy               = false" \
-    "state bucket force_destroy must remain disabled"
-  require_fragment \
-    "${TERRAFORM_DIR}/state.tf" \
-    'public_access_prevention    = "enforced"' \
-    "state bucket public access prevention is missing"
-  require_fragment \
-    "${TERRAFORM_DIR}/state.tf" \
-    "uniform_bucket_level_access = true" \
-    "state bucket uniform access is missing"
-  require_fragment \
-    "${TERRAFORM_DIR}/state.tf" \
-    "enabled = true" \
-    "state bucket versioning is missing"
-  require_fragment \
-    "${TERRAFORM_DIR}/state.tf" \
-    "prevent_destroy = true" \
-    "state bucket lifecycle must prevent destroy"
-  require_fragment \
-    "${TERRAFORM_DIR}/backend.tf" \
-    'bucket = "festive-ally-503605-v7-tfstate"' \
-    "the hardened state backend is not configured"
-  require_exact_trimmed_line_once \
-    "${TERRAFORM_DIR}/versions.tf" \
-    'required_version = "= 1.13.5"' \
-    "Terraform must be pinned exactly to 1.13.5"
-  require_fragment \
-    "${TERRAFORM_DIR}/versions.tf" \
-    'data "google_project" "current"' \
-    "the project number must come from google_project.current"
-  [[ "$(<"${TERRAFORM_DIR}/.terraform-version")" == "1.13.5" ]] ||
-    fail "infra/gcp/.terraform-version must pin Terraform 1.13.5"
-
   printf 'OK: credential-free Terraform security contract verified.\n'
+}
+
+verify_terraform_tests() {
+  require_command python3
+  require_command terraform
+  terraform -chdir="$TERRAFORM_DIR" test -json |
+    python3 "$CONTRACT_SCRIPT" terraform-test-result
 }
 
 policy_has_member() {
@@ -788,13 +701,17 @@ verify_live_contract() {
 }
 
 usage() {
-  printf 'Usage: %s [--static|--live|--governance-live]\n' "${0##*/}"
+  printf 'Usage: %s [--static|--terraform-test|--live|--governance-live]\n' \
+    "${0##*/}"
 }
 
 mode="${1:---live}"
 case "$mode" in
   --static)
     verify_static_contract
+    ;;
+  --terraform-test)
+    verify_terraform_tests
     ;;
   --live)
     verify_static_contract

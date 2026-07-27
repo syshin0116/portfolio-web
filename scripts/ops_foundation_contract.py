@@ -27,7 +27,23 @@ EXPECTED_TERRAFORM_FILES = frozenset(
         "infra/gcp/versions.tf",
     }
 )
+EXPECTED_TERRAFORM_TEST_FILES = {
+    "infra/gcp/tests/foundation.tftest.hcl": (
+        "a7bb5925800441a1532ebe6a3dcef033dee74099406fbce9f8db7ff6eb3f3a41"
+    )
+}
+EXPECTED_TERRAFORM_TEST_ABSTRACT = {
+    "tests/foundation.tftest.hcl": ["foundation_security_contract"]
+}
+EXPECTED_TERRAFORM_TEST_SUMMARY = {
+    "status": "pass",
+    "passed": 1,
+    "failed": 0,
+    "errored": 0,
+    "skipped": 0,
+}
 HCL2_VERSION = "7.3.1"
+TERRAFORM_VERSION = "1.13.5"
 EXPECTED_TOP_LEVEL_KEYS = {
     "infra/gcp/backend.tf": frozenset({"terraform"}),
     "infra/gcp/iam.tf": frozenset({"locals", "resource"}),
@@ -38,26 +54,6 @@ EXPECTED_TOP_LEVEL_KEYS = {
     "infra/gcp/variables.tf": frozenset({"variable"}),
     "infra/gcp/versions.tf": frozenset({"data", "provider", "terraform"}),
 }
-EXPECTED_RESOURCES = frozenset(
-    {
-        ("google_artifact_registry_repository", "agent"),
-        ("google_iam_workload_identity_pool", "github"),
-        ("google_iam_workload_identity_pool_provider", "preview"),
-        ("google_iam_workload_identity_pool_provider", "production"),
-        ("google_project_service", "required"),
-        ("google_secret_manager_secret", "preview_runtime"),
-        ("google_secret_manager_secret", "runtime"),
-        ("google_secret_manager_secret_iam_member", "preview_runtime_accessor"),
-        ("google_secret_manager_secret_iam_member", "runtime_accessor"),
-        ("google_service_account", "deployer"),
-        ("google_service_account", "preview_runtime"),
-        ("google_service_account", "runtime"),
-        ("google_service_account_iam_member", "deployer_uses_runtime"),
-        ("google_service_account_iam_member", "github_preview"),
-        ("google_service_account_iam_member", "github_production"),
-        ("google_storage_bucket", "terraform_state"),
-    }
-)
 EXPECTED_DATA = frozenset({("google_project", "current")})
 EXPECTED_ATTRIBUTE_MAPPING = {
     "attribute.environment": "assertion.environment",
@@ -195,50 +191,89 @@ EXPECTED_IMPORT_BLOCKS = [
 ]
 EXPECTED_VARIABLES = {
     "project_id": {
+        "description": "Existing GCP project dedicated to syshin0116.dev.",
+        "type": "string",
         "default": "festive-ally-503605-v7",
-        "condition": '${var.project_id == "festive-ally-503605-v7"}',
-        "error_message": (
-            "This state and backend are dedicated to festive-ally-503605-v7; "
-            "use a separate root module for another project."
-        ),
+        "validation": [
+            {
+                "condition": '${var.project_id == "festive-ally-503605-v7"}',
+                "error_message": (
+                    "This state and backend are dedicated to festive-ally-503605-v7; "
+                    "use a separate root module for another project."
+                ),
+            }
+        ],
     },
     "region": {
+        "description": "Cloud Run and Artifact Registry region.",
+        "type": "string",
         "default": "us-east4",
-        "condition": '${var.region == "us-east4"}',
-        "error_message": (
-            "This foundation is fixed to us-east4; review state, imports, and "
-            "data residency before changing regions."
-        ),
+        "validation": [
+            {
+                "condition": '${var.region == "us-east4"}',
+                "error_message": (
+                    "This foundation is fixed to us-east4; review state, imports, "
+                    "and data residency before changing regions."
+                ),
+            }
+        ],
     },
     "github_repository_id": {
+        "description": "Immutable numeric GitHub repository ID.",
+        "type": "string",
         "default": "1102380057",
-        "condition": '${var.github_repository_id == "1102380057"}',
-        "error_message": (
-            "This federation root is dedicated to syshin0116/syshin0116.dev "
-            "repository ID 1102380057."
-        ),
+        "validation": [
+            {
+                "condition": '${var.github_repository_id == "1102380057"}',
+                "error_message": (
+                    "This federation root is dedicated to syshin0116/syshin0116.dev "
+                    "repository ID 1102380057."
+                ),
+            }
+        ],
     },
     "github_owner_id": {
+        "description": "Immutable numeric GitHub repository owner ID.",
+        "type": "string",
         "default": "99532836",
-        "condition": '${var.github_owner_id == "99532836"}',
-        "error_message": (
-            "This federation root is dedicated to GitHub owner ID 99532836."
-        ),
+        "validation": [
+            {
+                "condition": '${var.github_owner_id == "99532836"}',
+                "error_message": (
+                    "This federation root is dedicated to GitHub owner ID 99532836."
+                ),
+            }
+        ],
     },
     "github_preview_environment": {
+        "description": "Exact GitHub environment claim accepted by the preview provider.",
+        "type": "string",
         "default": "Preview",
-        "condition": '${var.github_preview_environment == "Preview"}',
-        "error_message": (
-            "The preview provider must remain bound to the exact Preview environment."
-        ),
+        "validation": [
+            {
+                "condition": '${var.github_preview_environment == "Preview"}',
+                "error_message": (
+                    "The preview provider must remain bound to the exact Preview "
+                    "environment."
+                ),
+            }
+        ],
     },
     "github_production_environment": {
-        "default": "Production",
-        "condition": '${var.github_production_environment == "Production"}',
-        "error_message": (
-            "The production provider must remain bound to the exact Production "
-            "environment."
+        "description": (
+            "Exact GitHub environment claim accepted by the production provider."
         ),
+        "type": "string",
+        "default": "Production",
+        "validation": [
+            {
+                "condition": '${var.github_production_environment == "Production"}',
+                "error_message": (
+                    "The production provider must remain bound to the exact "
+                    "Production environment."
+                ),
+            }
+        ],
     },
 }
 FORBIDDEN_EXECUTION_KEYS = frozenset(
@@ -249,7 +284,58 @@ EXPECTED_DATA_CONFIGS = {
         "project_id": "${var.project_id}",
     }
 }
-EXPECTED_CRITICAL_RESOURCES = {
+EXPECTED_RESOURCE_CONFIGS = {
+    ("google_project_service", "required"): {
+        "for_each": "${local.required_services}",
+        "project": "${var.project_id}",
+        "service": "${each.value}",
+        "disable_on_destroy": False,
+    },
+    ("google_artifact_registry_repository", "agent"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository_id": "agent",
+        "description": "Immutable agent images",
+        "format": "DOCKER",
+        "docker_config": [{"immutable_tags": True}],
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_service_account", "runtime"): {
+        "project": "${var.project_id}",
+        "account_id": "agent-runtime",
+        "display_name": "Cloud Run production agent runtime",
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_service_account", "preview_runtime"): {
+        "project": "${var.project_id}",
+        "account_id": "agent-preview-runtime",
+        "display_name": "Cloud Run preview agent runtime",
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_service_account", "deployer"): {
+        "for_each": "${local.deployers}",
+        "project": "${var.project_id}",
+        "account_id": "${each.value.account_id}",
+        "display_name": "${each.value.display_name}",
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_secret_manager_secret", "runtime"): {
+        "for_each": "${local.production_secret_names}",
+        "project": "${var.project_id}",
+        "secret_id": "${each.value}",
+        "replication": [{"auto": [{}]}],
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_secret_manager_secret", "preview_runtime"): {
+        "for_each": "${local.preview_secret_names}",
+        "project": "${var.project_id}",
+        "secret_id": "${each.value}",
+        "replication": [{"auto": [{}]}],
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
     ("google_iam_workload_identity_pool", "github"): {
         "project": "${var.project_id}",
         "workload_identity_pool_id": "github",
@@ -327,6 +413,119 @@ EXPECTED_CRITICAL_RESOURCES = {
             "attribute.environment/${var.github_production_environment}"
         ),
     },
+    ("google_storage_bucket", "terraform_state"): {
+        "name": "${var.project_id}-tfstate",
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "force_destroy": False,
+        "public_access_prevention": "enforced",
+        "uniform_bucket_level_access": True,
+        "versioning": [{"enabled": True}],
+        "soft_delete_policy": [{"retention_duration_seconds": 2592000}],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+}
+EXPECTED_LOCALS_BY_FILE = {
+    "infra/gcp/main.tf": [
+        {
+            "preview_wif_attribute_condition": EXPECTED_SOURCE_CONDITIONS["preview"],
+            "production_wif_attribute_condition": EXPECTED_SOURCE_CONDITIONS[
+                "production"
+            ],
+            "required_services": (
+                "${toset([artifactregistry.googleapis.com, "
+                "cloudresourcemanager.googleapis.com, iam.googleapis.com, "
+                "iamcredentials.googleapis.com, run.googleapis.com, "
+                "secretmanager.googleapis.com, storage.googleapis.com, "
+                "sts.googleapis.com])}"
+            ),
+            "production_secret_names": (
+                "${toset([agent-auth-secret, agent-database-url, anthropic-api-key, "
+                "langsmith-api-key, openai-api-key])}"
+            ),
+            "preview_secret_names": (
+                "${toset([agent-preview-anthropic-api-key, "
+                "agent-preview-auth-secret, agent-preview-database-url, "
+                "agent-preview-langsmith-api-key, agent-preview-openai-api-key])}"
+            ),
+            "deployers": {
+                "preview": {
+                    "account_id": "agent-preview-deployer",
+                    "display_name": "GitHub preview deployer",
+                },
+                "production": {
+                    "account_id": "agent-prod-deployer",
+                    "display_name": "GitHub production deployer",
+                },
+            },
+        }
+    ],
+    "infra/gcp/iam.tf": [
+        {
+            "runtime_service_account_ids": {
+                "preview": "${google_service_account.preview_runtime.name}",
+                "production": "${google_service_account.runtime.name}",
+            },
+            "runtime_service_accounts": {
+                "preview": "${google_service_account.preview_runtime.email}",
+                "production": "${google_service_account.runtime.email}",
+            },
+            "deployer_service_accounts": (
+                "${{for name , account in google_service_account.deployer : "
+                "name => account.email}}"
+            ),
+        }
+    ],
+}
+EXPECTED_CHECK_BLOCKS = [
+    {
+        "runtime_environments_are_disjoint": {
+            "assert": [
+                {
+                    "condition": (
+                        "${length(setintersection(local.production_secret_names, "
+                        "local.preview_secret_names)) == 0}"
+                    ),
+                    "error_message": (
+                        "Preview and production Secret Manager resource names "
+                        "must be disjoint."
+                    ),
+                }
+            ]
+        }
+    }
+]
+EXPECTED_OUTPUTS = {
+    "artifact_registry_repository": {
+        "value": "${google_artifact_registry_repository.agent.name}",
+    },
+    "runtime_service_account": {
+        "description": (
+            "Production runtime service account; retained for compatibility."
+        ),
+        "value": "${google_service_account.runtime.email}",
+    },
+    "production_runtime_service_account": {
+        "value": "${google_service_account.runtime.email}",
+    },
+    "preview_runtime_service_account": {
+        "value": "${google_service_account.preview_runtime.email}",
+    },
+    "preview_deployer_service_account": {
+        "value": '${google_service_account.deployer["preview"].email}',
+    },
+    "production_deployer_service_account": {
+        "value": '${google_service_account.deployer["production"].email}',
+    },
+    "preview_workload_identity_provider": {
+        "value": "${google_iam_workload_identity_pool_provider.preview.name}",
+    },
+    "production_workload_identity_provider": {
+        "value": "${google_iam_workload_identity_pool_provider.production.name}",
+    },
+    "terraform_state_bucket": {
+        "value": "${google_storage_bucket.terraform_state.name}",
+    },
 }
 
 PUBLIC_MEMBERS = frozenset({"allAuthenticatedUsers", "allUsers"})
@@ -365,6 +564,26 @@ def _read_stdin_json() -> dict[str, Any]:
         return _json_object(json.load(sys.stdin), "input")
     except (json.JSONDecodeError, OSError) as exc:
         raise ContractError(f"input must be valid JSON: {exc}") from exc
+
+
+def _read_stdin_json_lines() -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for line_number, raw_line in enumerate(sys.stdin, start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ContractError(
+                f"Terraform test output line {line_number} must be valid JSON: {exc}"
+            ) from exc
+        records.append(
+            _json_object(parsed, f"Terraform test output line {line_number}")
+        )
+    if not records:
+        _fail("Terraform test output must contain JSON event records")
+    return records
 
 
 def _tracked_paths(repo_root: Path) -> list[str]:
@@ -518,47 +737,54 @@ def _validate_variables(variables: Mapping[str, Mapping[str, Any]]) -> None:
         )
 
     for variable_name, expected in EXPECTED_VARIABLES.items():
-        body = variables[variable_name]
-        if set(body) != {"default", "description", "type", "validation"}:
-            _fail(f"variable {variable_name} has unreviewed attributes")
-        if body.get("type") != "string" or body.get("default") != expected["default"]:
-            _fail(f"variable {variable_name} type/default is not exact")
-        if not isinstance(body.get("description"), str) or not body["description"]:
-            _fail(f"variable {variable_name} must retain a description")
-        validations = _json_array(
-            body.get("validation"),
-            f"variable {variable_name}.validation",
-        )
-        expected_validation = {
-            "condition": expected["condition"],
-            "error_message": expected["error_message"],
-        }
-        if validations != [expected_validation]:
-            _fail(f"variable {variable_name} validation must exactly match")
+        if variables[variable_name] != expected:
+            _fail(f"variable {variable_name} body must exactly match")
 
 
-def _validate_wif_locals(
-    documents: Mapping[str, Mapping[str, Any]],
+def _validate_test_file_contract(
+    repo_root: Path,
+    tracked_paths: Iterable[str],
 ) -> None:
-    locals_by_name: dict[str, Any] = {}
-    for relative_path, document in documents.items():
-        for raw_locals in _json_array(
-            document.get("locals", []),
-            f"{relative_path}.locals",
-        ):
-            local_block = _json_object(raw_locals, f"{relative_path}.locals block")
-            for name, value in local_block.items():
-                if name in locals_by_name:
-                    _fail(f"duplicate Terraform local declaration: {name}")
-                locals_by_name[name] = value
+    tracked_test_files = frozenset(
+        path for path in tracked_paths if path.endswith((".tftest.hcl", ".tftest.json"))
+    )
+    expected_test_files = frozenset(EXPECTED_TERRAFORM_TEST_FILES)
+    if tracked_test_files != expected_test_files:
+        missing = sorted(expected_test_files - tracked_test_files)
+        unexpected = sorted(tracked_test_files - expected_test_files)
+        _fail(
+            "tracked Terraform test inventory mismatch; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
 
-    for provider_name, expected_condition in EXPECTED_SOURCE_CONDITIONS.items():
-        local_name = f"{provider_name}_wif_attribute_condition"
-        if locals_by_name.get(local_name) != expected_condition:
+    for relative_path, expected_sha256 in EXPECTED_TERRAFORM_TEST_FILES.items():
+        path = repo_root / relative_path
+        if path.is_symlink():
+            _fail(f"tracked Terraform test must not be a symlink: {relative_path}")
+        try:
+            actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ContractError(
+                f"cannot read tracked Terraform test {relative_path}: {exc}"
+            ) from exc
+        if actual_sha256 != expected_sha256:
             _fail(
-                f"{provider_name} WIF CEL condition must exactly match "
-                "the fail-closed contract"
+                f"Terraform test content digest is not exact: {relative_path}; "
+                f"expected={expected_sha256}, got={actual_sha256}"
             )
+
+    version_path = "infra/gcp/.terraform-version"
+    if version_path not in tracked_paths:
+        _fail(f"tracked Terraform version pin is missing: {version_path}")
+    path = repo_root / version_path
+    if path.is_symlink():
+        _fail(f"tracked Terraform version pin must not be a symlink: {version_path}")
+    try:
+        version_pin = path.read_bytes()
+    except OSError as exc:
+        raise ContractError(f"cannot read {version_path}: {exc}") from exc
+    if version_pin != f"{TERRAFORM_VERSION}\n".encode():
+        _fail(f"{version_path} must exactly pin Terraform {TERRAFORM_VERSION}")
 
 
 def validate_static_contract(repo_root: Path) -> None:
@@ -574,6 +800,7 @@ def validate_static_contract(repo_root: Path) -> None:
             f"missing={missing}, unexpected={unexpected}. "
             "Nested Terraform modules are prohibited in this foundation."
         )
+    _validate_test_file_contract(repo_root, tracked_paths)
 
     documents = _load_hcl_documents(repo_root, tracked_tf)
     modules = _single_label_blocks(documents, "module")
@@ -624,23 +851,85 @@ def validate_static_contract(repo_root: Path) -> None:
             _fail(f"Terraform data configuration is not exact: {'.'.join(key)}")
 
     resources = _two_label_blocks(documents, "resource")
-    if frozenset(resources) != EXPECTED_RESOURCES:
-        missing = sorted(EXPECTED_RESOURCES - frozenset(resources))
-        unexpected = sorted(frozenset(resources) - EXPECTED_RESOURCES)
+    expected_resources = frozenset(EXPECTED_RESOURCE_CONFIGS)
+    if frozenset(resources) != expected_resources:
+        missing = sorted(expected_resources - frozenset(resources))
+        unexpected = sorted(frozenset(resources) - expected_resources)
         _fail(
             "Terraform resource declarations must exactly match the reviewed "
             f"allowlist; missing={missing}, unexpected={unexpected}"
         )
-    for key, expected_config in EXPECTED_CRITICAL_RESOURCES.items():
+    for key, expected_config in EXPECTED_RESOURCE_CONFIGS.items():
         if resources[key] != expected_config:
-            _fail(
-                "Terraform critical resource configuration is not exact: "
-                f"{'.'.join(key)}"
-            )
+            _fail(f"Terraform resource configuration is not exact: {'.'.join(key)}")
 
     variables = _single_label_blocks(documents, "variable")
     _validate_variables(variables)
-    _validate_wif_locals(documents)
+    for relative_path, expected_locals in EXPECTED_LOCALS_BY_FILE.items():
+        if documents[relative_path].get("locals") != expected_locals:
+            _fail(f"Terraform locals configuration is not exact: {relative_path}")
+    if documents["infra/gcp/main.tf"].get("check") != EXPECTED_CHECK_BLOCKS:
+        _fail("Terraform check configuration is not exact: infra/gcp/main.tf")
+    outputs = _single_label_blocks(documents, "output")
+    if outputs != EXPECTED_OUTPUTS:
+        _fail("Terraform output inventory and bodies must exactly match")
+
+
+def validate_terraform_test_result(
+    records: Iterable[Mapping[str, Any]],
+) -> None:
+    events = list(records)
+    versions = [
+        record.get("terraform") for record in events if record.get("type") == "version"
+    ]
+    if versions != [TERRAFORM_VERSION]:
+        _fail(
+            "Terraform test must run exactly once with the pinned version; "
+            f"expected={[TERRAFORM_VERSION]}, got={versions}"
+        )
+
+    abstracts = [
+        record.get("test_abstract")
+        for record in events
+        if record.get("type") == "test_abstract"
+    ]
+    if abstracts != [EXPECTED_TERRAFORM_TEST_ABSTRACT]:
+        _fail(
+            "Terraform test discovery must exactly equal one reviewed file/run; "
+            f"expected={EXPECTED_TERRAFORM_TEST_ABSTRACT}, got={abstracts}"
+        )
+
+    completed_runs = [
+        record.get("test_run")
+        for record in events
+        if record.get("type") == "test_run"
+        and isinstance(record.get("test_run"), dict)
+        and record["test_run"].get("progress") == "complete"
+    ]
+    expected_runs = [
+        {
+            "path": "tests/foundation.tftest.hcl",
+            "run": "foundation_security_contract",
+            "progress": "complete",
+            "status": "pass",
+        }
+    ]
+    if completed_runs != expected_runs:
+        _fail(
+            "Terraform test completion inventory must exactly equal the reviewed run; "
+            f"expected={expected_runs}, got={completed_runs}"
+        )
+
+    summaries = [
+        record.get("test_summary")
+        for record in events
+        if record.get("type") == "test_summary"
+    ]
+    if summaries != [EXPECTED_TERRAFORM_TEST_SUMMARY]:
+        _fail(
+            "Terraform test summary must report exactly 1 passed, 0 failed, "
+            f"0 errored, 0 skipped; got={summaries}"
+        )
 
 
 def _provider_id(provider: Mapping[str, Any]) -> str:
@@ -1042,6 +1331,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     static = subparsers.add_parser("static")
     static.add_argument("--repo-root", type=Path, required=True)
 
+    subparsers.add_parser("terraform-test-result")
     subparsers.add_parser("wif-live")
 
     audit = subparsers.add_parser("audit-policy")
@@ -1059,6 +1349,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "static":
             validate_static_contract(args.repo_root.resolve())
+        elif args.command == "terraform-test-result":
+            records = _read_stdin_json_lines()
+            for record in records:
+                message = record.get("@message")
+                if isinstance(message, str):
+                    print(message)
+            validate_terraform_test_result(records)
         elif args.command == "wif-live":
             validate_live_wif(_read_stdin_json())
         elif args.command == "audit-policy":

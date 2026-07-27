@@ -13,6 +13,7 @@ from scripts.ops_foundation_contract import (
     validate_live_wif,
     validate_policy_audit,
     validate_secret_policy,
+    validate_terraform_test_result,
 )
 
 
@@ -85,6 +86,63 @@ def _reviewed_binding(
     if condition is not None:
         binding["condition_sha256"] = _json_digest(condition)
     return binding
+
+
+def _terraform_test_records() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "version",
+            "terraform": "1.13.5",
+        },
+        {
+            "type": "test_abstract",
+            "test_abstract": {
+                "tests/foundation.tftest.hcl": ["foundation_security_contract"]
+            },
+        },
+        {
+            "type": "test_run",
+            "test_run": {
+                "path": "tests/foundation.tftest.hcl",
+                "run": "foundation_security_contract",
+                "progress": "complete",
+                "status": "pass",
+            },
+        },
+        {
+            "type": "test_summary",
+            "test_summary": {
+                "status": "pass",
+                "passed": 1,
+                "failed": 0,
+                "errored": 0,
+                "skipped": 0,
+            },
+        },
+    ]
+
+
+class TerraformTestResultContractTests(unittest.TestCase):
+    def test_exactly_one_reviewed_run_passes(self) -> None:
+        validate_terraform_test_result(_terraform_test_records())
+
+    def test_zero_discovered_tests_fails_closed(self) -> None:
+        records = _terraform_test_records()
+        records[1]["test_abstract"] = {}
+        records.pop(2)
+        records[2]["test_summary"] = {
+            "status": "pass",
+            "passed": 0,
+            "failed": 0,
+            "errored": 0,
+            "skipped": 0,
+        }
+
+        with self.assertRaisesRegex(
+            ContractError,
+            "discovery must exactly equal one reviewed file/run",
+        ):
+            validate_terraform_test_result(records)
 
 
 class LiveWifContractTests(unittest.TestCase):

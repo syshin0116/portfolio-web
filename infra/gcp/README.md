@@ -91,7 +91,7 @@ Credential-free CI uses:
 ```sh
 terraform init -backend=false -input=false -lockfile=readonly
 terraform validate
-terraform test
+scripts/verify_ops_foundation.sh --terraform-test
 ```
 
 The static verifier runs:
@@ -101,10 +101,15 @@ uv run --no-project --with python-hcl2==7.3.1 \
   python scripts/ops_foundation_contract.py static --repo-root .
 ```
 
-It checks exact provider/alias, import target/live object ID, module, data, resource, and
-critical variable-validation inventories and rejects `moved` and `removed` blocks, every
-provisioner, external provider/data, `terraform_remote_state`, and executable escape
-resources. The Terraform commands above remain separate gates.
+It exact-compares the parsed bodies of all 16 resources, every local, check, output,
+variable, provider/data/backend block, and import target/live object ID. It rejects
+unreviewed modules, `moved` and `removed` blocks, every provisioner, external
+provider/data, `terraform_remote_state`, and executable escape resources. The reviewed
+`.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
+Terraform test expression. `--terraform-test` validates Terraform's JSON event stream and
+requires the exact single reviewed run and summary `1 passed, 0 failed, 0 errored,
+0 skipped`; a green zero-test command is rejected. Formatting, fresh initialization, and
+validation remain separate gates.
 
 Run `scripts/verify_ops_foundation.sh --static` before review and `--live` only after an
 explicitly approved apply. Live mode requires

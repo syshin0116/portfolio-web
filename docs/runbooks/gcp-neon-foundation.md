@@ -304,19 +304,26 @@ Credential-free checks:
 terraform -chdir=infra/gcp fmt -check -recursive
 terraform -chdir=infra/gcp init -backend=false -input=false -lockfile=readonly
 terraform -chdir=infra/gcp validate
-terraform -chdir=infra/gcp test
+scripts/verify_ops_foundation.sh --terraform-test
 shellcheck scripts/verify_ops_foundation.sh
 scripts/verify_ops_foundation.sh --static
 ```
 
 The static command runs `uv run --no-project --with python-hcl2==7.3.1` and uses that
-pinned parser, not regular expressions. It inventories every provider and alias, import
-target and live object ID, module, data source, resource, and critical variable validation
-after HCL comments and line breaks are parsed. It rejects `moved` and `removed` blocks,
-provisioners, `local-exec`, `remote-exec`, external providers/data,
-`terraform_remote_state`, and other unreviewed executable resource types. Terraform
-`fmt`, fresh `init -backend=false`, `validate`, and mock-provider tests remain independent
-gates; the parser does not replace them.
+pinned parser, not regular expressions or source-string grep. It compares the complete
+parsed bodies of all 16 resources, all locals, the root check, every output and variable,
+the provider/data/backend blocks, and every import target and live object ID. It rejects
+unreviewed modules, `moved` and `removed` blocks, provisioners, `local-exec`,
+`remote-exec`, external providers/data, `terraform_remote_state`, and other executable
+resource types after HCL comments and line breaks are parsed.
+
+The only reviewed Terraform test file is
+`infra/gcp/tests/foundation.tftest.hcl`; static verification pins its exact SHA-256.
+`--terraform-test` runs Terraform's JSON test output through the contract and succeeds only
+when that exact file and `foundation_security_contract` run are discovered and the summary
+is exactly `1 passed, 0 failed, 0 errored, 0 skipped`. Terraform's otherwise-successful
+zero-test result is a failure. `fmt`, fresh `init -backend=false`, and `validate` remain
+independent gates.
 
 After an explicitly approved foundation apply, run the live metadata checks:
 

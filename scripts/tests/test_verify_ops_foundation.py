@@ -17,6 +17,7 @@ FIXTURE_FILES = (
     "infra/gcp/main.tf",
     "infra/gcp/outputs.tf",
     "infra/gcp/state.tf",
+    "infra/gcp/tests/foundation.tftest.hcl",
     "infra/gcp/variables.tf",
     "infra/gcp/versions.tf",
 )
@@ -99,6 +100,258 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_terraform_test_runner_rejects_zero_discovered_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            fake_terraform = fake_bin / "terraform"
+            fake_terraform.write_text(
+                """#!/bin/bash
+printf '%s\n' \
+  '{"type":"version","terraform":"1.13.5"}' \
+  '{"type":"test_abstract","test_abstract":{}}' \
+  '{"type":"test_summary","test_summary":{"status":"pass","passed":0,"failed":0,"errored":0,"skipped":0}}'
+""",
+                encoding="utf-8",
+            )
+            fake_terraform.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+
+            result = subprocess.run(
+                ["bash", "scripts/verify_ops_foundation.sh", "--terraform-test"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "discovery must exactly equal one reviewed file/run",
+            result.stderr,
+        )
+
+    def test_terraform_test_file_removal_and_drift_fail_closed(self) -> None:
+        mutations = ("removed", "changed")
+        for mutation in mutations:
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = self._fixture(directory)
+                test_path = root / "infra/gcp/tests/foundation.tftest.hcl"
+                if mutation == "removed":
+                    subprocess.run(
+                        [
+                            "git",
+                            "rm",
+                            "--cached",
+                            "--force",
+                            "--quiet",
+                            str(test_path.relative_to(root)),
+                        ],
+                        cwd=root,
+                        check=True,
+                    )
+                    test_path.unlink()
+                else:
+                    test_path.write_text(
+                        test_path.read_text(encoding="utf-8")
+                        + "\n# unreviewed test drift\n",
+                        encoding="utf-8",
+                    )
+
+                result = self._run(root)
+
+            self.assertNotEqual(0, result.returncode)
+            expected = (
+                "tracked Terraform test inventory mismatch"
+                if mutation == "removed"
+                else "Terraform test content digest is not exact"
+            )
+            self.assertIn(expected, result.stderr)
+
+    def test_every_previously_unchecked_resource_body_fails_closed(self) -> None:
+        mutations = {
+            "project_service": (
+                "infra/gcp/main.tf",
+                "  disable_on_destroy = false",
+                "  disable_on_destroy = true",
+            ),
+            "artifact_registry": (
+                "infra/gcp/main.tf",
+                "    immutable_tags = true",
+                "    immutable_tags = false",
+            ),
+            "production_runtime": (
+                "infra/gcp/main.tf",
+                '  account_id   = "agent-runtime"',
+                '  account_id   = "agent-runtime-changed"',
+            ),
+            "preview_runtime": (
+                "infra/gcp/main.tf",
+                '  account_id   = "agent-preview-runtime"',
+                '  account_id   = "agent-preview-runtime-changed"',
+            ),
+            "deployers": (
+                "infra/gcp/main.tf",
+                "  for_each = local.deployers",
+                "  for_each = {}",
+            ),
+            "production_secrets": (
+                "infra/gcp/main.tf",
+                "  for_each = local.production_secret_names",
+                "  for_each = local.preview_secret_names",
+            ),
+            "preview_secrets": (
+                "infra/gcp/main.tf",
+                "  for_each = local.preview_secret_names",
+                "  for_each = local.production_secret_names",
+            ),
+            "state_bucket": (
+                "infra/gcp/state.tf",
+                "  force_destroy               = false",
+                "  force_destroy               = true",
+            ),
+        }
+        for name, (relative_path, expected, replacement) in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = self._fixture(directory)
+                path = root / relative_path
+                original = path.read_text(encoding="utf-8")
+                self.assertEqual(1, original.count(expected))
+                path.write_text(
+                    original.replace(expected, replacement, 1),
+                    encoding="utf-8",
+                )
+
+                result = self._run(root)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(
+                "Terraform resource configuration is not exact",
+                result.stderr,
+            )
+
+    def test_locals_check_and_outputs_are_exact(self) -> None:
+        mutations = {
+            "main_locals": (
+                "infra/gcp/main.tf",
+                '    "storage.googleapis.com",',
+                '    "storage.googleapis.com.disabled",',
+                "Terraform locals configuration is not exact",
+            ),
+            "iam_locals": (
+                "infra/gcp/iam.tf",
+                "    preview    = google_service_account.preview_runtime.name",
+                "    preview    = google_service_account.runtime.name",
+                "Terraform locals configuration is not exact",
+            ),
+            "check": (
+                "infra/gcp/main.tf",
+                "condition     = length(setintersection(local.production_secret_names, local.preview_secret_names)) == 0",
+                "condition     = length(setintersection(local.production_secret_names, local.preview_secret_names)) >= 0",
+                "Terraform check configuration is not exact",
+            ),
+            "output": (
+                "infra/gcp/outputs.tf",
+                "",
+                """
+
+output "unreviewed_sensitive_value" {
+  value = local.production_secret_names
+}
+""",
+                "Terraform output inventory and bodies must exactly match",
+            ),
+        }
+        for name, (relative_path, expected, replacement, error) in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = self._fixture(directory)
+                path = root / relative_path
+                original = path.read_text(encoding="utf-8")
+                if expected:
+                    self.assertEqual(1, original.count(expected))
+                    mutated = original.replace(expected, replacement, 1)
+                else:
+                    mutated = original + replacement
+                path.write_text(mutated, encoding="utf-8")
+
+                result = self._run(root)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(error, result.stderr)
+
+    def test_full_comment_and_zero_test_bypass_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            main_path = root / "infra/gcp/main.tf"
+            main_source = main_path.read_text(encoding="utf-8")
+            main_path.write_text(
+                main_source.replace(
+                    "    immutable_tags = true", "    immutable_tags = false"
+                )
+                + "\n# immutable_tags = true\n",
+                encoding="utf-8",
+            )
+            state_path = root / "infra/gcp/state.tf"
+            state_source = state_path.read_text(encoding="utf-8")
+            insecure_state = (
+                state_source.replace(
+                    "  force_destroy               = false",
+                    "  force_destroy               = true",
+                )
+                .replace(
+                    '  public_access_prevention    = "enforced"',
+                    '  public_access_prevention    = "inherited"',
+                )
+                .replace(
+                    "  uniform_bucket_level_access = true",
+                    "  uniform_bucket_level_access = false",
+                )
+                .replace("    enabled = true", "    enabled = false")
+                .replace(
+                    "retention_duration_seconds = 2592000",
+                    "retention_duration_seconds = 604800",
+                )
+                .replace("    prevent_destroy = true", "    prevent_destroy = false")
+            )
+            state_path.write_text(
+                insecure_state
+                + """
+
+# force_destroy = false
+# public_access_prevention = "enforced"
+# uniform_bucket_level_access = true
+# enabled = true
+# retention_duration_seconds = 2592000
+# prevent_destroy = true
+""",
+                encoding="utf-8",
+            )
+            test_path = root / "infra/gcp/tests/foundation.tftest.hcl"
+            subprocess.run(
+                [
+                    "git",
+                    "rm",
+                    "--cached",
+                    "--force",
+                    "--quiet",
+                    str(test_path.relative_to(root)),
+                ],
+                cwd=root,
+                check=True,
+            )
+            test_path.unlink()
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("tracked Terraform test inventory mismatch", result.stderr)
+
     def test_governance_delegation_uses_exact_pinned_uv_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory)
@@ -173,7 +426,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(
-                    "preview WIF CEL condition must exactly match",
+                    "Terraform locals configuration is not exact",
                     result.stderr,
                 )
 
@@ -202,7 +455,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(
-                    "production WIF CEL condition must exactly match",
+                    "Terraform locals configuration is not exact",
                     result.stderr,
                 )
 
@@ -227,7 +480,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "critical resource configuration is not exact",
+            "resource configuration is not exact",
             result.stderr,
         )
 
@@ -396,7 +649,7 @@ resource "google_iam_workload_identity_pool_provider" "weak" {
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "critical resource configuration is not exact",
+            "resource configuration is not exact",
             result.stderr,
         )
 
@@ -614,7 +867,7 @@ data "terraform_remote_state" "escape" # parser-bypass
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "variable github_repository_id validation must exactly match",
+            "variable github_repository_id body must exactly match",
             result.stderr,
         )
 

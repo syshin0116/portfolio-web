@@ -258,9 +258,9 @@ jobs:
       - name: Validate Terraform configuration
         if: needs.changes.outputs.infra == 'true'
         run: terraform -chdir=infra/gcp validate
-      - name: Test Terraform security invariants with a mock provider
+      - name: Test exactly one Terraform security contract run
         if: needs.changes.outputs.infra == 'true'
-        run: terraform -chdir=infra/gcp test
+        run: scripts/verify_ops_foundation.sh --terraform-test
       - name: Check the operations verifier
         if: needs.changes.outputs.infra == 'true'
         run: |

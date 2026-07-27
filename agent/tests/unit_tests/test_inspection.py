@@ -40,9 +40,7 @@ class _Runtime:
 class _Retriever:
     method_id = "bm25"
     fingerprint = METHOD_FINGERPRINT
-    registration = SimpleNamespace(
-        implementation_id="agent.retrieval.bm25:create@2"
-    )
+    registration = SimpleNamespace(implementation_id="agent.retrieval.bm25:create@2")
 
 
 def _payload() -> dict[str, object]:
@@ -139,7 +137,9 @@ def test_build_retrieval_inspection_exposes_only_bounded_public_provenance() -> 
         assert forbidden not in serialized
 
 
-def test_inspection_transformer_promotes_exact_envelope_and_preserves_namespace() -> None:
+def test_inspection_transformer_promotes_exact_envelope_and_preserves_namespace() -> (
+    None
+):
     transformer = InspectionEventTransformer(("retrieval-researcher",))
     event = {
         "type": "event",

@@ -110,12 +110,11 @@ whose OIDC identity can reach GCP deployment resources.
 Promotion into the retrieval-method catalogue requires all of these external checks:
 
 1. The repository `Evaluation Publication` environment exists with the exact governance
-   policy (main branch only, `syshin0116` required reviewer, no admin bypass). Run the
-   live repository-governance verifier for those policy fields, then separately confirm
-   in the GitHub UI/API that the environment contains no secrets or variables; the live
-   verifier does not inspect either inventory. This environment is not configured in
-   GitHub as of 2026-07-28, so publication dispatch is blocked until that external setup
-   and both checks finish.
+   policy (main branch only, `syshin0116` required reviewer,
+   `prevent_self_review=false`, no admin bypass). On 2026-07-28, the frozen live
+   repository-governance verifier passed for those policy fields. Separate GitHub API
+   checks confirmed zero environment secrets and zero variables; the live verifier does
+   not inspect either inventory.
 2. The reviewer approves the manual workflow for the intended main commit.
 3. Download the `blogeval-publication-candidate-<sha>` artifact and run:
 
@@ -135,7 +134,8 @@ Promotion into the retrieval-method catalogue requires all of these external che
 4. Only after that command succeeds may its result digest be copied into the catalogue.
 
 The currently committed 90-query set intentionally fails step 3 until its qrels receive
-an explicit owner review.
+an explicit owner review. As of 2026-07-28, the manual publication workflow has not been
+dispatched and no evaluation result is claimed as published gold.
 
 ## Development gates
 

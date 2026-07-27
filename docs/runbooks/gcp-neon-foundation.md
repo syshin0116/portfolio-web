@@ -106,16 +106,17 @@ canonical Production and Evaluation Publication deployment-branch set is `{main}
 owner to review, forbid admin bypass, and contain no environment secrets or variables.
 It must never be added to the GCP WIF provider conditions.
 
-As of 2026-07-28, `Evaluation Publication` has not been created or verified in the live
-repository. Do not dispatch `.github/workflows/eval-publication.yml`: GitHub may create a
-referenced missing environment without the reviewed protection rules. First create the
-environment in repository settings, apply the exact policy above, confirm its secrets and
-variables are empty in the GitHub UI/API, and require the live verifier below to pass.
+As of 2026-07-28, the live repository has the `Evaluation Publication` environment with
+required reviewer `syshin0116`, `prevent_self_review=false`, admin bypass disabled, and
+one custom deployment branch policy for `main`. The frozen live verifier below passes,
+and separate GitHub API checks confirmed zero environment secrets and zero variables.
+The manual publication workflow has not been dispatched, and no evaluation result is
+claimed as published gold.
 
 Delegation requires both `uv` and `gh` and runs the verifier exactly as:
 
 ```sh
-uv run --no-project --with pyyaml==6.0.3 \
+uv run --frozen --package syshin0116-dev-agent \
   python scripts/verify_repository_governance.py --live
 ```
 

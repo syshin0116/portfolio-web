@@ -105,6 +105,22 @@ EXPECTED_ACTIONS = {
     "sha_pinning_required": True,
 }
 EXPECTED_ENVIRONMENTS = {
+    "Evaluation Publication": {
+        "can_admins_bypass": False,
+        "deployment_branch_policy": {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
+        "branch_policies": [{"name": "main", "type": "branch"}],
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "prevent_self_review": False,
+                "reviewers": [{"type": "User", "login": "syshin0116"}],
+            },
+            {"type": "branch_policy"},
+        ],
+    },
     "Preview": {
         "can_admins_bypass": True,
         "deployment_branch_policy": None,
@@ -147,7 +163,7 @@ EVAL_CI_JOB_AST_SHA256 = (
 )
 EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
 EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
-    "c14155ccd57971847c3619fee522c771eed17e0d0a6ce5727660311733143ab3"
+    "3a1325950d8781c46bd2b7d018de30191776206e26e338e0b0573ada484a5ca2"
 )
 AGENT_CI_SERVICES = {
     "postgres": {
@@ -2201,7 +2217,7 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     if not _json_exact(environments_policy, EXPECTED_ENVIRONMENTS):
         errors.append(
             "local: policy.environments differs from the complete reviewed "
-            f"Preview/Production payload; actual={environments_policy!r}, "
+            f"environment payload; actual={environments_policy!r}, "
             f"expected={EXPECTED_ENVIRONMENTS!r}"
         )
 

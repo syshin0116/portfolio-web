@@ -113,6 +113,34 @@
     "sha_pinning_required": true
   },
   "environments": {
+    "Evaluation Publication": {
+      "can_admins_bypass": false,
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      },
+      "branch_policies": [
+        {
+          "name": "main",
+          "type": "branch"
+        }
+      ],
+      "protection_rules": [
+        {
+          "type": "required_reviewers",
+          "prevent_self_review": false,
+          "reviewers": [
+            {
+              "type": "User",
+              "login": "syshin0116"
+            }
+          ]
+        },
+        {
+          "type": "branch_policy"
+        }
+      ]
+    },
     "Preview": {
       "can_admins_bypass": true,
       "deployment_branch_policy": null,

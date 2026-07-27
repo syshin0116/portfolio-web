@@ -9,7 +9,7 @@ when_to_read: >
   Singapore database.
 tags: [operations, gcp, neon, workload-identity, cloud-run, secrets, terraform]
 status: stable
-updated: "2026-07-27"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
@@ -53,6 +53,9 @@ After this foundation is reviewed and applied, the target is:
   environment, and the `pull_request` event;
 - production federation restricted to the numeric repository and owner IDs, the `push`
   event, `refs/heads/main`, and the `Production` environment;
+- evaluation publication isolated in a separate `Evaluation Publication` environment
+  that is not accepted by either GCP workload-identity provider and carries no GCP or
+  deployment secrets;
 - no user-managed service-account keys.
 
 The live verifier reads direct policies at the project, every reported folder and
@@ -92,13 +95,24 @@ provider therefore cannot honestly bind `job_workflow_ref`; `push` + `main` +
 workflow-ref claim and condition after its workflow path exists, then update both the
 Terraform exact-value test and live verifier.
 
-GitHub environment names are exactly `Preview` and `Production`. Their reviewers,
-self-review settings, and deployment branches are governed only by
+GitHub environment names are exactly `Preview`, `Production`, and
+`Evaluation Publication`. Their reviewers, self-review settings, admin-bypass settings,
+and deployment branches are governed only by
 `.github/repository-governance.json` and
 `scripts/verify_repository_governance.py`; this foundation does not duplicate that policy.
 When those central files are present, `--live` delegates to their live verifier. The
-canonical Production deployment-branch set is `{main}`. Delegation requires both `uv` and
-`gh` and runs the verifier exactly as:
+canonical Production and Evaluation Publication deployment-branch set is `{main}`.
+`Evaluation Publication` must use `syshin0116` as its required reviewer, allow the solo
+owner to review, forbid admin bypass, and contain no environment secrets or variables.
+It must never be added to the GCP WIF provider conditions.
+
+As of 2026-07-28, `Evaluation Publication` has not been created or verified in the live
+repository. Do not dispatch `.github/workflows/eval-publication.yml`: GitHub may create a
+referenced missing environment without the reviewed protection rules. First create the
+environment in repository settings, apply the exact policy above, confirm its secrets and
+variables are empty in the GitHub UI/API, and require the live verifier below to pass.
+
+Delegation requires both `uv` and `gh` and runs the verifier exactly as:
 
 ```sh
 uv run --no-project --with pyyaml==6.0.3 \

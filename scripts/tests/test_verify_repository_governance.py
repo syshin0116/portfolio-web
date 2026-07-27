@@ -19,6 +19,10 @@ ENVIRONMENTS_PAGE = "environments?per_page=100&page=1"
 PRODUCTION_BRANCH_POLICIES_PAGE = (
     "environments/Production/deployment-branch-policies?per_page=100&page=1"
 )
+EVAL_PUBLICATION_BRANCH_POLICIES_PAGE = (
+    "environments/Evaluation%20Publication/"
+    "deployment-branch-policies?per_page=100&page=1"
+)
 LEGACY_MAIN_PROTECTION = "branches/main/protection"
 
 
@@ -111,11 +115,33 @@ def desired_live_responses() -> dict[str, object]:
             status=404,
         ),
         ENVIRONMENTS_PAGE: {
-            "total_count": 2,
+            "total_count": 3,
             "environments": [
+                {"name": "Evaluation Publication"},
                 {"name": "Preview"},
                 {"name": "Production"},
             ],
+        },
+        "environments/Evaluation%20Publication": {
+            "name": "Evaluation Publication",
+            "can_admins_bypass": False,
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [
+                        {
+                            "type": "User",
+                            "reviewer": {"login": "syshin0116"},
+                        }
+                    ],
+                },
+                {"type": "branch_policy"},
+            ],
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
         },
         "environments/Preview": {
             "name": "Preview",
@@ -145,6 +171,10 @@ def desired_live_responses() -> dict[str, object]:
             },
         },
         PRODUCTION_BRANCH_POLICIES_PAGE: {
+            "total_count": 1,
+            "branch_policies": [{"name": "main", "type": "branch"}],
+        },
+        EVAL_PUBLICATION_BRANCH_POLICIES_PAGE: {
             "total_count": 1,
             "branch_policies": [{"name": "main", "type": "branch"}],
         },
@@ -280,7 +310,7 @@ class LocalGovernanceTests(unittest.TestCase):
                     "if: always()",
                 ),
             ),
-            "environment": (("    environment: Production\n", ""),),
+            "environment": (("    environment: Evaluation Publication\n", ""),),
             "caller-image": (
                 (
                     "IMAGE_DIGEST: ${{ steps.image.outputs.digest }}",
@@ -948,6 +978,14 @@ runs:
                 "prevent_self_review"
             ] = True
 
+        def mutate_eval_publication_admin_bypass(policy: dict[str, object]) -> None:
+            policy["environments"]["Evaluation Publication"]["can_admins_bypass"] = True
+
+        def mutate_eval_publication_reviewer(policy: dict[str, object]) -> None:
+            policy["environments"]["Evaluation Publication"]["protection_rules"][0][
+                "reviewers"
+            ] = []
+
         def mutate_staging(policy: dict[str, object]) -> None:
             policy["environments"]["Staging"] = {
                 "can_admins_bypass": True,
@@ -963,6 +1001,8 @@ runs:
             ("reviewer-identity", mutate_reviewer_identity),
             ("reviewer-duplicate", mutate_duplicate_reviewer),
             ("self-review", mutate_self_review),
+            ("eval-publication-admin-bypass", mutate_eval_publication_admin_bypass),
+            ("eval-publication-reviewer", mutate_eval_publication_reviewer),
             ("staging", mutate_staging),
         )
         for label, mutate in mutations:
@@ -3139,6 +3179,40 @@ class LiveGovernanceTests(unittest.TestCase):
             )
         )
 
+    def test_evaluation_publication_environment_drift_is_rejected(self) -> None:
+        mutations = (
+            ("admin-bypass", "can_admins_bypass", True),
+            ("self-review", "prevent_self_review", True),
+            ("reviewer", "reviewer-login", "another-owner"),
+        )
+        for label, field, value in mutations:
+            with self.subTest(label=label):
+                responses = desired_live_responses()
+                path = "environments/Evaluation%20Publication"
+                environment = json.loads(json.dumps(responses[path]))
+                if field == "reviewer-login":
+                    environment["protection_rules"][0]["reviewers"][0]["reviewer"][
+                        "login"
+                    ] = value
+                elif field == "prevent_self_review":
+                    environment["protection_rules"][0][field] = value
+                else:
+                    environment[field] = value
+                responses[path] = environment
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "environment 'Evaluation Publication'" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
     def test_production_reviewer_identity_drift_is_rejected(self) -> None:
         responses = desired_live_responses()
         production = json.loads(json.dumps(responses["environments/Production"]))
@@ -3256,7 +3330,7 @@ class LiveGovernanceTests(unittest.TestCase):
     def test_extra_environment_is_rejected_as_policy_drift(self) -> None:
         responses = desired_live_responses()
         environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
-        environments["total_count"] = 3
+        environments["total_count"] = 4
         environments["environments"].append({"name": "Staging"})
         responses[ENVIRONMENTS_PAGE] = environments
 
@@ -3285,12 +3359,12 @@ class LiveGovernanceTests(unittest.TestCase):
     def test_environment_total_count_mismatch_fails_closed(self) -> None:
         responses = desired_live_responses()
         environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
-        environments["total_count"] = 3
+        environments["total_count"] = 4
         responses[ENVIRONMENTS_PAGE] = environments
 
         with self.assertRaisesRegex(
             governance.GovernanceError,
-            "total_count is 3",
+            "total_count is 4",
         ):
             governance.verify_live(self.policy, responses.__getitem__)
 

@@ -100,17 +100,22 @@ therefore always fails locally after first rejecting synthetic or unreviewed lab
 process cannot prove which container launched it.
 
 `.github/workflows/eval-publication.yml` is the only candidate-producing boundary. It is
-manual, main-only, gated by the `Production` environment, builds a pinned Linux amd64
-image, derives its immutable image ID from Docker, executes by that exact ID, compares
-the image-built content tree to `HEAD:content`, verifies the result, and attests the
-sealed candidate archive with GitHub OIDC. The uploaded archive remains explicitly
-non-published.
+manual, main-only, gated by the dedicated `Evaluation Publication` environment, builds a
+pinned Linux amd64 image, derives its immutable image ID from Docker, executes by that
+exact ID, compares the image-built content tree to `HEAD:content`, verifies the result,
+and attests the sealed candidate archive with GitHub OIDC. The uploaded archive remains
+explicitly non-published. This environment is deliberately separate from `Production`,
+whose OIDC identity can reach GCP deployment resources.
 
 Promotion into the retrieval-method catalogue requires all of these external checks:
 
-1. The repository `Production` environment has an owner as required reviewer, and that
-   reviewer approves the manual workflow for the intended main commit.
-2. Download the `blogeval-publication-candidate-<sha>` artifact and run:
+1. The repository `Evaluation Publication` environment exists with the exact governance
+   policy (main branch only, `syshin0116` required reviewer, no admin bypass) and contains
+   no deployment secrets or variables. Run the live repository-governance verifier
+   before dispatch. This environment is not configured in GitHub as of 2026-07-28, so
+   publication dispatch is blocked until that external setup and verification finish.
+2. The reviewer approves the manual workflow for the intended main commit.
+3. Download the `blogeval-publication-candidate-<sha>` artifact and run:
 
    ```bash
    uv run --frozen --package syshin0116-dev-eval \
@@ -125,7 +130,7 @@ Promotion into the retrieval-method catalogue requires all of these external che
    then checks the archive inventory, canonical candidate metadata, owner-reviewed
    label/checksum, content tree, image/result digests, Linux x86_64 runtime, run ID, and
    every regenerated result projection.
-3. Only after that command succeeds may its result digest be copied into the catalogue.
+4. Only after that command succeeds may its result digest be copied into the catalogue.
 
 The currently committed 90-query set intentionally fails step 3 until its qrels receive
 an explicit owner review.

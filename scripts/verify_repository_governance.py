@@ -164,7 +164,7 @@ EVAL_CI_JOB_AST_SHA256 = (
 )
 EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
 EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
-    "c67bc5ebb4a96eb7fb3a8a35266b479b5cb15157d5d4ee8fba7abaca543906ba"
+    "88dd92e98edaeb66d0f24f067ec8439759995fac6539e913bff8020d574218e8"
 )
 AGENT_CI_SERVICES = {
     "postgres": {

@@ -21,6 +21,7 @@ updates:
         exclude-patterns:
           # Framework/protocol/auth bumps need focused compatibility evidence.
           - "@assistant-ui/*"
+          - "@auth/*"
           - "@langchain/*"
           - "next"
           - "next-auth"
@@ -51,10 +52,10 @@ updates:
           - "aegra-*"
           - "deepagents"
           - "langchain"
-          - "langchain-core"
+          - "langchain-*"
           - "langgraph"
-          - "langgraph-sdk"
-          - "langchain-quickjs"
+          - "langgraph-*"
+          - "langsmith"
         update-types:
           - "minor"
           - "patch"

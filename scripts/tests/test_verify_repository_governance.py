@@ -17,8 +17,10 @@ def desired_live_responses() -> dict[str, object]:
         "rulesets?includes_parents=true": [{"id": 7}],
         "rulesets/7": {
             "id": 7,
+            "name": "main",
             "target": "branch",
             "enforcement": "active",
+            "bypass_actors": [],
             "conditions": {
                 "ref_name": {
                     "include": ["~DEFAULT_BRANCH"],
@@ -63,10 +65,26 @@ def desired_live_responses() -> dict[str, object]:
         },
         "environments/Preview": {
             "name": "Preview",
+            "can_admins_bypass": True,
+            "protection_rules": [],
             "deployment_branch_policy": None,
         },
         "environments/Production": {
             "name": "Production",
+            "can_admins_bypass": True,
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [
+                        {
+                            "type": "User",
+                            "reviewer": {"login": "syshin0116"},
+                        }
+                    ],
+                },
+                {"type": "branch_policy"},
+            ],
             "deployment_branch_policy": {
                 "protected_branches": False,
                 "custom_branch_policies": True,
@@ -122,16 +140,180 @@ jobs:
 
         self.assertIsNone(governance.FULL_SHA_ACTION.fullmatch(reference))
 
+    def test_flow_mapping_uses_is_found_by_ast_walk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "flow.yml"
+            workflow.write_text(
+                'jobs: {check: {steps: [{"uses": actions/checkout@v7}]}}\n',
+                encoding="utf-8",
+            )
+
+            document = governance.load_yaml_document(workflow)
+            references = list(governance.external_action_references(document))
+
+        self.assertEqual([(1, "actions/checkout@v7")], references)
+
+    def test_explicit_quoted_uses_key_is_found_by_ast_walk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "explicit.yml"
+            workflow.write_text(
+                """
+jobs:
+  check:
+    steps:
+      - ? "uses"
+        : actions/checkout@v7
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            document = governance.load_yaml_document(workflow)
+            references = list(governance.external_action_references(document))
+
+        self.assertEqual([(5, "actions/checkout@v7")], references)
+
+    def test_duplicate_yaml_key_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "duplicate.yml"
+            workflow.write_text(
+                """
+jobs:
+  check:
+    name: first
+    name: second
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                governance.GovernanceError,
+                "duplicate YAML key 'name'",
+            ):
+                governance.load_yaml_document(workflow)
+
+    def test_yaml_anchor_and_alias_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "alias.yml"
+            workflow.write_text(
+                """
+shared: &shared
+  uses: actions/checkout@v7
+jobs:
+  check:
+    steps:
+      - *shared
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                governance.GovernanceError,
+                "anchors, aliases",
+            ):
+                governance.load_yaml_document(workflow)
+
+    def test_yaml_merge_key_fails_closed_without_an_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "merge.yml"
+            workflow.write_text(
+                "jobs: {check: {<<: {name: ci/check}}}\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                governance.GovernanceError,
+                "YAML merge key",
+            ):
+                governance.load_yaml_document(workflow)
+
+    def test_local_action_reference_is_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "local.yml"
+            workflow.write_text(
+                "jobs: {check: {uses: ./.github/workflows/check.yml}}\n",
+                encoding="utf-8",
+            )
+
+            document = governance.load_yaml_document(workflow)
+
+        self.assertEqual(
+            [],
+            list(governance.external_action_references(document)),
+        )
+
     def test_dependency_audit_events_are_schedule_and_manual_only(self) -> None:
         workflow = REPO_ROOT / ".github/workflows/dependency-audit.yml"
+        document = governance.load_yaml_document(workflow)
 
         self.assertEqual(
             {"schedule", "workflow_dispatch"},
-            governance.workflow_events(workflow),
+            governance.workflow_events(document),
         )
-        self.assertNotIn(
-            "continue-on-error",
-            workflow.read_text(encoding="utf-8"),
+        self.assertFalse(
+            any(
+                governance._nodes_for_mapping_key(
+                    document.root,
+                    "continue-on-error",
+                )
+            )
+        )
+
+    def test_dependabot_groups_match_the_exact_policy(self) -> None:
+        policy = governance.load_policy()
+
+        self.assertEqual(
+            [],
+            governance.validate_dependabot_grouping(
+                REPO_ROOT / ".github/dependabot.yml",
+                policy,
+            ),
+        )
+
+    def test_dependabot_compatibility_surface_exclusions_are_exact(self) -> None:
+        document = governance.load_yaml_document(REPO_ROOT / ".github/dependabot.yml")
+        groups = governance._normalized_dependabot_groups(document)
+
+        self.assertEqual(
+            sorted(
+                [
+                    "@assistant-ui/*",
+                    "@auth/*",
+                    "@langchain/*",
+                    "next",
+                    "next-auth",
+                ]
+            ),
+            groups["npm:/web:web-routine"]["exclude_patterns"],
+        )
+        self.assertEqual(
+            sorted(
+                [
+                    "aegra-*",
+                    "deepagents",
+                    "langchain",
+                    "langchain-*",
+                    "langgraph",
+                    "langgraph-*",
+                    "langsmith",
+                ]
+            ),
+            groups["pip:/agent:agent-routine"]["exclude_patterns"],
+        )
+
+    def test_dependabot_group_pattern_mutation_is_rejected(self) -> None:
+        policy = governance.load_policy()
+        original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            mutated = Path(directory) / "dependabot.yml"
+            mutated.write_text(
+                original.replace('          - "@auth/*"\n', ""),
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_dependabot_grouping(mutated, policy)
+
+        self.assertTrue(
+            any("@auth/*" in error and "web-routine" in error for error in errors)
         )
 
     def test_duplicate_required_check_name_is_rejected(self) -> None:
@@ -200,9 +382,154 @@ class LiveGovernanceTests(unittest.TestCase):
         self.assertTrue(any("non_fast_forward" in error for error in errors))
         self.assertTrue(any("requires 1 approvals" in error for error in errors))
         self.assertTrue(
-            any("Code Owner approval is required" in error for error in errors)
+            any(
+                "Code Owner review must be explicitly disabled" in error
+                for error in errors
+            )
         )
         self.assertTrue(any("full-SHA policy is False" in error for error in errors))
+
+    def test_disabled_actions_are_reported(self) -> None:
+        responses = desired_live_responses()
+        responses["actions/permissions"] = {
+            "enabled": False,
+            "allowed_actions": "all",
+            "sha_pinning_required": True,
+        }
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertIn(
+            "external: GitHub Actions enabled policy is False; expected True",
+            errors,
+        )
+
+    def test_required_checks_compare_missing_extra_and_duplicates_exactly(self) -> None:
+        responses = desired_live_responses()
+        ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+        status = next(
+            rule
+            for rule in ruleset["rules"]
+            if rule["type"] == "required_status_checks"
+        )
+        status["parameters"]["required_status_checks"] = [
+            {"context": "ci/check"},
+            {"context": "ci/check"},
+            {"context": "protocol/compat"},
+            {"context": "unexpected/check"},
+        ]
+        responses["rulesets/7"] = ruleset
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        mismatch = next(error for error in errors if "checks differ exactly" in error)
+        self.assertIn("wiki/verify", mismatch)
+        self.assertIn("unexpected/check", mismatch)
+        self.assertIn("duplicates=['ci/check']", mismatch)
+
+    def test_every_main_ruleset_bypass_actor_is_rejected(self) -> None:
+        responses = desired_live_responses()
+        ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+        ruleset["bypass_actors"] = [
+            {"actor_type": "RepositoryRole", "actor_id": 5, "bypass_mode": "always"},
+            {"actor_type": "Team", "actor_id": 17, "bypass_mode": "pull_request"},
+        ]
+        responses["rulesets/7"] = ruleset
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        bypass_error = next(error for error in errors if "bypass actors" in error)
+        self.assertIn("RepositoryRole", bypass_error)
+        self.assertIn("Team", bypass_error)
+
+    def test_disabled_main_ruleset_is_not_silently_ignored(self) -> None:
+        responses = desired_live_responses()
+        ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+        ruleset["enforcement"] = "disabled"
+        responses["rulesets/7"] = ruleset
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(any("inactive branch rulesets" in error for error in errors))
+        self.assertTrue(any("0 active branch rulesets" in error for error in errors))
+
+    def test_rules_split_across_active_rulesets_are_rejected(self) -> None:
+        responses = desired_live_responses()
+        first = json.loads(json.dumps(responses["rulesets/7"]))
+        second = json.loads(json.dumps(responses["rulesets/7"]))
+        first["rules"] = first["rules"][:2]
+        second["id"] = 8
+        second["name"] = "main-part-two"
+        second["rules"] = second["rules"][2:]
+        responses["rulesets?includes_parents=true"] = [{"id": 7}, {"id": 8}]
+        responses["rulesets/7"] = first
+        responses["rulesets/8"] = second
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "2 active branch rulesets" in error and "distributed" in error
+                for error in errors
+            )
+        )
+
+    def test_preview_mandatory_reviewer_is_rejected(self) -> None:
+        responses = desired_live_responses()
+        preview = json.loads(json.dumps(responses["environments/Preview"]))
+        preview["protection_rules"] = [
+            {
+                "type": "required_reviewers",
+                "prevent_self_review": False,
+                "reviewers": [
+                    {
+                        "type": "User",
+                        "reviewer": {"login": "syshin0116"},
+                    }
+                ],
+            }
+        ]
+        responses["environments/Preview"] = preview
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any("environment 'Preview' protection rules" in error for error in errors)
+        )
+
+    def test_production_self_review_deadlock_is_rejected(self) -> None:
+        responses = desired_live_responses()
+        production = json.loads(json.dumps(responses["environments/Production"]))
+        required_reviewers = production["protection_rules"][0]
+        required_reviewers["prevent_self_review"] = True
+        responses["environments/Production"] = production
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "environment 'Production' protection rules" in error
+                and "prevent_self_review" in error
+                for error in errors
+            )
+        )
+
+    def test_production_reviewer_identity_drift_is_rejected(self) -> None:
+        responses = desired_live_responses()
+        production = json.loads(json.dumps(responses["environments/Production"]))
+        required_reviewers = production["protection_rules"][0]
+        required_reviewers["reviewers"][0]["reviewer"]["login"] = "another-owner"
+        responses["environments/Production"] = production
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "environment 'Production' protection rules" in error
+                and "another-owner" in error
+                for error in errors
+            )
+        )
 
 
 if __name__ == "__main__":

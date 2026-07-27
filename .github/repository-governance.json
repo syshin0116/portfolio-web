@@ -3,6 +3,8 @@
   "api_version": "2026-03-10",
   "main": {
     "ref": "refs/heads/main",
+    "active_ruleset_count": 1,
+    "bypass_actors": [],
     "required_checks": [
       "ci/check",
       "protocol/compat",
@@ -18,14 +20,19 @@
     ]
   },
   "actions": {
+    "enabled": true,
+    "allowed_actions": "all",
     "sha_pinning_required": true
   },
   "environments": {
     "Preview": {
+      "can_admins_bypass": true,
       "deployment_branch_policy": null,
-      "branch_policies": []
+      "branch_policies": [],
+      "protection_rules": []
     },
     "Production": {
+      "can_admins_bypass": true,
       "deployment_branch_policy": {
         "protected_branches": false,
         "custom_branch_policies": true
@@ -35,7 +42,82 @@
           "name": "main",
           "type": "branch"
         }
+      ],
+      "protection_rules": [
+        {
+          "type": "required_reviewers",
+          "prevent_self_review": false,
+          "reviewers": [
+            {
+              "type": "User",
+              "login": "syshin0116"
+            }
+          ]
+        },
+        {
+          "type": "branch_policy"
+        }
       ]
     }
+  },
+  "dependabot": {
+    "routine_groups": [
+      {
+        "package_ecosystem": "npm",
+        "directory": "/web",
+        "name": "web-routine",
+        "applies_to": "version-updates",
+        "patterns": [
+          "*"
+        ],
+        "exclude_patterns": [
+          "@assistant-ui/*",
+          "@auth/*",
+          "@langchain/*",
+          "next",
+          "next-auth"
+        ],
+        "update_types": [
+          "minor",
+          "patch"
+        ]
+      },
+      {
+        "package_ecosystem": "pip",
+        "directory": "/agent",
+        "name": "agent-routine",
+        "applies_to": "version-updates",
+        "patterns": [
+          "*"
+        ],
+        "exclude_patterns": [
+          "aegra-*",
+          "deepagents",
+          "langchain",
+          "langchain-*",
+          "langgraph",
+          "langgraph-*",
+          "langsmith"
+        ],
+        "update_types": [
+          "minor",
+          "patch"
+        ]
+      },
+      {
+        "package_ecosystem": "github-actions",
+        "directory": "/",
+        "name": "actions-routine",
+        "applies_to": "version-updates",
+        "patterns": [
+          "*"
+        ],
+        "exclude_patterns": [],
+        "update_types": [
+          "minor",
+          "patch"
+        ]
+      }
+    ]
   }
 }

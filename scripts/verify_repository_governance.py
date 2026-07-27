@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import re
 import shlex
@@ -140,6 +141,14 @@ AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
     "AGENT_AUTH_SECRET": "ci-only-agent-secret-ci-only-agent-secret",
 }
+EVAL_CI_JOB = "eval"
+EVAL_CI_JOB_AST_SHA256 = (
+    "2ea64da7efc89544044730c68709becb6de72dd0ae65a7e987bf8a3c37a066e8"
+)
+EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
+EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
+    "c14155ccd57971847c3619fee522c771eed17e0d0a6ce5727660311733143ab3"
+)
 AGENT_CI_SERVICES = {
     "postgres": {
         "image": (
@@ -914,6 +923,56 @@ def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
             f"expected={AGENT_RUN_STEP_INVENTORY!r}, "
             f"actual={tuple(run_step_inventory)!r}"
         )
+    return errors
+
+
+def _canonical_ast_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def validate_eval_workflow_contracts(
+    root: Path,
+    documents: dict[Path, YamlDocument],
+) -> list[str]:
+    """Bind eval CI and its trusted publication boundary to reviewed ASTs."""
+
+    errors: list[str] = []
+    ci_path = (root.resolve() / AGENT_CI_WORKFLOW).resolve()
+    ci = documents.get(ci_path)
+    if ci is None:
+        errors.append(f"{AGENT_CI_WORKFLOW}: workflow is missing or invalid")
+    else:
+        eval_job = _workflow_jobs(ci).get(EVAL_CI_JOB)
+        if eval_job is None:
+            errors.append(f"{AGENT_CI_WORKFLOW}: job {EVAL_CI_JOB!r} is missing")
+        else:
+            actual = _canonical_ast_sha256(_node_to_data(eval_job))
+            if actual != EVAL_CI_JOB_AST_SHA256:
+                errors.append(
+                    f"{AGENT_CI_WORKFLOW}: job {EVAL_CI_JOB!r} exact AST differs; "
+                    f"expected_sha256={EVAL_CI_JOB_AST_SHA256}, "
+                    f"actual_sha256={actual}"
+                )
+
+    publication_path = (root.resolve() / EVAL_PUBLICATION_WORKFLOW).resolve()
+    publication = documents.get(publication_path)
+    if publication is None:
+        errors.append(f"{EVAL_PUBLICATION_WORKFLOW}: workflow is missing or invalid")
+    else:
+        actual = _canonical_ast_sha256(_node_to_data(publication.root))
+        if actual != EVAL_PUBLICATION_WORKFLOW_AST_SHA256:
+            errors.append(
+                f"{EVAL_PUBLICATION_WORKFLOW}: exact workflow AST differs; "
+                f"expected_sha256={EVAL_PUBLICATION_WORKFLOW_AST_SHA256}, "
+                f"actual_sha256={actual}"
+            )
     return errors
 
 
@@ -2065,6 +2124,13 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
             )
         except GovernanceError as exc:
             errors.append(f"local: invalid ci/agent resolution contract: {exc}")
+    try:
+        errors.extend(
+            f"local: {error}"
+            for error in validate_eval_workflow_contracts(root, documents)
+        )
+    except GovernanceError as exc:
+        errors.append(f"local: invalid eval workflow contract: {exc}")
 
     required_files = (
         ".github/CODEOWNERS",

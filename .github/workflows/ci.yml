@@ -249,6 +249,7 @@ jobs:
         if: needs.changes.outputs.eval == 'true'
         shell: bash
         run: |
+          set -euo pipefail
           content_tree_sha="$(git rev-parse HEAD:content)"
           uv run --frozen --package syshin0116-dev-eval \
             blogeval generate-known-item \
@@ -273,6 +274,13 @@ jobs:
             test "$(find "$output_root" -name leaderboard.md -type f | wc -l)" -eq 1
             test "$(find "$output_root" -name per-query.md -type f | wc -l)" -eq 1
             test "$(find "$output_root" -name metrics.svg -type f | wc -l)" -eq 1
+            test "$(find "$output_root" -name manifest.json -type f | wc -l)" -eq 1
+            run_json="$(find "$output_root" -name run.json -type f)"
+            run_directory="${run_json%/run.json}"
+            uv run --frozen --package syshin0116-dev-eval \
+              blogeval verify-run \
+              --dataset querysets/known-item-alias-v1.json \
+              --run-directory "$run_directory"
           done
           first_run_json="$(
             find "$RUNNER_TEMP/eval-results-first" -name run.json -type f

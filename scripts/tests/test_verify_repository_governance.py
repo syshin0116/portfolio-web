@@ -187,6 +187,127 @@ class LocalGovernanceTests(unittest.TestCase):
             errors,
         )
 
+    def assert_eval_workflow_mutation_rejected(
+        self,
+        *,
+        workflow_name: str,
+        replacements: tuple[tuple[str, str], ...],
+        expected_error: str,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows" / workflow_name
+            original = workflow.read_text(encoding="utf-8")
+            prefix = ""
+            suffix = ""
+            mutated = original
+            if workflow_name == "ci.yml":
+                eval_start = original.index("  eval:\n")
+                eval_end = original.index("\n  infra:\n", eval_start)
+                prefix = original[:eval_start]
+                mutated = original[eval_start:eval_end]
+                suffix = original[eval_end:]
+            for old, new in replacements:
+                before = mutated
+                mutated = mutated.replace(old, new, 1)
+                self.assertNotEqual(before, mutated)
+            workflow.write_text(prefix + mutated + suffix, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(expected_error in error for error in errors),
+            errors,
+        )
+
+    def test_eval_ci_exact_ast_rejects_gate_and_order_weakening(self) -> None:
+        mutations = {
+            "lock-check": (
+                ("        run: uv lock --check\n", "        run: uv lock\n"),
+            ),
+            "frozen": (
+                (
+                    "uv sync --frozen --package syshin0116-dev-eval",
+                    "uv sync --package syshin0116-dev-eval",
+                ),
+            ),
+            "dataset-check": (("          --check\n", ""),),
+            "dataset-validate": (
+                (
+                    "uv run --frozen --package syshin0116-dev-eval blogeval validate",
+                    "echo validate",
+                ),
+            ),
+            "second-sweep": (
+                (
+                    '            "$RUNNER_TEMP/eval-results-second"\n',
+                    "",
+                ),
+            ),
+            "recursive-diff": (
+                (
+                    "          diff --no-dereference --recursive \\\n",
+                    "          diff \\\n",
+                ),
+            ),
+            "condition": (
+                (
+                    "if: needs.changes.outputs.eval == 'true'",
+                    "if: false",
+                ),
+            ),
+            "continue-on-error": (
+                (
+                    "      - name: Verify the workspace lockfile is current\n",
+                    "      - name: Verify the workspace lockfile is current\n"
+                    "        continue-on-error: true\n",
+                ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_eval_workflow_mutation_rejected(
+                    workflow_name="ci.yml",
+                    replacements=replacements,
+                    expected_error="job 'eval' exact AST differs",
+                )
+
+    def test_eval_publication_exact_ast_rejects_untrusted_identity_inputs(self) -> None:
+        mutations = {
+            "non-main": (
+                (
+                    "if: github.ref == 'refs/heads/main'",
+                    "if: always()",
+                ),
+            ),
+            "environment": (("    environment: Production\n", ""),),
+            "caller-image": (
+                (
+                    "IMAGE_DIGEST: ${{ steps.image.outputs.digest }}",
+                    "IMAGE_DIGEST: ${{ env.BLOGEVAL_IMAGE_DIGEST }}",
+                ),
+            ),
+            "tag-execution": (
+                (
+                    '            "$IMAGE_DIGEST" \\\n',
+                    '            "blogeval-candidate:$GITHUB_SHA" \\\n',
+                ),
+            ),
+            "attestation": (
+                (
+                    "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+                    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+                ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_eval_workflow_mutation_rejected(
+                    workflow_name="eval-publication.yml",
+                    replacements=replacements,
+                    expected_error="exact workflow AST differs",
+                )
+
     def test_agent_ci_exact_job_surface_rejects_every_unreviewed_key(self) -> None:
         header = (
             "  agent:\n"

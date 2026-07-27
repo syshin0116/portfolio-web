@@ -1,0 +1,174 @@
+name: Evaluation publication candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: eval-publication-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: eval/publication-candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: Production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify trusted workflow source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "$GITHUB_REPOSITORY/.github/workflows/eval-publication.yml@$GITHUB_REF"
+          git diff --no-ext-diff --quiet HEAD --
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Build and derive the immutable Linux amd64 image identity
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --file eval/Dockerfile.publication \
+            --platform linux/amd64 \
+            --tag "blogeval-candidate:$GITHUB_SHA" \
+            .
+          image_digest="$(
+            docker image inspect \
+              --format '{{.Id}}' \
+              "blogeval-candidate:$GITHUB_SHA"
+          )"
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(
+            docker image inspect \
+              --format '{{.Os}}/{{.Architecture}}' \
+              "$image_digest"
+          )" = "linux/amd64"
+          echo "digest=$image_digest" >> "$GITHUB_OUTPUT"
+      - name: Execute and verify the candidate by exact image digest
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/eval-candidate"
+          mkdir -p "$candidate_root"
+          docker run --rm --platform linux/amd64 \
+            --mount "type=bind,src=$candidate_root,dst=/candidate" \
+            "$IMAGE_DIGEST" \
+            bash -euo pipefail -c '
+              python scripts/build_index.py \
+                --output /tmp/eval-index \
+                --expect-document-count 335
+              content_tree_sha="$(
+                python -c "import json; print(json.load(open(\"/tmp/eval-index/manifest.json\"))[\"content_git_tree_sha\"])"
+              )"
+              blogeval generate-known-item \
+                --index-root /tmp/eval-index \
+                --content-tree-sha "$content_tree_sha" \
+                --output eval/querysets/known-item-alias-v1.json \
+                --check
+              blogeval validate \
+                --index-root /tmp/eval-index \
+                --content-tree-sha "$content_tree_sha" \
+                --dataset eval/querysets/known-item-alias-v1.json
+              blogeval sweep \
+                --index-root /tmp/eval-index \
+                --content-tree-sha "$content_tree_sha" \
+                --dataset eval/querysets/known-item-alias-v1.json \
+                --output-root /tmp/results
+              run_json="$(find /tmp/results -name run.json -type f)"
+              test -n "$run_json"
+              test "$(printf "%s\n" "$run_json" | wc -l)" -eq 1
+              run_directory="${run_json%/run.json}"
+              blogeval verify-run \
+                --dataset eval/querysets/known-item-alias-v1.json \
+                --run-directory "$run_directory"
+              cp -R "$run_directory" /candidate/result
+            '
+      - name: Seal workflow-derived candidate metadata
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "eval-candidate"
+          manifest = json.loads((root / "result/manifest.json").read_text())
+          run = json.loads((root / "result/run.json").read_text())
+          expected_content_tree = subprocess.run(
+              ["git", "rev-parse", "HEAD:content"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          if run["corpus"]["git_tree_sha"] != expected_content_tree:
+              raise SystemExit(
+                  "container corpus tree does not match the workflow commit"
+              )
+          platform = run["provenance"]["platform"]
+          if platform["system"] != "Linux" or platform["machine"] != "x86_64":
+              raise SystemExit("candidate runtime is not Linux x86_64")
+          if not re.fullmatch(
+              r"sha256:[0-9a-f]{64}",
+              manifest["result_digest"],
+          ):
+              raise SystemExit("candidate result digest is malformed")
+          candidate = {
+              "commit_sha": os.environ["GITHUB_SHA"],
+              "content_git_tree_sha": expected_content_tree,
+              "dataset_label_status": run["dataset"]["label_status"],
+              "execution_image_digest": os.environ["IMAGE_DIGEST"],
+              "publication_status": "candidate-awaiting-external-verification",
+              "result_digest": manifest["result_digest"],
+              "run_id": run["run_id"],
+              "schema": "blogeval-publication-candidate-v1",
+              "workflow_identity": os.environ["GITHUB_WORKFLOW_REF"],
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+          }
+          (root / "candidate.json").write_text(
+              json.dumps(
+                  candidate,
+                  ensure_ascii=False,
+                  allow_nan=False,
+                  indent=2,
+                  sort_keys=True,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+          tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner \
+            -cf "$RUNNER_TEMP/blogeval-candidate.tar" \
+            -C "$RUNNER_TEMP/eval-candidate" \
+            candidate.json result
+          gzip -n "$RUNNER_TEMP/blogeval-candidate.tar"
+      - name: Attest the sealed candidate
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ runner.temp }}/blogeval-candidate.tar.gz
+      - name: Upload the non-published candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: blogeval-publication-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/blogeval-candidate.tar.gz
+          if-no-files-found: error
+          retention-days: 30

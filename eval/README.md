@@ -8,7 +8,9 @@ agent install. `eval` imports the workspace `agent` package; `agent` never impor
 
 The harness consumes only a verified generated `agent/.index` mirror. It never reads
 live `content/`. Every committed query-set manifest pins both the `content/` git tree SHA
-and the generated corpus fingerprint.
+and the generated corpus fingerprint. Index construction rejects tracked modifications
+and untracked files under `content/`; the builder, index manifest, query-set CLI argument,
+and query-set identity must all agree on the same full Git tree SHA.
 
 ## Query sets
 
@@ -16,11 +18,22 @@ and the generated corpus fingerprint.
   `wikilinks.json` artifact. The source has 164 aliased-link occurrences: 140 included
   occurrences collapse to 90 unique, single-target known-item qrels and 24 occurrences
   are retained as explicit exclusions (conflicting alias targets, ambiguous targets,
-  self-links, or unresolved targets).
+  self-links, or unresolved targets). Its label status is
+  `generated-owner-authored`, not `owner-reviewed`; it is useful for comparisons but
+  cannot be published as relevance gold.
 - A `topic-smoke-v1` gold set is deliberately not committed yet. Topic recall is a
   separate contract and requires owner-reviewed multi-document qrels. The synthetic
   `tests/fixtures/topic-contract-v1.json` exercises its schema and metrics without
   claiming relevance gold or enabling a macro gate.
+
+Each source artifact records its canonical SHA-256 checksum and upstream data
+dependencies. An `owner-reviewed` label claim additionally binds the exact canonical
+qrels checksum plus reviewer, review date, and review reference. The parser rejects a
+stale checksum or review metadata on an unreviewed set.
+
+Methods declare their own namespaced data dependencies. Every run and report classifies
+each comparison as `oracle-overlap` (the method reads a qrel source artifact),
+`in-sample-overlap` (it reads an ancestor of that artifact), or `clean-holdout`.
 
 Known-item reports headline Hit@k, MRR@k, and coverage. Topic reports headline recall@k
 and coverage. The report generator does not calculate a headline nDCG score.
@@ -42,11 +55,21 @@ uv run --frozen --package syshin0116-dev-eval blogeval generate-known-item \
   --content-tree-sha "$content_tree_sha" \
   --output eval/querysets/known-item-alias-v1.json \
   --check
+uv run --frozen --package syshin0116-dev-eval blogeval validate \
+  --index-root agent/.index \
+  --content-tree-sha "$content_tree_sha" \
+  --dataset eval/querysets/known-item-alias-v1.json
 uv run --frozen --package syshin0116-dev-eval blogeval sweep \
   --index-root agent/.index \
   --content-tree-sha "$content_tree_sha" \
   --dataset eval/querysets/known-item-alias-v1.json \
   --output-root eval/results
+run_directory="$(
+  dirname "$(find eval/results -name run.json -type f -print -quit)"
+)"
+uv run --frozen --package syshin0116-dev-eval blogeval verify-run \
+  --dataset eval/querysets/known-item-alias-v1.json \
+  --run-directory "$run_directory"
 ```
 
 The default sweep runs `bm25`, `char-ngram`, and `rrf-bm25-char-ngram`, with no model,
@@ -54,23 +77,58 @@ embedding, network, or provider cost. It writes:
 
 ```text
 results/<content-tree-sha>/<run-id>/
-├── run.json          # canonical system of record
 ├── leaderboard.md    # derived summary
+├── manifest.json     # exact inventory, checksums, and canonical result digest
+├── metrics.svg       # derived plot
 ├── per-query.md      # derived rankings
-└── metrics.svg       # derived plot
+└── run.json          # canonical system of record
 ```
 
 `results/` is generated and gitignored. The run ID automatically binds the agent and eval
-source-tree digests, root lock digest, runtime platform, Python runtime, and optional OCI
-image digest in addition to the dataset, corpus, methods, and cutoffs. A repeated run over
-identical inputs and execution provenance produces the same run ID and the same bytes.
+source-tree digests, root lock digest, runtime platform, and Python runtime in addition
+to the dataset, corpus, method fingerprints/data dependencies, and cutoffs. The result
+digest binds the exact four result payloads. `verify-run` rejects partial or extra files,
+checksum resealing, changed rankings or metrics, and Markdown/SVG projection drift. A
+staging directory plus an exclusive lock makes concurrent identical writers converge on
+one complete immutable result directory.
 
-Local macOS and unpinned runner output is useful for development but is marked
-publication-ineligible in `run.json` and the leaderboard. A result may be copied into the
-catalogue only after running inside the actual digest-pinned Linux x86_64 image with
-`BLOGEVAL_IMAGE_DIGEST=sha256:<64 lowercase hex>` and `--require-publishable`. The
-environment value records the image already executing the command; it is not a substitute
-for entering that image.
+## Publication boundary
+
+Every local process is publication-ineligible, including Linux x86_64 and any process
+given a caller-controlled image-digest environment variable. `--require-publishable`
+therefore always fails locally after first rejecting synthetic or unreviewed labels. A
+process cannot prove which container launched it.
+
+`.github/workflows/eval-publication.yml` is the only candidate-producing boundary. It is
+manual, main-only, gated by the `Production` environment, builds a pinned Linux amd64
+image, derives its immutable image ID from Docker, executes by that exact ID, compares
+the image-built content tree to `HEAD:content`, verifies the result, and attests the
+sealed candidate archive with GitHub OIDC. The uploaded archive remains explicitly
+non-published.
+
+Promotion into the retrieval-method catalogue requires all of these external checks:
+
+1. The repository `Production` environment has an owner as required reviewer, and that
+   reviewer approves the manual workflow for the intended main commit.
+2. Download the `blogeval-publication-candidate-<sha>` artifact and run:
+
+   ```bash
+   uv run --frozen --package syshin0116-dev-eval \
+     blogeval verify-publication \
+     --archive blogeval-candidate.tar.gz \
+     --dataset eval/querysets/known-item-alias-v1.json \
+     --expected-commit <40-character-main-commit>
+   ```
+
+   This command directly requires `gh attestation verify` with the exact repository,
+   signer workflow, main ref, source/signer commit, and GitHub-hosted runner policy. It
+   then checks the archive inventory, canonical candidate metadata, owner-reviewed
+   label/checksum, content tree, image/result digests, Linux x86_64 runtime, run ID, and
+   every regenerated result projection.
+3. Only after that command succeeds may its result digest be copied into the catalogue.
+
+The currently committed 90-query set intentionally fails step 3 until its qrels receive
+an explicit owner review.
 
 ## Development gates
 

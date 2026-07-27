@@ -36,10 +36,23 @@ from agent.auth import (
     TOKEN_AUDIENCE,
     TOKEN_ISSUER,
 )
+from agent.inspection import INSPECTION_EVENT_NAME
 from agent.migrate import migrate_database
 
 POSTGRES_URL = os.environ.get("AEGRA_POSTGRES_TEST_URL")
 FIXTURE_GRAPH = Path(__file__).resolve().parents[1] / "fixtures" / "aegra_graph.py"
+INSPECTION_FIXTURE = (
+    Path(__file__).resolve().parents[3]
+    / "protocol"
+    / "fixtures"
+    / "inspection-events-v1.json"
+)
+
+
+def _canonical_inspection_payload() -> dict[str, object]:
+    fixture = json.loads(INSPECTION_FIXTURE.read_text(encoding="utf-8"))
+    return fixture["records"][0]["payload"]["params"]["data"]["payload"]
+
 
 if os.environ.get("CI", "").lower() == "true" and not POSTGRES_URL:
     raise RuntimeError(
@@ -216,6 +229,7 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
                         "tools",
                         "lifecycle",
                         "input",
+                        f"custom:{INSPECTION_EVENT_NAME}",
                     ]
                 },
             ) as stream_response,
@@ -312,6 +326,18 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
             and envelope["params"]["namespace"] == []
             and envelope["params"]["data"]["event"] == "interrupted"
             for envelope in observed
+        )
+        inspection = [
+            envelope
+            for envelope in observed
+            if envelope["method"] == "custom"
+            and envelope["params"]["data"].get("name") == INSPECTION_EVENT_NAME
+        ]
+        assert len(inspection) == 1
+        assert inspection[0]["params"]["namespace"] == []
+        assert (
+            inspection[0]["params"]["data"]["payload"]
+            == _canonical_inspection_payload()
         )
         assert [envelope["seq"] for envelope in observed] == sorted(
             {envelope["seq"] for envelope in observed}

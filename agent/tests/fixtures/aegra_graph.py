@@ -1,16 +1,34 @@
 """Deterministic graph for Aegra runtime compatibility tests."""
 
+import json
+from copy import deepcopy
+from pathlib import Path
 from typing import Annotated
 
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AnyMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph, add_messages
-from langgraph.prebuilt import ToolCallTransformer, ToolNode
+from langgraph.prebuilt import ToolCallTransformer, ToolNode, ToolRuntime
 from langgraph.types import interrupt
 from typing_extensions import TypedDict
 
 from agent.graph import _build_backend
+from agent.inspection import (
+    InspectionEventTransformer,
+    _emit_inspection_payload,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_INSPECTION_FIXTURE = _REPO_ROOT / "protocol" / "fixtures" / "inspection-events-v1.json"
+
+
+def _canonical_inspection_payload() -> dict[str, object]:
+    fixture = json.loads(_INSPECTION_FIXTURE.read_text(encoding="utf-8"))
+    return fixture["records"][0]["payload"]["params"]["data"]["payload"]
+
+
+CANONICAL_INSPECTION_PAYLOAD = _canonical_inspection_payload()
 
 
 class FixtureState(TypedDict, total=False):
@@ -30,8 +48,18 @@ class MemoryFixtureState(TypedDict, total=False):
 
 
 @tool
-def fixture_lookup(query: str) -> str:
+def fixture_lookup(
+    query: str,
+    runtime: ToolRuntime = None,  # type: ignore[assignment]
+) -> str:
     """Return a deterministic lookup result."""
+    if runtime is not None and runtime.tool_call_id is not None:
+        payload = deepcopy(CANONICAL_INSPECTION_PAYLOAD)
+        if (
+            runtime.tool_call_id == payload["tool_call_id"]
+            and query == payload["query"]
+        ):
+            _emit_inspection_payload(runtime, payload)
     return f"fixture-result:{query}"
 
 
@@ -116,7 +144,7 @@ builder.add_edge("fixture_tool", "nested_subgraph")
 builder.add_edge("nested_subgraph", "request_approval")
 builder.add_edge("request_approval", "finish")
 builder.add_edge("finish", END)
-graph = builder.compile(transformers=[ToolCallTransformer])
+graph = builder.compile(transformers=[ToolCallTransformer, InspectionEventTransformer])
 
 memory_builder = StateGraph(MemoryFixtureState)
 memory_builder.add_node("memory", exercise_persistent_memory)

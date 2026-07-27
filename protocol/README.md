@@ -65,7 +65,12 @@ only under the runner's temporary directory.
 
 Fixtures cover content-block assembly, tool and run lifecycles, nested
 namespaces, sequence replay after disconnect, HITL commands, structured errors,
-and the Aegra dialect translation. The translation fixture stores both the raw
+the retrieval-only `syshin.rag.inspection.v1` custom event, and the Aegra
+dialect translation. The inspection fixture is the backend producer's
+canonical full schema for later TypeScript consumers. It declares
+`delivery: "live-run-only"` and deliberately has no replay expectation because
+the in-memory custom-event broker is not a durable journal. The translation
+fixture stores both the raw
 Aegra wire event and the expected normalized generated-binding event, so the
 dialect is never silently presented as upstream-conforming. In addition to
 generated-binding validation, the local validator checks ordering, command

@@ -20,6 +20,7 @@ from deepagents.backends import (
 )
 from langgraph.runtime import Runtime
 
+from agent.inspection import InspectionEventTransformer
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import TOOLS
 
@@ -99,13 +100,21 @@ def create_graph():
     model = _normalized_model_spec()
     _disable_general_purpose_subagent(model)
 
-    return create_deep_agent(
+    compiled = create_deep_agent(
         model=model,
         tools=TOOLS,
         system_prompt=SYSTEM_PROMPT,
         backend=_build_backend(),
         skills=["/skills/"],
         permissions=_filesystem_permissions(),
+    )
+    return compiled.copy(
+        update={
+            "stream_transformers": (
+                *compiled.stream_transformers,
+                InspectionEventTransformer,
+            )
+        }
     )
 
 

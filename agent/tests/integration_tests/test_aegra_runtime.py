@@ -31,9 +31,16 @@ from agent import http as http_extension
 from agent.auth import AGENT_AUTH_SECRET, TOKEN_AUDIENCE, TOKEN_ISSUER
 from agent.graph import graph
 from agent.http import NativeThreadGuard
+from agent.inspection import INSPECTION_EVENT_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
+INSPECTION_FIXTURE = REPO_ROOT / "protocol" / "fixtures" / "inspection-events-v1.json"
+
+
+def _canonical_inspection_payload() -> dict[str, object]:
+    fixture = json.loads(INSPECTION_FIXTURE.read_text(encoding="utf-8"))
+    return fixture["records"][0]["payload"]["params"]["data"]["payload"]
 
 
 def _authorization(subject: str = "owner") -> dict[str, str]:
@@ -295,6 +302,13 @@ async def test_native_stream_fixture_covers_tools_nested_interrupt_and_content_b
         for namespace in namespaces
     )
     assert any(event["params"].get("interrupts") for _method, event in first_events)
+    inspection_events = [
+        event
+        for method, event in first_events
+        if method == f"custom:{INSPECTION_EVENT_NAME}"
+    ]
+    assert len(inspection_events) == 1
+    assert inspection_events[0]["params"]["data"] == _canonical_inspection_payload()
 
     resumed_events = [
         event

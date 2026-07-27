@@ -1,0 +1,81 @@
+{
+  "fixture_version": 1,
+  "name": "syshin retrieval inspection custom event",
+  "description": "The canonical retrieval-only syshin.rag.inspection.v1 payload on the best-effort live-run custom stream.",
+  "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+  "wire_profile": "official-generated-snake-case",
+  "records": [
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-inspection-001",
+        "event": "custom"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-inspection-001",
+        "seq": 1,
+        "method": "custom",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031700001,
+          "data": {
+            "name": "syshin.rag.inspection.v1",
+            "payload": {
+              "corpus_document_count": 1,
+              "corpus_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "delivery": "live-run-only",
+              "hit_count": 1,
+              "kind": "retrieval",
+              "method_id": "fixture-retriever",
+              "method_identity": {
+                "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "implementation_id": "agent.tests.fixture:retrieve@1",
+                "method_id": "fixture-retriever"
+              },
+              "query": "aegra",
+              "query_truncated": false,
+              "schema_version": 1,
+              "sources": [
+                {
+                  "doc_id": "AI/fixture.md",
+                  "provenance": {
+                    "corpus_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "kind": "published-corpus",
+                    "retriever_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  },
+                  "rank": 1,
+                  "score": 1.0,
+                  "title": "Fixture"
+                }
+              ],
+              "sources_truncated": false,
+              "stages": [
+                {
+                  "application": {
+                    "input_count": 1,
+                    "output_count": 1,
+                    "status": "applied"
+                  },
+                  "elapsed_ms": 1.0,
+                  "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "implementation_id": "agent.tests.fixture:retrieve@1",
+                  "stage_id": "fixture-retriever"
+                }
+              ],
+              "tool_call_id": "fixture-tool-call"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "coverage": [],
+    "delivery": {
+      "durable_replay": false,
+      "mode": "live-run-only"
+    }
+  }
+}

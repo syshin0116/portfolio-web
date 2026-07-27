@@ -27,7 +27,7 @@ function normalizeAegraInput(raw: AegraRawInputRequestedEvent): Event {
 invariant(stream_requests.length === 5, "expected five stream requests");
 invariant(commands.length === 5, "expected five commands");
 invariant(command_responses.length === 5, "expected five command responses");
-invariant(events.length === 35, "expected thirty-five native events");
+invariant(events.length === 36, "expected thirty-six native events");
 invariant(normalized_events.length === 1, "expected one normalized event");
 invariant(aegra_raw_events.length === 1, "expected one raw Aegra event");
 invariant(
@@ -42,7 +42,7 @@ const recordCount =
   events.length +
   normalized_events.length +
   aegra_raw_events.length;
-invariant(recordCount === 52, "expected all fifty-two fixture records");
+invariant(recordCount === 53, "expected all fifty-three fixture records");
 
 for (const pair of aegra_translation_pairs) {
   const normalized = normalizeAegraInput(pair.raw);
@@ -68,6 +68,7 @@ for (const event of typedEvents) {
 }
 
 const expectedShapes = [
+  "custom:<none>",
   "input.requested:<none>",
   "lifecycle:completed",
   "lifecycle:running",
@@ -85,7 +86,7 @@ invariant(
   JSON.stringify([...shapes].sort()) === JSON.stringify(expectedShapes),
   `fixture shape coverage drifted: ${JSON.stringify([...shapes].sort())}`,
 );
-invariant(typedEvents.length === 36, "expected thirty-six typed events");
+invariant(typedEvents.length === 37, "expected thirty-seven typed events");
 
 console.log(
   `typescript protocol fixtures ok: ${recordCount} records, ` +

@@ -38,7 +38,7 @@ class PathClassificationTests(unittest.TestCase):
             changes.classify_paths([".github/workflows/ci.yml"]),
         )
 
-    def test_other_workflows_run_infrastructure_checks(self) -> None:
+    def test_all_workflows_run_every_component(self) -> None:
         for path in (
             ".github/workflows/protocol-compat.yml",
             ".github/workflows/preview-agent.yml",
@@ -48,7 +48,7 @@ class PathClassificationTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(
-                    {"web": False, "agent": False, "eval": False, "infra": True},
+                    {"web": True, "agent": True, "eval": True, "infra": True},
                     changes.classify_paths([path]),
                 )
 

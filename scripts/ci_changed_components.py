@@ -50,10 +50,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         if not path:
             continue
         if path.startswith(".github/workflows/"):
-            affected["infra"] = True
-            if path == ".github/workflows/ci.yml":
-                affected.update(dict.fromkeys(COMPONENTS, True))
-            continue
+            return dict.fromkeys(COMPONENTS, True)
         if path.startswith("protocol/") or path.startswith("content/"):
             affected["web"] = True
             affected["agent"] = True

@@ -4,12 +4,15 @@ import asyncio
 import json
 import runpy
 import socket
+import time
 from importlib.metadata import version
 from pathlib import Path
 
 import httpx
+import jwt
 import pytest
 import uvicorn
+from aegra_api.core.orm import get_session
 from aegra_api.main import app
 from aegra_api.services.event_streaming.capabilities import (
     _probe_runtime_symbols,
@@ -24,10 +27,29 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
+from agent import http as http_extension
+from agent.auth import AGENT_AUTH_SECRET, TOKEN_AUDIENCE, TOKEN_ISSUER
 from agent.graph import graph
+from agent.http import NativeThreadGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+def _authorization(subject: str = "owner") -> dict[str, str]:
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": subject,
+            "iss": TOKEN_ISSUER,
+            "aud": TOKEN_AUDIENCE,
+            "iat": now,
+            "exp": now + 900,
+        },
+        AGENT_AUTH_SECRET,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_runtime_dependencies_are_the_spike_versions():
@@ -76,6 +98,14 @@ def test_aegra_config_registers_the_compiled_graph():
     assert config == {
         "dependencies": ["./agent/src"],
         "graphs": {"agent": "./agent/src/agent/graph.py:graph"},
+        "auth": {
+            "path": "agent.auth:auth",
+            "disable_studio_auth": False,
+        },
+        "http": {
+            "app": "agent.http:app",
+            "enable_custom_route_auth": False,
+        },
     }
     assert isinstance(graph, CompiledStateGraph)
 
@@ -92,6 +122,112 @@ def test_pinned_runtime_supports_aegra_v2_dialect(monkeypatch):
     assert "/threads/{thread_id}/stream/events" in route_paths
     assert "/threads/{thread_id}/commands" in route_paths
     assert "/threads/{thread_id}/stream" not in route_paths
+
+
+async def test_custom_http_app_guard_wraps_native_v2_command_route(monkeypatch):
+    async def busy(_thread_id: str, _user_id: str) -> tuple[bool, str]:
+        return True, "busy"
+
+    monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", busy)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/native-guard-proof/commands",
+            headers=_authorization(),
+            json={
+                "id": 1,
+                "method": "run.start",
+                "params": {"assistant_id": "agent"},
+            },
+        )
+
+    assert any(
+        middleware.cls is NativeThreadGuard for middleware in app.user_middleware
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": "conflict",
+        "message": "The thread already has an active run",
+    }
+
+
+async def test_v2_stream_and_commands_deny_missing_or_forged_auth():
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        for headers in ({}, {"Authorization": "Bearer forged"}):
+            stream = await client.post(
+                "/threads/thread-1/stream/events",
+                headers=headers,
+                json={"channels": ["messages"]},
+            )
+            command = await client.post(
+                "/threads/thread-1/commands",
+                headers=headers,
+                json={
+                    "id": 1,
+                    "method": "run.start",
+                    "params": {"assistant_id": "agent"},
+                },
+            )
+
+            assert stream.status_code == 401
+            assert command.status_code == 401
+
+
+async def test_native_thread_delete_is_denied_and_checkpoint_is_preserved():
+    fixture_graph = runpy.run_path(FIXTURE_ROOT / "aegra_graph.py")["graph"]
+    checkpointer = InMemorySaver()
+    runtime_graph = fixture_graph.copy(update={"checkpointer": checkpointer})
+    config = {"configurable": {"thread_id": "delete-disabled-proof"}}
+    await runtime_graph.ainvoke(
+        {"messages": [HumanMessage(content="persist before denied delete")]},
+        config,
+    )
+    before = await checkpointer.aget_tuple(config)
+    assert before is not None
+
+    async def unused_session():
+        yield object()
+
+    app.dependency_overrides[get_session] = unused_session
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.delete(
+                "/threads/delete-disabled-proof",
+                headers=_authorization(),
+            )
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    after = await checkpointer.aget_tuple(config)
+    assert response.status_code == 403
+    assert response.json() == {
+        "error": "forbidden",
+        "message": "Forbidden",
+        "details": None,
+    }
+    assert after == before
+
+
+async def test_health_routes_are_not_globally_authenticated():
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        live = await client.get("/live")
+        ready = await client.get("/ready")
+
+    assert live.status_code == 200
+    assert live.json() == {"status": "alive"}
+    assert ready.status_code == 503
 
 
 async def test_uvicorn_serves_and_stops_the_aegra_app():

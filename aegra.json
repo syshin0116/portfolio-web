@@ -4,5 +4,13 @@
   ],
   "graphs": {
     "agent": "./agent/src/agent/graph.py:graph"
+  },
+  "auth": {
+    "path": "agent.auth:auth",
+    "disable_studio_auth": false
+  },
+  "http": {
+    "app": "agent.http:app",
+    "enable_custom_route_auth": false
   }
 }

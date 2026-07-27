@@ -9,7 +9,7 @@ when_to_read: >
   interpreter, or when revisiting anonymous retention and rate limits.
 tags: [research, security, cost, auth, anonymous, sandbox, rate-limiting]
 status: draft
-updated: "2026-07-26"
+updated: "2026-07-27"
 owners: ["@syshin0116"]
 refs: [../adr/README.md]
 template: research
@@ -18,6 +18,12 @@ template: research
 # Research: making the chatbot public without a login
 
 > **Not a decision.** Input to the public-access and code-interpreter ADRs.
+
+> **Historical pre-Aegra snapshot.** The referenced hand-written `api/`, ARQ, schema, and
+> database files were removed by the native Aegra cutover. Keep this as threat-model
+> evidence for what existed then; use
+> [`aegra-native-stack.md`](aegra-native-stack.md) and
+> [the restack plan](../plans/rag-restack.md) for the current runtime contract.
 
 > **Investigated** 2026-07-26 against the repo at `09a29a9`, plus current vendor
 > docs. Every code claim below was re-verified by reading the file, and the

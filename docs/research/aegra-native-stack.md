@@ -8,7 +8,7 @@ when_to_read: >
   bumping any pin in this stack.
 tags: [research, aegra, assistant-ui, langgraph, deepagents, auth, anonymous]
 status: draft
-updated: "2026-07-26"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs: [../adr/0004-adopt-aegra.md, ../adr/0005-adopt-assistant-ui.md, ../plans/rag-restack.md]
 template: research
@@ -18,6 +18,17 @@ template: research
 
 > **Not a decision.** Input to [ADR-0004](../adr/0004-adopt-aegra.md) and
 > [ADR-0005](../adr/0005-adopt-assistant-ui.md).
+
+> **Implementation update, 2026-07-28.** The static compiled deepagents graph now runs
+> through Aegra's real `LangGraphService` path. A Python 3.12/PostgreSQL 17 integration
+> test proves request-scoped saver/store injection, interrupt persistence across complete
+> pool restart, and independent two-identity checkpoint/store persistence.
+> A second black-box test drives Aegra's native HTTP executor through AP v2 `run.start`,
+> SSE `input.requested`, `input.respond`, terminal lifecycle/message events, and the
+> persisted PostgreSQL checkpoint.
+> `Runtime.server_info.user.identity` is the sole memory owner input. Aegra's `http.app`
+> becomes the main FastAPI application before native routers are included, so one pure-ASGI
+> single-process command guard wraps the native AP v2 route without a protocol facade.
 
 > **Evaluated at** `aegra-api` **0.9.24** (2026-07-05) with the repo cloned at main
 > (`d142457`, 2026-07-11), `@assistant-ui/react` **0.14.27**, `@assistant-ui/react-langgraph`
@@ -121,7 +132,10 @@ Found while reading the graph, unrelated to Aegra:
 - **Deleting a thread strands its checkpoints forever** - `api/threads.py::delete_thread`
   says so in its own docstring. `runs` cascades via FK; `checkpoints`, `checkpoint_blobs`,
   and `checkpoint_writes` carry `thread_id TEXT` with no FK. Sweep by absence, children
-  before parents.
+  before parents. The implemented owner-preview contract therefore registers
+  `@auth.on.threads.delete` to return false and exposes no replacement delete route:
+  Aegra 0.9.24 has no supported atomic metadata-plus-checkpoint operation. A later admin
+  GC/retention job is separate from user deletion.
 - **Do not use `BaseHTTPMiddleware`** for the guard - it wraps the response in an extra
   anyio task group and interferes with sse-starlette's client-disconnect detection, which is
   how `on_disconnect="cancel"` works. Write pure ASGI.
@@ -170,9 +184,10 @@ Frontend: delete 1,769 LOC of vendored prompt-kit plus `chat-section.tsx` (1,054
 
 ## Unverified
 
-- Whether deepagents actually runs under Aegra. Aegra's repo has zero mentions of it. Plan
-  phase P0 is the test; issues #224 (fixed 0.7.5) and #352 (fixed 0.9.14) were both
-  deepagents multi-turn bugs, which is why the smoke test needs a **second turn**.
+- A provider-backed two-turn Korean conversation on the deployed image. Deterministic
+  deepagents tool/nested/interrupt plus PostgreSQL pool-recreation behavior is verified
+  locally, but that does not substitute for a fresh deployed process or the live provider
+  smoke.
 - Whether issue #468 reproduces.
 - Whether the assistant-ui adapter surfaces 409 and 429 as usable error states or as a
   generic stream failure.

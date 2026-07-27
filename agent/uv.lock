@@ -121,19 +121,6 @@ wheels = [
 ]
 
 [[package]]
-name = "arq"
-version = "0.27.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "redis", extra = ["hiredis"] },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/63/f9/0f1df9a39b36fc4df590a5f2fca010e6bc8ba2635b75f0368f41722ef24e/arq-0.27.0.tar.gz", hash = "sha256:302a16e78396923fbff0f542fee0e04c731cc549195d18d039be3cc1a3431106", size = 415951, upload-time = "2026-02-02T14:38:21.509Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/89/e28a3a82da9b3d5ccacf143013b8911501c3593cf976b14b34711766fd4c/arq-0.27.0-py3-none-any.whl", hash = "sha256:4ca085671520472e45f09f5c37a1495097e5c4a79faaf18efcb9a759f8917f87", size = 26026, upload-time = "2026-02-02T14:38:19.375Z" },
-]
-
-[[package]]
 name = "asgi-correlation-id"
 version = "5.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1616,9 +1603,6 @@ wheels = [
 binary = [
     { name = "psycopg-binary", marker = "implementation_name != 'pypy'" },
 ]
-pool = [
-    { name = "psycopg-pool" },
-]
 
 [[package]]
 name = "psycopg-binary"
@@ -2208,22 +2192,11 @@ dependencies = [
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langgraph" },
-    { name = "langgraph-checkpoint-postgres" },
     { name = "langgraph-sdk" },
     { name = "langsmith" },
     { name = "numpy" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
+    { name = "pyjwt" },
     { name = "rank-bm25" },
-    { name = "sse-starlette" },
-    { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-arq = [
-    { name = "arq" },
-    { name = "redis" },
 ]
 
 [package.dev-dependencies]
@@ -2240,7 +2213,6 @@ dev = [
 requires-dist = [
     { name = "aegra-api", specifier = "==0.9.24" },
     { name = "aegra-cli", specifier = "==0.9.24" },
-    { name = "arq", marker = "extra == 'arq'", specifier = ">=0.26" },
     { name = "deepagents", specifier = "==0.6.12" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "kiwipiepy", specifier = "==0.23.2" },
@@ -2250,19 +2222,12 @@ requires-dist = [
     { name = "langchain-core", specifier = "==1.4.9" },
     { name = "langchain-openai" },
     { name = "langgraph", specifier = "==1.2.9" },
-    { name = "langgraph-checkpoint-postgres", specifier = "==3.1.0" },
     { name = "langgraph-sdk", specifier = "==0.4.2" },
     { name = "langsmith", specifier = "==0.10.2" },
     { name = "numpy", specifier = "==2.4.4" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.4" },
-    { name = "python-dotenv" },
-    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "pyjwt", specifier = "==2.13.0" },
     { name = "rank-bm25", specifier = "==0.2.2" },
-    { name = "redis", marker = "extra == 'arq'", specifier = ">=5.0" },
-    { name = "sse-starlette", specifier = ">=3.4.6" },
-    { name = "uvicorn", specifier = ">=0.51.0" },
 ]
-provides-extras = ["arq"]
 
 [package.metadata.requires-dev]
 dev = [

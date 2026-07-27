@@ -12,7 +12,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-26"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs: [../research/aegra-native-stack.md, ../plans/rag-restack.md, ../../DECISIONS.md]
 template: adr
@@ -79,9 +79,11 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
 
 - ~4,500 LOC deleted; `agent/src` goes from 5,947 to roughly 1,450. The RAG layer, which
   is where the value is, survives 96% unchanged.
-- Alembic migrations replace unreviewed boot-time DDL. Today `main.py:47-54` and
-  `legacy_migration.py:346-347` run `CREATE`/`ALTER` against production on every container
-  boot with no migration framework.
+- A one-shot entrypoint owns Aegra Alembic migrations instead of the deleted server's
+  unreviewed boot-time migration path. Aegra 0.9.24 still calls the LangGraph saver/store
+  idempotent `setup()` methods during every lifespan, so the runtime role temporarily
+  retains only their tested schema-local DDL in addition to narrow DML; real-Neon
+  grant/denial tests block deployment until Aegra supports a no-DDL startup.
 - Crons actually fire. The current ones are stored and never execute - there is no
   scheduler and nothing computes `next_run_date`.
 - The spike (plan phase P0) turned "deepagents under Aegra is unverified" from a caveat
@@ -100,8 +102,18 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
   and P0 found Aegra's AP v2 path/commands differ from upstream. The production frontend
   uses `/threads/{id}/stream/events`, but authorization still cannot depend on handler
   dispatch: the SQL predicate and outer ASGI middleware are the real boundary.
+- Owner preview exposes AP v2 `run.start`/`input.respond` as the only model-spending
+  mutations. Legacy threaded/stateless run creation, checkpoint state update, and cron
+  creation/activation return a non-enumerating 404 because they bypass the in-process guard.
+  Read/history and run-cancel compatibility remain native.
 - Aegra with no auth file is **fail-open** (one shared `anonymous` identity), where the
-  current server is fail-closed. A typo in `aegra.json` degrades an outage into an open door.
+  current server is fail-closed. The adopted runtime therefore validates the exact
+  graph/auth/http registration and loaded `Auth` handler during application construction;
+  a typo aborts startup instead of degrading to anonymous access.
+- Aegra 0.9.24 deletes thread metadata without deleting LangGraph checkpoints and exposes
+  no supported atomic operation spanning both. Native thread deletion is therefore denied
+  with 403. A future administrative orphan-GC/retention job is separate and must not be
+  presented as user-facing deletion.
 - Pre-1.0 with bus factor 1: `ibbybuilds` holds 629 of ~800 commits, three releases shipped
   in three weeks, and `server.py` will import `aegra_api.*` internals with no stability
   guarantee.
@@ -110,18 +122,25 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
 
 **Follow-ups**
 
-- [ ] P0 spike: two-turn Korean conversation over `/runs/stream`, skills loading verified.
+- [x] Deterministic AP v2 fixture: tool, nested graph, native HTTP
+      `run.start`/interrupt/`input.respond`, terminal stream, and command guard.
+- [x] Static graph injection plus PostgreSQL migration/pool-recreation/store persistence on
+      Python 3.12.
+- [ ] Provider-backed two-turn Korean conversation on the deployed service.
 - [ ] `scripts/smoke.py` as the permanent gate for every version bump.
-- [ ] Assert `len(AGENT_AUTH_SECRET) >= 32` at import so the process refuses to start.
-- [ ] Confine `aegra_api.*` imports to one file with a comment listing them, so a version
-      bump has a checklist rather than a surprise.
-- [ ] Amend the 2026-07-11 `DECISIONS.md` run-serialization entry to record the reversal.
+- [x] Assert `len(AGENT_AUTH_SECRET) >= 32` at import so the process refuses to start.
+- [x] Keep the custom HTTP extension minimal: startup checks, single-process AP v2
+      mutation guard, and no custom protocol routes.
+- [x] Amend the 2026-07-11 `DECISIONS.md` run-serialization entry to record the reversal.
+- [x] Deny native thread deletion until metadata and checkpoints can be removed atomically.
 - [ ] Watch PR #462 and PR #385; if either merges, delete the corresponding stand-in.
 
 ## Revisit when
 
 - PR #462 merges - the in-process run guard becomes dead weight and should be replaced by
   `multitask_strategy: "reject"`.
+- Aegra exposes a supported atomic metadata-plus-checkpoint deletion operation; only then
+  may user-facing thread deletion be reconsidered.
 - Aegra goes quiet for a quarter, or the maintainer stops responding to a
   production-affecting bug. The fallback stays in the LangChain family (LangSmith
   Deployments), not back to a bespoke server.
@@ -133,3 +152,7 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
 
 - 2026-07-26: created as `proposed` recommending against Aegra; replaced the same day with
   this `accepted` decision after the owner confirmed the agent data is disposable.
+- 2026-07-27: recorded the implemented fail-closed registration, PostgreSQL pool-recreation
+  proof, minimal native-route guard, and deletion-disabled contract.
+- 2026-07-28: recorded Aegra's unconditional saver/store setup, the temporary schema-local
+  runtime DDL constraint, and the real-Neon grant/denial deployment gate.

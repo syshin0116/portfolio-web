@@ -89,11 +89,17 @@ defaults/environment and changes to the job's exact environment or
 agent-only working directory. A comment, `echo`, or quoted command string
 therefore cannot stand in for an executable gate.
 
+The same exact job AST pins a PostgreSQL 17 service, database credentials, published test
+port, `pg_isready` health check, and `AEGRA_POSTGRES_TEST_URL`. The ordinary pytest command
+therefore executes migration, checkpointer, real `/memories/` isolation, and pool-recreation
+coverage instead of reporting a green job with that integration test skipped.
+
 That contract binds the complete `agent` job AST, not only its `run` strings.
 The only job keys are the reviewed name, `always()` condition, `changes`
 dependency, Ubuntu runner, 20-minute timeout, agent working directory, exact CI
-environment, and ordered steps. `container`, `services`, `strategy`,
-`environment`, a self-hosted runner, or any other extra or changed job key
+environment, exact PostgreSQL service, and ordered steps. `container`, `strategy`,
+`environment`, a self-hosted runner, any additional service, or any other extra or
+changed job key fails; changing any field of the one reviewed PostgreSQL service also
 fails. All eleven steps are exact and ordered: checkout is pinned to its
 reviewed SHA with only `persist-credentials: false`; setup-python v7.0.0 is
 pinned with Python 3.12; setup-uv v8.3.2 is pinned with only the reviewed cache

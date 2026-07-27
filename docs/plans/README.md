@@ -7,7 +7,7 @@ when_to_read: >
   Before picking up multi-phase work, or before dispatching an agent onto a packet.
 tags: [index, plan]
 status: stable
-updated: "2026-07-26"
+updated: "2026-07-27"
 owners: ["@syshin0116"]
 refs: [../adr/README.md, ../research/README.md]
 template: index
@@ -27,4 +27,4 @@ with the plan's phase section plus its linked research, rather than the whole fi
 
 | Plan | Covers | Status |
 |---|---|---|
-| [rag-restack.md](rag-restack.md) | Rebuild on Aegra and assistant-ui, prove basic chat, evaluate retrieval plus bounded QuickJS/subagent capabilities, harden, then open anonymous testing to every visitor | draft, not started |
+| [rag-restack.md](rag-restack.md) | Rebuild on Aegra and assistant-ui, prove basic chat, evaluate retrieval plus bounded QuickJS/subagent capabilities, harden, then open anonymous testing to every visitor | in progress |

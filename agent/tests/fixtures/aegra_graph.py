@@ -10,6 +10,8 @@ from langgraph.prebuilt import ToolCallTransformer, ToolNode
 from langgraph.types import interrupt
 from typing_extensions import TypedDict
 
+from agent.graph import _build_backend
+
 
 class FixtureState(TypedDict, total=False):
     """State shared by the root graph and deterministic nested graph."""
@@ -17,6 +19,14 @@ class FixtureState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     nested_result: str
     approval: str
+
+
+class MemoryFixtureState(TypedDict, total=False):
+    """Input and result for deterministic persistent-memory operations."""
+
+    operation: str
+    content: str
+    result: str
 
 
 @tool
@@ -65,6 +75,28 @@ def finish(state: FixtureState) -> FixtureState:
     return {"messages": [fixture_model.invoke(state["messages"])]}
 
 
+async def exercise_persistent_memory(
+    state: MemoryFixtureState,
+) -> MemoryFixtureState:
+    """Exercise the production /memories/ route inside LangGraph runtime context."""
+    backend = _build_backend()
+    path = "/memories/preference.txt"
+    if state["operation"] == "write":
+        result = await backend.awrite(path, state["content"])
+        if result.error:
+            raise RuntimeError(result.error)
+        return {"result": result.path or ""}
+    if state["operation"] == "read":
+        result = await backend.aread(path)
+        if result.error:
+            raise RuntimeError(result.error)
+        file_data = result.file_data
+        if file_data is None or not isinstance(file_data.get("content"), str):
+            raise RuntimeError("persistent memory did not return text content")
+        return {"result": file_data["content"]}
+    raise ValueError(f"unsupported memory fixture operation: {state['operation']}")
+
+
 nested_builder = StateGraph(FixtureState)
 nested_builder.add_node("nested_worker", run_nested_step)
 nested_builder.add_edge(START, "nested_worker")
@@ -85,3 +117,9 @@ builder.add_edge("nested_subgraph", "request_approval")
 builder.add_edge("request_approval", "finish")
 builder.add_edge("finish", END)
 graph = builder.compile(transformers=[ToolCallTransformer])
+
+memory_builder = StateGraph(MemoryFixtureState)
+memory_builder.add_node("memory", exercise_persistent_memory)
+memory_builder.add_edge(START, "memory")
+memory_builder.add_edge("memory", END)
+memory_graph = memory_builder.compile()

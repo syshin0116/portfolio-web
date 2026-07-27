@@ -242,6 +242,12 @@ def _prepare_content_git_identity(content_root: Path) -> _ContentGitIdentity:
         resolved_content = content_root.resolve(strict=True)
     except OSError as exc:
         raise CorpusBuildError(f"content root does not exist: {content_root}") from exc
+    if shutil.which("git") is None:
+        if any((parent / ".git").exists() for parent in resolved_content.parents):
+            raise CorpusBuildError(
+                "cannot verify a Git-backed content tree because Git is unavailable"
+            )
+        return _ContentGitIdentity(resolved_content, None, None, None)
     discovered = _git(resolved_content, "rev-parse", "--show-toplevel")
     if discovered.returncode != 0:
         return _ContentGitIdentity(resolved_content, None, None, None)

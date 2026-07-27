@@ -1072,6 +1072,25 @@ def test_git_backed_build_rejects_dirty_and_untracked_content(
         )
 
 
+def test_git_backed_build_rejects_when_git_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    content = repository / "content"
+    _write_post(content, "AI/public.md", "draft: false")
+    policy = _write_policy(repository / "policy.toml")
+    subprocess.run(("git", "init", "-q", str(repository)), check=True)
+    monkeypatch.setattr(corpus_build.shutil, "which", lambda _name: None)
+
+    with pytest.raises(CorpusBuildError, match="Git is unavailable"):
+        build_index(
+            content_root=content,
+            policy_path=policy,
+            output_root=repository / "index",
+        )
+
+
 def test_real_corpus_build_is_exactly_the_nuartz_published_335(
     tmp_path: Path,
 ) -> None:

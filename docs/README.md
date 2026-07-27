@@ -8,9 +8,13 @@ when_to_read: >
   document to docs/.
 tags: [index, documentation]
 status: stable
-updated: "2026-07-26"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
-refs: [adr/README.md, research/README.md, conventions/frontmatter.md]
+refs:
+  - adr/README.md
+  - research/README.md
+  - conventions/frontmatter.md
+  - runbooks/upstream-version-audit.md
 template: index
 ---
 
@@ -31,6 +35,7 @@ decisions, the research behind them, execution plans, and conventions.
 | [`plans/`](plans/) | Sequenced execution plans decomposed into work packets | Until delivered |
 | [`conventions/`](conventions/) | Rules about how we write code and docs | Yes |
 | [`reference/`](reference/) | Living registries and lookup data - edited in place, not superseded | Yes, while current |
+| [`runbooks/`](runbooks/) | Operational verification, rollout, recovery, and triage procedures | Yes, while current |
 
 The `adr/` ↔ `research/` split is the important one. A research doc compares options
 and is allowed to be wrong later; an ADR commits and is never rewritten to match

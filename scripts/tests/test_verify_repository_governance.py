@@ -294,6 +294,12 @@ def copy_local_governance_fixture(directory: str) -> Path:
         REPO_ROOT / governance.AGENT_RELEASE_CANDIDATE_SCRIPT,
         candidate_validator,
     )
+    upstream_audit = root / governance.UPSTREAM_VERSION_AUDIT_SCRIPT
+    upstream_audit.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        REPO_ROOT / governance.UPSTREAM_VERSION_AUDIT_SCRIPT,
+        upstream_audit,
+    )
     return root
 
 
@@ -2098,6 +2104,66 @@ runs:
                 ),
                 errors,
             )
+
+    def test_dependency_audit_upstream_and_aggregation_mutations_are_rejected(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "script",
+                "python scripts/upstream_version_audit.py",
+                "python scripts/smoke.py",
+                "job 'upstream' exact AST differs",
+            ),
+            (
+                "summary",
+                '          --summary "$GITHUB_STEP_SUMMARY"\n',
+                "",
+                "job 'upstream' exact AST differs",
+            ),
+            (
+                "needs",
+                "      - upstream\n",
+                "",
+                "job 'check' exact AST differs",
+            ),
+            (
+                "result",
+                "          UPSTREAM_RESULT: ${{ needs.upstream.result }}\n",
+                "",
+                "job 'check' exact AST differs",
+            ),
+        )
+        for label, old, new, expected in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/dependency-audit.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(expected in error for error in errors),
+                errors,
+            )
+
+    def test_dependency_audit_missing_upstream_script_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            (root / governance.UPSTREAM_VERSION_AUDIT_SCRIPT).unlink()
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "upstream script must be a regular repository file" in error
+                for error in errors
+            ),
+            errors,
+        )
 
     def test_repository_wide_uv_toolchain_mutations_are_rejected(self) -> None:
         mutations = (

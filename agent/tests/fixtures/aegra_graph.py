@@ -29,6 +29,7 @@ def _canonical_inspection_payload() -> dict[str, object]:
 
 
 CANONICAL_INSPECTION_PAYLOAD = _canonical_inspection_payload()
+PRIVATE_STATE_SENTINEL = "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"
 
 
 class FixtureState(TypedDict, total=False):
@@ -37,6 +38,7 @@ class FixtureState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     nested_result: str
     approval: str
+    private_state: dict[str, object]
 
 
 class MemoryFixtureState(TypedDict, total=False):
@@ -84,7 +86,14 @@ def request_tool(_state: FixtureState) -> FixtureState:
 
 def run_nested_step(_state: FixtureState) -> FixtureState:
     """Produce an update inside a nested namespace."""
-    return {"nested_result": "nested-ok"}
+    return {
+        "nested_result": "nested-ok",
+        "private_state": {
+            "todos": [{"content": PRIVATE_STATE_SENTINEL}],
+            "files": {"/memories/private.txt": PRIVATE_STATE_SENTINEL},
+            "scratch": {"chain_of_thought": PRIVATE_STATE_SENTINEL},
+        },
+    }
 
 
 def request_approval(_state: FixtureState) -> FixtureState:
@@ -99,7 +108,7 @@ def request_approval(_state: FixtureState) -> FixtureState:
 
 
 def finish(state: FixtureState) -> FixtureState:
-    """Stream one stable visible assistant message without a provider."""
+    """Stream one stable visible assistant message without an external provider."""
     return {"messages": [fixture_model.invoke(state["messages"])]}
 
 

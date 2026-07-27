@@ -173,7 +173,6 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     ("ANTHROPIC_API_KEY", "anthropic-api-key", "12"),
                     ("DATABASE_URL", "agent-database-url", "13"),
                     ("LANGCHAIN_API_KEY", "langsmith-api-key", "14"),
-                    ("OPENAI_API_KEY", "openai-api-key", "15"),
                 ]
 
                 def runtime_template(image):

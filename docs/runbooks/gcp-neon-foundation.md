@@ -243,7 +243,6 @@ Production resource names:
 - `agent-database-url`;
 - `agent-auth-secret`;
 - `anthropic-api-key`;
-- `openai-api-key`;
 - `langsmith-api-key`.
 
 Preview resource names use the same suffixes with the `agent-preview-` prefix. Terraform
@@ -253,6 +252,11 @@ version ID selected by each Cloud Run service and job. `latest`, `0`, and aliase
 rejected so scale-to-zero restart cannot silently change a revision's environment. The
 post-apply live verifier is the acceptance gate for effective direct policies and numeric
 secret references.
+
+The Cloud Run model is fixed to Anthropic. OpenAI credentials are not part of either
+environment's runtime inventory. Any previously managed OpenAI secret is forgotten from
+Terraform state without destroying the external Secret Manager object; removal of that
+object is a separate, explicitly approved cleanup.
 
 Inject each value out of band:
 

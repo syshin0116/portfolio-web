@@ -44,3 +44,29 @@ import {
   to = google_secret_manager_secret.runtime[each.value]
   id = "projects/${var.project_id}/secrets/${each.value}"
 }
+
+moved {
+  from = google_secret_manager_secret.runtime["openai-api-key"]
+  to   = google_secret_manager_secret.retired_openai_production
+}
+
+removed {
+  from = google_secret_manager_secret.retired_openai_production
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+moved {
+  from = google_secret_manager_secret.preview_runtime["agent-preview-openai-api-key"]
+  to   = google_secret_manager_secret.retired_openai_preview
+}
+
+removed {
+  from = google_secret_manager_secret.retired_openai_preview
+
+  lifecycle {
+    destroy = false
+  }
+}

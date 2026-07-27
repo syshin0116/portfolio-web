@@ -125,10 +125,6 @@ override_resource {
 }
 
 override_resource {
-  target = google_secret_manager_secret.runtime["openai-api-key"]
-}
-
-override_resource {
   target = google_secret_manager_secret.migration["preview"]
 }
 
@@ -152,10 +148,8 @@ run "foundation_security_contract" {
       agent-preview-database-url           = "23"
       agent-preview-langsmith-api-key      = "24"
       agent-preview-migration-database-url = "25"
-      agent-preview-openai-api-key         = "26"
       anthropic-api-key                    = "14"
       langsmith-api-key                    = "15"
-      openai-api-key                       = "16"
     }
   }
 
@@ -305,8 +299,8 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = length(google_secret_manager_secret.runtime) == 5 && length(google_secret_manager_secret.preview_runtime) == 5 && length(google_secret_manager_secret.migration) == 2
-    error_message = "Each runtime environment must own exactly five runtime secrets and one separate migration URL."
+    condition     = length(google_secret_manager_secret.runtime) == 4 && length(google_secret_manager_secret.preview_runtime) == 4 && length(google_secret_manager_secret.migration) == 2
+    error_message = "Each runtime environment must own exactly four runtime secrets and one separate migration URL."
   }
 
   assert {
@@ -315,8 +309,8 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = length(google_secret_manager_secret_iam_member.runtime_accessor) == 5 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 5
-    error_message = "Each environment must bind only its five runtime secrets."
+    condition     = length(google_secret_manager_secret_iam_member.runtime_accessor) == 4 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
+    error_message = "Each environment must bind only its four runtime secrets."
   }
 
   assert {
@@ -391,7 +385,7 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
-      && length(service.template[0].containers[0].env) == 18
+      && length(service.template[0].containers[0].env) == 17
       && {
         for env in service.template[0].containers[0].env :
         env.name => env.value
@@ -400,7 +394,7 @@ run "foundation_security_contract" {
       && length([
         for env in service.template[0].containers[0].env : env
         if try(env.value_source[0].secret_key_ref[0].version, null) != null
-      ]) == 5
+      ]) == 4
       && alltrue([
         for env in service.template[0].containers[0].env :
         try(
@@ -534,8 +528,8 @@ run "foundation_bootstrap_contract" {
 
   assert {
     condition = (
-      length(google_secret_manager_secret.runtime) == 5
-      && length(google_secret_manager_secret.preview_runtime) == 5
+      length(google_secret_manager_secret.runtime) == 4
+      && length(google_secret_manager_secret.preview_runtime) == 4
       && length(google_secret_manager_secret.migration) == 2
       && google_artifact_registry_repository.agent.repository_id == "agent"
       && google_artifact_registry_repository.preview_agent.repository_id == "agent-preview"
@@ -572,10 +566,8 @@ run "jobs_bootstrap_contract" {
       agent-preview-database-url           = "23"
       agent-preview-langsmith-api-key      = "24"
       agent-preview-migration-database-url = "25"
-      agent-preview-openai-api-key         = "26"
       anthropic-api-key                    = "14"
       langsmith-api-key                    = "15"
-      openai-api-key                       = "16"
     }
   }
 

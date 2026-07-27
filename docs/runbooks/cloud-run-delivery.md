@@ -146,7 +146,8 @@ environment is rejected.
 
 ## Secret Manager payloads
 
-The foundation's five runtime secrets per environment remain unchanged. Add one separate
+The foundation owns four runtime secrets per environment. The deployed model is fixed to
+Anthropic, so no OpenAI credential is managed, version-pinned, or injected. Add one separate
 migration URL secret per environment:
 
 ```text
@@ -189,12 +190,12 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    ```
 
    The plan must create/import both registries, identities, WIF, IAM, state bucket, and
-   twelve empty secret resources, with **zero** Cloud Run services or jobs. For the
+   ten empty secret resources, with **zero** Cloud Run services or jobs. For the
    existing production registry, complete the cleanup-policy dry run below before
    approving its metadata change. Reject every persistent replacement/destroy and apply
    only the saved, owner-reviewed plan.
 
-2. **Payloads and images.** Add all twelve first secret versions out of band without
+2. **Payloads and images.** Add all ten first secret versions out of band without
    printing payloads. Record only each positive numeric enabled version ID. Build the
    reviewed commit for Linux x86-64 with the checked-in Dockerfile once into each
    environment's isolated repository. Record and independently inspect both
@@ -209,7 +210,7 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    but bootstrap must still prove each path exists and is readable by only the matching
    delivery identities.
 
-3. **Jobs.** Put the twelve non-secret version IDs in a mode-`0600` variable file outside
+3. **Jobs.** Put the ten non-secret version IDs in a mode-`0600` variable file outside
    the repository as `agent_secret_versions = { ... }`. Plan and apply with both reviewed
    digests:
 
@@ -236,9 +237,13 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    variable back to `false` while investigating.
 
 After bootstrap, every Terraform plan must explicitly retain `stage=services`, both
-current exact digests, and the complete twelve-key numeric version map. Omitting them
+current exact digests, and the complete ten-key numeric version map. Omitting them
 proposes protected resource removal and fails closed. Never “simplify” an apply with
 `-target`; each stage is a complete, repeatable root-module plan.
+
+The two retired OpenAI Secret Manager objects are removed from Terraform state with
+`destroy = false`. This repository does not delete their external payloads or versions.
+Delete them only as a separately approved GCP cleanup after confirming no consumer remains.
 
 Terraform ignores subsequent image and traffic drift because the delivery workflow owns
 those revision fields. Every other service/job field—including the selected numeric

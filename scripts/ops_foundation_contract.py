@@ -31,7 +31,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "162070773663e20b5021eabe455133a990946460ccf5eacb94fef3252c48f3b9"
+        "21b13a596eca620da23de74d68015bcccf290afa08aaba0122ebc4e15e688e4e"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -39,7 +39,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "8c3289f31abdfb4fb789c4c918603c160f0c353eb570b262b46327654c2ac7fe"
+        "60f08e5bbb325acf8cf0e9289078bdad3f6e5b0ff799d78b479b0a7d914aee2c"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
@@ -76,7 +76,7 @@ EXPECTED_TOP_LEVEL_KEYS = {
     "infra/gcp/backend.tf": frozenset({"terraform"}),
     "infra/gcp/cloud_run.tf": frozenset({"locals", "resource"}),
     "infra/gcp/iam.tf": frozenset({"locals", "resource"}),
-    "infra/gcp/imports.tf": frozenset({"import"}),
+    "infra/gcp/imports.tf": frozenset({"import", "moved", "removed"}),
     "infra/gcp/main.tf": frozenset({"check", "locals", "resource"}),
     "infra/gcp/outputs.tf": frozenset({"output"}),
     "infra/gcp/state.tf": frozenset({"resource"}),
@@ -238,6 +238,29 @@ EXPECTED_IMPORT_BLOCKS = [
         "for_each": "${local.production_secret_names}",
         "to": "${google_secret_manager_secret.runtime[each.value]}",
         "id": "projects/${var.project_id}/secrets/${each.value}",
+    },
+]
+EXPECTED_MOVED_BLOCKS = [
+    {
+        "from": '${google_secret_manager_secret.runtime["openai-api-key"]}',
+        "to": "${google_secret_manager_secret.retired_openai_production}",
+    },
+    {
+        "from": (
+            "${google_secret_manager_secret.preview_runtime["
+            '"agent-preview-openai-api-key"]}'
+        ),
+        "to": "${google_secret_manager_secret.retired_openai_preview}",
+    },
+]
+EXPECTED_REMOVED_BLOCKS = [
+    {
+        "from": "${google_secret_manager_secret.retired_openai_production}",
+        "lifecycle": [{"destroy": False}],
+    },
+    {
+        "from": "${google_secret_manager_secret.retired_openai_preview}",
+        "lifecycle": [{"destroy": False}],
     },
 ]
 EXPECTED_VARIABLES = {
@@ -414,7 +437,7 @@ EXPECTED_VARIABLES = {
     },
     "agent_secret_versions": {
         "description": (
-            "Reviewed Secret Manager numeric versions keyed by all twelve managed "
+            "Reviewed Secret Manager numeric versions keyed by all ten managed "
             "secret IDs; null only during foundation bootstrap. Secret payloads "
             "never enter Terraform."
         ),
@@ -443,11 +466,10 @@ EXPECTED_VARIABLES = {
                     "agent-preview-database-url, "
                     "agent-preview-langsmith-api-key, "
                     "agent-preview-migration-database-url, "
-                    "agent-preview-openai-api-key, anthropic-api-key, "
-                    "langsmith-api-key, openai-api-key])}"
+                    "anthropic-api-key, langsmith-api-key])}"
                 ),
                 "error_message": (
-                    "agent_secret_versions must contain exactly the twelve "
+                    "agent_secret_versions must contain exactly the ten "
                     "managed secret IDs, with no missing or extra keys."
                 ),
             },
@@ -767,12 +789,12 @@ EXPECTED_LOCALS_BY_FILE = {
             ),
             "production_secret_names": (
                 "${toset([agent-auth-secret, agent-database-url, anthropic-api-key, "
-                "langsmith-api-key, openai-api-key])}"
+                "langsmith-api-key])}"
             ),
             "preview_secret_names": (
                 "${toset([agent-preview-anthropic-api-key, "
                 "agent-preview-auth-secret, agent-preview-database-url, "
-                "agent-preview-langsmith-api-key, agent-preview-openai-api-key])}"
+                "agent-preview-langsmith-api-key])}"
             ),
             "migration_secret_names": {
                 "preview": "agent-preview-migration-database-url",
@@ -918,7 +940,7 @@ EXPECTED_CHECK_BLOCKS = [
                         "local.required_agent_secret_names)}"
                     ),
                     "error_message": (
-                        "jobs and services require exactly the twelve managed "
+                        "jobs and services require exactly the ten managed "
                         "secret IDs, with no missing or extra version keys."
                     ),
                 }
@@ -1479,6 +1501,24 @@ def validate_static_contract(repo_root: Path) -> None:
         _fail(
             "Terraform import targets and live object IDs must exactly match "
             "the reviewed migration contract"
+        )
+    moved_blocks = _json_array(
+        documents["infra/gcp/imports.tf"].get("moved"),
+        "infra/gcp/imports.tf.moved",
+    )
+    if moved_blocks != EXPECTED_MOVED_BLOCKS:
+        _fail(
+            "Terraform moved targets must exactly match the reviewed credential "
+            "retirement contract"
+        )
+    removed_blocks = _json_array(
+        documents["infra/gcp/imports.tf"].get("removed"),
+        "infra/gcp/imports.tf.removed",
+    )
+    if removed_blocks != EXPECTED_REMOVED_BLOCKS:
+        _fail(
+            "Terraform removed targets and state-only retention policy must exactly "
+            "match the reviewed credential retirement contract"
         )
 
     data_blocks = _two_label_blocks(documents, "data")

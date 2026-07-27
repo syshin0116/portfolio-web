@@ -51,7 +51,6 @@ readonly PRODUCTION_SECRET_NAMES=(
   agent-database-url
   anthropic-api-key
   langsmith-api-key
-  openai-api-key
 )
 
 readonly PREVIEW_SECRET_NAMES=(
@@ -59,7 +58,6 @@ readonly PREVIEW_SECRET_NAMES=(
   agent-preview-auth-secret
   agent-preview-database-url
   agent-preview-langsmith-api-key
-  agent-preview-openai-api-key
 )
 
 readonly PREVIEW_MIGRATION_SECRET="agent-preview-migration-database-url"
@@ -681,7 +679,7 @@ verify_cloud_run_service() {
           | select((secret_name | length) > 0)
           | {name: secret_name, version: secret_version}
         ] as $secret_refs
-        | ($secret_refs | length) == 5
+        | ($secret_refs | length) == 4
           and ([$secret_refs[].name] | sort) == ($expected_secret_names | sort)
           and all(
             $secret_refs[];

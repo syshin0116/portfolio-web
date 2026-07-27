@@ -92,9 +92,10 @@ to the dataset, corpus, method fingerprints/data dependencies, and cutoffs. The 
 digest binds the exact four result payloads. `verify-run` rejects partial or extra files,
 checksum resealing, unregistered or registration-drifted method identities, changed
 rankings or metrics, and Markdown/SVG projection drift. Verification resolves every
-method fingerprint from the reviewed registry and the same checksummed corpus artifacts.
-A staging directory plus an exclusive lock makes concurrent identical writers converge
-on one complete immutable result directory.
+method fingerprint from the reviewed registry and the same checksummed corpus artifacts,
+then replays every canonical qrel through that implementation at the largest cutoff and
+requires an exact ranking match. A staging directory plus an exclusive lock makes
+concurrent identical writers converge on one complete immutable result directory.
 
 ## Publication boundary
 

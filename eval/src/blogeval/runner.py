@@ -17,7 +17,7 @@ from typing import cast
 
 from agent.retrieval.fingerprint import retriever_fingerprint
 from agent.retrieval.protocol import Corpus, DocId
-from agent.retrieval.registry import RetrieverRegistry
+from agent.retrieval.registry import ResolvedRetriever, RetrieverRegistry
 
 from blogeval.datasets import DatasetError, QuerySet, validate_queryset_corpus
 from blogeval.jsonio import (
@@ -193,6 +193,87 @@ def _data_relation(
     return "clean-holdout", ()
 
 
+def _create_registered_retriever(
+    *,
+    corpus: Corpus,
+    method_id: str,
+    registry: RetrieverRegistry,
+) -> ResolvedRetriever:
+    try:
+        return registry.retrievable.create(method_id, corpus)
+    except Exception as exc:
+        raise EvaluationError(
+            f"cannot create reviewed retriever {method_id!r}: {exc}"
+        ) from exc
+
+
+def _close_registered_retriever(
+    resolved: ResolvedRetriever,
+    *,
+    method_id: str,
+) -> None:
+    try:
+        close = getattr(resolved.implementation, "close", None)
+        if callable(close):
+            close()
+    except Exception as exc:
+        raise EvaluationError(
+            f"cannot close reviewed retriever {method_id!r}: {exc}"
+        ) from exc
+
+
+def _validated_retrieval_ranking(
+    resolved: ResolvedRetriever,
+    *,
+    corpus_doc_ids: frozenset[DocId],
+    limit: int,
+    method_id: str,
+    query: str,
+    query_id: str,
+) -> tuple[DocId, ...]:
+    try:
+        retrieval = resolved.retrieve(query, limit=limit)
+        returned = retrieval.doc_ids()
+    except Exception as exc:
+        raise EvaluationError(
+            f"reviewed retriever {method_id!r} failed for query {query_id!r}: {exc}"
+        ) from exc
+    if retrieval.query != query:
+        raise EvaluationError(
+            f"retriever {method_id!r} returned query {retrieval.query!r} "
+            f"for expected query {query!r}"
+        )
+    if not isinstance(returned, tuple) or not all(
+        isinstance(doc_id, DocId) for doc_id in returned
+    ):
+        raise EvaluationError(
+            f"retriever {method_id!r} returned an invalid DocId ranking "
+            f"for query {query_id!r}"
+        )
+    if len(returned) != len(set(returned)):
+        raise EvaluationError(
+            f"retriever {method_id!r} returned duplicate DocIds for query {query_id!r}"
+        )
+    outside_corpus = tuple(
+        sorted(
+            (doc_id for doc_id in returned if doc_id not in corpus_doc_ids),
+            key=str,
+        )
+    )
+    if outside_corpus:
+        values = ", ".join(str(value) for value in outside_corpus)
+        raise EvaluationError(
+            f"retriever {method_id!r} returned DocIds outside the verified "
+            f"corpus for query {query_id!r}: {values}"
+        )
+    if len(returned) > limit:
+        raise EvaluationError(
+            f"retriever {method_id!r} returned {len(returned)} documents for "
+            f"limit {limit} on query {query_id!r}"
+        )
+    return returned
+
+
 def run_evaluation(
     *,
     corpus: Corpus,
@@ -222,7 +303,11 @@ def run_evaluation(
     methods: list[MethodResult] = []
     identities: list[Mapping[str, object]] = []
     for method_id in normalized_method_ids:
-        resolved = registry.retrievable.create(method_id, corpus)
+        resolved = _create_registered_retriever(
+            corpus=corpus,
+            method_id=method_id,
+            registry=registry,
+        )
         dependencies = resolved.registration.data_dependencies
         evaluation_relation, overlap_sources = _data_relation(
             dependencies,
@@ -241,33 +326,14 @@ def run_evaluation(
             query_results: list[QueryResult] = []
             rankings: dict[str, tuple[DocId, ...]] = {}
             for qrel in dataset.qrels:
-                retrieval = resolved.retrieve(
-                    qrel.query,
+                ranking = _validated_retrieval_ranking(
+                    resolved,
+                    corpus_doc_ids=corpus_doc_ids,
                     limit=retrieval_limit,
+                    method_id=method_id,
+                    query=qrel.query,
+                    query_id=qrel.query_id,
                 )
-                if retrieval.query != qrel.query:
-                    raise EvaluationError(
-                        f"retriever {method_id!r} returned query "
-                        f"{retrieval.query!r} for expected query {qrel.query!r}"
-                    )
-                returned_doc_ids = retrieval.doc_ids()
-                outside_corpus = tuple(
-                    sorted(
-                        (
-                            doc_id
-                            for doc_id in returned_doc_ids
-                            if doc_id not in corpus_doc_ids
-                        ),
-                        key=str,
-                    )
-                )
-                if outside_corpus:
-                    values = ", ".join(str(value) for value in outside_corpus)
-                    raise EvaluationError(
-                        f"retriever {method_id!r} returned DocIds outside the "
-                        f"verified corpus for query {qrel.query_id!r}: {values}"
-                    )
-                ranking = returned_doc_ids[:retrieval_limit]
                 rankings[qrel.query_id] = ranking
                 query_results.append(
                     QueryResult(
@@ -297,9 +363,7 @@ def run_evaluation(
                 )
             )
         finally:
-            close = getattr(resolved.implementation, "close", None)
-            if callable(close):
-                close()
+            _close_registered_retriever(resolved, method_id=method_id)
 
     return EvaluationRun(
         run_id=_run_id(
@@ -389,6 +453,7 @@ def _parse_recorded_run(
     if raw["dataset"] != expected_dataset:
         raise EvaluationError("run dataset identity differs from the supplied dataset")
     cutoffs = validate_cutoffs(tuple(_array(raw["cutoffs"], location="run.cutoffs")))
+    corpus_doc_ids = frozenset(DocId(value) for value in corpus.doc_ids())
     qrels_by_id = {qrel.query_id: qrel for qrel in dataset.qrels}
     methods: list[MethodResult] = []
     identities: list[Mapping[str, object]] = []
@@ -504,6 +569,18 @@ def _parse_recorded_run(
                 raise EvaluationError(
                     f"{query_location}.retrieved_doc_ids exceed the largest cutoff"
                 )
+            outside_corpus = tuple(
+                sorted(
+                    (doc_id for doc_id in retrieved if doc_id not in corpus_doc_ids),
+                    key=str,
+                )
+            )
+            if outside_corpus:
+                values = ", ".join(str(value) for value in outside_corpus)
+                raise EvaluationError(
+                    f"{query_location}.retrieved_doc_ids are outside the "
+                    f"verified corpus: {values}"
+                )
             rankings[query_id] = retrieved
             query_results.append(
                 QueryResult(
@@ -537,7 +614,7 @@ def _parse_recorded_run(
             )
         try:
             expected_identity_config = registration.identity_config(corpus)
-        except (OSError, TypeError, ValueError) as exc:
+        except Exception as exc:
             raise EvaluationError(
                 f"cannot resolve the reviewed identity for {method_id!r}: {exc}"
             ) from exc
@@ -555,6 +632,35 @@ def _parse_recorded_run(
             raise EvaluationError(
                 f"{location}.fingerprint differs from the reviewed registration"
             )
+        resolved = _create_registered_retriever(
+            corpus=corpus,
+            method_id=method_id,
+            registry=registry,
+        )
+        try:
+            if resolved.fingerprint != expected_fingerprint:
+                raise EvaluationError(
+                    f"{location}.fingerprint differs from the resolved "
+                    "reviewed retriever"
+                )
+            for query_index, (qrel, recorded_query) in enumerate(
+                zip(dataset.qrels, query_results, strict=True)
+            ):
+                replayed = _validated_retrieval_ranking(
+                    resolved,
+                    corpus_doc_ids=corpus_doc_ids,
+                    limit=cutoffs[-1],
+                    method_id=method_id,
+                    query=qrel.query,
+                    query_id=qrel.query_id,
+                )
+                if replayed != recorded_query.retrieved_doc_ids:
+                    raise EvaluationError(
+                        f"{location}.queries[{query_index}].retrieved_doc_ids "
+                        "differ from the reviewed retriever replay"
+                    )
+        finally:
+            _close_registered_retriever(resolved, method_id=method_id)
         methods.append(
             MethodResult(
                 method_id=method_id,

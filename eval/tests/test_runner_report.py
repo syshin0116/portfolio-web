@@ -13,6 +13,7 @@ from agent.retrieval.registry import RetrieverRegistry
 
 import blogeval.runner as runner_module
 from blogeval.jsonio import canonical_json_bytes, json_checksum
+from blogeval.metrics import summarize_metrics
 from blogeval.runner import (
     EvaluationError,
     run_evaluation,
@@ -74,6 +75,23 @@ def _replace_complete_artifacts(artifacts, run) -> None:
     artifacts.result_manifest.write_bytes(manifest_payload)
 
 
+def _replace_run_rankings(run, dataset, doc_id: DocId):
+    method = run.methods[0]
+    queries = tuple(
+        replace(query, retrieved_doc_ids=(doc_id,)) for query in method.queries
+    )
+    metrics = summarize_metrics(
+        kind=dataset.kind,
+        qrels=dataset.qrels,
+        rankings={query.query_id: query.retrieved_doc_ids for query in queries},
+        cutoffs=run.cutoffs,
+    )
+    return replace(
+        run,
+        methods=(replace(method, metrics=metrics, queries=queries),),
+    )
+
+
 def test_runner_writes_byte_reproducible_json_markdown_and_svg(
     tmp_path: Path,
     memory_corpus: MemoryCorpus,
@@ -105,15 +123,20 @@ def test_runner_writes_byte_reproducible_json_markdown_and_svg(
     assert _tree_digest(first.directory) == _tree_digest(second.directory)
     assert first.run_json.read_bytes() == second.run_json.read_bytes()
     assert first.result_manifest.is_file()
-    assert (
-        verify_run_directory(
-            first.directory,
-            corpus=memory_corpus,
-            dataset=known_dataset,
-            registry=_registry(),
-        ).result_digest
-        == first.result_digest
+    first_verification = verify_run_directory(
+        first.directory,
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        registry=_registry(),
     )
+    repeated_verification = verify_run_directory(
+        first.directory,
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        registry=_registry(),
+    )
+    assert first_verification.result_digest == first.result_digest
+    assert repeated_verification == first_verification
     leaderboard = first.leaderboard_markdown.read_text(encoding="utf-8")
     assert "## Known-item metrics" in leaderboard
     assert "## Topic metrics" in leaderboard
@@ -424,6 +447,79 @@ def test_verify_run_rejects_self_consistent_unregistered_method_identity(
         )
 
 
+def test_verify_run_rejects_fully_resealed_ranking_drift(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    registry = _registry()
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1,),
+        registry=registry,
+    )
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=registry,
+    )
+    forged_run = _replace_run_rankings(
+        run,
+        known_dataset,
+        DocId("Dev/gamma.md"),
+    )
+    assert forged_run.run_id == run.run_id
+    _replace_complete_artifacts(artifacts, forged_run)
+
+    with pytest.raises(EvaluationError, match="reviewed retriever replay"):
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=registry,
+        )
+
+
+def test_verify_run_rejects_fully_resealed_unknown_recorded_doc_id(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    registry = _registry()
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1,),
+        registry=registry,
+    )
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=registry,
+    )
+    forged_run = _replace_run_rankings(
+        run,
+        known_dataset,
+        DocId("ghost.md"),
+    )
+    _replace_complete_artifacts(artifacts, forged_run)
+
+    with pytest.raises(EvaluationError, match="outside the verified corpus.*ghost.md"):
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=registry,
+        )
+
+
 def test_concurrent_identical_writers_commit_one_complete_directory(
     tmp_path: Path,
     memory_corpus: MemoryCorpus,
@@ -577,4 +673,141 @@ def test_runner_rejects_retriever_query_mismatch(
             method_ids=("method",),
             cutoffs=(1,),
             registry=registry,
+        )
+
+
+def _raising_factory(_corpus, _config):
+    raise RuntimeError("factory exploded")
+
+
+def _invalid_factory(_corpus, _config):
+    return object()
+
+
+class RetrieveFailureRetriever:
+    def __init__(self, _corpus, _config) -> None:
+        pass
+
+    def retrieve(self, query: str, *, limit: int = 10) -> Retrieval:
+        del query, limit
+        raise RuntimeError("retrieve exploded")
+
+
+class InvalidRetrievalTypeRetriever:
+    def __init__(self, _corpus, _config) -> None:
+        pass
+
+    def retrieve(self, query: str, *, limit: int = 10):
+        del query, limit
+        return object()
+
+
+class DuplicateRanking(Retrieval):
+    def doc_ids(self, *, limit: int | None = None):
+        del limit
+        return (DocId("AI/alpha.md"), DocId("AI/alpha.md"))
+
+
+class DuplicateRankingRetriever:
+    def __init__(self, _corpus, _config) -> None:
+        pass
+
+    def retrieve(self, query: str, *, limit: int = 10) -> Retrieval:
+        del limit
+        return DuplicateRanking(query=query)
+
+
+class InvalidDocIdRanking(Retrieval):
+    def doc_ids(self, *, limit: int | None = None):
+        del limit
+        return ("AI/alpha.md",)
+
+
+class InvalidDocIdRankingRetriever:
+    def __init__(self, _corpus, _config) -> None:
+        pass
+
+    def retrieve(self, query: str, *, limit: int = 10) -> Retrieval:
+        del limit
+        return InvalidDocIdRanking(query=query)
+
+
+class CloseFailureRetriever(RankedRetriever):
+    def close(self) -> None:
+        raise RuntimeError("close exploded")
+
+
+class OverLimitRetriever:
+    def __init__(self, _corpus, _config) -> None:
+        pass
+
+    def retrieve(self, query: str, *, limit: int = 10) -> Retrieval:
+        del limit
+        return Retrieval(
+            query=query,
+            hits=(
+                Hit(doc_id=DocId("AI/alpha.md"), rank=1, score=None),
+                Hit(doc_id=DocId("AI/beta.md"), rank=2, score=None),
+            ),
+        )
+
+
+def _method_a_registry(factory) -> RetrieverRegistry:
+    source = _registry().retrievable["method-a"]
+    registry = RetrieverRegistry()
+    registry.register(
+        source.method_id,
+        factory,
+        implementation_id=source.implementation_id,
+        config=source.config,
+        data_dependencies=source.data_dependencies,
+        servable=False,
+    )
+    return registry
+
+
+@pytest.mark.parametrize(
+    ("factory", "message"),
+    (
+        (_raising_factory, "cannot create.*factory exploded"),
+        (_invalid_factory, "cannot create.*without retrieve"),
+        (RetrieveFailureRetriever, "failed for query.*retrieve exploded"),
+        (InvalidRetrievalTypeRetriever, "returned object.*expected Retrieval"),
+        (DuplicateRankingRetriever, "returned duplicate DocIds"),
+        (InvalidDocIdRankingRetriever, "returned an invalid DocId ranking"),
+        (CloseFailureRetriever, "cannot close.*close exploded"),
+        (OverLimitRetriever, "returned 2 documents for limit 1"),
+        (OutOfCorpusTailRetriever, "outside the verified corpus.*ghost.md"),
+        (QueryMismatchRetriever, "returned query.*alpha-changed"),
+    ),
+)
+def test_verify_run_fails_closed_when_retriever_replay_is_invalid(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+    factory,
+    message: str,
+) -> None:
+    registry = _registry()
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1,),
+        registry=registry,
+    )
+    artifacts = write_run_artifacts(
+        run,
+        corpus=memory_corpus,
+        output_root=tmp_path,
+        registry=registry,
+    )
+
+    with pytest.raises(EvaluationError, match=message):
+        verify_run_directory(
+            artifacts.directory,
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            registry=_method_a_registry(factory),
         )

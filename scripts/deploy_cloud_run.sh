@@ -203,8 +203,7 @@ runtime_expectations() {
         {"name":"AGENT_AUTH_SECRET","secret":"agent-preview-auth-secret"},
         {"name":"ANTHROPIC_API_KEY","secret":"agent-preview-anthropic-api-key"},
         {"name":"DATABASE_URL","secret":"agent-preview-database-url"},
-        {"name":"LANGCHAIN_API_KEY","secret":"agent-preview-langsmith-api-key"},
-        {"name":"OPENAI_API_KEY","secret":"agent-preview-openai-api-key"}
+        {"name":"LANGCHAIN_API_KEY","secret":"agent-preview-langsmith-api-key"}
       ]'
       readonly EXPECTED_MIGRATOR_SERVICE_ACCOUNT="agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
       readonly EXPECTED_MIGRATION_SECRET="agent-preview-migration-database-url"
@@ -218,8 +217,7 @@ runtime_expectations() {
         {"name":"AGENT_AUTH_SECRET","secret":"agent-auth-secret"},
         {"name":"ANTHROPIC_API_KEY","secret":"anthropic-api-key"},
         {"name":"DATABASE_URL","secret":"agent-database-url"},
-        {"name":"LANGCHAIN_API_KEY","secret":"langsmith-api-key"},
-        {"name":"OPENAI_API_KEY","secret":"openai-api-key"}
+        {"name":"LANGCHAIN_API_KEY","secret":"langsmith-api-key"}
       ]'
       readonly EXPECTED_MIGRATOR_SERVICE_ACCOUNT="agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
       readonly EXPECTED_MIGRATION_SECRET="agent-migration-database-url"
@@ -380,7 +378,7 @@ verify_runtime_template() {
       )
       and (
         (.containers[0].env // []) as $env
-        | ($env | length) == 18
+        | ($env | length) == 17
           and ([$env[].name] | length) == ([$env[].name] | unique | length)
           and (
             [

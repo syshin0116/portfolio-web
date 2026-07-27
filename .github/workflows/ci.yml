@@ -255,7 +255,6 @@ jobs:
             --env LANGGRAPH_MAX_POOL_SIZE=4 \
             --env LANGGRAPH_MIN_POOL_SIZE=1 \
             --env MODEL=anthropic:claude-sonnet-4-6 \
-            --env OPENAI_API_KEY=ci-only-not-a-real-openai-key \
             --env PORT=8080 \
             --env REDIS_BROKER_ENABLED=false \
             --env RUN_MIGRATIONS_ON_STARTUP=false \

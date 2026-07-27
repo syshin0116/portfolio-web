@@ -49,6 +49,22 @@ DELIVERY_ROLE_MAPPING_LINE = (
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
+    def test_cloud_runtime_contract_has_no_openai_credential(self) -> None:
+        reviewed_paths = (
+            REPO_ROOT / ".github/workflows/ci.yml",
+            REPO_ROOT / "infra/gcp/cloud_run.tf",
+            REPO_ROOT / "infra/gcp/main.tf",
+            REPO_ROOT / "infra/gcp/variables.tf",
+            REPO_ROOT / "scripts/deploy_cloud_run.sh",
+            REPO_ROOT / "scripts/verify_ops_foundation.sh",
+        )
+
+        for path in reviewed_paths:
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.relative_to(REPO_ROOT)):
+                self.assertNotIn("OPENAI_API_KEY", source)
+                self.assertNotIn("openai-api-key", source)
+
     def test_broad_cloud_run_developer_role_is_absent(self) -> None:
         reviewed_paths = (
             REPO_ROOT / "DECISIONS.md",
@@ -1195,7 +1211,31 @@ removed {
                 result = self._run(root)
 
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("top-level block inventory is not exact", result.stderr)
+            expected_error = (
+                "moved targets"
+                if name == "moved"
+                else "removed targets and state-only retention policy"
+            )
+            self.assertIn(expected_error, result.stderr)
+
+    def test_retired_openai_secrets_cannot_be_destroyed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            imports_path = root / "infra/gcp/imports.tf"
+            source = imports_path.read_text(encoding="utf-8")
+            self.assertEqual(2, source.count("    destroy = false"))
+            imports_path.write_text(
+                source.replace("    destroy = false", "    destroy = true", 1),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "removed targets and state-only retention policy",
+            result.stderr,
+        )
 
     def test_terraform_data_local_exec_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

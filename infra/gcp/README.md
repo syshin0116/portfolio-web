@@ -135,8 +135,8 @@ member removals; any resource replacement or persistent-resource destroy is a bl
 Initial setup is an explicit complete-root progression:
 
 1. `foundation` with null image/version inputs creates the registries, identities, WIF,
-   IAM, state bucket, and twelve empty secrets, but no Cloud Run resources;
-2. `jobs` with isolated production and preview digests plus the exact twelve-key numeric
+   IAM, state bucket, and ten empty secrets, but no Cloud Run resources;
+2. `jobs` with isolated production and preview digests plus the exact ten-key numeric
    version map creates only the two migration jobs and two grant-probe jobs plus resource
    IAM;
 3. after all four jobs pass, `services` adds the two serving surfaces and service IAM.
@@ -145,6 +145,10 @@ Never use `-target` to emulate a stage. After bootstrap, retain `services`, both
 exact digests, and the complete external version file on every plan; omission proposes
 protected removal and fails closed. Payload injection and version creation remain
 out-of-band.
+
+The serving model is fixed to Anthropic, so the managed inventory has no OpenAI credential.
+The reviewed `removed` blocks forget any legacy OpenAI secret instances from Terraform
+state with `destroy = false`; external secret deletion is a separate operator action.
 
 Use an ephemeral access token or Application Default Credentials. Never pass a service
 account JSON key to Terraform. Do not run `apply` from CI.

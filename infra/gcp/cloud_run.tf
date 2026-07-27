@@ -28,10 +28,6 @@ locals {
           secret  = google_secret_manager_secret.preview_runtime["agent-preview-langsmith-api-key"].secret_id
           version = try(var.agent_secret_versions["agent-preview-langsmith-api-key"], null)
         }
-        OPENAI_API_KEY = {
-          secret  = google_secret_manager_secret.preview_runtime["agent-preview-openai-api-key"].secret_id
-          version = try(var.agent_secret_versions["agent-preview-openai-api-key"], null)
-        }
       }
     }
     production = {
@@ -61,10 +57,6 @@ locals {
         LANGCHAIN_API_KEY = {
           secret  = google_secret_manager_secret.runtime["langsmith-api-key"].secret_id
           version = try(var.agent_secret_versions["langsmith-api-key"], null)
-        }
-        OPENAI_API_KEY = {
-          secret  = google_secret_manager_secret.runtime["openai-api-key"].secret_id
-          version = try(var.agent_secret_versions["openai-api-key"], null)
         }
       }
     }

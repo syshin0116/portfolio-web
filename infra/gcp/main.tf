@@ -1,6 +1,7 @@
 locals {
-  preview_wif_attribute_condition    = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'pull_request' && assertion.environment == '${var.github_preview_environment}'"
-  production_wif_attribute_condition = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'push' && assertion.ref == 'refs/heads/main' && assertion.environment == '${var.github_production_environment}'"
+  disabled_preview_wif_attribute_condition = "attribute.repository_id == '__legacy_provider_disabled__'"
+  delivery_role_mapping                    = "assertion.event_name == 'pull_request' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + assertion.ref ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@' + assertion.ref ? 'preview-builder' : assertion.environment == '${var.github_preview_environment}' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@' + assertion.ref ? 'preview-deployer' : 'invalid') : assertion.event_name in ['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@refs/heads/main' ? 'production-builder' : assertion.environment == '${var.github_production_environment}' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@refs/heads/main' ? 'production-deployer' : 'invalid') : 'invalid'"
+  delivery_wif_attribute_condition         = "attribute.repository_id == '${var.github_repository_id}' && attribute.repository_owner_id == '${var.github_owner_id}' && attribute.delivery_role in ['preview-builder', 'preview-deployer', 'production-builder', 'production-deployer']"
 
   required_services = toset([
     "artifactregistry.googleapis.com",
@@ -29,6 +30,17 @@ locals {
     "agent-preview-openai-api-key",
   ])
 
+  migration_secret_names = {
+    preview    = "agent-preview-migration-database-url"
+    production = "agent-migration-database-url"
+  }
+
+  required_agent_secret_names = setunion(
+    local.production_secret_names,
+    local.preview_secret_names,
+    toset(values(local.migration_secret_names)),
+  )
+
   deployers = {
     preview = {
       account_id   = "agent-preview-deployer"
@@ -37,6 +49,17 @@ locals {
     production = {
       account_id   = "agent-prod-deployer"
       display_name = "GitHub production deployer"
+    }
+  }
+
+  migrators = {
+    preview = {
+      account_id   = "agent-preview-migrator"
+      display_name = "Cloud Run preview migration identity"
+    }
+    production = {
+      account_id   = "agent-prod-migrator"
+      display_name = "Cloud Run production migration identity"
     }
   }
 }
@@ -53,11 +76,74 @@ resource "google_artifact_registry_repository" "agent" {
   project       = var.project_id
   location      = var.region
   repository_id = "agent"
-  description   = "Immutable agent images"
+  description   = "Production agent images with bounded rollback retention"
   format        = "DOCKER"
 
   docker_config {
-    immutable_tags = true
+    # Each delivery writes a never-reused run/attempt tag and deploys the
+    # resolved digest. Tags must remain mutable so cleanup policies can remove
+    # expired tagged versions.
+    immutable_tags = false
+  }
+
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-after-90-days"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "ANY"
+      older_than = "7776000s"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-last-30"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 30
+    }
+  }
+
+  depends_on = [google_project_service.required]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_artifact_registry_repository" "preview_agent" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "agent-preview"
+  description   = "Preview agent images with short-lived retention"
+  format        = "DOCKER"
+
+  docker_config {
+    immutable_tags = false
+  }
+
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-after-14-days"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "ANY"
+      older_than = "1209600s"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-last-20"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 20
+    }
   }
 
   depends_on = [google_project_service.required]
@@ -89,6 +175,38 @@ resource "google_service_account" "preview_runtime" {
 
 resource "google_service_account" "deployer" {
   for_each = local.deployers
+
+  project      = var.project_id
+  account_id   = each.value.account_id
+  display_name = each.value.display_name
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_service_account" "builder" {
+  project      = var.project_id
+  account_id   = "agent-image-builder"
+  display_name = "GitHub production agent image builder"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_service_account" "preview_builder" {
+  project      = var.project_id
+  account_id   = "agent-preview-image-builder"
+  display_name = "GitHub preview agent image builder"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_service_account" "migrator" {
+  for_each = local.migrators
 
   project      = var.project_id
   account_id   = each.value.account_id
@@ -133,6 +251,23 @@ resource "google_secret_manager_secret" "preview_runtime" {
   }
 }
 
+resource "google_secret_manager_secret" "migration" {
+  for_each = local.migration_secret_names
+
+  project   = var.project_id
+  secret_id = each.value
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.required]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "google_iam_workload_identity_pool" "github" {
   project                   = var.project_id
   workload_identity_pool_id = "github"
@@ -151,19 +286,15 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-preview"
-  display_name                       = "GitHub Preview"
-  disabled                           = false
+  display_name                       = "Legacy GitHub Preview (disabled)"
+  disabled                           = true
 
   attribute_mapping = {
-    "google.subject"                = "assertion.sub"
-    "attribute.environment"         = "assertion.environment"
-    "attribute.event_name"          = "assertion.event_name"
-    "attribute.ref"                 = "assertion.ref"
-    "attribute.repository_id"       = "assertion.repository_id"
-    "attribute.repository_owner_id" = "assertion.repository_owner_id"
+    "google.subject"          = "assertion.sub"
+    "attribute.repository_id" = "assertion.repository_id"
   }
 
-  attribute_condition = local.preview_wif_attribute_condition
+  attribute_condition = local.disabled_preview_wif_attribute_condition
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -181,23 +312,46 @@ check "runtime_environments_are_disjoint" {
   }
 }
 
+check "agent_delivery_stage_inputs" {
+  assert {
+    condition = var.agent_delivery_stage == "foundation" ? (
+      var.agent_bootstrap_image == null
+      && var.agent_preview_bootstrap_image == null
+      && var.agent_secret_versions == null
+      ) : (
+      var.agent_bootstrap_image != null
+      && var.agent_preview_bootstrap_image != null
+      && var.agent_secret_versions != null
+    )
+    error_message = "foundation requires null image/version inputs; jobs and services require immutable production/preview images plus the complete reviewed numeric version map."
+  }
+}
+
+check "agent_secret_version_inventory" {
+  assert {
+    condition = var.agent_delivery_stage == "foundation" ? true : (
+      var.agent_secret_versions != null
+      && toset(keys(var.agent_secret_versions)) == local.required_agent_secret_names
+    )
+    error_message = "jobs and services require exactly the twelve managed secret IDs, with no missing or extra version keys."
+  }
+}
+
 resource "google_iam_workload_identity_pool_provider" "production" {
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-production"
-  display_name                       = "GitHub Production"
+  display_name                       = "GitHub Agent Delivery"
   disabled                           = false
 
   attribute_mapping = {
     "google.subject"                = "assertion.sub"
-    "attribute.environment"         = "assertion.environment"
-    "attribute.event_name"          = "assertion.event_name"
-    "attribute.ref"                 = "assertion.ref"
     "attribute.repository_id"       = "assertion.repository_id"
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
+    "attribute.delivery_role"       = local.delivery_role_mapping
   }
 
-  attribute_condition = local.production_wif_attribute_condition
+  attribute_condition = local.delivery_wif_attribute_condition
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"

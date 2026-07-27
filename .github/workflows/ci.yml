@@ -32,12 +32,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.29"
+          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
           enable-cache: false
+      - name: Sync the frozen repository test toolchain
+        run: uv sync --frozen --package syshin0116-dev-agent --all-extras --dev
       - name: Test component change detection
         run: >-
-          uv run --no-project --with pyyaml==6.0.3
+          uv run --frozen --package syshin0116-dev-agent
           python -m unittest discover -s scripts/tests -v
       - name: Detect affected components
         id: components
@@ -120,7 +127,7 @@ jobs:
     needs:
       - changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
@@ -135,9 +142,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    defaults:
-      run:
-        working-directory: agent
     env:
       AEGRA_POSTGRES_TEST_URL: postgresql://postgres@localhost:5432/aegra_ci
       AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret
@@ -155,9 +159,11 @@ jobs:
         if: needs.changes.outputs.agent == 'true'
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         if: needs.changes.outputs.agent == 'true'
         with:
+          version: "0.11.29"
+          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Verify the workspace lockfile is current
@@ -169,30 +175,136 @@ jobs:
       - if: needs.changes.outputs.agent == 'true'
         run: >-
           uv run --frozen --package syshin0116-dev-agent ruff check
-          src
-          tests
-          ../scripts/build_index.py
-          ../scripts/ci_changed_components.py
-          ../scripts/verify_repository_governance.py
-          ../scripts/tests
+          agent/src
+          agent/tests
+          scripts/build_index.py
+          scripts/ci_changed_components.py
+          scripts/verify_repository_governance.py
+          scripts/tests
       - if: needs.changes.outputs.agent == 'true'
         run: >-
           uv run --frozen --package syshin0116-dev-agent ruff format --check
-          src
-          tests
-          ../scripts/build_index.py
-          ../scripts/ci_changed_components.py
-          ../scripts/verify_repository_governance.py
-          ../scripts/tests
+          agent/src
+          agent/tests
+          scripts/build_index.py
+          scripts/ci_changed_components.py
+          scripts/verify_repository_governance.py
+          scripts/tests
       - name: Build and audit the published corpus and BM25 artifacts
         if: needs.changes.outputs.agent == 'true'
         run: >-
           uv run --frozen --package syshin0116-dev-agent
-          python ../scripts/build_index.py
+          python scripts/build_index.py
           --expect-document-count 335
       - if: needs.changes.outputs.agent == 'true'
         run: >-
-          uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q
+          uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q agent/tests
+      - name: Build, inspect, and smoke the Linux amd64 delivery image
+        if: needs.changes.outputs.agent == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="agent-ci:$GITHUB_SHA"
+          container_name="agent-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            exit_code=$?
+            trap - EXIT
+            if docker container inspect "$container_name" >/dev/null 2>&1; then
+              docker container logs "$container_name" || true
+              docker container rm --force "$container_name" >/dev/null || true
+            fi
+            exit "$exit_code"
+          }
+          trap cleanup EXIT
+
+          docker build \
+            --file Dockerfile \
+            --platform linux/amd64 \
+            --build-arg "VCS_REF=$GITHUB_SHA" \
+            --tag "$image_tag" \
+            .
+          test "$(
+            docker image inspect \
+              --format '{{.Os}}/{{.Architecture}}' \
+              "$image_tag"
+          )" = "linux/amd64"
+
+          docker run \
+            --rm \
+            --network host \
+            --entrypoint python \
+            --env "DATABASE_URL=$AEGRA_POSTGRES_TEST_URL" \
+            --env ENV_MODE=PRODUCTION \
+            --env RUN_MIGRATIONS_ON_STARTUP=false \
+            "$image_tag" \
+            -m agent.migrate
+
+          docker run \
+            --detach \
+            --name "$container_name" \
+            --network host \
+            --env AEGRA_CONFIG=/app/aegra.json \
+            --env AGENT_AUTH_SECRET=ci-only-agent-secret-ci-only-agent-secret \
+            --env ANTHROPIC_API_KEY=ci-only-not-a-real-anthropic-key \
+            --env BG_JOB_MAX_RETRIES=0 \
+            --env "DATABASE_URL=$AEGRA_POSTGRES_TEST_URL" \
+            --env ENV_MODE=PRODUCTION \
+            --env FF_V2_EVENT_STREAMING=true \
+            --env HOST=0.0.0.0 \
+            --env LANGCHAIN_API_KEY=ci-only-not-a-real-langchain-key \
+            --env LANGGRAPH_MAX_POOL_SIZE=4 \
+            --env LANGGRAPH_MIN_POOL_SIZE=1 \
+            --env MODEL=anthropic:claude-sonnet-4-6 \
+            --env OPENAI_API_KEY=ci-only-not-a-real-openai-key \
+            --env PORT=8080 \
+            --env REDIS_BROKER_ENABLED=false \
+            --env RUN_MIGRATIONS_ON_STARTUP=false \
+            --env SQLALCHEMY_MAX_OVERFLOW=0 \
+            --env SQLALCHEMY_POOL_SIZE=2 \
+            "$image_tag" \
+            >/dev/null
+
+          health_ready=false
+          for _ in {1..120}; do
+            test "$(
+              docker container inspect \
+                --format '{{.State.Running}}' \
+                "$container_name"
+            )" = "true"
+            if curl \
+              --fail \
+              --silent \
+              --max-time 3 \
+              --output /dev/null \
+              http://127.0.0.1:8080/live \
+              && curl \
+                --fail \
+                --silent \
+                --max-time 3 \
+                --output /dev/null \
+                http://127.0.0.1:8080/ready
+            then
+              health_ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$health_ready" = "true"
+
+          unauthenticated_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --max-time 5 \
+              --max-redirs 0 \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              --header 'content-type: application/json' \
+              --data \
+                '{"id":1,"method":"run.start","params":{"assistant_id":"agent","input":{"messages":[{"role":"user","content":"ci"}]}}}' \
+              http://127.0.0.1:8080/threads/00000000-0000-4000-8000-000000000001/commands
+          )"
+          test "$unauthenticated_status" = "401"
 
   eval:
     name: ci/eval
@@ -218,9 +330,11 @@ jobs:
         if: needs.changes.outputs.eval == 'true'
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         if: needs.changes.outputs.eval == 'true'
         with:
+          version: "0.11.29"
+          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Verify the workspace lockfile is current
@@ -336,20 +450,37 @@ jobs:
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
         with:
           version: 1.7.12
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         if: needs.changes.outputs.infra == 'true'
         with:
+          version: "0.11.29"
+          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
           enable-cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.changes.outputs.infra == 'true'
+        with:
+          python-version: "3.12"
+      - name: Sync the frozen infrastructure toolchain
+        if: needs.changes.outputs.infra == 'true'
+        run: uv sync --frozen --package syshin0116-dev-agent --all-extras --dev
       - name: Lint infrastructure Python contracts
         if: needs.changes.outputs.infra == 'true'
         run: |
-          uv run --no-project --with ruff==0.15.8 ruff check \
+          uv run --frozen --package syshin0116-dev-agent ruff check \
             scripts/ops_foundation_contract.py \
+            scripts/validate_agent_release_candidate.py \
+            scripts/tests/test_agent_delivery_identity.py \
+            scripts/tests/test_deploy_cloud_run.py \
             scripts/tests/test_ops_foundation_contract.py \
+            scripts/tests/test_validate_agent_release_candidate.py \
             scripts/tests/test_verify_ops_foundation.py
-          uv run --no-project --with ruff==0.15.8 ruff format --check \
+          uv run --frozen --package syshin0116-dev-agent ruff format --check \
             scripts/ops_foundation_contract.py \
+            scripts/validate_agent_release_candidate.py \
+            scripts/tests/test_agent_delivery_identity.py \
+            scripts/tests/test_deploy_cloud_run.py \
             scripts/tests/test_ops_foundation_contract.py \
+            scripts/tests/test_validate_agent_release_candidate.py \
             scripts/tests/test_verify_ops_foundation.py
       - name: Audit GitHub Actions security
         if: needs.changes.outputs.infra == 'true'
@@ -357,7 +488,10 @@ jobs:
       - name: Check the operations verifier
         if: needs.changes.outputs.infra == 'true'
         run: |
-          shellcheck scripts/verify_ops_foundation.sh
+          shellcheck \
+            scripts/deploy_cloud_run.sh \
+            scripts/validate_agent_delivery_identity.sh \
+            scripts/verify_ops_foundation.sh
           scripts/verify_ops_foundation.sh --static
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         if: needs.changes.outputs.infra == 'true'
@@ -373,7 +507,7 @@ jobs:
       - name: Validate Terraform configuration
         if: needs.changes.outputs.infra == 'true'
         run: scripts/verify_ops_foundation.sh --terraform-validate
-      - name: Test exactly one Terraform security contract run
+      - name: Test the exact Terraform stage contracts
         if: needs.changes.outputs.infra == 'true'
         run: scripts/verify_ops_foundation.sh --terraform-test
 

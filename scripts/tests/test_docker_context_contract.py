@@ -10,6 +10,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLICATION_DOCKERFILE = Path("eval/Dockerfile.publication")
 PUBLICATION_DOCKERIGNORE = Path("eval/Dockerfile.publication.dockerignore")
+AGENT_DOCKERFILE = Path("Dockerfile")
+AGENT_DOCKERIGNORE = Path("Dockerfile.dockerignore")
 
 PUBLICATION_ALLOWED_FILES = frozenset(
     {
@@ -29,6 +31,38 @@ PUBLICATION_ALLOWED_FILES = frozenset(
         "content/Dev/nested/probe.md",
     }
 )
+AGENT_ALLOWED_FILES = frozenset(
+    {
+        "pyproject.toml",
+        "uv.lock",
+        "aegra.json",
+        "agent/pyproject.toml",
+        "agent/bm25-policy.toml",
+        "agent/corpus-policy.toml",
+        "agent/src/agent/api.py",
+        "agent/src/agent/nested/retriever.py",
+        "agent/skills/blog-retrieval/SKILL.md",
+        "eval/pyproject.toml",
+        "scripts/build_index.py",
+        "content/AI/probe.md",
+        "content/Dev/nested/probe.md",
+    }
+)
+PUBLICATION_EXPECTED_FILES = PUBLICATION_ALLOWED_FILES | frozenset(
+    {
+        "agent/src/agent/api.py",
+        "agent/src/agent/nested/retriever.py",
+        "eval/src/blogeval/private.py",
+        "content/AI/diagram.png",
+        "content/Dev/nested/archive.json",
+    }
+)
+AGENT_EXPECTED_FILES = AGENT_ALLOWED_FILES | frozenset(
+    {
+        "agent/src/agent/retrieval/protocol.py",
+        "agent/src/agent/retrieval/nested/probe.py",
+    }
+)
 UNRELATED_FILES = frozenset(
     {
         "agent/README.md",
@@ -37,6 +71,9 @@ UNRELATED_FILES = frozenset(
         "docs/rag-restack-plan.md",
         "eval/README.md",
         "eval/tests/conftest.py",
+        "eval/src/blogeval/private.py",
+        "content/AI/diagram.png",
+        "content/Dev/nested/archive.json",
         "scripts/tests/test_unrelated.py",
         "scripts/verify_repository_governance.py",
         "web/package.json",
@@ -75,6 +112,7 @@ class DockerBuildContextContractTests(unittest.TestCase):
     def _write_candidates(self, context: Path) -> None:
         for relative in (
             *PUBLICATION_ALLOWED_FILES,
+            *AGENT_ALLOWED_FILES,
             *UNRELATED_FILES,
             *SENSITIVE_AND_ARTIFACT_FILES,
         ):
@@ -138,7 +176,7 @@ class DockerBuildContextContractTests(unittest.TestCase):
 
             inventory = self._buildkit_inventory(context, dockerfile)
 
-        self.assertEqual(PUBLICATION_ALLOWED_FILES, inventory)
+        self.assertEqual(PUBLICATION_EXPECTED_FILES, inventory)
 
     def test_root_ignore_excludes_sensitive_and_artifact_real_buildkit_paths(
         self,
@@ -154,7 +192,29 @@ class DockerBuildContextContractTests(unittest.TestCase):
 
             inventory = self._buildkit_inventory(context, dockerfile)
 
-        self.assertEqual(PUBLICATION_ALLOWED_FILES | UNRELATED_FILES, inventory)
+        self.assertEqual(
+            PUBLICATION_ALLOWED_FILES | AGENT_ALLOWED_FILES | UNRELATED_FILES,
+            inventory,
+        )
+
+    def test_agent_specific_ignore_has_exact_real_buildkit_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = root / "agent-context"
+            context.mkdir()
+            self._write_candidates(context)
+
+            shutil.copy2(REPO_ROOT / ".dockerignore", context / ".dockerignore")
+            dockerfile = context / AGENT_DOCKERFILE
+            dockerfile.write_text("FROM scratch\nCOPY . /context\n", encoding="utf-8")
+            shutil.copy2(
+                REPO_ROOT / AGENT_DOCKERIGNORE,
+                context / AGENT_DOCKERIGNORE,
+            )
+
+            inventory = self._buildkit_inventory(context, dockerfile)
+
+        self.assertEqual(AGENT_EXPECTED_FILES, inventory)
 
 
 if __name__ == "__main__":

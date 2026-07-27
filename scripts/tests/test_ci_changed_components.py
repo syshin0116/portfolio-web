@@ -119,6 +119,7 @@ class PathClassificationTests(unittest.TestCase):
         for path in (
             "aegra.json",
             "Dockerfile",
+            "Dockerfile.dockerignore",
             "pyproject.toml",
             "uv.lock",
             "scripts/build_index.py",
@@ -131,10 +132,16 @@ class PathClassificationTests(unittest.TestCase):
 
     def test_ops_verifier_runs_only_infrastructure_ci(self) -> None:
         for path in (
+            "scripts/deploy_cloud_run.sh",
             "scripts/ops_foundation_contract.py",
+            "scripts/tests/test_agent_delivery_identity.py",
+            "scripts/tests/test_deploy_cloud_run.py",
             "scripts/tests/test_ops_foundation_contract.py",
+            "scripts/tests/test_validate_agent_release_candidate.py",
             "scripts/verify_ops_foundation.sh",
             "scripts/tests/test_verify_ops_foundation.py",
+            "scripts/validate_agent_release_candidate.py",
+            "scripts/validate_agent_delivery_identity.sh",
         ):
             with self.subTest(path=path):
                 self.assertEqual(

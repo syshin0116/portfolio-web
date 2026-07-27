@@ -8,7 +8,7 @@ when_to_read: >
   check names, CODEOWNERS, or deployment environment branch policies.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
-updated: "2026-07-27"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/repository-governance.json
@@ -77,43 +77,58 @@ and every project-bound
 `uv run` may resolve a stale `pyproject.toml`/`uv.lock` pair after the frozen
 sync and silently replace the environment that CI was meant to verify. The
 local verifier binds this contract to the AST-selected `agent` job and its
-`agent` working directory, tokenizes executable `run` scalars with shell
+root-workspace execution, tokenizes executable `run` scalars with shell
 comments removed, and binds every run step—including the fail-closed and
 unaffected-component reports—to an exact name, condition, command-token, and
 order inventory. The four frozen commands and their complete scopes—Ruff
-check, Ruff format check, index build/audit, and pytest—are exact within that
+check, Ruff format check, index build/audit, and pytest restricted to
+`agent/tests`—are exact within that
 inventory, so variable executables, wrapper commands, deletions, renames, and
-extra direct or indirect runs require a deliberate contract change. Run-step
-execution metadata is limited to `name`, `if`, and `run`; step `shell`, `env`,
-or working-directory overrides fail, as do workflow-level inherited
-defaults/environment and changes to the job's exact environment or
-agent-only working directory. A comment, `echo`, or quoted command string
-therefore cannot stand in for an executable gate.
+extra direct or indirect runs require a deliberate contract change. The final
+reviewed step is the one intentional exception to the ordinary run-step key
+set: it uses `shell: bash` to build the actual root `Dockerfile` for
+`linux/amd64`, inspect the resulting platform, run that image's migration
+entrypoint against the job's PostgreSQL service, and boot the same image for
+health and unauthenticated-boundary checks. No job or workflow
+`defaults.run.working-directory` is allowed, because the root `pyproject.toml`,
+root `uv.lock`, `agent/`, `eval/`, scripts, and Docker context are one reviewed
+workspace contract. A comment, `echo`, or quoted command string therefore
+cannot stand in for an executable gate.
 
 The same exact job AST pins a PostgreSQL 17 service, database credentials, published test
 port, `pg_isready` health check, and `AEGRA_POSTGRES_TEST_URL`. The ordinary pytest command
 therefore executes migration, checkpointer, real `/memories/` isolation, and pool-recreation
-coverage instead of reporting a green job with that integration test skipped.
+coverage instead of reporting a green job with that integration test skipped. The final
+step reuses that database to run `python -m agent.migrate` inside the exact built image,
+boots the image with startup migration, Redis dispatch, and background retries disabled,
+waits for `/live` and `/ready`, and requires an unauthenticated AP v2 command to return
+401. It always emits container logs and removes the container. It deliberately makes no
+provider or model request; real Neon, provider, browser, and capability evidence remain
+deployment gates.
 
 That contract binds the complete `agent` job AST, not only its `run` strings.
 The only job keys are the reviewed name, `always()` condition, `changes`
-dependency, Ubuntu runner, 20-minute timeout, agent working directory, exact CI
-environment, exact PostgreSQL service, and ordered steps. `container`, `strategy`,
-`environment`, a self-hosted runner, any additional service, or any other extra or
-changed job key fails; changing any field of the one reviewed PostgreSQL service also
-fails. All eleven steps are exact and ordered: checkout is pinned to its
+dependency, Ubuntu runner, 30-minute timeout, exact CI environment, exact PostgreSQL
+service, and ordered steps. `defaults`, `container`, `strategy`, `environment`, a
+self-hosted runner, any additional service, or any other extra or changed job key fails;
+changing any field of the one reviewed PostgreSQL service also fails. All twelve steps
+are exact and ordered: checkout is pinned to its
 reviewed SHA with only `persist-credentials: false`; setup-python v7.0.0 is
-pinned with Python 3.12; setup-uv v8.3.2 is pinned with only the reviewed cache
-inputs; and the eight run steps retain their exact names, conditions, commands,
-and allowed keys. Adding, deleting, moving, replacing, or changing an action,
-including a pinned or local composite action, is a deliberate baseline change
-in the verifier and its mutation tests.
+pinned with Python 3.12; setup-uv v9.0.0 is pinned with uv 0.11.29, its reviewed
+checksum, and the reviewed cache inputs; the eight ordinary run steps retain their exact
+names, conditions, commands, and allowed keys; and the twelfth step builds, inspects,
+migrates, boots, probes, logs, and removes the real delivery image.
+Adding, deleting, moving, replacing, or changing an action or step, including a pinned or
+local composite action, is a deliberate baseline change in the verifier and its mutation
+tests.
 
 The setup-python v7 major removes only the unused `pip-install` input from this
-repository's surface. setup-uv v8 removes the deprecated custom
-`manifest-file` format and mutable major/minor tags; this repository uses
-neither, keeps full-SHA pins, and uses inputs still declared by v8.3.2:
-`version`, `checksum`, `enable-cache`, and `cache-dependency-glob`.
+repository's surface. Every setup-uv invocation uses the same full-SHA v9.0.0 action,
+explicit `version` and `checksum`, plus only its job's reviewed cache inputs. The root
+`[tool.uv] required-version = "==0.11.29"` rejects a mismatched local binary, and the
+agent Dockerfile binds the same version to its immutable uv image digest. The repository
+verifier rejects a missing call, a new unreviewed call, or drift in any of those three
+surfaces.
 
 No job in the required-check emitter or its transitive `needs` graph may use
 job-level `uses`, whether it calls a local or external reusable workflow.
@@ -152,9 +167,9 @@ Rulesets, environments, and branch policies request an explicit
 second-page requirement fails closed:
 
 ```bash
-uv run --no-project --with pyyaml==6.0.3 \
+uv run --frozen --package syshin0116-dev-agent \
   python scripts/verify_repository_governance.py
-uv run --no-project --with pyyaml==6.0.3 \
+uv run --frozen --package syshin0116-dev-agent \
   python scripts/verify_repository_governance.py --live
 ```
 
@@ -235,31 +250,73 @@ external setting disable a workflow.
 
 ## Deployment environment branches
 
-Keep the existing Vercel environments explicit:
+Keep the Vercel and agent delivery environments explicit and disjoint:
 
 | Environment | Deployment branches |
 |---|---|
 | `Preview` | No branch restriction and no required reviewer, so every contributor branch can receive a routine preview |
 | `Production` | Selected branches and tags: branch `main` only; required reviewer `syshin0116`, with self-review allowed |
+| `Agent Preview` | No branch restriction; required reviewer `syshin0116`, with self-review allowed; in-repository pull requests only are enforced by the workflow and WIF condition |
+| `Agent Production` | Selected branches and tags: branch `main` only; required reviewer `syshin0116`, with self-review allowed |
 
 The verifier compares these settings exactly, including branch policy,
 protection-rule types, reviewer identities, `prevent_self_review`, and admin
-bypass. The environment-name set is also exact, so an undeclared `Staging` or
-other environment cannot silently become a deployment surface. At the time
-this contract was recorded, both environments had the owner as a required
-reviewer with `prevent_self_review: false`. The desired routine state removes
-that reviewer from `Preview`; `Production` keeps the existing owner gate and
-explicitly permits self-review so a solo owner cannot deadlock. The current
-Preview mismatch is an external rollout item, not something this PR mutates.
+bypass. Admin bypass is disabled for `Agent Preview`, `Agent Production`, and
+`Evaluation Publication`; the Vercel environments retain their existing settings. The
+environment-name set is also exact, so an undeclared `Staging` or other environment
+cannot silently become a deployment surface. Vercel `Preview` remains review-free for
+routine contributor previews. Both agent environments keep the owner gate and explicitly
+permit self-review so a solo owner cannot deadlock. Creating or reconciling these settings
+is an external rollout item; the checked-in contract does not claim it has already been
+applied.
 
-When separate Cloud Run `preview` and `production` environments are introduced,
-add them to the checked-in policy in the same PR as their workflows; do not
-silently reuse the Vercel environments.
+The image builder runs first through `agent-image-build.yml` without any GitHub
+environment, environment secret, or deployment credential. It can write only to the
+target's isolated registry. The one subsequent `agent-release.yml` job references the
+exact agent environment, so a normal preview or production delivery needs one approval
+before migration credentials, the smoke token, runtime validation, or traffic are
+available. Manual rollback uses the same release boundary and also needs one approval.
+This two-workflow shape keeps registry-writer and deployer credentials on different
+runners without claiming that one environment review yields two independent approvals.
+The sole active `github-production` WIF provider explicitly maps numeric repository and
+owner IDs plus the four phase-specific delivery roles, and its condition references only
+those mapped attributes. The legacy `github-preview` provider is managed disabled as
+described in the [Cloud Run delivery runbook](../runbooks/cloud-run-delivery.md).
+
+When `AGENT_CLOUD_RUN_ENABLED=true`, the agent preview caller handles only
+`opened`, `reopened`, and `synchronize` events from same-repository, non-Dependabot pull
+requests. Its secretless builder resolves the exact PR head before the owner-gated
+`Agent Preview` release targets the fixed shared `agent-preview` service. A single global
+caller concurrency group serializes that shared service with
+`cancel-in-progress=false`; there is no label, per-PR service, URL comment, or expiry
+automation.
+
+After the reviewer releases `agent-release.yml` and before GCP authentication, a pinned
+repository validator binds the exact target/environment/mode, source SHA, isolated digest
+or rollback revision, and a fresh bounded smoke token. Preview rechecks the still-open
+same-repository PR head. Production deploy rechecks current `main` before and after the
+exact successful `ci/check`, `protocol/compat`, and `wiki/verify` check-runs from GitHub
+Actions. Manual rollback requires `workflow_dispatch`, current `main`, an exact revision,
+and the production review but deliberately does not require green candidate checks.
+Caller-only preview/production concurrency never cancels an approved release.
+
+Environment inventory is also exact. `Evaluation Publication` contains no secrets or
+variables. `Agent Preview` and `Agent Production` each contain only
+`AGENT_SMOKE_BEARER_TOKEN` and no variables. The verifier compares names but never reads
+or logs secret values. Immediately before every agent approval, the operator must replace
+that secret with an owner JWT valid for at most two hours and with at least 65 minutes
+remaining. The release gate rejects stale or long-lived public claims before GCP auth,
+and the live smoke verifies the signature. Automatic minting is not implemented; storing
+one long-lived static JWT is forbidden. Vercel environment secrets are outside this
+repository-governance inventory.
 
 Environment reviewers are independent of branch policy. A solo-owner approval
-is safe only when `prevent_self_review` is disabled. Keep routine previews free
-of mandatory review; reserve an owner approval for a deliberately gated
-production or spend-bearing preview.
+is usable only when `prevent_self_review` is disabled. Keep routine Vercel previews free
+of mandatory review; retain owner approval for both spend-bearing agent releases and
+production.
+Anonymous visitor access can be enabled only by a reviewed Agent Production release after
+ADR-0006's gates pass. Agent Preview validates a candidate; it is never the public guest
+path.
 
 ## Dependabot and scheduled audit
 
@@ -309,14 +366,12 @@ one stable `dependency/audit` result. It is an alerting workflow, not a required
 main check; a discovered vulnerability should create a focused fix PR rather
 than making every unrelated PR permanently pending.
 
-Its agent job deliberately pins uv 0.11.29 under setup-uv v8.3.2. That action's
-built-in checksum table ends at uv 0.11.28, so the workflow also pins the
-official Linux x64 0.11.29 archive SHA-256 rather than allowing an unverified
-download. Local uv commands validate the lock/export semantics but cannot
-emulate the GitHub Action's Node runtime, release download, checksum, and cache
-path. After this action rollup is pushed, manually dispatch **Dependency
-audit** and require its agent job to install uv 0.11.29 and pass before
-considering that scheduled path verified.
+Its agent job uses the repository-wide uv 0.11.29 and setup-uv v9.0.0 pins, including
+the reviewed official archive SHA-256 rather than allowing an unverified download. Local
+uv commands validate the version gate and lock/export semantics but cannot emulate the
+GitHub Action's Node runtime, release download, checksum, and cache path. After this action
+rollup is pushed, manually dispatch **Dependency audit** and require its agent job to
+install uv 0.11.29 and pass before considering that scheduled path verified.
 
 The web policy is executable in
 [`audit-dependencies.ts`](../../web/scripts/audit-dependencies.ts) and fails
@@ -373,14 +428,17 @@ re-resolution or add temporary transitive packages to `package.json`.
 4. Enable repository Actions and its full-SHA policy.
 5. Enable vulnerability alerts and Dependabot security updates, then confirm
    that security updates are not paused.
-6. Remove the required reviewer from routine `Preview`; retain the existing
-   `syshin0116` reviewer on `Production` with self-review allowed, and confirm
+6. Remove the required reviewer from routine Vercel `Preview`; retain the existing
+   `syshin0116` reviewer on Vercel `Production` with self-review allowed, and confirm
    both branch policies.
-7. Run the `--live` command from this runbook; it must pass.
-8. Manually dispatch **Dependency audit** once and triage any reported
+7. Create or reconcile `Agent Preview` and `Agent Production` with required reviewer
+   `syshin0116`, self-review allowed, admin bypass disabled, the branch policies above,
+   only `AGENT_SMOKE_BEARER_TOKEN`, and zero variables.
+8. Run the `--live` command from this runbook; it must pass.
+9. Manually dispatch **Dependency audit** once and triage any reported
    vulnerabilities in separate PRs.
 
-The settings in steps 3–6 live outside Git. A green local verifier does not mean
+The settings in steps 3–7 live outside Git. A green local verifier does not mean
 they have been applied.
 
 ## Official references

@@ -10,10 +10,21 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 
+from scripts.ops_foundation_contract import (
+    EXPECTED_SOURCE_CONDITIONS,
+    EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "agent/pyproject.toml",
+    "agent/src/agent/__init__.py",
+    "eval/pyproject.toml",
     "infra/gcp/.terraform-version",
     "infra/gcp/backend.tf",
+    "infra/gcp/cloud_run.tf",
     "infra/gcp/iam.tf",
     "infra/gcp/imports.tf",
     "infra/gcp/main.tf",
@@ -23,24 +34,37 @@ FIXTURE_FILES = (
     "infra/gcp/variables.tf",
     "infra/gcp/versions.tf",
 )
-PREVIEW_CONDITION_LINE = (
-    "  preview_wif_attribute_condition    = "
-    "\"assertion.repository_id == '${var.github_repository_id}' && "
-    "assertion.repository_owner_id == '${var.github_owner_id}' && "
-    "assertion.event_name == 'pull_request' && "
-    "assertion.environment == '${var.github_preview_environment}'\"\n"
+DISABLED_PREVIEW_CONDITION_LINE = (
+    "  disabled_preview_wif_attribute_condition = "
+    f'"{EXPECTED_SOURCE_CONDITIONS["disabled_preview"]}"\n'
 )
-PRODUCTION_CONDITION_LINE = (
-    "  production_wif_attribute_condition = "
-    "\"assertion.repository_id == '${var.github_repository_id}' && "
-    "assertion.repository_owner_id == '${var.github_owner_id}' && "
-    "assertion.event_name == 'push' && "
-    "assertion.ref == 'refs/heads/main' && "
-    "assertion.environment == '${var.github_production_environment}'\"\n"
+DELIVERY_CONDITION_LINE = (
+    "  delivery_wif_attribute_condition         = "
+    f'"{EXPECTED_SOURCE_CONDITIONS["delivery"]}"\n'
+)
+DELIVERY_ROLE_MAPPING_LINE = (
+    "  delivery_role_mapping                    = "
+    f'"{EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING}"\n'
 )
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
+    def test_broad_cloud_run_developer_role_is_absent(self) -> None:
+        reviewed_paths = (
+            REPO_ROOT / "DECISIONS.md",
+            REPO_ROOT / "infra/gcp/README.md",
+            REPO_ROOT / "docs/runbooks/cloud-run-delivery.md",
+            REPO_ROOT / "docs/runbooks/gcp-neon-foundation.md",
+            *(REPO_ROOT / "infra/gcp").glob("*.tf"),
+        )
+
+        for path in reviewed_paths:
+            with self.subTest(path=path.relative_to(REPO_ROOT)):
+                self.assertNotIn(
+                    "roles/run" + ".developer",
+                    path.read_text(encoding="utf-8"),
+                )
+
     def _fixture(self, directory: str) -> Path:
         root = Path(directory)
         for relative_path in FIXTURE_FILES:
@@ -101,6 +125,28 @@ class StaticVerifierMutationTests(unittest.TestCase):
             result = self._run(self._fixture(directory))
 
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_builder_role_arms_are_lazy_before_optional_environment_claims(
+        self,
+    ) -> None:
+        self.assertIn(
+            "assertion.workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
+            "assertion.ref ? (assertion.job_workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@' + "
+            "assertion.ref ? 'preview-builder' : assertion.environment == ",
+            EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING,
+        )
+        self.assertIn(
+            "assertion.workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@"
+            "refs/heads/main' ? (assertion.job_workflow_ref == "
+            "'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@"
+            "refs/heads/main' ? 'production-builder' : assertion.environment == ",
+            EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING,
+        )
+        self.assertNotIn("environment", EXPECTED_SOURCE_CONDITIONS["delivery"])
+        self.assertNotIn("assertion.", EXPECTED_SOURCE_CONDITIONS["delivery"])
 
     def test_static_rejects_ignored_destructive_override_before_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -444,7 +490,7 @@ printf '%s\n' \
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "discovery must exactly equal one reviewed file/run",
+            "discovery must exactly equal the reviewed file/run inventory",
             result.stderr,
         )
 
@@ -488,6 +534,23 @@ printf '%s\n' \
             )
             self.assertIn(expected, result.stderr)
 
+    def test_cloud_run_source_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            cloud_run_path = root / "infra/gcp/cloud_run.tf"
+            original = cloud_run_path.read_text(encoding="utf-8")
+            expected = "      max_instance_count = 1"
+            self.assertEqual(1, original.count(expected))
+            cloud_run_path.write_text(
+                original.replace(expected, "      max_instance_count = 2", 1),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Terraform source content digest is not exact", result.stderr)
+
     def test_every_previously_unchecked_resource_body_fails_closed(self) -> None:
         mutations = {
             "project_service": (
@@ -497,8 +560,24 @@ printf '%s\n' \
             ),
             "artifact_registry": (
                 "infra/gcp/main.tf",
-                "    immutable_tags = true",
-                "    immutable_tags = false",
+                (
+                    '  description   = "Production agent images with bounded rollback retention"\n'
+                    '  format        = "DOCKER"\n\n'
+                    "  docker_config {\n"
+                    "    # Each delivery writes a never-reused run/attempt tag and deploys the\n"
+                    "    # resolved digest. Tags must remain mutable so cleanup policies can remove\n"
+                    "    # expired tagged versions.\n"
+                    "    immutable_tags = false"
+                ),
+                (
+                    '  description   = "Production agent images with bounded rollback retention"\n'
+                    '  format        = "DOCKER"\n\n'
+                    "  docker_config {\n"
+                    "    # Each delivery writes a never-reused run/attempt tag and deploys the\n"
+                    "    # resolved digest. Tags must remain mutable so cleanup policies can remove\n"
+                    "    # expired tagged versions.\n"
+                    "    immutable_tags = true"
+                ),
             ),
             "production_runtime": (
                 "infra/gcp/main.tf",
@@ -514,6 +593,11 @@ printf '%s\n' \
                 "infra/gcp/main.tf",
                 "  for_each = local.deployers",
                 "  for_each = {}",
+            ),
+            "cloud_run_delivery_role_extra_permission": (
+                "infra/gcp/iam.tf",
+                '    "run.jobs.run",',
+                '    "run.jobs.run",\n    "run.jobs.runWithOverrides",',
             ),
             "production_secrets": (
                 "infra/gcp/main.tf",
@@ -606,9 +690,11 @@ output "unreviewed_sensitive_value" {
             main_source = main_path.read_text(encoding="utf-8")
             main_path.write_text(
                 main_source.replace(
-                    "    immutable_tags = true", "    immutable_tags = false"
+                    "  cleanup_policy_dry_run = false",
+                    "  cleanup_policy_dry_run = true",
+                    1,
                 )
-                + "\n# immutable_tags = true\n",
+                + "\n# cleanup_policy_dry_run = false\n",
                 encoding="utf-8",
             )
             state_path = root / "infra/gcp/state.tf"
@@ -704,9 +790,9 @@ output "unreviewed_sensitive_value" {
             self.assertEqual(
                 [
                     "run",
-                    "--no-project",
-                    "--with",
-                    "pyyaml==6.0.3",
+                    "--frozen",
+                    "--package",
+                    "syshin0116-dev-agent",
                     "python",
                     str(governance.resolve()),
                     "--live",
@@ -717,25 +803,29 @@ output "unreviewed_sensitive_value" {
     def test_preview_condition_mutations_fail_closed(self) -> None:
         mutations: dict[str, Callable[[str], str]] = {
             "or_true": lambda line: line.replace(
-                "'${var.github_preview_environment}'\"",
-                "'${var.github_preview_environment}' || true\"",
+                "assertion.environment == '${var.github_preview_environment}' && ",
+                "(assertion.environment == '${var.github_preview_environment}' || "
+                "true) && ",
             ),
             "dropped_event_clause": lambda line: line.replace(
                 "assertion.event_name == 'pull_request' && ",
                 "",
             ),
-            "changed_grouping": lambda line: line.replace(
-                "assertion.repository_id == '${var.github_repository_id}' && "
-                "assertion.repository_owner_id == '${var.github_owner_id}'",
-                "(assertion.repository_id == '${var.github_repository_id}' && "
-                "assertion.repository_owner_id == '${var.github_owner_id}')",
+            "builder_requires_environment": lambda line: line.replace(
+                "(assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@' + assertion.ref ? 'preview-builder'",
+                "(assertion.environment == '${var.github_preview_environment}' && "
+                "assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@' + assertion.ref ? 'preview-builder'",
             ),
         }
 
         for name, mutation in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = self._fixture(directory)
-                self._mutate_condition(root, PREVIEW_CONDITION_LINE, mutation)
+                self._mutate_condition(root, DELIVERY_ROLE_MAPPING_LINE, mutation)
                 result = self._run(root)
 
                 self.assertNotEqual(0, result.returncode)
@@ -747,24 +837,67 @@ output "unreviewed_sensitive_value" {
     def test_production_condition_mutations_fail_closed(self) -> None:
         mutations: dict[str, Callable[[str], str]] = {
             "or_true": lambda line: line.replace(
-                "'${var.github_production_environment}'\"",
-                "'${var.github_production_environment}' || true\"",
+                "assertion.environment == '${var.github_production_environment}' && ",
+                "(assertion.environment == '${var.github_production_environment}' || "
+                "true) && ",
             ),
             "dropped_event_clause": lambda line: line.replace(
-                "assertion.event_name == 'push' && ",
+                "assertion.event_name in ['push', 'workflow_dispatch'] && ",
                 "",
             ),
             "changed_grouping": lambda line: line.replace(
-                "assertion.event_name == 'push' && assertion.ref == 'refs/heads/main'",
-                "(assertion.event_name == 'push' && "
+                "assertion.event_name in ['push', 'workflow_dispatch'] && "
+                "assertion.ref == 'refs/heads/main'",
+                "(assertion.event_name in ['push', 'workflow_dispatch'] && "
                 "assertion.ref == 'refs/heads/main')",
+            ),
+            "builder_requires_environment": lambda line: line.replace(
+                "(assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@refs/heads/main' ? 'production-builder'",
+                "(assertion.environment == '${var.github_production_environment}' && "
+                "assertion.job_workflow_ref == "
+                "'syshin0116/syshin0116.dev/.github/workflows/"
+                "agent-image-build.yml@refs/heads/main' ? 'production-builder'",
             ),
         }
 
         for name, mutation in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = self._fixture(directory)
-                self._mutate_condition(root, PRODUCTION_CONDITION_LINE, mutation)
+                self._mutate_condition(root, DELIVERY_ROLE_MAPPING_LINE, mutation)
+                result = self._run(root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "Terraform locals configuration is not exact",
+                    result.stderr,
+                )
+
+    def test_provider_condition_raw_or_unmapped_fields_fail_closed(self) -> None:
+        mutations: dict[str, Callable[[str], str]] = {
+            "raw_repository_id": lambda line: line.replace(
+                "attribute.repository_id",
+                "assertion.repository_id",
+                1,
+            ),
+            "raw_owner_id": lambda line: line.replace(
+                "attribute.repository_owner_id",
+                "assertion.repository_owner_id",
+                1,
+            ),
+            "raw_environment": lambda line: line.replace(
+                "attribute.delivery_role in ",
+                "assertion.environment == '${var.github_production_environment}' && "
+                "attribute.delivery_role in ",
+                1,
+            ),
+        }
+
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = self._fixture(directory)
+                self._mutate_condition(root, DELIVERY_CONDITION_LINE, mutation)
                 result = self._run(root)
 
                 self.assertNotEqual(0, result.returncode)
@@ -778,13 +911,16 @@ output "unreviewed_sensitive_value" {
             root = self._fixture(directory)
             main_path = root / "infra/gcp/main.tf"
             original = main_path.read_text(encoding="utf-8")
-            expected = "  attribute_condition = local.preview_wif_attribute_condition\n"
+            expected = (
+                "  attribute_condition = "
+                "local.disabled_preview_wif_attribute_condition\n"
+            )
             self.assertEqual(1, original.count(expected))
             main_path.write_text(
                 original.replace(
                     expected,
                     "  attribute_condition = "
-                    '"(${local.preview_wif_attribute_condition}) || true"\n',
+                    '"(${local.disabled_preview_wif_attribute_condition}) || true"\n',
                     1,
                 ),
                 encoding="utf-8",
@@ -1201,12 +1337,90 @@ class LiveShellGuardTests(unittest.TestCase):
             text=True,
         )
 
+    @staticmethod
+    def _artifact_metadata() -> dict[str, object]:
+        return {
+            "name": (
+                "projects/festive-ally-503605-v7/locations/us-east4/repositories/agent"
+            ),
+            "dockerConfig": {"immutableTags": False},
+            "cleanupPolicyDryRun": False,
+            "cleanupPolicies": {
+                "delete-after-90-days": {
+                    "id": "delete-after-90-days",
+                    "action": "DELETE",
+                    "condition": {
+                        "tagState": "ANY",
+                        "olderThan": "7776000s",
+                    },
+                },
+                "keep-last-30": {
+                    "id": "keep-last-30",
+                    "action": "KEEP",
+                    "mostRecentVersions": {"keepCount": 30},
+                },
+            },
+        }
+
+    def _run_artifact_metadata(
+        self,
+        metadata: dict[str, object],
+    ) -> subprocess.CompletedProcess[str]:
+        payload = shlex.quote(json.dumps(metadata, separators=(",", ":")))
+        return self._run_helper(
+            f"printf '%s\\n' {payload} | "
+            "verify_artifact_repository_metadata "
+            "agent delete-after-90-days 7776000s keep-last-30 30"
+        )
+
+    def test_artifact_metadata_accepts_exact_active_retention(self) -> None:
+        result = self._run_artifact_metadata(self._artifact_metadata())
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_artifact_metadata_rejects_cleanup_and_mutability_drift(self) -> None:
+        mutations: dict[str, Callable[[dict[str, object]], None]] = {
+            "immutable_tags": lambda metadata: metadata["dockerConfig"].__setitem__(
+                "immutableTags", True
+            ),
+            "dry_run": lambda metadata: metadata.__setitem__(
+                "cleanupPolicyDryRun", True
+            ),
+            "delete_age": lambda metadata: metadata["cleanupPolicies"][
+                "delete-after-90-days"
+            ]["condition"].__setitem__("olderThan", "86400s"),
+            "delete_scope": lambda metadata: metadata["cleanupPolicies"][
+                "delete-after-90-days"
+            ]["condition"].__setitem__("tagPrefixes", ["temporary-"]),
+            "keep_count": lambda metadata: metadata["cleanupPolicies"]["keep-last-30"][
+                "mostRecentVersions"
+            ].__setitem__("keepCount", 3),
+            "extra_policy": lambda metadata: metadata["cleanupPolicies"].__setitem__(
+                "unreviewed", {"action": "KEEP"}
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                metadata = self._artifact_metadata()
+                mutate(metadata)
+                result = self._run_artifact_metadata(metadata)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "active cleanup retention policy drifted",
+                    result.stderr,
+                )
+
     def test_every_workload_account_is_forbidden_on_ancestor_policies(self) -> None:
         accounts = (
             "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
         )
         ancestors = json.dumps(
             [
@@ -1322,24 +1536,20 @@ class LiveShellGuardTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(
-            3,
+            2,
             verifier.count("assert_workload_accounts_have_no_direct_roles \\"),
         )
         self.assertIn(
             '"projects/${PROJECT_ID}" \\\n    "$ancestors_json"',
             verifier,
         )
-        self.assertIn(
-            '"projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \\\n'
-            '    "$ancestors_json"',
-            verifier,
-        )
+        self.assertIn("assert_policy_binding_pairs_exactly \\", verifier)
         self.assertIn(
             '"${ancestor_type}s/${ancestor_id}" \\\n      "$ancestors_json"',
             verifier,
         )
 
-    def test_project_key_scan_checks_accounts_outside_the_managed_four(self) -> None:
+    def test_project_key_scan_checks_accounts_outside_the_managed_eight(self) -> None:
         legacy_account = "legacy@festive-ally-503605-v7.iam.gserviceaccount.com"
         inventory = json.dumps(
             [
@@ -1361,6 +1571,30 @@ class LiveShellGuardTests(unittest.TestCase):
                 {
                     "email": (
                         "agent-prod-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-migrator@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-prod-migrator@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },
@@ -1443,6 +1677,30 @@ verify_project_has_no_user_managed_service_account_keys
                 {
                     "email": (
                         "agent-prod-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-migrator@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-prod-migrator@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },

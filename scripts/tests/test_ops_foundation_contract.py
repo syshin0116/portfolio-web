@@ -4,8 +4,8 @@ import copy
 import unittest
 
 from scripts.ops_foundation_contract import (
-    EXPECTED_ATTRIBUTE_MAPPING,
     EXPECTED_ISSUER,
+    EXPECTED_LIVE_ATTRIBUTE_MAPPINGS,
     EXPECTED_LIVE_CONDITIONS,
     ContractError,
     _json_digest,
@@ -18,15 +18,18 @@ from scripts.ops_foundation_contract import (
 
 
 def _live_provider(provider_id: str) -> dict[str, object]:
+    disabled = provider_id == "github-preview"
     return {
         "name": (
             "projects/72919926064/locations/global/"
             f"workloadIdentityPools/github/providers/{provider_id}"
         ),
         "state": "ACTIVE",
-        "disabled": False,
+        "disabled": disabled,
         "attributeCondition": EXPECTED_LIVE_CONDITIONS[provider_id],
-        "attributeMapping": EXPECTED_ATTRIBUTE_MAPPING,
+        "attributeMapping": copy.deepcopy(
+            EXPECTED_LIVE_ATTRIBUTE_MAPPINGS[provider_id]
+        ),
         "oidc": {"issuerUri": EXPECTED_ISSUER},
     }
 
@@ -97,7 +100,11 @@ def _terraform_test_records() -> list[dict[str, object]]:
         {
             "type": "test_abstract",
             "test_abstract": {
-                "tests/foundation.tftest.hcl": ["foundation_security_contract"]
+                "tests/foundation.tftest.hcl": [
+                    "foundation_security_contract",
+                    "foundation_bootstrap_contract",
+                    "jobs_bootstrap_contract",
+                ]
             },
         },
         {
@@ -110,10 +117,28 @@ def _terraform_test_records() -> list[dict[str, object]]:
             },
         },
         {
+            "type": "test_run",
+            "test_run": {
+                "path": "tests/foundation.tftest.hcl",
+                "run": "foundation_bootstrap_contract",
+                "progress": "complete",
+                "status": "pass",
+            },
+        },
+        {
+            "type": "test_run",
+            "test_run": {
+                "path": "tests/foundation.tftest.hcl",
+                "run": "jobs_bootstrap_contract",
+                "progress": "complete",
+                "status": "pass",
+            },
+        },
+        {
             "type": "test_summary",
             "test_summary": {
                 "status": "pass",
-                "passed": 1,
+                "passed": 3,
                 "failed": 0,
                 "errored": 0,
                 "skipped": 0,
@@ -123,13 +148,13 @@ def _terraform_test_records() -> list[dict[str, object]]:
 
 
 class TerraformTestResultContractTests(unittest.TestCase):
-    def test_exactly_one_reviewed_run_passes(self) -> None:
+    def test_exact_reviewed_run_inventory_passes(self) -> None:
         validate_terraform_test_result(_terraform_test_records())
 
     def test_zero_discovered_tests_fails_closed(self) -> None:
         records = _terraform_test_records()
         records[1]["test_abstract"] = {}
-        records.pop(2)
+        del records[2:5]
         records[2]["test_summary"] = {
             "status": "pass",
             "passed": 0,
@@ -140,13 +165,13 @@ class TerraformTestResultContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ContractError,
-            "discovery must exactly equal one reviewed file/run",
+            "discovery must exactly equal the reviewed file/run inventory",
         ):
             validate_terraform_test_result(records)
 
 
 class LiveWifContractTests(unittest.TestCase):
-    def test_exact_enabled_provider_set_passes(self) -> None:
+    def test_exact_single_active_and_managed_disabled_provider_set_passes(self) -> None:
         validate_live_wif(_live_wif())
 
     def test_third_provider_fails_closed(self) -> None:
@@ -164,11 +189,18 @@ class LiveWifContractTests(unittest.TestCase):
         ):
             validate_live_wif(document)
 
-    def test_disabled_provider_fails_closed(self) -> None:
+    def test_active_provider_disabled_fails_closed(self) -> None:
         document = _live_wif()
-        document["described"][0]["disabled"] = True  # type: ignore[index]
+        document["described"][1]["disabled"] = True  # type: ignore[index]
 
         with self.assertRaisesRegex(ContractError, "must be enabled"):
+            validate_live_wif(document)
+
+    def test_legacy_provider_reenabled_fails_closed(self) -> None:
+        document = _live_wif()
+        document["described"][0]["disabled"] = False  # type: ignore[index]
+
+        with self.assertRaisesRegex(ContractError, "must remain disabled"):
             validate_live_wif(document)
 
     def test_custom_audience_fails_closed(self) -> None:
@@ -182,6 +214,36 @@ class LiveWifContractTests(unittest.TestCase):
             "allowedAudiences must be absent or empty",
         ):
             validate_live_wif(document)
+
+    def test_unmapped_active_condition_field_fails_closed(self) -> None:
+        document = _live_wif()
+        provider = document["described"][1]  # type: ignore[index]
+        provider["attributeCondition"] = (  # type: ignore[index]
+            EXPECTED_LIVE_CONDITIONS["github-production"].replace(
+                "attribute.repository_id",
+                "assertion.repository_id",
+                1,
+            )
+        )
+
+        with self.assertRaisesRegex(ContractError, "attributeCondition is not exact"):
+            validate_live_wif(document)
+
+    def test_missing_or_optional_claim_mapping_fails_closed(self) -> None:
+        for mutation in ("missing_repository_id", "direct_environment"):
+            with self.subTest(mutation=mutation):
+                document = _live_wif()
+                mapping = document["described"][1]["attributeMapping"]  # type: ignore[index]
+                if mutation == "missing_repository_id":
+                    del mapping["attribute.repository_id"]
+                else:
+                    mapping["attribute.environment"] = "assertion.environment"
+
+                with self.assertRaisesRegex(
+                    ContractError,
+                    "attributeMapping is not exact",
+                ):
+                    validate_live_wif(document)
 
 
 class PolicyAuditContractTests(unittest.TestCase):

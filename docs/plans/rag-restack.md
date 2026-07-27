@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-07-27"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -25,10 +25,11 @@ template: plan
 
 # Plan: rebuild the agent on Aegra, get basic chat working, then evaluate
 
-> **Status: in progress.** The P0 native runtime mechanics and the P1 owner-auth boundary
-> are implemented; provider-backed Korean chat, deploy, UI, evaluation, and public-access
-> phases remain. Phases are written to be dispatched to separate agents. Read
-> [How to dispatch](#how-to-dispatch) first.
+> **Status: in progress.** The P0 native runtime mechanics, P1 owner-auth boundary, and
+> repository-side Cloud Run delivery automation are implemented. The external
+> GCP/Neon bootstrap and first live deployment, provider-backed Korean chat, UI,
+> evaluation, and public-access phases remain. Phases are written to be dispatched to
+> separate agents. Read [How to dispatch](#how-to-dispatch) first.
 
 > **Read [ADR-0008](../adr/0008-chatbot-is-a-rag-evaluation-testbed.md) before touching
 > anything here.** The purpose is comparing retrieval methods; the chat is an inspection
@@ -81,8 +82,8 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `langchain` | `==1.3.14` | |
 | `langchain-quickjs` | `==0.3.4` | async execution only; owner/eval tier first |
 | `pyjwt` | `==2.13.0` | replaces 130 LOC of hand-rolled base64url + HMAC |
-| `@assistant-ui/react` | `0.14.27` | |
-| `@assistant-ui/react-langgraph` | `0.14.12` | **not** `react-langchain` |
+| `@assistant-ui/react` | `0.14.28` | |
+| `@assistant-ui/react-langgraph` | `0.14.13` | **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
 
 **Already dropped:** `chromadb` (zero call sites).
@@ -171,27 +172,33 @@ tests pass. `content/` remains an immutable build input and is never moved under
 
 ## CI/CD and release contract
 
-The repository already has application and wiki CI, but no agent deployment workflow.
-The restack adds the following workflows. Workflow names are required checks and therefore
-part of the contract; renaming one requires updating branch protection in the same PR.
+The repository implements the following application, protocol, delivery, and dependency
+workflows. The three stable required-check contexts are a separate branch contract below;
+workflow files and reusable-workflow boundaries are also reviewed delivery inputs.
 
 ```text
 .github/workflows/
-├── ci.yml                    # web + agent + eval + index/security tests
+├── ci.yml                    # web + agent + eval + index/security checks
 ├── protocol-compat.yml       # AP v2 schema/codegen/fixture drift
-├── preview-agent.yml         # opt-in PR Cloud Run preview
-├── deploy-agent.yml          # main -> immutable image -> Cloud Run
-├── smoke-production.yml      # post-deploy protocol/security/browser gate
+├── agent-image-build.yml     # reusable secretless isolated image builder
+├── agent-release.yml         # reusable owner-gated release + pre-traffic smoke
+├── preview-agent.yml         # same-repository PR caller -> fixed preview service
+├── deploy-agent.yml          # reviewed main caller -> production or rollback
 └── dependency-audit.yml      # scheduled latest-release/security report
 ```
 
 ### Pull requests
 
-- `ci/web`: frozen Bun install, generated-content prebuild, unit tests, lint, typecheck,
-  production build, and Playwright chat tests against committed AP v2 fixtures.
-- `ci/agent`: root `uv sync --frozen`, Ruff, typecheck, unit/contract/security tests,
-  published-only mirror build, Docker build, and container smoke against ephemeral
-  Postgres.
+- `ci/web` currently runs a frozen Bun install, generated-content prebuild, unit tests,
+  lint, typecheck, and the production build. P3 acceptance adds Playwright chat tests
+  against committed AP v2 fixtures and the Korean-IME journey; those browser gates are
+  not claimed by the current workflow.
+- `ci/agent`: root `uv sync --frozen`, Ruff, unit/contract/security tests, and the
+  published-only mirror build. Its PostgreSQL 17 service runs the host integration
+  suite, then CI builds the real Linux amd64 image, runs that same image's
+  `python -m agent.migrate` against the same database, boots the image, verifies `/live`
+  and `/ready`, and requires an unauthenticated AP v2 command to return 401. This bounded
+  container smoke never sends a provider or model request.
 - `ci/eval`: dataset-schema validation, deterministic metric fixtures, registry/fingerprint
   contract, and a tiny no-provider-cost sweep. Full paid sweeps are never a PR requirement.
 - `protocol-compat`: fetch the Agent Protocol CDDL/OpenAPI revision recorded in
@@ -209,37 +216,47 @@ part of the contract; renaming one requires updating branch protection in the sa
 - Path filters include root `pyproject.toml`, `uv.lock`, `aegra.json`, `Dockerfile`,
   `protocol/**`, `scripts/**`, `content/**`, `agent/**`, `eval/**`, and `web/**`. A
   `content/**` change must rebuild both the web artifacts and the agent mirror.
-- Required checks: `ci/web`, `ci/agent`, `ci/eval`, `protocol-compat`, and wiki verification
-  when its paths match. Never merge on red CI; never let a path-filtered workflow report no
-  status for a required check.
+- Required checks are exactly `ci/check`, `protocol/compat`, and `wiki/verify`. Component
+  work remains path-aware behind the stable aggregate contexts. Never merge on red CI or
+  let a path filter suppress one of those three contexts.
 
 ### Preview and production
 
-- Vercel continues to create the web preview. `preview-agent.yml` is triggered only by an
-  explicit trusted label because every preview can spend model tokens. That label is an
-  opt-in trigger, not a routine reviewer or an environment-approval rule. The workflow
-  builds the exact PR SHA, deploys a separate Cloud Run preview service with owner-only
-  auth, `max-instances=1`, and one application worker, posts the URL to the PR, and expires
-  the service automatically.
+- Vercel continues to create the web preview. When the repository variable
+  `AGENT_CLOUD_RUN_ENABLED=true`, `preview-agent.yml` handles `opened`, `reopened`, and
+  `synchronize` events from same-repository, non-Dependabot pull requests. It builds the
+  exact PR head in the isolated secretless builder, then waits for an owner approval in
+  `Agent Preview` before releasing to the fixed shared `agent-preview` service. One global
+  caller concurrency group serializes that shared target with `cancel-in-progress=false`.
+  There is no trusted-label trigger, per-PR service, URL comment, or automatic expiry.
 - GitHub authenticates to GCP through Workload Identity Federation; no long-lived service
-  account JSON key is stored. Build once, push an immutable Artifact Registry image tagged
-  with the git SHA, record its digest/SBOM, and deploy that digest—never rebuild between
-  preview, smoke, and promotion.
-- `deploy-agent.yml` runs only after required main-branch CI succeeds. Before P6 it deploys
-  the owner-only service. After P6, the same workflow deploys the public revision but does
-  not shift traffic until `smoke-production` passes.
-- `smoke-production` verifies `/live` and `/ready`, owner and anonymous auth boundaries,
-  AP v2 two-turn/replay/HITL fixtures, publication exclusions, concurrent-submit rejection,
-  QuickJS/subagent tier limits, one Playwright Korean-IME conversation, and the deployed
-  `max-instances=1` plus single-worker settings.
+  account JSON key is stored. Preview and production use isolated builders and Artifact
+  Registry repositories. Each delivery attempt pushes a fresh git-SHA/run/attempt tag,
+  records its digest/SBOM in that builder job, and deploys only that digest—never trust a
+  pre-existing tag or rebuild between migration, smoke, and promotion.
+- `deploy-agent.yml` releases only the current reviewed `main` candidate whose exact
+  `ci/check`, `protocol/compat`, and `wiki/verify` check-runs succeeded. Before P6 it
+  deploys the owner-only service; after P6 it uses the same digest-bound path for the
+  reviewed public revision.
+- The full authenticated AP v2 smoke is integrated into `agent-release.yml`: it targets
+  the exact newly tagged revision while that revision still has 0% traffic, alongside
+  `/live`, `/ready`, and the unauthenticated 401 boundary. Only a successful pre-traffic
+  smoke permits promotion. Post-promotion checks are intentionally limited to health and
+  the cheap unauthenticated AP v2 boundary; there is no separate
+  `smoke-production.yml`.
+- The PR container smoke proves packaging, migration, startup, health, and fail-closed
+  routing without provider spend. It does not replace the P2/P3 deployed gates against
+  real Neon, a real model provider, the browser Korean-IME journey, or capability-policy
+  evidence.
 - Cloud Run keeps the previous healthy revision at zero traffic. Rollback is traffic
   reassignment to that known digest, not a rebuild. Database migrations must be backward
   compatible with one previous application revision; destructive migrations require a
   separate ADR and backup/restore rehearsal.
-- Use GitHub environments `Preview` and `Production` exactly. Reviewers, self-review, and
-  deployment branches are defined only in `.github/repository-governance.json` and checked
-  by `scripts/verify_repository_governance.py`; workflow or infrastructure verifiers must
-  not restate them. The central contract keeps the exact Production branch set `{main}`.
+- Use dedicated GitHub environments `Agent Preview` and `Agent Production`; the Vercel
+  environments remain `Preview` and `Production`. Reviewers, self-review, and deployment
+  branches are defined only in `.github/repository-governance.json` and checked by
+  `scripts/verify_repository_governance.py`. The central contract keeps both production
+  branch sets at exactly `{main}`.
 
 ### Staying current without surprise upgrades
 
@@ -491,15 +508,16 @@ if auth registration or its secret is missing.
   checkpoint/store operations must succeed while cross-schema, role-management, and
   administrative operations fail. Tighten the role to DML-only when Aegra exposes a
   supported no-DDL startup.
-- Deploy initially with `--memory 1Gi --no-cpu-throttling --timeout 3600
-  --max-instances 1 --concurrency 20`, a **dedicated minimal service account**, and
-  an application entrypoint fixed to one server worker. Turn Postgres pool knobs down
+- Deploy initially with 1 GiB memory, `cpu_idle=true`, `startup_cpu_boost=true`, a
+  300-second timeout, `max_instances=1`, concurrency 8, a **dedicated minimal service
+  account**, and an application entrypoint fixed to one server worker. Keep
+  `REDIS_BROKER_ENABLED=false` and `BG_JOB_MAX_RETRIES=0`. Turn Postgres pool knobs down
   (Aegra opens up to ~50 connections by default). Cloud Run's 512 MiB default is too close
   to the measured ~373 MiB clean Linux x86_64 BM25 runtime before Aegra, API, database
   pools, and concurrent requests are loaded.
 - Verify the owner token succeeds and an anonymous or forged token receives 401/403 on the
   exact streaming route used by the frontend, not only on a metadata route.
-- `--max-instances 1` and one application worker are both load-bearing: either setting
+- `max_instances=1` and one application worker are both load-bearing: either setting
   exceeding one splits P5's in-process guard.
 - Set the Anthropic organization spend cap. Grep startup logs for Aegra's
   data-not-isolated warning.
@@ -510,7 +528,7 @@ proves its separate direct runtime URL and the required grant/denial matrix agai
 Neon across the exercised async/sync database paths;
 `/live` returns 200, `/ready` is healthy, and `scripts/smoke.py` passes with owner preview
 credentials. The same streaming requests without credentials or with a forged subject
-receive 401/403; cold-start-to-first-token and full-image cold-start plus concurrency-20
+receive 401/403; cold-start-to-first-token and full-image cold-start plus concurrency-8
 memory are measured and recorded without approaching the 1 GiB limit. Starting a fresh
 revision from the same image digest restores persisted checkpoint/thread/memory state. Do
 not continue if graph routes are anonymously reachable, a pooler endpoint is configured,

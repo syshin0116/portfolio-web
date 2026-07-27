@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-07-26"
+updated: "2026-07-27"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -83,7 +83,9 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `@assistant-ui/react-langgraph` | `0.14.12` | **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
 
-**Drop:** `chromadb` (zero call sites), `fastapi`, `uvicorn`, `sse-starlette`, the `arq`
+**Already dropped:** `chromadb` (zero call sites).
+
+**Drop during the Aegra replacement:** `fastapi`, `uvicorn`, `sse-starlette`, the `arq`
 extra, `@langchain/react`, `@langchain/langgraph`.
 
 ## Target AI project tree

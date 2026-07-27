@@ -8,7 +8,7 @@ when_to_read: >
   or when looking for what has already been tried and what it scored.
 tags: [reference, retrieval, rag, evaluation, registry]
 status: draft
-updated: "2026-07-26"
+updated: "2026-07-27"
 owners: ["@syshin0116"]
 refs: [../adr/0008-chatbot-is-a-rag-evaluation-testbed.md, ../plans/rag-restack.md]
 template: reference
@@ -191,7 +191,7 @@ dimension rather than a row.
 | Method | Reason |
 |---|---|
 | ripgrep subprocess search | Shells out for a 2.4 MB corpus while its own in-process Python fallback does the same job correctly. Kept as an idea (see "exact substring" above), deleted as an implementation |
-| Chroma vector store | Declared in `pyproject.toml` with **zero call sites**. Never wired. Dropped rather than adopted by default - the vector-store choice should follow the embedding decision, not precede it |
+| Chroma vector store | Previously declared in `pyproject.toml` with **zero call sites** and removed after an unpatched critical advisory. Never wired. Dropped rather than adopted by default - the vector-store choice should follow the embedding decision, not precede it |
 
 ## The Korean tokenizer problem
 

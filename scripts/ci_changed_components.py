@@ -28,6 +28,12 @@ PUBLICATION_SEMANTICS_WEB_PATHS = frozenset(
         "web/scripts/prebuild.ts",
     }
 )
+OPS_FOUNDATION_PATHS = frozenset(
+    {
+        "scripts/tests/test_verify_ops_foundation.py",
+        "scripts/verify_ops_foundation.sh",
+    }
+)
 
 
 class ChangeDetectionError(RuntimeError):
@@ -58,17 +64,14 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
             affected["eval"] = True
         if (
             path.startswith("agent/")
-            or (
-                path.startswith("scripts/")
-                and path != "scripts/verify_ops_foundation.sh"
-            )
+            or (path.startswith("scripts/") and path not in OPS_FOUNDATION_PATHS)
             or path in ROOT_AGENT_PATHS
         ):
             affected["agent"] = True
             affected["eval"] = True
         if path.startswith("eval/"):
             affected["eval"] = True
-        if path.startswith("infra/") or path == "scripts/verify_ops_foundation.sh":
+        if path.startswith("infra/") or path in OPS_FOUNDATION_PATHS:
             affected["infra"] = True
     return affected
 

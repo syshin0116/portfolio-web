@@ -11,14 +11,30 @@ secret payload, secret version, or Neon credential.
 - one regional Docker Artifact Registry repository with immutable tags;
 - distinct production runtime, preview runtime, preview deployer, and production deployer
   service accounts;
-- separate GitHub OIDC providers for `Preview` pull requests and `Production` main;
+- separate GitHub OIDC providers for `Preview` pull requests and `Production` pushes to
+  `main`;
 - environment-specific act-as and secret-access bindings;
 - five disjoint empty Secret Manager resources per runtime environment.
 
 The existing `agent-runtime` resource remains the production runtime. Deployers have no
 project-wide Cloud Run role and no Artifact Registry writer role. A later deployment PR
 must create the Cloud Run services and a separate image-builder identity before granting
-service-scoped deployment permissions.
+service-scoped deployment permissions. It must also grant repository-scoped
+Artifact Registry reader access to the exact Cloud Run image-pull principal.
+
+IAM member resources are deliberately additive: changing them to authoritative
+role-level bindings without a reviewed live plan could remove unrelated or
+Google-managed members. The post-apply live verifier is the acceptance gate: it rejects
+extra direct members for the managed roles, public principals, direct project roles on
+the four workload identities, and known project- or resource-level impersonation and
+secret-access bypasses. Before builder and Cloud Run image-pull identities exist, it also
+requires repository-level reader and writer roles to be empty. Any failure requires a
+separate reviewed IAM remediation; it is never ignored or overwritten blindly.
+
+The production OIDC provider is currently pinned to the repository and owner numeric IDs,
+the `push` event, `refs/heads/main`, and the `Production` environment. There is no
+production deployment workflow yet, so a `job_workflow_ref` condition would be fictional.
+The deployment PR must add that condition after the exact workflow path exists.
 
 No user-managed service-account key is permitted.
 
@@ -42,6 +58,11 @@ Routine operator commands:
 terraform init
 terraform plan
 ```
+
+Terraform is pinned to `1.13.5` in both configuration and `.terraform-version`. Every
+remote plan is mandatory review material. Do not apply until the operator has confirmed
+that the plan contains only the intended imports, additions, metadata changes, and IAM
+member removals; any resource replacement or persistent-resource destroy is a blocker.
 
 Use an ephemeral access token or Application Default Credentials. Never pass a service
 account JSON key to Terraform. Do not run `apply` from CI.

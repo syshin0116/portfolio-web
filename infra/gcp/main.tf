@@ -1,4 +1,7 @@
 locals {
+  preview_wif_attribute_condition    = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'pull_request' && assertion.environment == '${var.github_preview_environment}'"
+  production_wif_attribute_condition = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'push' && assertion.ref == 'refs/heads/main' && assertion.environment == '${var.github_production_environment}'"
+
   required_services = toset([
     "artifactregistry.googleapis.com",
     "cloudresourcemanager.googleapis.com",
@@ -158,12 +161,7 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
   }
 
-  attribute_condition = join(" && ", [
-    "assertion.repository_id == '${var.github_repository_id}'",
-    "assertion.repository_owner_id == '${var.github_owner_id}'",
-    "assertion.event_name == 'pull_request'",
-    "assertion.environment == '${var.github_preview_environment}'",
-  ])
+  attribute_condition = local.preview_wif_attribute_condition
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -190,17 +188,13 @@ resource "google_iam_workload_identity_pool_provider" "production" {
   attribute_mapping = {
     "google.subject"                = "assertion.sub"
     "attribute.environment"         = "assertion.environment"
+    "attribute.event_name"          = "assertion.event_name"
     "attribute.ref"                 = "assertion.ref"
     "attribute.repository_id"       = "assertion.repository_id"
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
   }
 
-  attribute_condition = join(" && ", [
-    "assertion.repository_id == '${var.github_repository_id}'",
-    "assertion.repository_owner_id == '${var.github_owner_id}'",
-    "assertion.ref == 'refs/heads/main'",
-    "assertion.environment == '${var.github_production_environment}'",
-  ])
+  attribute_condition = local.production_wif_attribute_condition
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"

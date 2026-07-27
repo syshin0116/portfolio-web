@@ -44,15 +44,37 @@ After this foundation is reviewed and applied, the target is:
 
 - immutable image tags;
 - distinct `agent-preview-runtime` and `agent-runtime` identities;
-- preview and production deployers able to act as only their matching runtime;
+- the managed direct act-as role on each runtime containing only its matching deployer,
+  with known project- and resource-level bypasses rejected by the live verifier;
 - no project-wide Cloud Run role and no image-writer role on either deployer;
-- five disjoint empty Secret Manager resources per environment, readable only by the
-  matching runtime;
+- five disjoint empty Secret Manager resources per environment, each with one managed
+  direct `secretAccessor` member for the matching runtime;
 - preview federation restricted to the numeric repository and owner IDs, the `Preview`
   environment, and the `pull_request` event;
-- production federation additionally restricted to `refs/heads/main` and the
-  `Production` environment;
+- production federation restricted to the numeric repository and owner IDs, the `push`
+  event, `refs/heads/main`, and the `Production` environment;
 - no user-managed service-account keys.
+
+The live verifier additionally rejects public IAM members, any direct project or
+repository role on the four workload identities, project-level
+`serviceAccountUser`/`serviceAccountTokenCreator`/`secretAccessor`/Secret Manager admin,
+extra members in the managed resource roles, and direct token-creator bindings. Terraform
+uses additive IAM member resources so an unreviewed apply cannot erase unrelated or
+Google-managed members. If the verifier finds drift, treat it as a blocker and remediate
+the exact binding in a separately reviewed plan. Until the follow-up creates the builder
+and Cloud Run image-pull identities, direct repository-level Artifact Registry reader and
+writer bindings must also be empty; a Google-managed member discovered there is reviewed,
+not silently removed.
+
+There is no production deployment workflow in the repository yet. The production
+provider therefore cannot honestly bind `job_workflow_ref`; `push` + `main` +
+`Production` is the current fail-closed boundary. The deployment PR must add the exact
+workflow-ref claim and condition after its workflow path exists, then update both the
+Terraform exact-value test and live verifier.
+
+Preview has no required environment reviewer so pull-request deployments cannot deadlock
+on the sole owner approving their own change. Production keeps the owner review gate; its
+self-review setting is governed by the repository governance manifest.
 
 ### Neon: verified repository state versus target
 
@@ -72,12 +94,16 @@ The accepted target from
 
 | Purpose | Target project | Target region | Target branch | Status |
 |---|---|---|---|---|
-| Auth.js Postgres | `syshin0116-web-prod` | `aws-us-east-1` | `production` | Unverified; create or confirm before cutover |
-| Aegra Postgres | `syshin0116-agent-prod` | `aws-us-east-1` | `production` | Unverified; create or confirm before cutover |
+| Auth.js production | `syshin0116-web-prod` | `aws-us-east-1` | `production` | Unverified; create or confirm before cutover |
+| Auth.js preview | `syshin0116-web-prod` | `aws-us-east-1` | isolated preview branch | Unverified; create with separate credentials |
+| Aegra production | `syshin0116-agent-prod` | `aws-us-east-1` | `production` | Unverified; create or confirm before cutover |
+| Aegra preview | `syshin0116-agent-prod` | `aws-us-east-1` | isolated preview branch | Unverified; create with separate credentials |
 | Rollback source | `syshin0116-dev` | `aws-ap-southeast-1` | `main` | Last recorded in ADR-0007; re-verify before relying on it |
 
-The agent must use a direct endpoint, never a `-pooler` endpoint. Web and agent use
-different projects, credentials, and failure domains.
+Web and agent use different projects, credentials, and failure domains. Application
+runtimes use Neon pooled endpoints. Schema or migration commands use separately held
+direct endpoints only; never expose a direct migration credential to Vercel or Cloud Run
+runtime configuration.
 
 ## Terraform state
 
@@ -102,6 +128,12 @@ Routine operator flow:
 terraform -chdir=infra/gcp init
 terraform -chdir=infra/gcp plan
 ```
+
+Use Terraform `1.13.5`; `required_version` and `infra/gcp/.terraform-version` pin the same
+exact release. A fresh remote plan is mandatory before every apply. Review the full plan,
+including imports and IAM removals, and stop on any persistent-resource replacement or
+destroy. The mock plan in CI is not evidence of live safety and cannot substitute for
+this review.
 
 CI deliberately uses `terraform init -backend=false` and mock-provider tests. It never
 receives GCP credentials and cannot read or modify remote state.
@@ -157,15 +189,24 @@ required secret has exactly one intended enabled version without reading its pay
 
 Keep Auth.js v5 and `@auth/pg-adapter`; only its Postgres endpoint changes.
 
+The repository currently contains no committed Auth.js schema migration or migration
+command. Do not describe one as reviewed, and do not cut over until a separate application
+PR adds and tests that contract.
+
 1. Confirm or create `syshin0116-web-prod` in the target region.
-2. Apply the reviewed Auth.js Postgres schema to its `production` branch.
-3. Configure GitHub and Google OAuth callback URLs for Vercel Preview first.
-4. Bind Vercel Preview `DATABASE_URL` to the new direct Neon endpoint.
-5. Verify login, callback rejection, logout, session refresh, and a fresh browser session.
-6. Promote the same application revision and an independently scoped production database
-   binding after approval.
-7. Re-authenticate the sole owner; do not migrate old sessions.
-8. Preserve the old database as the rollback source.
+2. Create an isolated preview branch and credentials that cannot access the production
+   branch.
+3. Land a reviewed Auth.js schema/migration contract, then apply it to preview through a
+   direct endpoint held only for migration.
+4. Configure GitHub and Google OAuth callback URLs for Vercel Preview first.
+5. Bind Vercel Preview `DATABASE_URL` to the preview branch's pooled endpoint.
+6. Verify login, callback rejection, logout, session refresh, and a fresh browser session.
+7. Apply the same reviewed schema contract to production through its direct migration
+   endpoint.
+8. Promote the same application revision with a separately scoped production pooled
+   runtime credential after approval.
+9. Re-authenticate the sole owner; do not migrate old sessions.
+10. Preserve the old database as the rollback source.
 
 Rollback restores the previous Vercel deployment and its previous environment binding. It
 does not copy new Auth.js rows back into the old database.
@@ -173,17 +214,22 @@ does not copy new Auth.js rows back into the old database.
 ## Agent cutover
 
 The target agent project starts empty. Do not copy test threads or legacy checkpoint
-tables.
+tables. The repository does not yet contain the target Aegra schema/migration command;
+the legacy custom server's startup-created tables are not that contract.
 
-1. Confirm or create `syshin0116-agent-prod` and obtain direct endpoints out of band.
-2. Use an isolated Neon branch for preview and the `production` branch for production.
-3. Inject endpoints into the matching preview and production secret resources.
-4. Run Aegra migrations from the reviewed application revision.
-5. Record table names and migration revision only; never print a connection string.
-6. Deploy an immutable image digest with the matching runtime service account.
-7. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
+1. Confirm or create `syshin0116-agent-prod`.
+2. Create an isolated preview branch and credentials that cannot access the `production`
+   branch.
+3. Land and test the target Aegra schema/migration contract in the application revision.
+4. Run that reviewed migration against preview with its direct endpoint.
+5. Inject only the preview branch's pooled runtime endpoint into
+   `agent-preview-database-url`.
+6. Record table names and migration revision only; never print a connection string.
+7. Deploy an immutable image digest with the matching runtime service account.
+8. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
    persistence, and exact Agent Protocol v2 streaming.
-8. Shift production traffic only after smoke tests pass.
+9. Apply the same migration to production through a separately held direct endpoint,
+   inject only its pooled runtime endpoint, and shift traffic after smoke tests pass.
 
 Rollback reassigns Cloud Run traffic to the previous healthy revision and restores the
 previous secret version. Database migrations must remain compatible with one previous
@@ -204,10 +250,14 @@ The follow-up deployment PR must:
    `roles/run.admin`;
 3. keep the existing environment-specific `serviceAccountUser` binding;
 4. build images through a distinct builder identity with repository-scoped writer access;
-5. pass only an immutable digest from the builder to the deployer;
-6. use GitHub OIDC and reviewed environments, with no JSON keys or long-lived cloud
+5. grant repository-scoped `roles/artifactregistry.reader` to the exact Cloud Run
+   image-pull principal, not to either deployer or application runtime by assumption;
+6. pass only an immutable digest from the builder to the deployer;
+7. add exact `job_workflow_ref` mapping and conditions to both OIDC providers after the
+   workflow paths exist;
+8. use GitHub OIDC and reviewed environments, with no JSON keys or long-lived cloud
    credentials;
-7. add preview, production, smoke, rollback, and concurrency gates in a separate PR.
+9. add preview, production, smoke, rollback, and concurrency gates in a separate PR.
 
 ## Verification
 

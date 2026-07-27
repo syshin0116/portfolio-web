@@ -3,6 +3,14 @@ mock_provider "google" {}
 run "foundation_security_contract" {
   command = plan
 
+  override_data {
+    target = data.google_project.current
+    values = {
+      number     = "72919926064"
+      project_id = "festive-ally-503605-v7"
+    }
+  }
+
   override_resource {
     target = google_artifact_registry_repository.agent
   }
@@ -95,33 +103,47 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = strcontains(google_iam_workload_identity_pool_provider.preview.attribute_condition, "assertion.event_name == 'pull_request'")
-    error_message = "Preview federation must accept pull_request workflows only."
+    condition     = google_iam_workload_identity_pool_provider.preview.attribute_condition == "assertion.repository_id == '1102380057' && assertion.repository_owner_id == '99532836' && assertion.event_name == 'pull_request' && assertion.environment == 'Preview'"
+    error_message = "Preview federation must exactly pin repository, owner, pull_request, and Preview without alternate CEL branches."
   }
 
   assert {
-    condition     = strcontains(google_iam_workload_identity_pool_provider.preview.attribute_condition, "assertion.repository_id == '1102380057'")
-    error_message = "Preview federation must pin the numeric repository ID."
-  }
-
-  assert {
-    condition     = strcontains(google_iam_workload_identity_pool_provider.preview.attribute_condition, "assertion.repository_owner_id == '99532836'")
-    error_message = "Preview federation must pin the numeric repository owner ID."
-  }
-
-  assert {
-    condition     = strcontains(google_iam_workload_identity_pool_provider.preview.attribute_condition, "assertion.environment == 'Preview'")
-    error_message = "Preview federation must pin the Preview environment."
+    condition     = google_iam_workload_identity_pool_provider.production.attribute_condition == "assertion.repository_id == '1102380057' && assertion.repository_owner_id == '99532836' && assertion.event_name == 'push' && assertion.ref == 'refs/heads/main' && assertion.environment == 'Production'"
+    error_message = "Production federation must exactly pin repository, owner, push, main, and Production without alternate CEL branches."
   }
 
   assert {
     condition = (
-      strcontains(google_iam_workload_identity_pool_provider.production.attribute_condition, "assertion.repository_id == '1102380057'")
-      && strcontains(google_iam_workload_identity_pool_provider.production.attribute_condition, "assertion.repository_owner_id == '99532836'")
-      && strcontains(google_iam_workload_identity_pool_provider.production.attribute_condition, "assertion.ref == 'refs/heads/main'")
-      && strcontains(google_iam_workload_identity_pool_provider.production.attribute_condition, "assertion.environment == 'Production'")
+      google_iam_workload_identity_pool_provider.preview.attribute_mapping
+      == tomap({
+        "google.subject"                = "assertion.sub"
+        "attribute.environment"         = "assertion.environment"
+        "attribute.event_name"          = "assertion.event_name"
+        "attribute.ref"                 = "assertion.ref"
+        "attribute.repository_id"       = "assertion.repository_id"
+        "attribute.repository_owner_id" = "assertion.repository_owner_id"
+      })
+      && google_iam_workload_identity_pool_provider.production.attribute_mapping
+      == tomap({
+        "google.subject"                = "assertion.sub"
+        "attribute.environment"         = "assertion.environment"
+        "attribute.event_name"          = "assertion.event_name"
+        "attribute.ref"                 = "assertion.ref"
+        "attribute.repository_id"       = "assertion.repository_id"
+        "attribute.repository_owner_id" = "assertion.repository_owner_id"
+      })
     )
-    error_message = "Production federation must pin repository, owner, main, and Production."
+    error_message = "Both WIF providers must expose only the reviewed GitHub OIDC claim mapping."
+  }
+
+  assert {
+    condition = (
+      google_service_account_iam_member.github_preview.member
+      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.environment/Preview"
+      && google_service_account_iam_member.github_production.member
+      == "principalSet://iam.googleapis.com/projects/72919926064/locations/global/workloadIdentityPools/github/attribute.environment/Production"
+    )
+    error_message = "WIF principal sets must derive the current project's numeric ID."
   }
 
   assert {
@@ -150,7 +172,7 @@ run "foundation_security_contract" {
         binding.member == "serviceAccount:agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
       ])
     )
-    error_message = "Each secret must be readable only by its matching runtime."
+    error_message = "Each managed secretAccessor member must target its matching runtime."
   }
 
   assert {
@@ -159,7 +181,7 @@ run "foundation_security_contract" {
       && google_service_account_iam_member.deployer_uses_runtime["preview"].service_account_id == google_service_account.preview_runtime.name
       && google_service_account_iam_member.deployer_uses_runtime["production"].service_account_id == google_service_account.runtime.name
     )
-    error_message = "Each deployer must have one environment-specific actAs binding."
+    error_message = "Each managed actAs member must target its environment-specific runtime."
   }
 
   assert {

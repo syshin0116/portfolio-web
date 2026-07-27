@@ -90,10 +90,15 @@ class PathClassificationTests(unittest.TestCase):
                 )
 
     def test_ops_verifier_runs_only_infrastructure_ci(self) -> None:
-        self.assertEqual(
-            {"web": False, "agent": False, "eval": False, "infra": True},
-            changes.classify_paths(["scripts/verify_ops_foundation.sh"]),
-        )
+        for path in (
+            "scripts/verify_ops_foundation.sh",
+            "scripts/tests/test_verify_ops_foundation.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": False, "agent": False, "eval": False, "infra": True},
+                    changes.classify_paths([path]),
+                )
 
     def test_unrelated_docs_do_not_rebuild_components(self) -> None:
         self.assertEqual(

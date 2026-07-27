@@ -41,11 +41,11 @@ resource "google_secret_manager_secret_iam_member" "preview_runtime_accessor" {
 resource "google_service_account_iam_member" "github_preview" {
   service_account_id = google_service_account.deployer["preview"].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${var.project_number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.environment/${var.github_preview_environment}"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.environment/${var.github_preview_environment}"
 }
 
 resource "google_service_account_iam_member" "github_production" {
   service_account_id = google_service_account.deployer["production"].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${var.project_number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.environment/${var.github_production_environment}"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/attribute.environment/${var.github_production_environment}"
 }

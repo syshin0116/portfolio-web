@@ -1,5 +1,5 @@
 resource "google_storage_bucket" "terraform_state" {
-  name     = "festive-ally-503605-v7-tfstate"
+  name     = "${var.project_id}-tfstate"
   project  = var.project_id
   location = var.region
 

@@ -25,8 +25,10 @@ template: plan
 
 # Plan: rebuild the agent on Aegra, get basic chat working, then evaluate
 
-> **Status: draft, not started.** Phases are written to be dispatched to separate agents.
-> Read [How to dispatch](#how-to-dispatch) first.
+> **Status: in progress.** The P0 native runtime mechanics and the P1 owner-auth boundary
+> are implemented; provider-backed Korean chat, deploy, UI, evaluation, and public-access
+> phases remain. Phases are written to be dispatched to separate agents. Read
+> [How to dispatch](#how-to-dispatch) first.
 
 > **Read [ADR-0008](../adr/0008-chatbot-is-a-rag-evaluation-testbed.md) before touching
 > anything here.** The purpose is comparing retrieval methods; the chat is an inspection
@@ -85,8 +87,9 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 
 **Already dropped:** `chromadb` (zero call sites).
 
-**Drop during the Aegra replacement:** `fastapi`, `uvicorn`, `sse-starlette`, the `arq`
-extra, `@langchain/react`, `@langchain/langgraph`.
+**Drop during the Aegra replacement:** direct `uvicorn`/`sse-starlette`, the `arq` extra,
+`@langchain/react`, and `@langchain/langgraph`. Retain FastAPI only for Aegra's supported
+`http.app` extension; it owns no Agent Protocol endpoint.
 
 ## Target AI project tree
 
@@ -121,6 +124,9 @@ agent/
 ├── src/agent/
 │   ├── graph.py                   # create_deep_agent entrypoint
 │   ├── auth.py                    # Aegra identity/auth hooks
+│   ├── http.py                    # minimal native-route guard; no protocol facade
+│   ├── preflight.py               # fail-closed Aegra registration checks
+│   ├── migrate.py                 # one-shot Aegra + LangGraph DB setup
 │   ├── middleware.py              # identity, tier, budget/run policy
 │   ├── capabilities/
 │   │   ├── quickjs.py             # bounded async CodeInterpreterMiddleware config
@@ -213,7 +219,8 @@ part of the contract; renaming one requires updating branch protection in the sa
   explicit trusted label because every preview can spend model tokens. That label is an
   opt-in trigger, not a routine reviewer or an environment-approval rule. The workflow
   builds the exact PR SHA, deploys a separate Cloud Run preview service with owner-only
-  auth and `max-instances=1`, posts the URL to the PR, and expires the service automatically.
+  auth, `max-instances=1`, and one application worker, posts the URL to the PR, and expires
+  the service automatically.
 - GitHub authenticates to GCP through Workload Identity Federation; no long-lived service
   account JSON key is stored. Build once, push an immutable Artifact Registry image tagged
   with the git SHA, record its digest/SBOM, and deploy that digest—never rebuild between
@@ -223,7 +230,8 @@ part of the contract; renaming one requires updating branch protection in the sa
   not shift traffic until `smoke-production` passes.
 - `smoke-production` verifies `/live` and `/ready`, owner and anonymous auth boundaries,
   AP v2 two-turn/replay/HITL fixtures, publication exclusions, concurrent-submit rejection,
-  QuickJS/subagent tier limits, and one Playwright Korean-IME conversation.
+  QuickJS/subagent tier limits, one Playwright Korean-IME conversation, and the deployed
+  `max-instances=1` plus single-worker settings.
 - Cloud Run keeps the previous healthy revision at zero traffic. Rollback is traffic
   reassignment to that known digest, not a rebuild. Database migrations must be backward
   compatible with one previous application revision; destructive migrations require a
@@ -250,8 +258,10 @@ part of the contract; renaming one requires updating branch protection in the sa
 Turn "deepagents under Aegra is unverified" into a step. Aegra's repo has zero mentions of
 deepagents.
 
-- `aegra.json` at the repo root: `dependencies: ["./agent/src"]`,
-  `graphs: {"agent": "./agent/src/agent/graph.py:graph"}`. No `auth` or `http` block yet.
+- `aegra.json` at the repo root registers the static compiled graph, mandatory
+  `agent.auth:auth`, and minimal `agent.http:app`. The custom FastAPI object becomes
+  Aegra's application before native routers are included, so its pure-ASGI guard wraps
+  native AP v2 commands without reimplementing them.
 - Set `FF_V2_EVENT_STREAMING=true`; Aegra 0.9.24 returns 503 from its AP v2 event route
   without this feature flag. Probe capabilities before starting the conversation.
 - Install `aegra-api==0.9.24 aegra-cli==0.9.24`; confirm no resolver conflict.
@@ -264,7 +274,10 @@ deepagents.
   deprecated for removal in deepagents 0.7. Resolve the namespace from the authoritative
   Aegra identity/config without any deprecated backend warnings; changing only
   `_build_backend` is incomplete.
-- `aegra serve` against local Postgres; confirm the Alembic tables appear.
+- Run `uv run --project agent --frozen --env-file .env python -m agent.migrate` against a
+  direct local/Neon Postgres endpoint, twice, then start with
+  `uv run --project agent --frozen aegra serve --config aegra.json`. Production keeps
+  `RUN_MIGRATIONS_ON_STARTUP=false`.
 - `scripts/smoke.py` on `langgraph_sdk.get_client`. **This becomes the permanent gate for
   every version bump.**
 - Register a deterministic fixture graph alongside the real graph for CI only. It always
@@ -276,15 +289,25 @@ deepagents.
 Aegra 0.9.24's AP v2 `POST /threads/{thread_id}/stream/events`, using content-block
 deltas, tool and run lifecycle events, and nested namespaces where applicable. Within one
 server lifetime, persist the last event/replay cursor, disconnect, reconnect, and prove that
-no visible content is duplicated or lost. Separately restart the process and prove
-checkpoint/thread state restores; do not claim broker event replay survives a process
+no visible content is duplicated or lost. Separately close every database/checkpointer
+pool, recreate the Aegra service graph objects, and prove checkpoint/thread state restores.
+This local gate is a pool-recreation test, not a process-restart claim; a fresh deployed
+process remains a P2 smoke requirement. Do not claim broker event replay survives a process
 restart unless a test demonstrates it. Verify store/memory namespace isolation and that a
-client-supplied `configurable.user_id` cannot change the trusted identity used by the
-backend: Aegra preserves that forged field but separately injects
+client-supplied `configurable.user_id` cannot change the trusted identity used by the backend:
+Aegra preserves that forged field but separately injects
 `langgraph_auth_user`/`server_info.user.identity`, which must be authoritative. With P0's
-no-auth local server, prove resistance to the forged field but defer genuine cross-user
-isolation to P1's owner auth. Exercise `run.start` and `input.respond` through
-`/threads/{thread_id}/commands`.
+owner-auth server, prove resistance to the forged field and genuine cross-user isolation.
+Exercise `run.start` and `input.respond` through `/threads/{thread_id}/commands`.
+
+**Implemented evidence (2026-07-27):** Python 3.12 tests run the real Aegra
+`LangGraphService` static-graph path with PostgreSQL 17, interrupt two identities, close
+all pools, reinitialize, resume one identity, and prove the other checkpoint plus both real
+`/memories/` namespaces survive unchanged despite a forged `configurable.user_id`. The
+actual custom app returns 409 from the guard on the native command route and hides legacy
+run/state/cron mutations with 404. Native thread DELETE returns 403 and leaves its
+checkpoint unchanged. The provider-backed two-turn Korean smoke remains a deployment
+acceptance check, not something the deterministic fixture claims to replace.
 
 > The second turn is not decoration - it is the exact regression from Aegra issues #224
 > (fixed 0.7.5) and #352 (fixed 0.9.14), both deepagents multi-turn bugs. If it fails,
@@ -425,6 +448,9 @@ gate**. Add a macro gate only with owner-reviewed `topic-smoke-v1` in P4.
 - Add `agent/src/agent/auth.py` here with the existing owner token flow and a mandatory
   `AGENT_AUTH_SECRET` length check. P1 authentication is fail-closed and owner-only; P5
   extends it with the anonymous tier. Never deploy an Aegra graph with no auth file.
+- Disable native thread deletion with `@auth.on.threads.delete`. Aegra 0.9.24 deletes
+  metadata without checkpoints and exposes no supported atomic extension, so there is no
+  honest user-facing delete operation yet. A later admin GC/retention job is separate.
 - Delete: `read_only_backend.py`, `result_formatter.py`, `ripgrep_search.py` (shells out
   for a 2.4 MB corpus while its own in-process fallback is correct), and 32 LOC of dead
   code in `prompts.py`.
@@ -452,32 +478,43 @@ if auth registration or its secret is missing.
   **Neon project regions are fixed at creation**, so this is only available now.
 - Set `RUN_MIGRATIONS_ON_STARTUP=false` on every Cloud Run revision. Before deployment, run
   a separate one-shot job from the same immutable image digest with a separately held
-  elevated direct Neon `DATABASE_URL` and the command `aegra db upgrade`; require success
-  before creating or updating the service revision. Never expose the migration credential
-  to the runtime.
+  elevated direct Neon `DATABASE_URL` and the command `python -m agent.migrate`; require
+  success before creating or updating the service revision. That entrypoint upgrades Aegra
+  metadata and creates the LangGraph checkpointer/store tables. Never expose the migration
+  credential to the runtime.
 - Give the service a separate least-privileged direct Neon URL. Reject `-pooler` hostnames
   before startup in accordance with ADR-0007, and exercise both async and synchronous
-  database paths in preview.
+  database paths in preview. Aegra 0.9.24 still invokes the LangGraph saver/store
+  `setup()` methods during lifespan startup, so the separated runtime role temporarily
+  needs the exact schema-local idempotent DDL those calls exercise in addition to narrow
+  DML. Treat the grant shape as a real-Neon deployment gate: startup/restart and
+  checkpoint/store operations must succeed while cross-schema, role-management, and
+  administrative operations fail. Tighten the role to DML-only when Aegra exposes a
+  supported no-DDL startup.
 - Deploy initially with `--memory 1Gi --no-cpu-throttling --timeout 3600
   --max-instances 1 --concurrency 20`, a **dedicated minimal service account**, and
-  Postgres pool knobs turned down (Aegra opens up to ~50 connections by default). Cloud
-  Run's 512 MiB default is too close to the measured ~373 MiB clean Linux x86_64 BM25
-  runtime before Aegra, API, database pools, and concurrent requests are loaded.
+  an application entrypoint fixed to one server worker. Turn Postgres pool knobs down
+  (Aegra opens up to ~50 connections by default). Cloud Run's 512 MiB default is too close
+  to the measured ~373 MiB clean Linux x86_64 BM25 runtime before Aegra, API, database
+  pools, and concurrent requests are loaded.
 - Verify the owner token succeeds and an anonymous or forged token receives 401/403 on the
   exact streaming route used by the frontend, not only on a metadata route.
-- `--max-instances 1` is load-bearing: it is what makes P5's in-process guard correct.
+- `--max-instances 1` and one application worker are both load-bearing: either setting
+  exceeding one splits P5's in-process guard.
 - Set the Anthropic organization spend cap. Grep startup logs for Aegra's
   data-not-isolated warning.
 
-**Accept:** the same-digest direct-URL `aegra db upgrade` job succeeds before deployment;
+**Accept:** the same-digest direct-URL `python -m agent.migrate` job succeeds before deployment;
 the service starts with `RUN_MIGRATIONS_ON_STARTUP=false`, rejects `-pooler` hostnames, and
-proves its separate direct runtime URL across the exercised async/sync database paths;
-`/health` 200 and `scripts/smoke.py` pass with
-owner preview credentials; the same streaming requests without credentials or with a
-forged subject receive 401/403; cold-start-to-first-token and full-image cold-start plus
-concurrency-20 memory are measured and recorded without approaching the 1 GiB limit. Do
+proves its separate direct runtime URL and the required grant/denial matrix against real
+Neon across the exercised async/sync database paths;
+`/live` returns 200, `/ready` is healthy, and `scripts/smoke.py` passes with owner preview
+credentials. The same streaming requests without credentials or with a forged subject
+receive 401/403; cold-start-to-first-token and full-image cold-start plus concurrency-20
+memory are measured and recorded without approaching the 1 GiB limit. Starting a fresh
+revision from the same image digest restores persisted checkpoint/thread/memory state. Do
 not continue if graph routes are anonymously reachable, a pooler endpoint is configured,
-or the measured memory leaves inadequate headroom.
+the process settings split the guard, or measured memory leaves inadequate headroom.
 
 ---
 
@@ -729,7 +766,8 @@ Nothing here is optional. Full detail in
   establishes an isolated anonymous subject; it is an abuse gate, not an account wall.
 - Verify the P1.2 mirror gate and the P5 guard on the **deployed** service, by actually
   exceeding the rate limit from a browser and firing two concurrent submits on one thread.
-- Confirm GC measurably reduces checkpoint row count.
+- Confirm the separate administrative retention/GC job measurably reduces orphaned
+  checkpoint row count; it does not enable user-facing thread deletion.
 - Add a stale-run sweep: with `REDIS_BROKER_ENABLED=false` there is no lease reaper, so an
   instance killed mid-run leaves a thread busy forever.
 - Decide LangSmith tracing **before**, not after - traces carry full prompts and full
@@ -745,6 +783,7 @@ Nothing here is optional. Full detail in
 | `HIGH` | **Same-thread run serialization is lost.** Aegra parses `multitask_strategy` and never reads it. This reverses the 2026-07-11 decision | P5's busy set. Honest limits: in-process, correct only at `--max-instances 1`, a check rather than a lock |
 | `HIGH` | Auth dispatch differs across legacy and AP v2 streaming/commands paths | Protocol fixtures test every production endpoint; SQL identity predicate plus outer ASGI guard is the boundary. Pin `aegra-api >= 0.9.7` |
 | `HIGH` | Client-supplied `configurable.user_id` wins over the server's | Read `langgraph_auth_user`. Fix in P1, before anything deploys |
+| `HIGH` | Aegra thread deletion strands checkpoints and cannot commit both stores atomically | Native DELETE is fail-closed with 403. Do not expose a faux-safe route; design admin GC separately |
 | `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra lists rate limiting as "Not yet planned" | Anthropic org spend cap is the only provider-enforced hard stop |
 | `MED` | **Evaluating with a broken baseline.** Every number produced against it is invalid, not merely pessimistic | P1.3 is a blocker for P4, with executable acceptance tests |
 | `MED` | Pre-1.0 churn. `aegra-api` shipped three releases in three weeks; four `unstable_` assistant-ui APIs on the happy path | Exact pins, committed lockfiles, `smoke.py` as the bump gate |

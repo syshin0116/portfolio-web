@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,6 @@ from deepagents.backends import (
     StateBackend,
     StoreBackend,
 )
-from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
 from agent.prompts import SYSTEM_PROMPT
@@ -34,33 +32,13 @@ AGENT_DIR = Path(__file__).resolve().parent.parent.parent  # agent/
 SKILLS_DIR = str(AGENT_DIR / "skills")
 
 
-def _trusted_identity(config: Mapping[str, Any]) -> str:
-    """Read the server-authoritative Aegra identity from a run config."""
-    configurable = config.get("configurable")
-    if not isinstance(configurable, Mapping):
-        raise ValueError("Aegra authentication context is required for memory")
-
-    auth_user = configurable.get("langgraph_auth_user")
-    if isinstance(auth_user, Mapping):
-        identity = auth_user.get("identity")
-    else:
-        identity = getattr(auth_user, "identity", None)
-
-    if not isinstance(identity, str) or not identity:
-        raise ValueError("Aegra authentication identity is required for memory")
-    return identity
-
-
 def _memory_namespace(runtime: Runtime[Any]) -> tuple[str, str, str]:
     """Scope persistent files to the authenticated Aegra identity."""
     server_info = runtime.server_info
     server_user = server_info.user if server_info is not None else None
     identity = getattr(server_user, "identity", None)
     if not isinstance(identity, str) or not identity:
-        # Aegra 0.9.24 does not populate Runtime.server_info for a static
-        # graph. It overwrites langgraph_auth_user after merging client config,
-        # so this remains server-authoritative while configurable.user_id does not.
-        identity = _trusted_identity(get_config())
+        raise ValueError("Aegra runtime authentication identity is required for memory")
     return (
         "users",
         hashlib.sha256(identity.encode()).hexdigest(),
@@ -131,6 +109,14 @@ def create_graph():
     )
 
 
+def _validate_aegra_registration() -> None:
+    """Cover startup even when config discovery omits the custom HTTP app."""
+    from agent.preflight import validate_runtime_preflight
+
+    validate_runtime_preflight()
+
+
+_validate_aegra_registration()
 graph = create_graph()
 
 __all__ = ["graph", "create_graph"]

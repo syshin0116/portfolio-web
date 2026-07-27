@@ -249,9 +249,10 @@ does not copy new Auth.js rows back into the old database.
 ## Agent cutover
 
 The target agent project starts empty. Do not copy test threads or legacy checkpoint
-tables. Aegra 0.9.24 supplies the reviewed migration command `aegra db upgrade`, but this
-repository does not yet contain the one-shot deployment job that must run it. Runtime
-startup migration must be disabled with the non-secret setting
+tables. The repository migration entrypoint is `python -m agent.migrate`; it upgrades
+Aegra metadata and initializes the LangGraph checkpointer and store schema. This repository
+does not yet contain the one-shot deployment job that must run it. Runtime startup
+Alembic migration must be disabled with the non-secret setting
 `RUN_MIGRATIONS_ON_STARTUP=false`; a service revision is never the migration runner.
 
 The migration job uses the same immutable image digest as the service, receives an
@@ -260,24 +261,44 @@ before deployment. The service receives a separate least-privileged direct runti
 Preview must exercise every Aegra 0.9.24 async and synchronous database path before
 cutover; a `-pooler` endpoint is not an allowed substitute.
 
+Aegra 0.9.24 still invokes the LangGraph saver and store `setup()` methods from its
+lifespan database initialization even when `RUN_MIGRATIONS_ON_STARTUP=false`. That setting
+disables startup Alembic migration; it does not provide a no-DDL runtime startup.
+Consequently, in addition to its normal narrow DML grants, the separated runtime role
+temporarily needs only the schema-local, idempotent DDL privileges required by those exact
+setup calls. It must not receive the broader migration credential, database
+administration, role management, or cross-schema privileges.
+
+This temporary grant is a deployment gate, not an assumed permission recipe. Before
+preview or production rollout, prove the proposed grants with the actual Neon runtime
+credential: initial startup and restart must complete, checkpoint and store operations
+must pass, and attempts to alter another schema, manage roles, or perform administrative
+operations must fail. Record only the tested grant shape and outcomes. Do not deploy
+until those real-Neon tests pass. Tighten the runtime role to DML-only as soon as Aegra
+offers a supported startup path that skips saver/store schema setup.
+
 1. Confirm or create `syshin0116-agent-prod`.
 2. Create an isolated preview branch and credentials that cannot access the `production`
    branch.
-3. Land and test a one-shot migration job that runs `aegra db upgrade` from the exact image
-   digest selected for deployment.
+3. Land and test a one-shot migration job that runs `python -m agent.migrate` from the
+   exact image digest selected for deployment.
 4. Give the preview migration job its separately held direct `DATABASE_URL`, run it, and
    require success before creating or updating the service revision.
 5. Inject only the preview branch's least-privileged direct runtime endpoint into
    `agent-preview-database-url`, and set `RUN_MIGRATIONS_ON_STARTUP=false`.
-6. Record table names and migration revision only; never print a connection string.
-7. Deploy the same immutable image digest with the matching runtime service account.
-8. Prove the direct runtime endpoint works through every Aegra database path exercised by
+6. Prove the preview runtime role's schema-local grant and denial boundaries on real Neon
+   as specified above; never print a connection string.
+7. Record table names and migration revision only.
+8. Deploy the same immutable image digest with the matching runtime service account,
+   Cloud Run `max-instances=1`, and exactly one application server worker.
+9. Prove the direct runtime endpoint works through every Aegra database path exercised by
    the preview smoke; reject any accidental `-pooler` hostname before startup.
-9. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
-   persistence, and exact Agent Protocol v2 streaming.
-10. Run the same digest's migration job against production through a separately held
+10. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
+    persistence, exact Agent Protocol v2 streaming, and the deployed instance/worker
+    limits.
+11. Run the same digest's migration job against production through a separately held
     elevated direct endpoint, inject only its least-privileged direct runtime endpoint,
-    and shift traffic after smoke tests pass.
+    repeat the real-Neon grant tests, and shift traffic after all gates pass.
 
 Rollback reassigns Cloud Run traffic to the previous healthy revision and restores the
 previous secret version. Database migrations must remain compatible with one previous
@@ -306,8 +327,12 @@ The follow-up deployment PR must:
 8. use GitHub OIDC and reviewed environments, with no JSON keys or long-lived cloud
    credentials;
 9. set `RUN_MIGRATIONS_ON_STARTUP=false` on both services and run the same-digest,
-   direct-URL `aegra db upgrade` job before each deployment;
-10. add preview, production, smoke, rollback, and concurrency gates in a separate PR.
+   direct-URL `python -m agent.migrate` job before each deployment;
+10. configure and verify Cloud Run `max-instances=1` and exactly one application server
+    worker, because the concurrency guard is process-local;
+11. make the real-Neon runtime grant matrix a required preview and production deployment
+    gate; and
+12. add preview, production, smoke, rollback, and concurrency gates in a separate PR.
 
 ## Verification
 

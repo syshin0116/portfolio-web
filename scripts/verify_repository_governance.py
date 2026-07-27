@@ -137,7 +137,26 @@ AGENT_CI_JOB = "agent"
 AGENT_CI_WORKING_DIRECTORY = "agent"
 AGENT_CI_CHANGED_CONDITION = "needs.changes.outputs.agent == 'true'"
 AGENT_CI_ENV = {
+    "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
     "AGENT_AUTH_SECRET": "ci-only-agent-secret-ci-only-agent-secret",
+}
+AGENT_CI_SERVICES = {
+    "postgres": {
+        "image": (
+            "postgres:17@sha256:"
+            "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d"
+        ),
+        "env": {
+            "POSTGRES_DB": "aegra_ci",
+            "POSTGRES_HOST_AUTH_METHOD": "trust",
+            "POSTGRES_USER": "postgres",
+        },
+        "ports": ["5432:5432"],
+        "options": (
+            '--health-cmd "pg_isready -U postgres -d aegra_ci" '
+            "--health-interval 10s --health-timeout 5s --health-retries 5"
+        ),
+    },
 }
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 AGENT_LOCK_COMMAND = ("uv", "lock", "--check")
@@ -217,6 +236,7 @@ EXPECTED_AGENT_CI_JOB = {
     "needs": ["changes"],
     "runs-on": "ubuntu-latest",
     "timeout-minutes": "20",
+    "services": AGENT_CI_SERVICES,
     "defaults": {
         "run": {
             "working-directory": AGENT_CI_WORKING_DIRECTORY,

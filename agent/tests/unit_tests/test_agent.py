@@ -1,11 +1,12 @@
 """Unit tests for the agent module."""
 
 import hashlib
-import importlib
-import warnings
+import inspect
 from types import SimpleNamespace
 
 import pytest
+from aegra_api.core import database as aegra_database
+from aegra_api.services.langgraph_service import LangGraphService
 from deepagents import FilesystemPermission
 from deepagents.backends import (
     CompositeBackend,
@@ -14,8 +15,10 @@ from deepagents.backends import (
     StoreBackend,
 )
 from deepagents.middleware.skills import SkillsMiddleware
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime, ServerInfo
+from langgraph.store.memory import InMemoryStore
 
 from agent.graph import (
     DEFAULT_MODEL,
@@ -23,7 +26,6 @@ from agent.graph import (
     _filesystem_permissions,
     _memory_namespace,
     _normalized_model_spec,
-    _trusted_identity,
     create_graph,
     graph,
 )
@@ -38,6 +40,44 @@ def test_graph_entrypoint_is_compiled_for_aegra():
     assert isinstance(graph, CompiledStateGraph)
     assert graph.checkpointer is None
     assert graph.store is None
+
+
+async def test_aegra_injects_request_scoped_persistence_into_static_graph(
+    monkeypatch,
+):
+    checkpointer = InMemorySaver()
+    store = InMemoryStore()
+    monkeypatch.setattr(
+        aegra_database.db_manager,
+        "get_checkpointer",
+        lambda: checkpointer,
+    )
+    monkeypatch.setattr(aegra_database.db_manager, "get_store", lambda: store)
+
+    service = LangGraphService()
+    service._graph_registry = {
+        "agent": {
+            "file_path": "./agent/src/agent/graph.py",
+            "export_name": "graph",
+        }
+    }
+    service._base_graph_cache["agent"] = graph
+
+    async with service.get_graph("agent") as request_graph:
+        assert request_graph is not graph
+        assert request_graph.checkpointer is checkpointer
+        assert request_graph.store is store
+
+    assert graph.checkpointer is None
+    assert graph.store is None
+
+
+def test_graph_module_never_constructs_its_own_persistence():
+    source = inspect.getsource(__import__("agent.graph", fromlist=["graph"]))
+
+    assert "AsyncPostgresSaver" not in source
+    assert "AsyncPostgresStore" not in source
+    assert "checkpointer=" not in source
 
 
 def test_compiled_graph_disables_general_purpose_subagent_dispatch():
@@ -120,47 +160,7 @@ def test_expected_blog_tools_are_registered():
     }
 
 
-def test_persistent_memory_namespace_uses_trusted_identity(monkeypatch):
-    graph_module = importlib.import_module("agent.graph")
-    config = {
-        "configurable": {
-            "user_id": "spoofed-client-value",
-            "langgraph_auth_user": SimpleNamespace(identity="alice"),
-        }
-    }
-    monkeypatch.setattr(graph_module, "get_config", lambda: config)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        alice = _memory_namespace(Runtime())
-        config["configurable"]["user_id"] = "another-spoofed-value"
-        assert _memory_namespace(Runtime()) == alice
-
-        config["configurable"]["langgraph_auth_user"] = {"identity": "bob"}
-        bob = _memory_namespace(Runtime())
-
-    assert alice != bob
-    assert alice[0] == "users"
-    assert bob[0] == "users"
-    assert not [
-        warning
-        for warning in caught
-        if issubclass(warning.category, DeprecationWarning)
-    ]
-
-
-def test_persistent_memory_namespace_prefers_runtime_server_identity(monkeypatch):
-    graph_module = importlib.import_module("agent.graph")
-    monkeypatch.setattr(
-        graph_module,
-        "get_config",
-        lambda: {
-            "configurable": {
-                "user_id": "spoofed-client-value",
-                "langgraph_auth_user": {"identity": "stale-config-value"},
-            }
-        },
-    )
+def test_persistent_memory_namespace_uses_only_runtime_server_identity():
     runtime = Runtime(
         server_info=ServerInfo(
             assistant_id="fixture",
@@ -176,9 +176,17 @@ def test_persistent_memory_namespace_prefers_runtime_server_identity(monkeypatch
     )
 
 
-def test_trusted_identity_requires_aegra_auth_context():
-    with pytest.raises(ValueError, match="authentication context"):
-        _trusted_identity({})
+def test_persistent_memory_namespace_fails_closed_without_runtime_identity():
+    with pytest.raises(ValueError, match="runtime authentication identity"):
+        _memory_namespace(Runtime())
 
-    with pytest.raises(ValueError, match="authentication identity"):
-        _trusted_identity({"configurable": {"user_id": "client-controlled"}})
+    with pytest.raises(ValueError, match="runtime authentication identity"):
+        _memory_namespace(
+            Runtime(
+                server_info=ServerInfo(
+                    assistant_id="fixture",
+                    graph_id="agent",
+                    user=SimpleNamespace(identity=""),
+                )
+            )
+        )

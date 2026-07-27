@@ -48,7 +48,7 @@ A personal tech blog, portfolio, and AI chatbot - built with [Next.js 16](https:
 | UI | React 19, shadcn/ui, Radix UI, Tailwind CSS v4 |
 | Content | Nuartz (headless markdown processor) |
 | Search | FlexSearch (CJK-aware) |
-| AI / RAG | LangGraph SDK, LangChain Core |
+| AI / RAG | Aegra Agent Protocol v2, LangGraph, Deep Agents |
 | Visualization | D3.js, Mermaid, Framer Motion |
 | Auth | Auth.js v5 + Postgres (Google / GitHub OAuth) |
 | Deployment | Vercel |
@@ -81,11 +81,11 @@ Copy the example files and fill in your values:
 
 ```bash
 cp web/.env.example web/.env.local
-cp agent/.env.example agent/.env
+cp agent/.env.example .env
 ```
 
 - `web/.env.local` - Auth.js/OAuth settings, `AUTH_ALLOWED_EMAILS`, optional `AUTH_ADMIN_EMAILS`, `DATABASE_URL`, agent URL, and `AGENT_AUTH_SECRET`
-- `agent/.env` - the same `AGENT_AUTH_SECRET`, exact `AGENT_ALLOWED_ORIGINS`, optional `AGENT_LEGACY_OWNER_ID`, `DATABASE_URL`, models, and provider keys
+- root `.env` - the same `AGENT_AUTH_SECRET`, the agent's direct `DATABASE_URL`, Aegra runtime flags, model, and provider keys
 
 Generate one Agent API secret and set the same value in both environments:
 
@@ -93,11 +93,21 @@ Generate one Agent API secret and set the same value in both environments:
 openssl rand -hex 32
 ```
 
-Production sign-in fails closed when `AUTH_ALLOWED_EMAILS` is empty. The Agent API exposes only `/ok` and `/info` without a short-lived token issued from an allowed Auth.js session. Shared assistant and model mutations additionally require an `admin` token scope; `AUTH_ADMIN_EMAILS` is an explicit subset and an empty list grants no administrators.
+Production sign-in fails closed when `AUTH_ALLOWED_EMAILS` is empty. Aegra's
+`/info`, `/live`, and `/ready` health surfaces remain public; Agent Protocol routes require
+a signed, short-lived token issued from an allowed Auth.js session.
 
-On the first ownership-aware Agent startup, legacy threads, checkpoints, and stores are migrated transactionally. When the shared Auth.js `users` table contains exactly one row, that user is selected automatically. Otherwise set `AGENT_LEGACY_OWNER_ID` to the intended Auth.js `users.id`; startup fails without changing legacy data when ownership is ambiguous.
+Use a direct Postgres/Neon endpoint for migrations, not a Neon `-pooler` endpoint. Run the
+same-image migration entrypoint before starting Aegra:
 
-For that first rollout, stop every legacy API and ARQ worker before starting the new API or worker. This quiescent window prevents an old process from writing an unscoped checkpoint after the migration snapshot.
+```bash
+uv run --project agent --frozen --env-file .env python -m agent.migrate
+```
+
+Production sets `RUN_MIGRATIONS_ON_STARTUP=false`; migration is an explicit deployment
+step. Aegra 0.9.24 cannot atomically delete thread metadata and LangGraph checkpoints, so
+thread deletion is intentionally unsupported. A future administrative retention/GC job is
+a separate operational feature, not user-facing deletion.
 
 ### Development
 
@@ -106,7 +116,7 @@ For that first rollout, stop every legacy API and ARQ worker before starting the
 cd web && bun dev       # http://localhost:3000
 
 # Agent backend (separate terminal, optional)
-cd agent && uv run langgraph dev
+uv run --project agent --frozen aegra serve --config aegra.json
 ```
 
 ## Project Structure

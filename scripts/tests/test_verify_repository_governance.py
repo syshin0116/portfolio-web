@@ -199,7 +199,15 @@ class LocalGovernanceTests(unittest.TestCase):
         )
         env = (
             "    env:\n"
+            "      AEGRA_POSTGRES_TEST_URL: "
+            "postgresql://postgres@localhost:5432/aegra_ci\n"
             "      AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret\n"
+        )
+        postgres_image = (
+            "    services:\n"
+            "      postgres:\n"
+            "        image: postgres:17@sha256:"
+            "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d\n"
         )
         mutations = {
             "name": ((header, header.replace("name: ci/agent", "name: ci/agent-v2")),),
@@ -226,11 +234,12 @@ class LocalGovernanceTests(unittest.TestCase):
             ),
             "services": (
                 (
-                    header,
-                    header
-                    + "    services:\n"
-                    + "      attacker:\n"
-                    + "        image: attacker.invalid/service:latest\n",
+                    postgres_image,
+                    postgres_image.replace(
+                        "postgres:17@sha256:"
+                        "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d",
+                        "attacker.invalid/service:latest",
+                    ),
                 ),
             ),
             "strategy": (
@@ -244,6 +253,51 @@ class LocalGovernanceTests(unittest.TestCase):
                     header,
                     header + "    environment: Production\n",
                 ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_agent_ci_job_mutation_rejected(replacements)
+
+    def test_agent_ci_postgres_gate_rejects_unreviewed_mutations(self) -> None:
+        mutations = {
+            "removed-test-url": (
+                (
+                    "      AEGRA_POSTGRES_TEST_URL: "
+                    "postgresql://postgres@localhost:5432/aegra_ci\n",
+                    "",
+                ),
+            ),
+            "database-version": (
+                (
+                    "        image: postgres:17@sha256:"
+                    "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d\n",
+                    "        image: postgres:16\n",
+                ),
+            ),
+            "database-name": (
+                (
+                    "          POSTGRES_DB: aegra_ci\n",
+                    "          POSTGRES_DB: postgres\n",
+                ),
+            ),
+            "authentication-mode": (
+                (
+                    "          POSTGRES_HOST_AUTH_METHOD: trust\n",
+                    "          POSTGRES_HOST_AUTH_METHOD: reject\n",
+                ),
+            ),
+            "published-port": (
+                ('          - "5432:5432"\n', '          - "15432:5432"\n'),
+            ),
+            "health-command": (
+                (
+                    '          --health-cmd "pg_isready -U postgres -d aegra_ci"\n',
+                    '          --health-cmd "true"\n',
+                ),
+            ),
+            "health-retries": (
+                ("          --health-retries 5\n", "          --health-retries 1\n"),
             ),
         }
         for label, replacements in mutations.items():
@@ -554,8 +608,12 @@ runs:
             ),
             "job-env": (
                 "    env:\n"
+                "      AEGRA_POSTGRES_TEST_URL: "
+                "postgresql://postgres@localhost:5432/aegra_ci\n"
                 "      AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret\n",
                 "    env:\n"
+                "      AEGRA_POSTGRES_TEST_URL: "
+                "postgresql://postgres@localhost:5432/aegra_ci\n"
                 "      AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret\n"
                 "      UV_PROJECT: ../web\n",
             ),

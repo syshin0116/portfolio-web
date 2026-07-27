@@ -73,10 +73,6 @@ def desired_live_responses() -> dict[str, object]:
                             "rebase",
                         ],
                         "dismiss_stale_reviews_on_push": False,
-                        "dismissal_restriction": {
-                            "allowed_actors": [],
-                            "enabled": False,
-                        },
                         "required_approving_review_count": 0,
                         "require_code_owner_review": False,
                         "require_last_push_approval": False,
@@ -1806,6 +1802,30 @@ class LiveGovernanceTests(unittest.TestCase):
                         for error in errors
                     )
                 )
+
+    def test_api_normalized_disabled_dismissal_restriction_is_omitted(self) -> None:
+        responses = desired_live_responses()
+        ruleset = json.loads(json.dumps(responses["rulesets/7"]))
+        pull_request = next(
+            rule for rule in ruleset["rules"] if rule["type"] == "pull_request"
+        )
+        self.assertNotIn("dismissal_restriction", pull_request["parameters"])
+
+        pull_request["parameters"]["dismissal_restriction"] = {
+            "allowed_actors": [],
+            "enabled": False,
+        }
+        responses["rulesets/7"] = ruleset
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "main pull-request parameters differ exactly" in error
+                for error in errors
+            ),
+            errors,
+        )
 
     def test_status_check_owned_parameter_mutations_fail_exactly(self) -> None:
         mutations = (

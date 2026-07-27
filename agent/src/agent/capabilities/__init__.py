@@ -6,6 +6,7 @@ from agent.capabilities.budget import (
     RunBudget,
     RunBudgetExceededError,
     RunBudgetMiddleware,
+    RunBudgetUnsettledError,
 )
 from agent.capabilities.subagents import (
     SUBAGENT_NAMES,
@@ -28,6 +29,7 @@ __all__ = [
     "RunBudget",
     "RunBudgetExceededError",
     "RunBudgetMiddleware",
+    "RunBudgetUnsettledError",
     "build_subagents",
     "count_anthropic_input_tokens",
     "dynamic_subagents_allowed",

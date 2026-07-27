@@ -185,8 +185,11 @@ _FORBIDDEN_CONFIG_KEYS = frozenset(
 )
 
 
-def _permission_set(permissions: Sequence[str] | None) -> frozenset[str]:
-    if permissions is None or isinstance(permissions, str):
+def _permission_set(permissions: object) -> frozenset[str]:
+    if not isinstance(permissions, Sequence) or isinstance(
+        permissions,
+        (str, bytes, bytearray),
+    ):
         return frozenset()
     if any(
         not isinstance(permission, str) or not permission for permission in permissions
@@ -198,7 +201,7 @@ def _permission_set(permissions: Sequence[str] | None) -> frozenset[str]:
 def dynamic_subagents_allowed(runtime: ServerRuntime[Any]) -> bool:
     """Authorize only from the authenticated server runtime, never run config."""
     user = runtime.user
-    if user is None:
+    if user is None or getattr(user, "is_authenticated", False) is not True:
         return False
     return bool(
         _permission_set(getattr(user, "permissions", None))

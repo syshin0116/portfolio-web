@@ -48,6 +48,10 @@ class InvalidDelegationError(ValueError):
     """Raised when a task dispatch is not a complete stateless envelope."""
 
 
+class RunBudgetUnsettledError(RuntimeError):
+    """Raised when finalization finds an open model or task reservation."""
+
+
 @dataclass(frozen=True, slots=True)
 class RunBudgetPolicy:
     """Immutable limits applied to one root run and every nested specialist."""
@@ -115,17 +119,49 @@ class TaskReservation:
 
 
 @dataclass(frozen=True, slots=True)
+class _ProviderTokenUsage:
+    """Trusted Anthropic pricing buckets parsed inside model middleware."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int
+    cache_write_input_tokens: int
+
+    @property
+    def total_tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_input_tokens
+            + self.cache_write_input_tokens
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class BudgetSnapshot:
-    """Bounded, serializable observation of a run ledger."""
+    """Bounded, serializable observation of a run ledger.
+
+    Provider buckets are populated only when every settled model call carried
+    complete Anthropic metadata; otherwise all four are ``None`` and
+    ``provider_usage_complete`` is false. Only :meth:`RunBudget.finalize`
+    produces ``finalized=True``.
+    """
 
     policy_id: str
     model_calls: int
+    model_reservations_in_flight: int
     tool_calls: int
     task_calls: int
     tasks_in_flight: int
     charged_tokens: int
+    provider_input_tokens: int | None
+    provider_output_tokens: int | None
+    provider_cache_read_input_tokens: int | None
+    provider_cache_write_input_tokens: int | None
+    provider_usage_complete: bool
     elapsed_ms: int
     exhausted: bool
+    finalized: bool
 
 
 class RunBudget:
@@ -139,6 +175,7 @@ class RunBudget:
         "_charged_tokens",
         "_clock",
         "_exhausted",
+        "_finalized_snapshot",
         "_lock",
         "_model_calls",
         "_next_reservation_id",
@@ -146,9 +183,15 @@ class RunBudget:
         "_open_model_reservations",
         "_open_task_reservations",
         "_policy",
+        "_provider_cache_read_input_tokens",
+        "_provider_cache_write_input_tokens",
+        "_provider_input_tokens",
+        "_provider_output_tokens",
+        "_provider_usage_complete",
         "_started_at",
         "_task_calls",
         "_tasks_in_flight",
+        "_terminal",
         "_tool_calls",
     )
 
@@ -174,6 +217,13 @@ class RunBudget:
         self._next_task_reservation_id = 0
         self._open_task_reservations: dict[int, bool] = {}
         self._exhausted = False
+        self._terminal = False
+        self._finalized_snapshot: BudgetSnapshot | None = None
+        self._provider_input_tokens = 0
+        self._provider_output_tokens = 0
+        self._provider_cache_read_input_tokens = 0
+        self._provider_cache_write_input_tokens = 0
+        self._provider_usage_complete = True
 
     @property
     def policy(self) -> RunBudgetPolicy:
@@ -193,6 +243,10 @@ class RunBudget:
     def _require_active_locked(self) -> None:
         if self._exhausted:
             raise RunBudgetExceededError("run budget is already exhausted")
+        if self._finalized_snapshot is not None:
+            raise RunBudgetExceededError("run budget is already finalized")
+        if self._terminal:
+            raise RunBudgetExceededError("run budget is already terminal")
         self._require_time_locked()
 
     def remaining_seconds(self) -> float:
@@ -258,7 +312,33 @@ class RunBudget:
         *,
         actual_tokens: int | None,
     ) -> None:
-        """Settle provider usage; missing usage retains the full reservation."""
+        """Settle a caller-known total without claiming trusted provider buckets."""
+        self._settle_model(
+            reservation,
+            actual_tokens=actual_tokens,
+            provider_usage=None,
+        )
+
+    def _settle_model_response(
+        self,
+        reservation: ModelReservation,
+        response: Any,
+    ) -> None:
+        """Settle totals and pricing buckets parsed from the provider response."""
+        self._settle_model(
+            reservation,
+            actual_tokens=_actual_token_usage(response),
+            provider_usage=_anthropic_provider_token_usage(response),
+        )
+
+    def _settle_model(
+        self,
+        reservation: ModelReservation,
+        *,
+        actual_tokens: int | None,
+        provider_usage: _ProviderTokenUsage | None,
+    ) -> None:
+        """Settle one reservation; missing usage retains the full charge."""
         with self._lock:
             if (
                 not isinstance(reservation, ModelReservation)
@@ -274,6 +354,26 @@ class RunBudget:
             )
             if reserved is None or reserved != reservation.reserved_tokens:
                 raise RuntimeError("model reservation is unknown or already settled")
+            if provider_usage is None:
+                self._provider_usage_complete = False
+            elif (
+                not isinstance(provider_usage, _ProviderTokenUsage)
+                or actual_tokens != provider_usage.total_tokens
+            ):
+                self._provider_usage_complete = False
+                self._exhausted = True
+                raise RunBudgetExceededError(
+                    "provider returned inconsistent token usage buckets"
+                )
+            else:
+                self._provider_input_tokens += provider_usage.input_tokens
+                self._provider_output_tokens += provider_usage.output_tokens
+                self._provider_cache_read_input_tokens += (
+                    provider_usage.cache_read_input_tokens
+                )
+                self._provider_cache_write_input_tokens += (
+                    provider_usage.cache_write_input_tokens
+                )
             if actual_tokens is None:
                 return
             if (
@@ -366,32 +466,93 @@ class RunBudget:
             self._tasks_in_flight -= 1
             del self._open_task_reservations[reservation.reservation_id]
 
+    def _snapshot_locked(
+        self,
+        *,
+        finalized: bool,
+        elapsed: float | None = None,
+    ) -> BudgetSnapshot:
+        observed_elapsed = self._elapsed_locked() if elapsed is None else elapsed
+        elapsed_ms = min(
+            int(observed_elapsed * 1_000),
+            int(self._policy.max_elapsed_seconds * 1_000),
+        )
+        if self._provider_usage_complete:
+            provider_input_tokens = self._provider_input_tokens
+            provider_output_tokens = self._provider_output_tokens
+            provider_cache_read_input_tokens = self._provider_cache_read_input_tokens
+            provider_cache_write_input_tokens = self._provider_cache_write_input_tokens
+        else:
+            provider_input_tokens = None
+            provider_output_tokens = None
+            provider_cache_read_input_tokens = None
+            provider_cache_write_input_tokens = None
+        return BudgetSnapshot(
+            policy_id=self._policy.policy_id,
+            model_calls=min(self._model_calls, self._policy.max_model_calls),
+            model_reservations_in_flight=len(self._open_model_reservations),
+            tool_calls=min(self._tool_calls, self._policy.max_tool_calls),
+            task_calls=min(self._task_calls, self._policy.max_task_calls),
+            tasks_in_flight=min(
+                self._tasks_in_flight,
+                self._policy.max_tasks_in_flight,
+            ),
+            charged_tokens=min(
+                self._charged_tokens,
+                self._policy.max_total_tokens,
+            ),
+            provider_input_tokens=provider_input_tokens,
+            provider_output_tokens=provider_output_tokens,
+            provider_cache_read_input_tokens=provider_cache_read_input_tokens,
+            provider_cache_write_input_tokens=provider_cache_write_input_tokens,
+            provider_usage_complete=self._provider_usage_complete,
+            elapsed_ms=elapsed_ms,
+            exhausted=self._exhausted,
+            finalized=finalized,
+        )
+
     def snapshot(self) -> BudgetSnapshot:
+        """Observe current state without making the run terminal."""
         with self._lock:
-            elapsed_ms = min(
-                int(self._elapsed_locked() * 1_000),
-                int(self._policy.max_elapsed_seconds * 1_000),
-            )
-            return BudgetSnapshot(
-                policy_id=self._policy.policy_id,
-                model_calls=min(self._model_calls, self._policy.max_model_calls),
-                tool_calls=min(self._tool_calls, self._policy.max_tool_calls),
-                task_calls=min(self._task_calls, self._policy.max_task_calls),
-                tasks_in_flight=min(
-                    self._tasks_in_flight,
-                    self._policy.max_tasks_in_flight,
-                ),
-                charged_tokens=min(
-                    self._charged_tokens,
-                    self._policy.max_total_tokens,
-                ),
-                elapsed_ms=elapsed_ms,
-                exhausted=self._exhausted,
-            )
+            if self._finalized_snapshot is not None:
+                return self._finalized_snapshot
+            return self._snapshot_locked(finalized=False)
+
+    def finalize(self) -> BudgetSnapshot:
+        """Atomically terminalize, assert settlement, and freeze one snapshot.
+
+        Settlement remains available after an unsettled failure so in-flight
+        ``finally`` blocks can release their reservations before a retry.
+        """
+        with self._lock:
+            if self._finalized_snapshot is not None:
+                return self._finalized_snapshot
+
+            self._terminal = True
+            elapsed = self._elapsed_locked()
+            elapsed_expired = elapsed >= self._policy.max_elapsed_seconds
+            if elapsed_expired:
+                self._exhausted = True
+
+            open_models = len(self._open_model_reservations)
+            open_tasks = len(self._open_task_reservations)
+            if open_models or open_tasks:
+                raise RunBudgetUnsettledError(
+                    "run budget has "
+                    f"{open_models} model and {open_tasks} task reservations in flight"
+                )
+            if elapsed_expired:
+                raise RunBudgetExceededError("run elapsed-time budget exhausted")
+
+            snapshot = self._snapshot_locked(finalized=True, elapsed=elapsed)
+            self._finalized_snapshot = snapshot
+            return snapshot
 
     def exhaust(self) -> None:
         """Mark a fail-closed preflight failure without spending a counter."""
         with self._lock:
+            if self._finalized_snapshot is not None:
+                raise RunBudgetExceededError("run budget is already finalized")
             self._exhausted = True
 
 
@@ -445,6 +606,103 @@ def _actual_token_usage(response: Any) -> int | None:
                 return None
         totals.append(total)
     return sum(totals)
+
+
+_ANTHROPIC_CACHE_CREATION_TTL_KEYS = (
+    "ephemeral_5m_input_tokens",
+    "ephemeral_1h_input_tokens",
+)
+_ANTHROPIC_INPUT_DETAIL_KEYS = frozenset(
+    {
+        "audio",
+        "cache_creation",
+        "cache_read",
+        *_ANTHROPIC_CACHE_CREATION_TTL_KEYS,
+    }
+)
+
+
+def _anthropic_provider_token_usage(response: Any) -> _ProviderTokenUsage | None:
+    """Parse exact Anthropic pricing buckets from normalized message metadata.
+
+    LangChain's ``input_tokens`` includes uncached input, cache reads, and cache
+    writes. Cache creation may be reported as one generic bucket or as the
+    current Anthropic five-minute and one-hour TTL buckets. Any missing,
+    negative, unknown, or internally inconsistent detail makes the complete
+    aggregate unavailable.
+    """
+    messages = _model_messages(response)
+    if not messages:
+        return None
+
+    input_tokens_total = 0
+    output_tokens_total = 0
+    cache_read_total = 0
+    cache_write_total = 0
+    for message in messages:
+        usage = getattr(message, "usage_metadata", None)
+        if not isinstance(usage, Mapping):
+            return None
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        total_tokens = usage.get("total_tokens")
+        if (
+            not _is_non_negative_integer(input_tokens)
+            or not _is_non_negative_integer(output_tokens)
+            or not _is_non_negative_integer(total_tokens)
+            or input_tokens + output_tokens != total_tokens
+        ):
+            return None
+
+        details = usage.get("input_token_details")
+        if (
+            not isinstance(details, Mapping)
+            or any(not isinstance(key, str) for key in details)
+            or not set(details).issubset(_ANTHROPIC_INPUT_DETAIL_KEYS)
+        ):
+            return None
+        cache_read = details.get("cache_read")
+        generic_cache_write = details.get("cache_creation")
+        if not _is_non_negative_integer(cache_read) or not _is_non_negative_integer(
+            generic_cache_write
+        ):
+            return None
+
+        ttl_values: list[int] = []
+        for key in _ANTHROPIC_CACHE_CREATION_TTL_KEYS:
+            if key not in details:
+                continue
+            value = details[key]
+            if not _is_non_negative_integer(value):
+                return None
+            ttl_values.append(value)
+        if ttl_values and len(ttl_values) != len(_ANTHROPIC_CACHE_CREATION_TTL_KEYS):
+            return None
+        specific_cache_write = sum(ttl_values)
+        if specific_cache_write > 0:
+            if generic_cache_write != 0:
+                return None
+            cache_write = specific_cache_write
+        else:
+            cache_write = generic_cache_write
+
+        if cache_read + cache_write > input_tokens:
+            return None
+        input_tokens_total += input_tokens - cache_read - cache_write
+        output_tokens_total += output_tokens
+        cache_read_total += cache_read
+        cache_write_total += cache_write
+
+    return _ProviderTokenUsage(
+        input_tokens=input_tokens_total,
+        output_tokens=output_tokens_total,
+        cache_read_input_tokens=cache_read_total,
+        cache_write_input_tokens=cache_write_total,
+    )
+
+
+def _is_non_negative_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _validate_task_call(
@@ -617,10 +875,7 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             except BaseException:
                 self._budget.settle_model(reservation, actual_tokens=None)
                 raise
-            self._budget.settle_model(
-                reservation,
-                actual_tokens=_actual_token_usage(response),
-            )
+            self._budget._settle_model_response(reservation, response)
             return response
 
         # Deep Agents appends this native middleware after user middleware.
@@ -688,5 +943,6 @@ __all__ = [
     "RunBudgetExceededError",
     "RunBudgetMiddleware",
     "RunBudgetPolicy",
+    "RunBudgetUnsettledError",
     "TaskReservation",
 ]

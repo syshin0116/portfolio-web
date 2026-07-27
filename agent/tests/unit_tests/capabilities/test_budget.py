@@ -6,13 +6,15 @@ import asyncio
 import json
 import pickle
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import FrozenInstanceError, asdict, replace
 from threading import Barrier
 
 import pytest
+from anthropic.types import CacheCreation, Usage
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_anthropic import ChatAnthropic
+from langchain_anthropic.chat_models import _create_usage_metadata
 from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -26,6 +28,7 @@ from agent.capabilities.budget import (
     RunBudget,
     RunBudgetExceededError,
     RunBudgetMiddleware,
+    RunBudgetUnsettledError,
     TaskReservation,
 )
 from agent.capabilities.token_counting import InputTokenCountError
@@ -117,12 +120,19 @@ def test_task_reservation_with_100_concurrent_attempts_commits_exactly_two():
     assert asdict(budget.snapshot()) == {
         "policy_id": "owner-dynamic-subagents-v1",
         "model_calls": 0,
+        "model_reservations_in_flight": 0,
         "tool_calls": 2,
         "task_calls": 2,
         "tasks_in_flight": 2,
         "charged_tokens": 4_096,
+        "provider_input_tokens": 0,
+        "provider_output_tokens": 0,
+        "provider_cache_read_input_tokens": 0,
+        "provider_cache_write_input_tokens": 0,
+        "provider_usage_complete": True,
         "elapsed_ms": 0,
         "exhausted": True,
+        "finalized": False,
     }
 
     for reservation in reservations:
@@ -279,6 +289,12 @@ async def test_model_usage_metadata_refunds_unused_token_reservation():
         1,
         100,
     )
+    snapshot = budget.snapshot()
+    assert snapshot.provider_usage_complete is False
+    assert snapshot.provider_input_tokens is None
+    assert snapshot.provider_output_tokens is None
+    assert snapshot.provider_cache_read_input_tokens is None
+    assert snapshot.provider_cache_write_input_tokens is None
 
 
 async def test_missing_model_usage_metadata_never_refunds_reservation():
@@ -295,7 +311,165 @@ async def test_missing_model_usage_metadata_never_refunds_reservation():
 
     await middleware.awrap_model_call(request, respond)
 
-    assert budget.snapshot().charged_tokens == 2_048
+    snapshot = budget.snapshot()
+    assert snapshot.charged_tokens == 2_048
+    assert snapshot.provider_usage_complete is False
+    assert (
+        snapshot.provider_input_tokens,
+        snapshot.provider_output_tokens,
+        snapshot.provider_cache_read_input_tokens,
+        snapshot.provider_cache_write_input_tokens,
+    ) == (None, None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("anthropic_usage", "expected"),
+    [
+        (
+            Usage(
+                input_tokens=80,
+                output_tokens=20,
+                cache_read_input_tokens=30,
+                cache_creation_input_tokens=10,
+            ),
+            (80, 20, 30, 10),
+        ),
+        (
+            Usage(
+                input_tokens=89,
+                output_tokens=20,
+                cache_read_input_tokens=11,
+                cache_creation_input_tokens=20,
+                cache_creation=CacheCreation(
+                    ephemeral_5m_input_tokens=7,
+                    ephemeral_1h_input_tokens=13,
+                ),
+            ),
+            (89, 20, 11, 20),
+        ),
+        (
+            Usage(
+                input_tokens=80,
+                output_tokens=20,
+                cache_read_input_tokens=30,
+                cache_creation_input_tokens=10,
+                cache_creation=CacheCreation(
+                    ephemeral_5m_input_tokens=0,
+                    ephemeral_1h_input_tokens=0,
+                ),
+            ),
+            (80, 20, 30, 10),
+        ),
+    ],
+    ids=[
+        "generic-cache-creation",
+        "ttl-cache-creation",
+        "zero-ttl-details-use-generic",
+    ],
+)
+async def test_anthropic_usage_tracks_exact_provider_pricing_buckets(
+    anthropic_usage,
+    expected,
+):
+    budget = RunBudget()
+    middleware = _middleware(budget)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def respond(_request):
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="bounded",
+                    usage_metadata=_create_usage_metadata(anthropic_usage),
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(request, respond)
+
+    snapshot = budget.finalize()
+    assert snapshot.provider_usage_complete is True
+    assert (
+        snapshot.provider_input_tokens,
+        snapshot.provider_output_tokens,
+        snapshot.provider_cache_read_input_tokens,
+        snapshot.provider_cache_write_input_tokens,
+    ) == expected
+    assert snapshot.charged_tokens == 140
+
+
+@pytest.mark.parametrize(
+    "input_details",
+    [
+        {},
+        {"cache_creation": 0},
+        {"cache_read": 0},
+        {"cache_read": -1, "cache_creation": 0},
+        {"cache_read": 80, "cache_creation": 50},
+        {
+            "cache_read": 10,
+            "cache_creation": 5,
+            "ephemeral_5m_input_tokens": 5,
+            "ephemeral_1h_input_tokens": 0,
+        },
+        {
+            "cache_read": 10,
+            "cache_creation": 0,
+            "ephemeral_24h_input_tokens": 5,
+        },
+        {
+            "cache_read": 10,
+            "cache_creation": 0,
+            "ephemeral_5m_input_tokens": 5,
+        },
+    ],
+    ids=[
+        "missing-cache-details",
+        "missing-cache-read",
+        "missing-cache-write",
+        "negative-cache-read",
+        "cache-sum-above-input",
+        "generic-and-ttl-double-count",
+        "unknown-ttl-bucket",
+        "partial-ttl-buckets",
+    ],
+)
+async def test_malformed_or_incomplete_anthropic_cache_usage_stays_incomplete(
+    input_details,
+):
+    budget = RunBudget()
+    middleware = _middleware(budget)
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def respond(_request):
+        message = AIMessage(content="bounded")
+        message.usage_metadata = {
+            "input_tokens": 120,
+            "output_tokens": 20,
+            "total_tokens": 140,
+            "input_token_details": input_details,
+        }
+        return ModelResponse(result=[message])
+
+    await middleware.awrap_model_call(request, respond)
+
+    snapshot = budget.finalize()
+    assert snapshot.provider_usage_complete is False
+    assert (
+        snapshot.provider_input_tokens,
+        snapshot.provider_output_tokens,
+        snapshot.provider_cache_read_input_tokens,
+        snapshot.provider_cache_write_input_tokens,
+    ) == (None, None, None, None)
+    assert snapshot.charged_tokens == 140
 
 
 def test_provider_usage_above_exact_reservation_closes_the_ledger():
@@ -360,7 +534,9 @@ async def test_any_missing_or_invalid_message_usage_prevents_partial_refund(
 
     await middleware.awrap_model_call(request, respond)
 
-    assert budget.snapshot().charged_tokens == 2_048
+    snapshot = budget.snapshot()
+    assert snapshot.charged_tokens == 2_048
+    assert snapshot.provider_usage_complete is False
 
 
 async def test_dense_unicode_input_is_rejected_before_calling_provider():
@@ -842,9 +1018,135 @@ def test_run_budget_is_non_serializable_but_snapshot_is_bounded_json():
     encoded = json.dumps(asdict(budget.snapshot()), sort_keys=True)
     assert encoded == (
         '{"charged_tokens": 2048, "elapsed_ms": 0, "exhausted": false, '
-        '"model_calls": 1, "policy_id": "owner-dynamic-subagents-v1", '
-        '"task_calls": 0, "tasks_in_flight": 0, "tool_calls": 0}'
+        '"finalized": false, "model_calls": 1, '
+        '"model_reservations_in_flight": 1, '
+        '"policy_id": "owner-dynamic-subagents-v1", '
+        '"provider_cache_read_input_tokens": 0, '
+        '"provider_cache_write_input_tokens": 0, '
+        '"provider_input_tokens": 0, "provider_output_tokens": 0, '
+        '"provider_usage_complete": true, "task_calls": 0, '
+        '"tasks_in_flight": 0, "tool_calls": 0}'
     )
+
+
+def test_snapshot_is_observational_and_finalize_is_frozen_terminal_and_idempotent():
+    now = [10.0]
+    budget = RunBudget(clock=lambda: now[0])
+
+    observation = budget.snapshot()
+    assert observation.finalized is False
+    assert observation.provider_usage_complete is True
+    budget.reserve_tool()
+
+    now[0] = 11.25
+    finalized = budget.finalize()
+    now[0] = 40.0
+
+    assert finalized.finalized is True
+    assert finalized.exhausted is False
+    assert finalized.elapsed_ms == 1_250
+    assert budget.finalize() is finalized
+    assert budget.snapshot() is finalized
+    with pytest.raises(FrozenInstanceError):
+        finalized.model_calls = 99
+    with pytest.raises(RunBudgetExceededError, match="finalized"):
+        budget.reserve_tool()
+    with pytest.raises(RunBudgetExceededError, match="finalized"):
+        budget.exhaust()
+
+
+def test_explicitly_exhausted_settled_budget_finalizes_without_looking_clean():
+    budget = RunBudget(clock=lambda: 0.0)
+    budget.exhaust()
+
+    finalized = budget.finalize()
+
+    assert finalized.finalized is True
+    assert finalized.exhausted is True
+    assert finalized.model_reservations_in_flight == 0
+    assert finalized.tasks_in_flight == 0
+
+
+def test_concurrent_finalize_calls_return_one_atomic_frozen_snapshot():
+    budget = RunBudget(clock=lambda: 0.0)
+    budget.reserve_tool()
+
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        snapshots = list(executor.map(lambda _index: budget.finalize(), range(100)))
+
+    assert all(snapshot is snapshots[0] for snapshot in snapshots)
+    assert snapshots[0].finalized is True
+    assert snapshots[0].tool_calls == 1
+
+
+def test_open_model_and_task_reservations_are_visible_and_prevent_finalization():
+    budget = RunBudget(clock=lambda: 0.0)
+    task = budget.reserve_task(depth=1)
+    model = budget.reserve_model(input_tokens=1, task_reservation=task)
+
+    observation = budget.snapshot()
+    assert observation.model_reservations_in_flight == 1
+    assert observation.tasks_in_flight == 1
+    assert observation.finalized is False
+
+    with pytest.raises(
+        RunBudgetUnsettledError,
+        match="1 model and 1 task",
+    ):
+        budget.finalize()
+    with pytest.raises(RunBudgetExceededError, match="terminal"):
+        budget.reserve_tool()
+
+    budget.settle_model(model, actual_tokens=None)
+    budget.finish_task(task)
+    finalized = budget.finalize()
+    assert finalized.model_reservations_in_flight == 0
+    assert finalized.tasks_in_flight == 0
+    assert finalized.provider_usage_complete is False
+    assert finalized.provider_input_tokens is None
+    assert finalized.provider_output_tokens is None
+    assert finalized.provider_cache_read_input_tokens is None
+    assert finalized.provider_cache_write_input_tokens is None
+    assert finalized.finalized is True
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "succeeds"),
+    [
+        (89.999, True),
+        (90.0, False),
+        (90.001, False),
+    ],
+    ids=["below-deadline", "at-deadline", "above-deadline"],
+)
+def test_finalize_enforces_exact_elapsed_deadline_boundary(elapsed, succeeds):
+    now = [10.0]
+    budget = RunBudget(clock=lambda: now[0])
+    now[0] += elapsed
+
+    if succeeds:
+        snapshot = budget.finalize()
+        assert snapshot.finalized is True
+        assert snapshot.exhausted is False
+        assert snapshot.elapsed_ms == 89_999
+    else:
+        with pytest.raises(RunBudgetExceededError, match="elapsed-time"):
+            budget.finalize()
+        snapshot = budget.snapshot()
+        assert snapshot.finalized is False
+        assert snapshot.exhausted is True
+        assert snapshot.elapsed_ms == 90_000
+
+
+def test_finalize_uses_one_atomic_clock_observation_for_deadline_and_snapshot():
+    ticks = iter((0.0, 89.999))
+    budget = RunBudget(clock=lambda: next(ticks))
+
+    snapshot = budget.finalize()
+
+    assert snapshot.elapsed_ms == 89_999
+    assert snapshot.exhausted is False
+    assert snapshot.finalized is True
 
 
 def test_elapsed_deadline_rejects_reservation_without_spending_counters():
@@ -858,12 +1160,19 @@ def test_elapsed_deadline_rejects_reservation_without_spending_counters():
     assert asdict(budget.snapshot()) == {
         "policy_id": "owner-dynamic-subagents-v1",
         "model_calls": 0,
+        "model_reservations_in_flight": 0,
         "tool_calls": 0,
         "task_calls": 0,
         "tasks_in_flight": 0,
         "charged_tokens": 0,
+        "provider_input_tokens": 0,
+        "provider_output_tokens": 0,
+        "provider_cache_read_input_tokens": 0,
+        "provider_cache_write_input_tokens": 0,
+        "provider_usage_complete": True,
         "elapsed_ms": 90_000,
         "exhausted": True,
+        "finalized": False,
     }
 
 

@@ -81,11 +81,11 @@ def _model() -> ToolCapableFakeModel:
     )
 
 
-def _runtime(permissions, *, context=None):
+def _runtime(permissions, *, context=None, is_authenticated=True):
     user = SimpleNamespace(
         identity="owner",
         display_name="owner",
-        is_authenticated=True,
+        is_authenticated=is_authenticated,
         permissions=permissions,
     )
     return build_server_runtime(
@@ -183,11 +183,30 @@ def test_server_runtime_permission_enables_dynamic_subagents(permission):
         [],
         ["anon"],
         "admin",
+        b"admin",
+        bytearray(b"admin"),
+        7,
+        {"admin"},
+        {"admin": True},
         ["admin", object()],
+        ["admin", ""],
     ],
 )
 def test_missing_or_malformed_runtime_permissions_fail_closed(permissions):
     assert dynamic_subagents_allowed(_runtime(permissions)) is False
+
+
+@pytest.mark.parametrize(
+    "is_authenticated",
+    [False, None, 0, 1, "true", object()],
+)
+def test_non_boolean_or_false_authentication_state_fails_closed(is_authenticated):
+    assert (
+        dynamic_subagents_allowed(
+            _runtime(["admin"], is_authenticated=is_authenticated)
+        )
+        is False
+    )
 
 
 def test_client_context_permissions_cannot_escalate_server_runtime():

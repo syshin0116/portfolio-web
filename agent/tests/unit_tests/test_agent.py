@@ -493,11 +493,18 @@ Stop after the first supported DocId.
     assert snapshot == {
         "policy_id": "owner-dynamic-subagents-v1",
         "model_calls": 3,
+        "model_reservations_in_flight": 0,
         "tool_calls": 1,
         "task_calls": 1,
         "tasks_in_flight": 0,
         "charged_tokens": 30,
+        "provider_input_tokens": None,
+        "provider_output_tokens": None,
+        "provider_cache_read_input_tokens": None,
+        "provider_cache_write_input_tokens": None,
+        "provider_usage_complete": False,
         "exhausted": False,
+        "finalized": False,
     }
 
 

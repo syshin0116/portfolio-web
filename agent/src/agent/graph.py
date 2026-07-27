@@ -212,7 +212,7 @@ async def graph(
     finally:
         snapshot = budget.snapshot()
         logger.debug(
-            "run budget finalized policy=%s model=%d tool=%d task=%d tokens=%d",
+            "run budget observed policy=%s model=%d tool=%d task=%d tokens=%d",
             snapshot.policy_id,
             snapshot.model_calls,
             snapshot.tool_calls,

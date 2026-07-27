@@ -1,0 +1,26 @@
+# CODEOWNERS is advisory in this solo repository. The main ruleset must keep
+# "Require review from Code Owners" disabled until another maintainer can approve.
+* @syshin0116
+
+# Application and runtime boundaries
+/web/ @syshin0116
+/agent/ @syshin0116
+/eval/ @syshin0116
+/protocol/ @syshin0116
+
+# Immutable source posts and the separately governed wiki layer
+/content/ @syshin0116
+/content/wiki/ @syshin0116
+
+# Delivery, automation, and repository policy
+/.github/ @syshin0116
+/infra/ @syshin0116
+/scripts/ @syshin0116
+/Dockerfile @syshin0116
+/aegra.json @syshin0116
+
+# Decisions and contributor contracts
+/docs/ @syshin0116
+/AGENTS.md @syshin0116
+/CLAUDE.md @syshin0116
+/DECISIONS.md @syshin0116

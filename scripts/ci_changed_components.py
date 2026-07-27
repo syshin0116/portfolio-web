@@ -41,7 +41,7 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         path = raw_path.removeprefix("./")
         if not path:
             continue
-        if path == ".github/workflows/ci.yml" or path.startswith("protocol/"):
+        if path.startswith(".github/workflows/") or path.startswith("protocol/"):
             return dict.fromkeys(COMPONENTS, True)
         if path.startswith("content/"):
             return dict.fromkeys(COMPONENTS, True)

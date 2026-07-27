@@ -21,6 +21,13 @@ ROOT_AGENT_PATHS = frozenset(
         "uv.lock",
     }
 )
+PUBLICATION_SEMANTICS_WEB_PATHS = frozenset(
+    {
+        "web/bun.lock",
+        "web/package.json",
+        "web/scripts/prebuild.ts",
+    }
+)
 
 
 class ChangeDetectionError(RuntimeError):
@@ -40,6 +47,9 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
             return dict.fromkeys(COMPONENTS, True)
         if path.startswith("web/"):
             affected["web"] = True
+        if path in PUBLICATION_SEMANTICS_WEB_PATHS:
+            affected["agent"] = True
+            affected["eval"] = True
         if (
             path.startswith("agent/")
             or path.startswith("scripts/")

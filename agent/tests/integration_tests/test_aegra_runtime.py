@@ -125,7 +125,7 @@ def test_pinned_runtime_supports_aegra_v2_dialect(monkeypatch):
 
     assert capabilities.ok
     assert capabilities.missing == ()
-    route_paths = {route.path for route in app.routes}
+    route_paths = set(app.openapi()["paths"])
     assert "/threads/{thread_id}/stream/events" in route_paths
     assert "/threads/{thread_id}/commands" in route_paths
     assert "/threads/{thread_id}/stream" not in route_paths

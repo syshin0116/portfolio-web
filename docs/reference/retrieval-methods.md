@@ -46,7 +46,9 @@ Two things gate every entry in this table, both from
   so comparisons drawn against it were invalid, not merely pessimistic. The corrected
   fitted baseline below is now the comparison floor. See
   [the tokenizer note](#the-korean-tokenizer-problem).
-- **One retriever interface**, used by both the chat and the harness. Methods are plugs.
+- **One retriever interface**, intended for both the chat and the harness. The chat now
+  resolves its configured method from the shared servable registry; the evaluation
+  harness still needs to be built against that interface.
 
 ## The corpus, and what it affords
 
@@ -82,7 +84,8 @@ those same links turned out to be the better prize.
 | BM25 + Kiwi morphological tokenization | `implemented` | The fitted, raw-score baseline everything else is measured against |
 | BM25 + character n-grams | `planned` | Whether morphological analysis earns its complexity, or n-grams match it on mixed-script Korean |
 | BM25 field weighting (title/tags/body) | `planned` | How much of retrieval quality is just "the title said so" |
-| Exact substring / regex | `planned` | The floor. If a method cannot beat grep, it is not earning its cost |
+| Exact substring | `implemented` | The safe literal-match floor. If a method cannot beat it, it is not earning its cost |
+| Bounded regex | `planned` | Whether regex expressiveness adds useful recall without exposing unbounded query execution |
 | SPLADE or learned sparse | `planned` | Whether learned sparse transfers to Korean at all |
 
 ### Dense

@@ -79,9 +79,9 @@ Three consequences follow directly and are binding:
    containing the term are missed, and the score normalisation forces a 1.0 top hit for any
    query at all, including nonsense. Under a product goal this is a bug to schedule. Under
    this goal it is a **blocker**.
-3. **Retrievers are plugs, not tools.** The chat must consume retrieval through the same
-   interface the evaluation harness does, or the interface gets built twice and the two
-   drift.
+3. **Retrievers are plugs, not tools.** The chat must consume retrieval through the
+   shared interface that the evaluation harness will also consume. Chat wiring is complete;
+   that does not count as an evaluation harness, which remains separate follow-up work.
 
 The living catalogue of methods lives in
 [`../reference/retrieval-methods.md`](../reference/retrieval-methods.md) - a registry, not
@@ -110,11 +110,12 @@ an ADR, because it changes continuously.
 
 **Follow-ups**
 
-- [ ] Create `docs/reference/retrieval-methods.md` as the living registry.
-- [ ] Point `CLAUDE.md`'s "What this repo is" at this ADR.
-- [ ] Fix or rebuild the BM25 baseline **before** any comparison is run.
-- [ ] Define the retriever interface once, and have both the chat and the harness use it.
-- [ ] Decide how the deployed chat selects which method is live (config, registry, A/B).
+- [x] Create `docs/reference/retrieval-methods.md` as the living registry.
+- [x] Point `CLAUDE.md`'s "What this repo is" at this ADR.
+- [x] Fix or rebuild the BM25 baseline **before** any comparison is run.
+- [x] Define the retriever interface once and wire the chat serving path to it.
+- [ ] Build the evaluation harness against that same retriever interface.
+- [x] Select the deployed method through server-owned config and the servable registry.
 
 ## Revisit when
 

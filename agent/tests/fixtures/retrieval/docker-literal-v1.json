@@ -1,0 +1,34 @@
+{
+  "behavioral_baseline": {
+    "expected_recall_at_13": 3,
+    "implementation": "legacy-kiwi-nn-vv-va-sl-v1",
+    "top_doc_id": "Study/Code-Test/2024-01-17-lvl2_뒤에 있는 큰 수 찾기.md"
+  },
+  "content_tree_sha": "71c5bbda097cc20be0cb15ca4666fd6917f89d5f",
+  "corrected_baseline": {
+    "expected_recall_at_13": 13,
+    "implementation": "agent.retrieval.bm25:create@2",
+    "load_multi_dict": false,
+    "load_typo_dict": false,
+    "model_type": "cong"
+  },
+  "corpus_fingerprint": "sha256:a36065dae4d6471b25ddb71b815338e7d9d165bd177286a528761c7c63d55d10",
+  "generator": "literal-substring-qrel-v1",
+  "qrels": [
+    "Dev/2024-03-25-Linux 환경 구축하기.md",
+    "Dev/2024-03-31-Supervisord.md",
+    "Dev/2025-05-08-CICD 툴 비교.md",
+    "Events/2024-04-05-원디트 프리온보딩 백엔드-Docker-1일차.md",
+    "Events/2024-07-24-​MLOps Now - LLM in Production.md",
+    "Projects/2024-01-28-포텐데이 회고.md",
+    "Projects/Podly/2024-08-17-Podly 백엔드 Todo.md",
+    "Study/Docker/2024-04-05-원티드 프리온보딩 백엔드-Docker-2일차.md",
+    "Study/Docker/2024-04-09-원티드 프리온보딩 백엔드-Docker-3일차.md",
+    "Study/Docker/2024-04-12-원티드 프리온보딩 백엔드-Docker-4일차.md",
+    "Tools/Docker/2023-05-08-Docker와 VM 차이.md",
+    "Tools/Docker/2023-11-09-Docker-실습.md",
+    "Tools/Git/2024-11-09-정리-Github CI CD - GCP.md"
+  ],
+  "query": "도커",
+  "schema": "literal-term-qrels-v1"
+}

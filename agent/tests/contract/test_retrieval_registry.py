@@ -250,3 +250,33 @@ def test_registration_when_falsey_config_is_not_a_mapping_rejects() -> None:
             implementation_id="tests:create_echo@1",
             config=[],  # type: ignore[arg-type]
         )
+
+
+def test_registration_data_dependencies_are_explicit_sorted_and_copied() -> None:
+    registry = RetrieverRegistry()
+    registration = registry.register(
+        "bm25",
+        create_echo,
+        implementation_id="tests:create_echo@1",
+        config={"score": 2.5},
+        data_dependencies=("artifact:bm25", "corpus:published-markdown"),
+    )
+
+    copied = registry.copy().retrievable["bm25"]
+
+    assert registration.data_dependencies == (
+        "artifact:bm25",
+        "corpus:published-markdown",
+    )
+    assert copied.data_dependencies == registration.data_dependencies
+    with pytest.raises(ValueError, match="sorted and unique"):
+        RetrieverRegistry().register(
+            "invalid",
+            create_echo,
+            implementation_id="tests:create_echo@1",
+            config={"score": 2.5},
+            data_dependencies=(
+                "corpus:published-markdown",
+                "artifact:bm25",
+            ),
+        )

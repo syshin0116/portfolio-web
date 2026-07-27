@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -9,6 +10,7 @@ import posixpath
 import re
 import shutil
 import stat
+import subprocess
 import tempfile
 import tomllib
 import unicodedata
@@ -126,6 +128,7 @@ class CorpusSnapshot:
 class BuildReport:
     document_count: int
     source_markdown_count: int
+    content_git_tree_sha: str
     fingerprint: str
     bm25_fingerprint: str
     output_root: Path
@@ -140,8 +143,227 @@ class _SourceCandidate:
     resolved_version: tuple[int, int, int, int, int, int]
 
 
+@dataclass(frozen=True, slots=True)
+class _ContentGitIdentity:
+    content_root: Path
+    repository_root: Path | None
+    repository_relative_path: str | None
+    expected_tree_sha: str | None
+
+
 def _portable_path_key(doc_id: str) -> str:
     return unicodedata.normalize("NFC", doc_id).casefold()
+
+
+def _git_object_digest(kind: str, payload: bytes) -> bytes:
+    header = f"{kind} {len(payload)}\0".encode()
+    return hashlib.sha1(header + payload).digest()
+
+
+def _filesystem_git_tree_sha(root: Path) -> str:
+    """Compute Git's SHA-1 tree identity from the exact filesystem bytes."""
+
+    def tree(directory: Path) -> bytes:
+        entries: list[tuple[bytes, bytes]] = []
+        try:
+            children = tuple(directory.iterdir())
+        except OSError as exc:
+            raise CorpusBuildError(
+                f"cannot inspect content tree while computing Git identity: {exc}"
+            ) from exc
+        for child in children:
+            name = os.fsencode(child.name)
+            if b"\0" in name or b"/" in name:
+                raise CorpusBuildError(
+                    f"content path cannot be represented in a Git tree: {child}"
+                )
+            try:
+                metadata = child.lstat()
+                if stat.S_ISLNK(metadata.st_mode):
+                    payload = os.fsencode(os.readlink(child))
+                    mode = b"120000"
+                    digest = _git_object_digest("blob", payload)
+                    sort_key = name
+                elif stat.S_ISREG(metadata.st_mode):
+                    payload = child.read_bytes()
+                    mode = b"100755" if metadata.st_mode & 0o111 else b"100644"
+                    digest = _git_object_digest("blob", payload)
+                    sort_key = name
+                elif stat.S_ISDIR(metadata.st_mode):
+                    mode = b"40000"
+                    digest = tree(child)
+                    sort_key = name + b"/"
+                else:
+                    raise CorpusBuildError(
+                        f"unsupported content entry while computing Git tree: {child}"
+                    )
+            except CorpusBuildError:
+                raise
+            except OSError as exc:
+                raise CorpusBuildError(
+                    f"cannot read content entry while computing Git tree: {child}: {exc}"
+                ) from exc
+            entries.append((sort_key, mode + b" " + name + b"\0" + digest))
+        payload = b"".join(
+            value for _, value in sorted(entries, key=lambda item: item[0])
+        )
+        return _git_object_digest("tree", payload)
+
+    try:
+        resolved = root.resolve(strict=True)
+    except OSError as exc:
+        raise CorpusBuildError(f"content root does not exist: {root}") from exc
+    if not resolved.is_dir():
+        raise CorpusBuildError(f"content root is not a directory: {root}")
+    return tree(resolved).hex()
+
+
+def _git(
+    repository_root: Path,
+    *args: str,
+    text: bool = True,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            ("git", "-c", "core.quotepath=false", "-C", str(repository_root), *args),
+            check=False,
+            capture_output=True,
+            text=text,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except OSError as exc:
+        raise CorpusBuildError(
+            f"cannot execute Git for content provenance: {exc}"
+        ) from exc
+
+
+def _prepare_content_git_identity(content_root: Path) -> _ContentGitIdentity:
+    try:
+        resolved_content = content_root.resolve(strict=True)
+    except OSError as exc:
+        raise CorpusBuildError(f"content root does not exist: {content_root}") from exc
+    discovered = _git(resolved_content, "rev-parse", "--show-toplevel")
+    if discovered.returncode != 0:
+        return _ContentGitIdentity(resolved_content, None, None, None)
+    repository_root = Path(discovered.stdout.strip()).resolve()
+    try:
+        relative = resolved_content.relative_to(repository_root).as_posix()
+    except ValueError as exc:
+        raise CorpusBuildError(
+            "content root escapes its discovered Git worktree"
+        ) from exc
+    if relative in {"", "."}:
+        raise CorpusBuildError("content root cannot be the complete Git worktree")
+
+    status = _git(
+        repository_root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--",
+        relative,
+        text=False,
+    )
+    if status.returncode != 0:
+        detail = os.fsdecode(status.stderr).strip()
+        raise CorpusBuildError(f"cannot inspect content Git status: {detail}")
+    if status.stdout:
+        raise CorpusBuildError(
+            "content tree contains dirty or untracked entries; build from an exact "
+            "committed Git tree"
+        )
+
+    revision = _git(repository_root, "rev-parse", f"HEAD:{relative}")
+    tree_sha = revision.stdout.strip()
+    if revision.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", tree_sha) is None:
+        detail = revision.stderr.strip()
+        raise CorpusBuildError(
+            f"content root is not a committed Git tree at HEAD: {detail}"
+        )
+    return _ContentGitIdentity(
+        resolved_content,
+        repository_root,
+        relative,
+        tree_sha,
+    )
+
+
+def _verify_content_git_identity(
+    identity: _ContentGitIdentity,
+    snapshot: CorpusSnapshot,
+) -> str:
+    if identity.repository_root is None:
+        return _filesystem_git_tree_sha(identity.content_root)
+    repository_root = identity.repository_root
+    relative = identity.repository_relative_path
+    expected_tree_sha = identity.expected_tree_sha
+    if relative is None or expected_tree_sha is None:
+        raise AssertionError("repository content identity is incomplete")
+
+    status = _git(
+        repository_root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--",
+        relative,
+        text=False,
+    )
+    if status.returncode != 0 or status.stdout:
+        raise CorpusBuildError(
+            "content tree changed during the build or contains untracked entries"
+        )
+    filesystem_tree_sha = _filesystem_git_tree_sha(identity.content_root)
+    if filesystem_tree_sha != expected_tree_sha:
+        raise CorpusBuildError(
+            "content filesystem bytes/modes differ from the committed Git tree"
+        )
+
+    listing = _git(
+        repository_root,
+        "ls-tree",
+        "-r",
+        "-z",
+        "HEAD",
+        "--",
+        relative,
+        text=False,
+    )
+    if listing.returncode != 0:
+        raise CorpusBuildError(
+            "cannot enumerate committed content blobs: "
+            + os.fsdecode(listing.stderr).strip()
+        )
+    committed_blobs: dict[str, tuple[str, str]] = {}
+    prefix = relative + "/"
+    for record in listing.stdout.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        mode, object_type, object_sha = os.fsdecode(metadata).split(" ")
+        path = os.fsdecode(raw_path)
+        if not path.startswith(prefix):
+            raise CorpusBuildError(
+                "Git returned a content path outside the requested tree"
+            )
+        committed_blobs[path.removeprefix(prefix)] = (
+            mode,
+            object_type + ":" + object_sha,
+        )
+    for document in snapshot.documents:
+        committed = committed_blobs.get(str(document.doc_id))
+        actual_blob = _git_object_digest("blob", document.raw).hex()
+        if committed is None or committed[0] not in {"100644", "100755"}:
+            raise CorpusBuildError(
+                f"{document.doc_id}: published document is not a committed regular blob"
+            )
+        if committed[1] != f"blob:{actual_blob}":
+            raise CorpusBuildError(
+                f"{document.doc_id}: built bytes differ from the committed Git blob"
+            )
+    return expected_tree_sha
 
 
 def validate_portable_doc_ids(doc_ids: Iterable[DocId | str]) -> None:
@@ -820,6 +1042,7 @@ def _write_snapshot(
     output_root: Path,
     *,
     bm25_policy_path: Path | str,
+    content_git_tree_sha: str,
 ) -> tuple[str, str]:
     posts_root = output_root / "posts"
     posts_root.mkdir(parents=True)
@@ -879,6 +1102,7 @@ def _write_snapshot(
             for path in artifact_paths
             for payload in [(output_root / path).read_bytes()]
         ],
+        "content_git_tree_sha": content_git_tree_sha,
         "corpus_fingerprint": fingerprint,
         "document_count": len(snapshot.documents),
         "documents": manifest_documents,
@@ -936,7 +1160,10 @@ def build_index(
         or expected_document_count < 0
     ):
         raise CorpusBuildError("expected document count must be a non-negative integer")
-    snapshot = scan_corpus(content_root=content_root, policy_path=policy_path)
+    content = Path(content_root)
+    content_identity = _prepare_content_git_identity(content)
+    snapshot = scan_corpus(content_root=content, policy_path=policy_path)
+    content_git_tree_sha = _verify_content_git_identity(content_identity, snapshot)
     document_count = len(snapshot.documents)
     if (
         expected_document_count is not None
@@ -959,6 +1186,7 @@ def build_index(
             snapshot,
             staged,
             bm25_policy_path=bm25_policy_path,
+            content_git_tree_sha=content_git_tree_sha,
         )
         corpus = PublishedCorpus(staged)
         from agent.retrieval.bm25 import Bm25Retriever
@@ -980,6 +1208,7 @@ def build_index(
     return BuildReport(
         document_count=document_count,
         source_markdown_count=snapshot.source_markdown_count,
+        content_git_tree_sha=content_git_tree_sha,
         fingerprint=fingerprint,
         bm25_fingerprint=bm25_fingerprint,
         output_root=output,

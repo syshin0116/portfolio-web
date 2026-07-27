@@ -1586,6 +1586,7 @@ registry.register(
     create,
     implementation_id=BM25_IMPLEMENTATION_ID,
     config=BM25_CONFIG,
+    data_dependencies=("artifact:bm25", "corpus:published-markdown"),
     servable=True,
     identity_factory=bm25_identity,
 )

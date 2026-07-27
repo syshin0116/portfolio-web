@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from agent.retrieval.protocol import DocId
 
-MANIFEST_SCHEMA = "published-corpus-manifest-v2"
+MANIFEST_SCHEMA = "published-corpus-manifest-v3"
 CATALOG_SCHEMA = "published-corpus-catalog-v1"
 WIKILINK_SCHEMA = "published-wikilinks-v2"
 _FINGERPRINT_SCHEMA = "published-corpus-fingerprint-v1"
@@ -20,6 +20,7 @@ DERIVED_ARTIFACT_PATHS = ("catalog.json", "wikilinks.json")
 _MANIFEST_KEYS = frozenset(
     {
         "artifacts",
+        "content_git_tree_sha",
         "corpus_fingerprint",
         "document_count",
         "documents",
@@ -40,6 +41,7 @@ _EXCLUSION_REASONS = frozenset(
         "published-false",
     }
 )
+_GIT_TREE_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class CorpusManifestError(ValueError):
@@ -316,6 +318,14 @@ class PublishedCorpus:
             raise CorpusManifestError(
                 f"unsupported corpus manifest schema: {manifest.get('schema')!r}"
             )
+        content_git_tree_sha = manifest.get("content_git_tree_sha")
+        if (
+            not isinstance(content_git_tree_sha, str)
+            or _GIT_TREE_PATTERN.fullmatch(content_git_tree_sha) is None
+        ):
+            raise CorpusManifestError(
+                "manifest content_git_tree_sha must be a full lowercase Git tree SHA"
+            )
         fingerprint = manifest.get("corpus_fingerprint")
         if (
             not isinstance(fingerprint, str)
@@ -495,6 +505,7 @@ class PublishedCorpus:
         self._by_doc_id = {document.doc_id: document for document in documents}
         self._doc_ids = doc_ids
         self._fingerprint = fingerprint
+        self._content_git_tree_sha = content_git_tree_sha
         self._resolved_posts_root = posts_root
 
     def _read_verified_artifact(
@@ -532,6 +543,12 @@ class PublishedCorpus:
     @property
     def fingerprint(self) -> str:
         return self._fingerprint
+
+    @property
+    def content_git_tree_sha(self) -> str:
+        """Return the Git tree independently measured when this index was built."""
+
+        return self._content_git_tree_sha
 
     @property
     def index_root(self) -> Path:

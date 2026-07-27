@@ -80,11 +80,11 @@ cloud_run_api_request() (
     "$CLOUD_RUN_API_CLEANUP_REQUEST"' EXIT
 
   token="$(gcloud auth print-access-token --quiet)"
-  [[ "${#token}" -ge 20 && "${#token}" -le 4096 ]] &&
-    [[ "$token" =~ ^[A-Za-z0-9._~-]+$ ]] || {
+  if [[ "${#token}" -lt 20 || "${#token}" -gt 4096 ]] ||
+    [[ ! "$token" =~ ^[A-Za-z0-9._~-]+$ ]]; then
     printf 'gcloud returned an invalid access token shape\n' >&2
     exit 1
-  }
+  fi
   printf 'header = "Authorization: Bearer %s"\n' "$token" >"$auth_config"
   unset token
 
@@ -998,11 +998,11 @@ validate_deploy_inputs() {
       "$CLOUD_RUN_SERVICE" >&2
     exit 1
   }
-  [[ "$IMAGE_DIGEST" == "${EXPECTED_IMAGE_PREFIX}"* ]] &&
-    [[ "${IMAGE_DIGEST#"$EXPECTED_IMAGE_PREFIX"}" =~ ^[0-9a-f]{64}$ ]] || {
+  if [[ "$IMAGE_DIGEST" != "${EXPECTED_IMAGE_PREFIX}"* ]] ||
+    [[ ! "${IMAGE_DIGEST#"$EXPECTED_IMAGE_PREFIX"}" =~ ^[0-9a-f]{64}$ ]]; then
     printf 'image digest is outside the selected isolated repository\n' >&2
     exit 1
-  }
+  fi
 }
 
 deploy() {

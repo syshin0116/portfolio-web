@@ -1388,6 +1388,15 @@ runs:
                 )
             )
         )
+        audit_commands = [
+            governance._scalar_value(node, context="dependency audit run").strip()
+            for node in governance._nodes_for_mapping_key(document.root, "run")
+            if isinstance(node, governance.ScalarNode)
+        ]
+        self.assertEqual(
+            1,
+            audit_commands.count(governance.DEPENDENCY_WEB_AUDIT_COMMAND),
+        )
 
     def test_dependency_audit_setup_mutations_are_rejected(self) -> None:
         mutations = (

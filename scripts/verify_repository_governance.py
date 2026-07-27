@@ -139,6 +139,7 @@ AGENT_CI_CHANGED_CONDITION = "needs.changes.outputs.agent == 'true'"
 AGENT_CI_ENV = {
     "AGENT_AUTH_SECRET": "ci-only-agent-secret-ci-only-agent-secret",
 }
+DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 AGENT_LOCK_COMMAND = ("uv", "lock", "--check")
 AGENT_SYNC_COMMAND = ("uv", "sync", "--frozen", "--all-extras", "--dev")
 AGENT_RUN_COMMANDS = (
@@ -2033,6 +2034,22 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
                     documents[dependency_audit]
                 )
             )
+            audit_commands = [
+                _scalar_value(
+                    node,
+                    context=f"{dependency_audit}: dependency audit run",
+                ).strip()
+                for node in _nodes_for_mapping_key(
+                    documents[dependency_audit].root,
+                    "run",
+                )
+                if isinstance(node, ScalarNode)
+            ]
+            if audit_commands.count(DEPENDENCY_WEB_AUDIT_COMMAND) != 1:
+                errors.append(
+                    "local: dependency audit must invoke the reviewed web "
+                    f"policy exactly once with {DEPENDENCY_WEB_AUDIT_COMMAND!r}"
+                )
         except GovernanceError as exc:
             errors.append(f"local: invalid dependency audit workflow: {exc}")
 

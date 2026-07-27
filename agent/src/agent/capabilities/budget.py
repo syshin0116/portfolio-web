@@ -614,7 +614,6 @@ _ANTHROPIC_CACHE_CREATION_TTL_KEYS = (
 )
 _ANTHROPIC_INPUT_DETAIL_KEYS = frozenset(
     {
-        "audio",
         "cache_creation",
         "cache_read",
         *_ANTHROPIC_CACHE_CREATION_TTL_KEYS,

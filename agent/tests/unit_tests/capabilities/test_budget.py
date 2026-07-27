@@ -424,6 +424,11 @@ async def test_anthropic_usage_tracks_exact_provider_pricing_buckets(
         {
             "cache_read": 10,
             "cache_creation": 0,
+            "audio": 5,
+        },
+        {
+            "cache_read": 10,
+            "cache_creation": 0,
             "ephemeral_5m_input_tokens": 5,
         },
     ],
@@ -435,6 +440,7 @@ async def test_anthropic_usage_tracks_exact_provider_pricing_buckets(
         "cache-sum-above-input",
         "generic-and-ttl-double-count",
         "unknown-ttl-bucket",
+        "unknown-audio-bucket",
         "partial-ttl-buckets",
     ],
 )

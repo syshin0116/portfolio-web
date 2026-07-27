@@ -26,6 +26,7 @@ jobs:
       web: ${{ steps.components.outputs.web }}
       agent: ${{ steps.components.outputs.agent }}
       eval: ${{ steps.components.outputs.eval }}
+      infra: ${{ steps.components.outputs.infra }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,9 +56,10 @@ jobs:
           WEB_CHANGED: ${{ steps.components.outputs.web }}
           AGENT_CHANGED: ${{ steps.components.outputs.agent }}
           EVAL_CHANGED: ${{ steps.components.outputs.eval }}
+          INFRA_CHANGED: ${{ steps.components.outputs.infra }}
         shell: bash
         run: |
-          for value in "$WEB_CHANGED" "$AGENT_CHANGED" "$EVAL_CHANGED"; do
+          for value in "$WEB_CHANGED" "$AGENT_CHANGED" "$EVAL_CHANGED" "$INFRA_CHANGED"; do
             if [[ "$value" != "true" && "$value" != "false" ]]; then
               echo "::error::component change detection emitted an invalid value: $value"
               exit 1
@@ -201,6 +203,71 @@ jobs:
           fi
           echo "eval/ is not present yet; ci/eval will become executable in the eval workspace PR."
 
+  infra:
+    name: ci/infra
+    if: always()
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fail closed if change detection failed
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - name: Report an unaffected component
+        if: needs.changes.outputs.infra != 'true'
+        run: echo "No infrastructure-affecting paths changed; ci/infra reports success without rebuilding."
+      - name: Lint GitHub Actions workflows
+        if: needs.changes.outputs.infra == 'true'
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          version: 1.7.12
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        if: needs.changes.outputs.infra == 'true'
+        with:
+          enable-cache: false
+      - name: Lint infrastructure Python contracts
+        if: needs.changes.outputs.infra == 'true'
+        run: |
+          uv run --no-project --with ruff==0.15.8 ruff check \
+            scripts/ops_foundation_contract.py \
+            scripts/tests/test_ops_foundation_contract.py \
+            scripts/tests/test_verify_ops_foundation.py
+          uv run --no-project --with ruff==0.15.8 ruff format --check \
+            scripts/ops_foundation_contract.py \
+            scripts/tests/test_ops_foundation_contract.py \
+            scripts/tests/test_verify_ops_foundation.py
+      - name: Audit GitHub Actions security
+        if: needs.changes.outputs.infra == 'true'
+        run: uvx --from zizmor==1.28.0 zizmor .github/workflows
+      - name: Check the operations verifier
+        if: needs.changes.outputs.infra == 'true'
+        run: |
+          shellcheck scripts/verify_ops_foundation.sh
+          scripts/verify_ops_foundation.sh --static
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        if: needs.changes.outputs.infra == 'true'
+        with:
+          terraform_version: 1.13.5
+          terraform_wrapper: false
+      - name: Check Terraform formatting
+        if: needs.changes.outputs.infra == 'true'
+        run: scripts/verify_ops_foundation.sh --terraform-fmt
+      - name: Initialize Terraform without remote credentials
+        if: needs.changes.outputs.infra == 'true'
+        run: scripts/verify_ops_foundation.sh --terraform-init
+      - name: Validate Terraform configuration
+        if: needs.changes.outputs.infra == 'true'
+        run: scripts/verify_ops_foundation.sh --terraform-validate
+      - name: Test exactly one Terraform security contract run
+        if: needs.changes.outputs.infra == 'true'
+        run: scripts/verify_ops_foundation.sh --terraform-test
+
   check:
     name: ci/check
     if: always()
@@ -209,6 +276,7 @@ jobs:
       - web
       - agent
       - eval
+      - infra
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -219,6 +287,7 @@ jobs:
           WEB_RESULT: ${{ needs.web.result }}
           AGENT_RESULT: ${{ needs.agent.result }}
           EVAL_RESULT: ${{ needs.eval.result }}
+          INFRA_RESULT: ${{ needs.infra.result }}
         shell: bash
         run: |
           results=(
@@ -226,6 +295,7 @@ jobs:
             "ci/web=$WEB_RESULT"
             "ci/agent=$AGENT_RESULT"
             "ci/eval=$EVAL_RESULT"
+            "ci/infra=$INFRA_RESULT"
           )
           failed=0
           for result in "${results[@]}"; do

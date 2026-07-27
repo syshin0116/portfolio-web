@@ -16,30 +16,75 @@ import ci_changed_components as changes  # noqa: E402
 class PathClassificationTests(unittest.TestCase):
     def test_component_paths_are_selective(self) -> None:
         self.assertEqual(
-            {"web": True, "agent": False, "eval": False},
+            {"web": True, "agent": False, "eval": False, "infra": False},
             changes.classify_paths(["web/app/page.tsx"]),
         )
         self.assertEqual(
-            {"web": False, "agent": True, "eval": True},
+            {"web": False, "agent": True, "eval": True, "infra": False},
             changes.classify_paths(["agent/src/agent/graph.py"]),
         )
         self.assertEqual(
-            {"web": False, "agent": False, "eval": True},
+            {"web": False, "agent": False, "eval": True, "infra": False},
             changes.classify_paths(["eval/src/blogeval/runner.py"]),
         )
+        self.assertEqual(
+            {"web": False, "agent": False, "eval": False, "infra": True},
+            changes.classify_paths(["infra/gcp/main.tf"]),
+        )
 
-    def test_shared_contract_paths_run_every_component(self) -> None:
+    def test_application_ci_workflow_runs_every_component(self) -> None:
+        self.assertEqual(
+            {"web": True, "agent": True, "eval": True, "infra": True},
+            changes.classify_paths([".github/workflows/ci.yml"]),
+        )
+
+    def test_change_detector_contract_runs_every_component(self) -> None:
         for path in (
-            ".github/workflows/ci.yml",
+            "scripts/ci_changed_components.py",
+            "scripts/tests/test_ci_changed_components.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": True, "agent": True, "eval": True, "infra": True},
+                    changes.classify_paths([path]),
+                )
+
+    def test_root_gitignore_runs_infrastructure_gate(self) -> None:
+        self.assertEqual(
+            {"web": False, "agent": False, "eval": False, "infra": True},
+            changes.classify_paths([".gitignore"]),
+        )
+
+    def test_all_workflows_run_every_component(self) -> None:
+        for path in (
+            ".github/workflows/protocol-compat.yml",
+            ".github/workflows/preview-agent.yml",
+            ".github/workflows/deploy-agent.yml",
+            ".github/workflows/smoke-production.yml",
             ".github/workflows/dependency-audit.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": True, "agent": True, "eval": True, "infra": True},
+                    changes.classify_paths([path]),
+                )
+
+    def test_corpus_and_protocol_contracts_do_not_run_infra(self) -> None:
+        for path in (
             "content/AI/example.md",
             "protocol/fixtures/content-tool-run.json",
         ):
             with self.subTest(path=path):
                 self.assertEqual(
-                    {"web": True, "agent": True, "eval": True},
+                    {"web": True, "agent": True, "eval": True, "infra": False},
                     changes.classify_paths([path]),
                 )
+
+    def test_multiple_paths_union_component_work(self) -> None:
+        self.assertEqual(
+            {"web": True, "agent": True, "eval": True, "infra": True},
+            changes.classify_paths(["content/AI/example.md", "infra/gcp/main.tf"]),
+        )
 
     def test_nuartz_publication_semantics_paths_run_every_component(self) -> None:
         for path in (
@@ -49,7 +94,7 @@ class PathClassificationTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(
-                    {"web": True, "agent": True, "eval": True},
+                    {"web": True, "agent": True, "eval": True, "infra": False},
                     changes.classify_paths([path]),
                 )
 
@@ -57,20 +102,33 @@ class PathClassificationTests(unittest.TestCase):
         for path in ("aegra.json", "Dockerfile", "scripts/build_index.py"):
             with self.subTest(path=path):
                 self.assertEqual(
-                    {"web": False, "agent": True, "eval": True},
+                    {"web": False, "agent": True, "eval": True, "infra": False},
+                    changes.classify_paths([path]),
+                )
+
+    def test_ops_verifier_runs_only_infrastructure_ci(self) -> None:
+        for path in (
+            "scripts/ops_foundation_contract.py",
+            "scripts/tests/test_ops_foundation_contract.py",
+            "scripts/verify_ops_foundation.sh",
+            "scripts/tests/test_verify_ops_foundation.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": False, "agent": False, "eval": False, "infra": True},
                     changes.classify_paths([path]),
                 )
 
     def test_unrelated_docs_do_not_rebuild_components(self) -> None:
         self.assertEqual(
-            {"web": False, "agent": False, "eval": False},
+            {"web": False, "agent": False, "eval": False, "infra": False},
             changes.classify_paths(["docs/plans/rag-restack.md"]),
         )
 
 
 class DetectionTests(unittest.TestCase):
     def test_manual_and_missing_base_runs_every_component(self) -> None:
-        expected = {"web": True, "agent": True, "eval": True}
+        expected = {"web": True, "agent": True, "eval": True, "infra": True}
         self.assertEqual(expected, changes.detect("workflow_dispatch", "", "a" * 40))
         self.assertEqual(expected, changes.detect("push", "0" * 40, "a" * 40))
 
@@ -83,7 +141,7 @@ class DetectionTests(unittest.TestCase):
             result = changes.detect("pull_request", "a" * 40, "b" * 40)
         changed_paths.assert_called_once_with("a" * 40, "b" * 40)
         self.assertEqual(
-            {"web": True, "agent": True, "eval": True},
+            {"web": True, "agent": True, "eval": True, "infra": False},
             result,
         )
 
@@ -137,7 +195,7 @@ class DetectionTests(unittest.TestCase):
             set(paths),
         )
         self.assertEqual(
-            {"web": True, "agent": True, "eval": True},
+            {"web": True, "agent": True, "eval": True, "infra": False},
             changes.classify_paths(paths),
         )
 

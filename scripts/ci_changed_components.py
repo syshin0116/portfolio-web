@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-COMPONENTS = ("web", "agent", "eval")
+COMPONENTS = ("web", "agent", "eval", "infra")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 ALL_ZERO_SHA = "0" * 40
 ROOT_AGENT_PATHS = frozenset(
@@ -28,6 +28,20 @@ PUBLICATION_SEMANTICS_WEB_PATHS = frozenset(
         "web/scripts/prebuild.ts",
     }
 )
+OPS_FOUNDATION_PATHS = frozenset(
+    {
+        "scripts/ops_foundation_contract.py",
+        "scripts/tests/test_ops_foundation_contract.py",
+        "scripts/tests/test_verify_ops_foundation.py",
+        "scripts/verify_ops_foundation.sh",
+    }
+)
+CHANGE_DETECTION_PATHS = frozenset(
+    {
+        "scripts/ci_changed_components.py",
+        "scripts/tests/test_ci_changed_components.py",
+    }
+)
 
 
 class ChangeDetectionError(RuntimeError):
@@ -41,10 +55,15 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         path = raw_path.removeprefix("./")
         if not path:
             continue
-        if path.startswith(".github/workflows/") or path.startswith("protocol/"):
+        if path.startswith(".github/workflows/") or path in CHANGE_DETECTION_PATHS:
             return dict.fromkeys(COMPONENTS, True)
-        if path.startswith("content/"):
-            return dict.fromkeys(COMPONENTS, True)
+        if path == ".gitignore":
+            affected["infra"] = True
+        if path.startswith("protocol/") or path.startswith("content/"):
+            affected["web"] = True
+            affected["agent"] = True
+            affected["eval"] = True
+            continue
         if path.startswith("web/"):
             affected["web"] = True
         if path in PUBLICATION_SEMANTICS_WEB_PATHS:
@@ -52,13 +71,15 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
             affected["eval"] = True
         if (
             path.startswith("agent/")
-            or path.startswith("scripts/")
+            or (path.startswith("scripts/") and path not in OPS_FOUNDATION_PATHS)
             or path in ROOT_AGENT_PATHS
         ):
             affected["agent"] = True
             affected["eval"] = True
         if path.startswith("eval/"):
             affected["eval"] = True
+        if path.startswith("infra/") or path in OPS_FOUNDATION_PATHS:
+            affected["infra"] = True
     return affected
 
 

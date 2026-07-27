@@ -58,3 +58,14 @@ agent/supabase/.temp/
 
 # in-flight series research (author working files, not for commit)
 .series-research/
+
+# terraform local state and plans
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

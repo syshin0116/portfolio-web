@@ -3,35 +3,20 @@ updates:
   - package-ecosystem: "bun"
     directory: "/web"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "04:00"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     cooldown:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      web-routine:
+      web-monthly:
         applies-to: "version-updates"
         patterns:
           - "*"
-        exclude-patterns:
-          # Framework/protocol/auth bumps need focused compatibility evidence.
-          - "@assistant-ui/*"
-          - "@auth/*"
-          - "@langchain/*"
-          - "next"
-          - "next-auth"
-          - "react"
-          - "react-dom"
-          - "@types/react"
-          - "@types/react-dom"
-        update-types:
-          - "minor"
-          - "patch"
 
   # Bun version updates include bun.lock, but GitHub does not yet support
   # Dependabot security updates for the Bun ecosystem. Keep npm as a
@@ -39,8 +24,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/web"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "04:10"
       timezone: "Asia/Seoul"
     open-pull-requests-limit: 0
@@ -48,50 +32,32 @@ updates:
   - package-ecosystem: "uv"
     directory: "/agent"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "04:20"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     cooldown:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      agent-routine:
+      agent-monthly:
         applies-to: "version-updates"
         patterns:
           - "*"
-        exclude-patterns:
-          # These are compatibility surfaces and must remain isolated bump PRs.
-          - "aegra-*"
-          - "deepagents"
-          - "langchain"
-          - "langchain-*"
-          - "langgraph"
-          - "langgraph-*"
-          - "langsmith"
-          - "numpy"
-        update-types:
-          - "minor"
-          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "04:40"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     cooldown:
       default-days: 7
     groups:
-      actions-routine:
+      actions-monthly:
         applies-to: "version-updates"
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"

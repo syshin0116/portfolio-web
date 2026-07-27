@@ -86,6 +86,11 @@ jobs:
       - name: Report an unaffected component
         if: needs.changes.outputs.web != 'true'
         run: echo "No web-affecting paths changed; ci/web reports success without rebuilding."
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: needs.changes.outputs.web == 'true'
+        with:
+          node-version: "24.14.0"
+          package-manager-cache: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: needs.changes.outputs.web == 'true'
         with:

@@ -6,7 +6,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from deepagents import create_deep_agent
+from deepagents import (
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from deepagents.backends import (
     CompositeBackend,
     StateBackend,
@@ -20,6 +25,9 @@ from agent.prompts import SYSTEM_PROMPT
 from agent.tools import TOOLS
 
 DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
+NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
+    general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)
+)
 
 # Resolve content path relative to agent/ directory
 AGENT_DIR = Path(__file__).resolve().parent.parent.parent  # agent/
@@ -87,6 +95,20 @@ def _build_backend() -> CompositeBackend:
     )
 
 
+def _normalized_model_spec() -> str:
+    """Return the configured model in Deep Agents' canonical spec form."""
+    model = os.environ.get("MODEL") or DEFAULT_MODEL
+    # Normalize "provider/model" → "provider:model" for deepagents compatibility
+    if "/" in model and ":" not in model:
+        model = model.replace("/", ":", 1)
+    return model
+
+
+def _disable_general_purpose_subagent(model: str) -> None:
+    """Apply the fail-closed subagent policy to the selected model."""
+    register_harness_profile(model, NO_GENERAL_PURPOSE_SUBAGENT)
+
+
 def create_graph():
     """Build a compiled Deep Agent for Aegra to register.
 
@@ -95,10 +117,8 @@ def create_graph():
 
     Set the MODEL env var to override the default model.
     """
-    model = os.environ.get("MODEL") or DEFAULT_MODEL
-    # Normalize "provider/model" → "provider:model" for deepagents compatibility
-    if "/" in model and ":" not in model:
-        model = model.replace("/", ":", 1)
+    model = _normalized_model_spec()
+    _disable_general_purpose_subagent(model)
 
     return create_deep_agent(
         model=model,

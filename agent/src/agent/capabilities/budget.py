@@ -59,6 +59,10 @@ class RunBudgetPolicy:
     policy_id: str
     max_model_calls: int
     max_tool_calls: int
+    max_quickjs_calls: int
+    max_quickjs_in_flight: int
+    max_quickjs_output_bytes: int
+    max_quickjs_total_output_bytes: int
     max_task_calls: int
     max_tasks_in_flight: int
     max_depth: int
@@ -70,6 +74,10 @@ class RunBudgetPolicy:
         integer_limits = (
             self.max_model_calls,
             self.max_tool_calls,
+            self.max_quickjs_calls,
+            self.max_quickjs_in_flight,
+            self.max_quickjs_output_bytes,
+            self.max_quickjs_total_output_bytes,
             self.max_task_calls,
             self.max_tasks_in_flight,
             self.max_depth,
@@ -85,14 +93,19 @@ class RunBudgetPolicy:
                 for value in integer_limits
             )
             or self.max_output_tokens > self.max_total_tokens
+            or self.max_quickjs_output_bytes > self.max_quickjs_total_output_bytes
         ):
             raise ValueError("run budget policy limits must be positive and coherent")
 
 
 DEFAULT_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="owner-dynamic-subagents-v1",
+    policy_id="owner-capability-lab-v2",
     max_model_calls=12,
     max_tool_calls=24,
+    max_quickjs_calls=4,
+    max_quickjs_in_flight=1,
+    max_quickjs_output_bytes=4_096,
+    max_quickjs_total_output_bytes=16_384,
     max_task_calls=2,
     max_tasks_in_flight=2,
     max_depth=1,
@@ -138,6 +151,14 @@ class _ProviderTokenUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class QuickJSReservation:
+    """Opaque interpreter slot with a reserved serialized-output tranche."""
+
+    reservation_id: int
+    reserved_output_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class BudgetSnapshot:
     """Bounded, serializable observation of a run ledger.
 
@@ -151,6 +172,9 @@ class BudgetSnapshot:
     model_calls: int
     model_reservations_in_flight: int
     tool_calls: int
+    quickjs_calls: int
+    quickjs_in_flight: int
+    quickjs_output_bytes: int
     task_calls: int
     tasks_in_flight: int
     charged_tokens: int
@@ -179,8 +203,10 @@ class RunBudget:
         "_lock",
         "_model_calls",
         "_next_reservation_id",
+        "_next_quickjs_reservation_id",
         "_next_task_reservation_id",
         "_open_model_reservations",
+        "_open_quickjs_reservations",
         "_open_task_reservations",
         "_policy",
         "_provider_cache_read_input_tokens",
@@ -189,6 +215,9 @@ class RunBudget:
         "_provider_output_tokens",
         "_provider_usage_complete",
         "_started_at",
+        "_quickjs_calls",
+        "_quickjs_in_flight",
+        "_quickjs_output_bytes",
         "_task_calls",
         "_tasks_in_flight",
         "_terminal",
@@ -209,11 +238,16 @@ class RunBudget:
         self._lock = Lock()
         self._model_calls = 0
         self._tool_calls = 0
+        self._quickjs_calls = 0
+        self._quickjs_in_flight = 0
+        self._quickjs_output_bytes = 0
         self._task_calls = 0
         self._tasks_in_flight = 0
         self._charged_tokens = 0
         self._next_reservation_id = 0
         self._open_model_reservations: dict[int, int] = {}
+        self._next_quickjs_reservation_id = 0
+        self._open_quickjs_reservations: dict[int, int] = {}
         self._next_task_reservation_id = 0
         self._open_task_reservations: dict[int, bool] = {}
         self._exhausted = False
@@ -409,6 +443,78 @@ class RunBudget:
                 raise RunBudgetExceededError("tool-call budget exhausted")
             self._tool_calls += 1
 
+    def reserve_quickjs(self) -> QuickJSReservation:
+        """Jointly reserve tool, execution, concurrency, time, and output bytes."""
+        with self._lock:
+            self._require_active_locked()
+            if self._tool_calls >= self._policy.max_tool_calls:
+                self._exhausted = True
+                raise RunBudgetExceededError("tool-call budget exhausted")
+            if self._quickjs_calls >= self._policy.max_quickjs_calls:
+                self._exhausted = True
+                raise RunBudgetExceededError("QuickJS execution budget exhausted")
+            if self._quickjs_in_flight >= self._policy.max_quickjs_in_flight:
+                self._exhausted = True
+                raise RunBudgetExceededError("QuickJS concurrency budget exhausted")
+            reserved = self._policy.max_quickjs_output_bytes
+            if (
+                self._quickjs_output_bytes + reserved
+                > self._policy.max_quickjs_total_output_bytes
+            ):
+                self._exhausted = True
+                raise RunBudgetExceededError("QuickJS output budget exhausted")
+
+            self._tool_calls += 1
+            self._quickjs_calls += 1
+            self._quickjs_in_flight += 1
+            self._quickjs_output_bytes += reserved
+            self._next_quickjs_reservation_id += 1
+            reservation = QuickJSReservation(
+                self._next_quickjs_reservation_id,
+                reserved,
+            )
+            self._open_quickjs_reservations[reservation.reservation_id] = reserved
+            return reservation
+
+    def settle_quickjs(
+        self,
+        reservation: QuickJSReservation,
+        *,
+        actual_output_bytes: int | None,
+    ) -> None:
+        """Release the execution slot and refund only measured unused output."""
+        with self._lock:
+            if (
+                not isinstance(reservation, QuickJSReservation)
+                or not isinstance(reservation.reservation_id, int)
+                or isinstance(reservation.reservation_id, bool)
+                or not isinstance(reservation.reserved_output_bytes, int)
+                or isinstance(reservation.reserved_output_bytes, bool)
+            ):
+                raise TypeError("reservation must be a QuickJSReservation")
+            reserved = self._open_quickjs_reservations.pop(
+                reservation.reservation_id,
+                None,
+            )
+            if reserved is None or reserved != reservation.reserved_output_bytes:
+                raise RuntimeError("QuickJS reservation is unknown or already settled")
+            if self._quickjs_in_flight < 1:
+                raise RuntimeError("QuickJS in-flight reservation underflow")
+            self._quickjs_in_flight -= 1
+            if actual_output_bytes is None:
+                return
+            if (
+                not isinstance(actual_output_bytes, int)
+                or isinstance(actual_output_bytes, bool)
+                or actual_output_bytes < 0
+                or actual_output_bytes > reserved
+            ):
+                self._exhausted = True
+                raise RunBudgetExceededError(
+                    "QuickJS returned output outside its reservation"
+                )
+            self._quickjs_output_bytes -= reserved - actual_output_bytes
+
     def reserve_task(self, *, depth: int) -> TaskReservation:
         """Jointly reserve tool, task-total, fan-out, depth, time, and tokens."""
         with self._lock:
@@ -492,6 +598,18 @@ class RunBudget:
             model_calls=min(self._model_calls, self._policy.max_model_calls),
             model_reservations_in_flight=len(self._open_model_reservations),
             tool_calls=min(self._tool_calls, self._policy.max_tool_calls),
+            quickjs_calls=min(
+                self._quickjs_calls,
+                self._policy.max_quickjs_calls,
+            ),
+            quickjs_in_flight=min(
+                self._quickjs_in_flight,
+                self._policy.max_quickjs_in_flight,
+            ),
+            quickjs_output_bytes=min(
+                self._quickjs_output_bytes,
+                self._policy.max_quickjs_total_output_bytes,
+            ),
             task_calls=min(self._task_calls, self._policy.max_task_calls),
             tasks_in_flight=min(
                 self._tasks_in_flight,
@@ -535,11 +653,13 @@ class RunBudget:
                 self._exhausted = True
 
             open_models = len(self._open_model_reservations)
+            open_quickjs = len(self._open_quickjs_reservations)
             open_tasks = len(self._open_task_reservations)
-            if open_models or open_tasks:
+            if open_models or open_quickjs or open_tasks:
                 raise RunBudgetUnsettledError(
                     "run budget has "
-                    f"{open_models} model and {open_tasks} task reservations in flight"
+                    f"{open_models} model, {open_quickjs} QuickJS, and "
+                    f"{open_tasks} task reservations in flight"
                 )
             if elapsed_expired:
                 raise RunBudgetExceededError("run elapsed-time budget exhausted")
@@ -704,6 +824,15 @@ def _is_non_negative_integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _tool_message_output_bytes(result: object) -> int | None:
+    if not isinstance(result, ToolMessage) or not isinstance(result.content, str):
+        return None
+    try:
+        return len(result.content.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+
+
 def _validate_task_call(
     tool_call: Mapping[str, Any],
     *,
@@ -771,8 +900,18 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         allowed_subagents: frozenset[str],
         input_token_counter: InputTokenCounter,
         native_subagent_prompt: str | None = None,
+        quickjs_tool_name: str | None = None,
+        allow_quickjs: bool = False,
     ) -> None:
         super().__init__()
+        if quickjs_tool_name is not None and (
+            not isinstance(quickjs_tool_name, str) or not quickjs_tool_name
+        ):
+            raise ValueError("quickjs_tool_name must be a non-empty string or None")
+        if not isinstance(allow_quickjs, bool):
+            raise TypeError("allow_quickjs must be a boolean")
+        if allow_quickjs and quickjs_tool_name is None:
+            raise ValueError("allow_quickjs requires quickjs_tool_name")
         self._budget = budget
         self._depth = depth
         self._allow_subagents = allow_subagents
@@ -782,6 +921,8 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         self._prompt_caching = AnthropicPromptCachingMiddleware(
             unsupported_model_behavior="ignore"
         )
+        self._quickjs_tool_name = quickjs_tool_name
+        self._allow_quickjs = allow_quickjs
 
     def _remove_unauthorized_subagent_surface(
         self,
@@ -857,6 +998,14 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
     ) -> Any:
         if not self._allow_subagents:
             request = self._remove_unauthorized_subagent_surface(request)
+        if self._quickjs_tool_name is not None and not self._allow_quickjs:
+            request = request.override(
+                tools=[
+                    tool
+                    for tool in request.tools
+                    if _tool_name(tool) != self._quickjs_tool_name
+                ]
+            )
 
         async def count_then_generate(
             final_request: ModelRequest[Any],
@@ -895,6 +1044,27 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         ],
     ) -> ToolMessage | Command[Any]:
         tool_name = request.tool_call.get("name")
+        if self._quickjs_tool_name is not None and tool_name == self._quickjs_tool_name:
+            if not self._allow_quickjs:
+                raise CapabilityDeniedError(
+                    "QuickJS requires server opt-in and owner or eval permission"
+                )
+            reservation = self._budget.reserve_quickjs()
+            try:
+                async with asyncio.timeout(self._budget.remaining_seconds()):
+                    result = await handler(request)
+            except BaseException:
+                self._budget.settle_quickjs(
+                    reservation,
+                    actual_output_bytes=None,
+                )
+                raise
+            self._budget.settle_quickjs(
+                reservation,
+                actual_output_bytes=_tool_message_output_bytes(result),
+            )
+            return result
+
         if tool_name == TASK_TOOL_NAME:
             if not self._allow_subagents:
                 raise CapabilityDeniedError(
@@ -938,6 +1108,7 @@ __all__ = [
     "InputTokenCountError",
     "InputTokenCounter",
     "ModelReservation",
+    "QuickJSReservation",
     "RunBudget",
     "RunBudgetExceededError",
     "RunBudgetMiddleware",

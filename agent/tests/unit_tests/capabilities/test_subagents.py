@@ -242,6 +242,7 @@ def test_normal_aegra_config_is_accepted_without_mutation():
     "config",
     [
         {"model": "client:model"},
+        {"quickjs": True},
         {"configurable": {"enable_subagents": True}},
         {"configurable": {"__deepagents_subagent_response_format": {"type": "object"}}},
         {"configurable": {"capability_dynamic_subagents": "on"}},

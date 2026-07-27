@@ -32,6 +32,11 @@ from langgraph.runtime import Runtime
 from langgraph_sdk.runtime import ServerRuntime
 
 from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
+from agent.capabilities.quickjs import (
+    QUICKJS_TOOL_NAME,
+    BoundedQuickJSMiddleware,
+    quickjs_allowed,
+)
 from agent.capabilities.subagents import (
     NATIVE_SUBAGENT_SYSTEM_PROMPT,
     SUBAGENT_NAMES,
@@ -148,6 +153,7 @@ def create_graph(
     budget: RunBudget | None = None,
     model: BaseChatModel | None = None,
     input_token_counter: InputTokenCounter | None = None,
+    quickjs_enabled: bool | None = None,
 ):
     """Compile one topology-stable Deep Agent around a run-local budget.
 
@@ -162,6 +168,7 @@ def create_graph(
     run_budget = budget or RunBudget()
     exact_input_counter = input_token_counter or count_anthropic_input_tokens
     allow_subagents = dynamic_subagents_allowed(runtime)
+    allow_quickjs = quickjs_allowed(runtime, server_enabled=quickjs_enabled)
     system_prompt = SYSTEM_PROMPT
     if allow_subagents:
         system_prompt = f"{system_prompt}\n\n{SUBAGENT_ROOT_PROMPT}"
@@ -171,6 +178,7 @@ def create_graph(
         tools=TOOLS,
         system_prompt=system_prompt,
         middleware=[
+            BoundedQuickJSMiddleware(enabled=allow_quickjs),
             RunBudgetMiddleware(
                 run_budget,
                 depth=0,
@@ -178,7 +186,9 @@ def create_graph(
                 allowed_subagents=SUBAGENT_NAMES,
                 input_token_counter=exact_input_counter,
                 native_subagent_prompt=NATIVE_SUBAGENT_SYSTEM_PROMPT,
-            )
+                quickjs_tool_name=QUICKJS_TOOL_NAME,
+                allow_quickjs=allow_quickjs,
+            ),
         ],
         subagents=build_subagents(
             model=selected_model,
@@ -212,10 +222,14 @@ async def graph(
     finally:
         snapshot = budget.snapshot()
         logger.debug(
-            "run budget observed policy=%s model=%d tool=%d task=%d tokens=%d",
+            (
+                "run budget observed policy=%s model=%d tool=%d quickjs=%d "
+                "task=%d tokens=%d"
+            ),
             snapshot.policy_id,
             snapshot.model_calls,
             snapshot.tool_calls,
+            snapshot.quickjs_calls,
             snapshot.task_calls,
             snapshot.charged_tokens,
         )

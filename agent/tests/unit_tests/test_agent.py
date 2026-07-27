@@ -2,6 +2,7 @@
 
 import hashlib
 import inspect
+import json
 from dataclasses import asdict
 from types import SimpleNamespace
 
@@ -28,14 +29,22 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime, ServerInfo
 from langgraph.store.memory import InMemoryStore
 from pydantic import Field
 
-from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
+from agent.capabilities.budget import (
+    CapabilityDeniedError,
+    RunBudget,
+    RunBudgetMiddleware,
+)
+from agent.capabilities.quickjs import (
+    QUICKJS_RESULT_SCHEMA,
+    QUICKJS_TOOL_NAME,
+)
 from agent.capabilities.subagents import (
     NATIVE_SUBAGENT_SYSTEM_PROMPT,
     SUBAGENT_NAMES,
@@ -223,6 +232,37 @@ async def test_graph_factory_creates_a_fresh_budget_for_every_run(monkeypatch):
     assert [budget.snapshot().charged_tokens for budget in created_budgets] == [10, 10]
 
 
+async def test_aegra_factory_creates_a_fresh_quickjs_tool_session_per_access(
+    monkeypatch,
+):
+    model = ToolCapableFakeModel(
+        responses=[
+            _final_message("first access"),
+            _final_message("second access"),
+        ]
+    )
+    monkeypatch.setenv("QUICKJS_ENABLED", "true")
+    monkeypatch.setattr("agent.graph._bounded_model", lambda _spec: model)
+    runtime = _server_runtime(["admin"])
+    coroutine_ids = []
+
+    for thread_id in ("quickjs-factory-first", "quickjs-factory-second"):
+        config = {"configurable": {"thread_id": thread_id}}
+        async with graph(config, runtime) as request_graph:
+            eval_tool = request_graph.nodes["tools"].bound._tools_by_name[
+                QUICKJS_TOOL_NAME
+            ]
+            coroutine_ids.append(id(eval_tool.coroutine))
+            result = await request_graph.ainvoke(
+                {"messages": [{"role": "user", "content": thread_id}]},
+                config,
+            )
+        assert result["messages"][-1].content.endswith("access")
+        assert QUICKJS_TOOL_NAME in model.bound_tool_names[-1]
+
+    assert len(set(coroutine_ids)) == 2
+
+
 def test_graph_module_never_constructs_its_own_persistence():
     source = inspect.getsource(__import__("agent.graph", fromlist=["graph"]))
 
@@ -269,7 +309,7 @@ def test_repeated_graph_creation_registers_profile_once_per_model(monkeypatch):
     assert calls == [(DEFAULT_MODEL, NO_GENERAL_PURPOSE_SUBAGENT)]
 
 
-def test_compiled_graph_registers_one_bounded_task_surface():
+def test_compiled_graph_keeps_capability_topology_stable_while_opted_out():
     compiled = create_graph(
         runtime=_server_runtime(["admin"]),
         config={"configurable": {"thread_id": "compile-proof"}},
@@ -279,7 +319,7 @@ def test_compiled_graph_registers_one_bounded_task_surface():
 
     assert {tool.name for tool in TOOLS} <= registered_tools
     assert {"task"} <= registered_tools
-    assert "eval" not in registered_tools
+    assert QUICKJS_TOOL_NAME in registered_tools
 
 
 @pytest.mark.parametrize(
@@ -310,7 +350,7 @@ def test_create_graph_for_selected_model_keeps_declared_task_dispatch(
     assert isinstance(compiled_graph, CompiledStateGraph)
     assert {tool.name for tool in TOOLS} <= _compiled_tool_names(compiled_graph)
     assert "task" in _compiled_tool_names(compiled_graph)
-    assert "eval" not in _compiled_tool_names(compiled_graph)
+    assert QUICKJS_TOOL_NAME in _compiled_tool_names(compiled_graph)
     assert compiled_graph.stream_transformers[-1] is InspectionEventTransformer
 
 
@@ -388,6 +428,7 @@ async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt
     assert result["messages"][-1].content == "no delegation"
     assert len(model.bound_tool_names) == 1
     assert "task" not in model.bound_tool_names[0]
+    assert QUICKJS_TOOL_NAME not in model.bound_tool_names[0]
     assert len(root_prompts) == 1
     prompt_text = str(root_prompts[0])
     assert SUBAGENT_ROOT_PROMPT.strip() not in prompt_text
@@ -432,6 +473,145 @@ async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model
     assert model.bound_tool_names == [counted_tool_names]
     assert "## `task` (subagent spawner)" in str(counted.system_message.content)
     assert "Available subagent types" in str(counted.system_message.content)
+
+
+@pytest.mark.parametrize("permission", ["admin", "eval"])
+async def test_owner_or_eval_server_opt_in_executes_native_quickjs(permission):
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": QUICKJS_TOOL_NAME,
+                        "args": {"code": "6 * 7"},
+                        "id": "native-quickjs-call",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            ),
+            _final_message("The bounded result is 42."),
+        ]
+    )
+    budget = RunBudget()
+    compiled = create_graph(
+        runtime=_server_runtime([permission]),
+        config={"configurable": {"thread_id": f"quickjs-{permission}"}},
+        model=model,
+        budget=budget,
+        quickjs_enabled=True,
+    )
+    config = {"configurable": {"thread_id": f"quickjs-{permission}"}}
+
+    result = await compiled.ainvoke(
+        {"messages": [{"role": "user", "content": "calculate once"}]},
+        config,
+    )
+
+    eval_messages = [
+        message
+        for message in result["messages"]
+        if isinstance(message, ToolMessage) and message.name == QUICKJS_TOOL_NAME
+    ]
+    assert len(eval_messages) == 1
+    payload = json.loads(eval_messages[0].content)
+    assert payload == {
+        "output": "42",
+        "schema": QUICKJS_RESULT_SCHEMA,
+        "status": "ok",
+        "truncated": False,
+    }
+    assert all(QUICKJS_TOOL_NAME in names for names in model.bound_tool_names)
+    snapshot = budget.snapshot()
+    assert (
+        snapshot.tool_calls,
+        snapshot.quickjs_calls,
+        snapshot.quickjs_in_flight,
+        snapshot.quickjs_output_bytes,
+    ) == (1, 1, 0, len(eval_messages[0].content.encode("utf-8")))
+
+
+async def test_quickjs_prompt_is_injected_before_input_token_reservation(monkeypatch):
+    observed: dict[int, list[int]] = {}
+    original = RunBudget.reserve_model
+
+    def capture_reservation(
+        self,
+        *,
+        estimated_input_tokens=0,
+        task_reservation=None,
+    ):
+        observed.setdefault(id(self), []).append(estimated_input_tokens)
+        return original(
+            self,
+            estimated_input_tokens=estimated_input_tokens,
+            task_reservation=task_reservation,
+        )
+
+    monkeypatch.setattr(RunBudget, "reserve_model", capture_reservation)
+    estimates = {}
+    for enabled in (False, True):
+        budget = RunBudget()
+        compiled = create_graph(
+            runtime=_server_runtime(["admin"]),
+            config={"configurable": {"thread_id": f"prompt-budget-{enabled}"}},
+            model=ToolCapableFakeModel(responses=[_final_message("done")]),
+            budget=budget,
+            quickjs_enabled=enabled,
+        )
+        await compiled.ainvoke(
+            {"messages": [{"role": "user", "content": "same input"}]},
+            {"configurable": {"thread_id": f"prompt-budget-{enabled}"}},
+        )
+        estimates[enabled] = observed[id(budget)][0]
+
+    assert estimates[True] > estimates[False]
+
+
+async def test_public_runtime_cannot_execute_forged_eval_call():
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": QUICKJS_TOOL_NAME,
+                        "args": {"code": "6 * 7"},
+                        "id": "forged-public-eval",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            )
+        ]
+    )
+    budget = RunBudget()
+    compiled = create_graph(
+        runtime=_server_runtime(["anon"]),
+        config={"configurable": {"thread_id": "forged-public-eval"}},
+        model=model,
+        budget=budget,
+        quickjs_enabled=True,
+    )
+
+    with pytest.raises(CapabilityDeniedError, match="QuickJS"):
+        await compiled.ainvoke(
+            {"messages": [{"role": "user", "content": "forged eval"}]},
+            {"configurable": {"thread_id": "forged-public-eval"}},
+        )
+
+    assert QUICKJS_TOOL_NAME not in model.bound_tool_names[0]
+    snapshot = budget.snapshot()
+    assert (snapshot.quickjs_calls, snapshot.quickjs_output_bytes) == (0, 0)
 
 
 async def test_root_and_child_share_one_ledger_and_child_has_no_task_or_eval():
@@ -486,15 +666,20 @@ Stop after the first supported DocId.
     assert result["messages"][-1].content == "Final answer cites Dev/docker.md."
     assert len(model.bound_tool_names) == 3
     assert "task" in model.bound_tool_names[0]
+    assert QUICKJS_TOOL_NAME not in model.bound_tool_names[0]
     assert {"task", "eval"}.isdisjoint(model.bound_tool_names[1])
     assert "task" in model.bound_tool_names[2]
+    assert QUICKJS_TOOL_NAME not in model.bound_tool_names[2]
     snapshot = asdict(budget.snapshot())
     snapshot.pop("elapsed_ms")
     assert snapshot == {
-        "policy_id": "owner-dynamic-subagents-v1",
+        "policy_id": "owner-capability-lab-v2",
         "model_calls": 3,
         "model_reservations_in_flight": 0,
         "tool_calls": 1,
+        "quickjs_calls": 0,
+        "quickjs_in_flight": 0,
+        "quickjs_output_bytes": 0,
         "task_calls": 1,
         "tasks_in_flight": 0,
         "charged_tokens": 30,
@@ -750,6 +935,53 @@ async def test_checkpoint_serialization_contains_no_run_budget_or_snapshot():
     assert b"owner-dynamic-subagents-v1" not in payload
     assert all("budget" not in key.casefold() for key in result)
     assert budget.snapshot().model_calls == 1
+
+
+async def test_quickjs_call_mode_never_enters_aegra_checkpoint_state():
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": QUICKJS_TOOL_NAME,
+                        "args": {"code": "globalThis.privateState = 42; privateState"},
+                        "id": "checkpoint-quickjs-call",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            ),
+            _final_message("done"),
+        ]
+    )
+    saver = InMemorySaver()
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": "quickjs-checkpoint"}},
+        model=model,
+        budget=RunBudget(),
+        quickjs_enabled=True,
+    ).copy(update={"checkpointer": saver})
+    config = {"configurable": {"thread_id": "quickjs-checkpoint"}}
+
+    result = await compiled.ainvoke(
+        {"messages": [{"role": "user", "content": "run bounded JavaScript"}]},
+        config,
+    )
+    checkpoint = await saver.aget_tuple(config)
+
+    assert checkpoint is not None
+    assert "_quickjs_snapshot_payload" not in result
+    channel_values = checkpoint.checkpoint["channel_values"]
+    assert "_quickjs_snapshot_payload" not in channel_values
+    encoding, payload = saver.serde.dumps_typed(checkpoint.checkpoint)
+    assert encoding == "msgpack"
+    assert b"_quickjs_snapshot_payload" not in payload
 
 
 def test_backend_uses_instances_for_all_routes():

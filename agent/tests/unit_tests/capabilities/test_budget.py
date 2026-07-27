@@ -25,6 +25,7 @@ from agent.capabilities.budget import (
     DEFAULT_RUN_BUDGET_POLICY,
     CapabilityDeniedError,
     InvalidDelegationError,
+    QuickJSReservation,
     RunBudget,
     RunBudgetExceededError,
     RunBudgetMiddleware,
@@ -85,6 +86,28 @@ def _task_request(
     )
 
 
+def _quickjs_request() -> ToolCallRequest:
+    runtime = ToolRuntime(
+        state={},
+        context=None,
+        config={"configurable": {}},
+        stream_writer=lambda _event: None,
+        tool_call_id="eval-call-1",
+        store=None,
+    )
+    return ToolCallRequest(
+        tool_call={
+            "name": "eval",
+            "args": {"code": "21 * 2"},
+            "id": "eval-call-1",
+            "type": "tool_call",
+        },
+        tool=None,
+        state={},
+        runtime=runtime,
+    )
+
+
 def _middleware(
     budget: RunBudget,
     *,
@@ -97,6 +120,8 @@ def _middleware(
         allow_subagents=allow_subagents,
         allowed_subagents=frozenset({"retrieval-researcher"}),
         input_token_counter=_zero_input_tokens,
+        quickjs_tool_name="eval",
+        allow_quickjs=True,
     )
 
 
@@ -118,10 +143,13 @@ def test_task_reservation_with_100_concurrent_attempts_commits_exactly_two():
     assert len(reservations) == 2
     assert accepted.count(None) == 98
     assert asdict(budget.snapshot()) == {
-        "policy_id": "owner-dynamic-subagents-v1",
+        "policy_id": "owner-capability-lab-v2",
         "model_calls": 0,
         "model_reservations_in_flight": 0,
         "tool_calls": 2,
+        "quickjs_calls": 0,
+        "quickjs_in_flight": 0,
+        "quickjs_output_bytes": 0,
         "task_calls": 2,
         "tasks_in_flight": 2,
         "charged_tokens": 4_096,
@@ -138,6 +166,162 @@ def test_task_reservation_with_100_concurrent_attempts_commits_exactly_two():
     for reservation in reservations:
         budget.finish_task(reservation)
     assert budget.snapshot().tasks_in_flight == 0
+
+
+def test_quickjs_reservation_with_100_concurrent_attempts_commits_exactly_one():
+    budget = RunBudget(clock=lambda: 0.0)
+    barrier = Barrier(100)
+
+    def reserve() -> QuickJSReservation | None:
+        barrier.wait()
+        try:
+            return budget.reserve_quickjs()
+        except RunBudgetExceededError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        accepted = list(executor.map(lambda _index: reserve(), range(100)))
+    reservations = [reservation for reservation in accepted if reservation is not None]
+
+    assert len(reservations) == 1
+    assert accepted.count(None) == 99
+    snapshot = budget.snapshot()
+    assert (
+        snapshot.tool_calls,
+        snapshot.quickjs_calls,
+        snapshot.quickjs_in_flight,
+        snapshot.quickjs_output_bytes,
+    ) == (1, 1, 1, 4_096)
+
+    budget.settle_quickjs(reservations[0], actual_output_bytes=100)
+    snapshot = budget.snapshot()
+    assert (snapshot.quickjs_in_flight, snapshot.quickjs_output_bytes) == (0, 100)
+
+
+def test_quickjs_output_reservation_refunds_only_measured_unused_bytes():
+    policy = replace(
+        DEFAULT_RUN_BUDGET_POLICY,
+        max_quickjs_calls=3,
+        max_quickjs_output_bytes=100,
+        max_quickjs_total_output_bytes=150,
+    )
+    budget = RunBudget(policy, clock=lambda: 0.0)
+    first = budget.reserve_quickjs()
+    budget.settle_quickjs(first, actual_output_bytes=50)
+    second = budget.reserve_quickjs()
+
+    assert budget.snapshot().quickjs_output_bytes == 150
+    budget.settle_quickjs(second, actual_output_bytes=100)
+
+    with pytest.raises(RunBudgetExceededError, match="output"):
+        budget.reserve_quickjs()
+    assert budget.snapshot().quickjs_calls == 2
+
+
+def test_repeated_quickjs_execution_stops_at_the_run_total():
+    budget = RunBudget(clock=lambda: 0.0)
+
+    for _index in range(4):
+        reservation = budget.reserve_quickjs()
+        budget.settle_quickjs(reservation, actual_output_bytes=0)
+
+    with pytest.raises(RunBudgetExceededError, match="execution"):
+        budget.reserve_quickjs()
+    snapshot = budget.snapshot()
+    assert (
+        snapshot.tool_calls,
+        snapshot.quickjs_calls,
+        snapshot.quickjs_in_flight,
+        snapshot.quickjs_output_bytes,
+    ) == (4, 4, 0, 0)
+
+
+async def test_quickjs_handler_cancellation_releases_only_the_execution_slot():
+    budget = RunBudget()
+    middleware = _middleware(budget)
+    entered = asyncio.Event()
+
+    async def block(_request):
+        entered.set()
+        await asyncio.Event().wait()
+
+    call = asyncio.create_task(middleware.awrap_tool_call(_quickjs_request(), block))
+    await entered.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    snapshot = budget.snapshot()
+    assert (
+        snapshot.tool_calls,
+        snapshot.quickjs_calls,
+        snapshot.quickjs_in_flight,
+        snapshot.quickjs_output_bytes,
+    ) == (1, 1, 0, 4_096)
+
+
+async def test_quickjs_middleware_rejects_concurrent_execution_before_handler():
+    budget = RunBudget()
+    middleware = _middleware(budget)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def block(_request):
+        entered.set()
+        await release.wait()
+        return ToolMessage(content="{}", tool_call_id="eval-call-1")
+
+    first = asyncio.create_task(middleware.awrap_tool_call(_quickjs_request(), block))
+    await entered.wait()
+    second_handler_called = False
+
+    async def should_not_run(_request):
+        nonlocal second_handler_called
+        second_handler_called = True
+        return ToolMessage(content="{}", tool_call_id="eval-call-2")
+
+    with pytest.raises(RunBudgetExceededError, match="concurrency"):
+        await middleware.awrap_tool_call(_quickjs_request(), should_not_run)
+    assert second_handler_called is False
+
+    release.set()
+    await first
+    snapshot = budget.snapshot()
+    assert (
+        snapshot.tool_calls,
+        snapshot.quickjs_calls,
+        snapshot.quickjs_in_flight,
+        snapshot.quickjs_output_bytes,
+    ) == (1, 1, 0, 2)
+
+
+async def test_unauthorized_quickjs_fails_before_spending_budget():
+    budget = RunBudget()
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        quickjs_tool_name="eval",
+        allow_quickjs=False,
+    )
+    called = False
+
+    async def should_not_run(_request):
+        nonlocal called
+        called = True
+        return ToolMessage(content="unexpected", tool_call_id="eval-call-1")
+
+    with pytest.raises(CapabilityDeniedError, match="QuickJS"):
+        await middleware.awrap_tool_call(_quickjs_request(), should_not_run)
+    assert called is False
+    snapshot = budget.snapshot()
+    assert (
+        snapshot.tool_calls,
+        snapshot.quickjs_calls,
+        snapshot.quickjs_output_bytes,
+    ) == (0, 0, 0)
 
 
 def test_task_token_tranche_is_atomic_under_100_way_contention():
@@ -1026,12 +1210,14 @@ def test_run_budget_is_non_serializable_but_snapshot_is_bounded_json():
         '{"charged_tokens": 2048, "elapsed_ms": 0, "exhausted": false, '
         '"finalized": false, "model_calls": 1, '
         '"model_reservations_in_flight": 1, '
-        '"policy_id": "owner-dynamic-subagents-v1", '
+        '"policy_id": "owner-capability-lab-v2", '
         '"provider_cache_read_input_tokens": 0, '
         '"provider_cache_write_input_tokens": 0, '
         '"provider_input_tokens": 0, "provider_output_tokens": 0, '
-        '"provider_usage_complete": true, "task_calls": 0, '
-        '"tasks_in_flight": 0, "tool_calls": 0}'
+        '"provider_usage_complete": true, '
+        '"quickjs_calls": 0, "quickjs_in_flight": 0, '
+        '"quickjs_output_bytes": 0, '
+        '"task_calls": 0, "tasks_in_flight": 0, "tool_calls": 0}'
     )
 
 
@@ -1164,10 +1350,13 @@ def test_elapsed_deadline_rejects_reservation_without_spending_counters():
         budget.reserve_tool()
 
     assert asdict(budget.snapshot()) == {
-        "policy_id": "owner-dynamic-subagents-v1",
+        "policy_id": "owner-capability-lab-v2",
         "model_calls": 0,
         "model_reservations_in_flight": 0,
         "tool_calls": 0,
+        "quickjs_calls": 0,
+        "quickjs_in_flight": 0,
+        "quickjs_output_bytes": 0,
         "task_calls": 0,
         "tasks_in_flight": 0,
         "charged_tokens": 0,
@@ -1248,6 +1437,8 @@ def test_task_token_check_is_atomic_with_other_task_limits():
     [
         ("max_model_calls", 1.5),
         ("max_tool_calls", True),
+        ("max_quickjs_calls", 1.0),
+        ("max_quickjs_output_bytes", 4_096.0),
         ("max_depth", 1.0),
         ("max_total_tokens", 48_000.0),
         ("max_elapsed_seconds", 90.0),
@@ -1256,6 +1447,15 @@ def test_task_token_check_is_atomic_with_other_task_limits():
 def test_policy_integer_limits_reject_non_integer_values(field, value):
     with pytest.raises(ValueError, match="positive and coherent"):
         replace(DEFAULT_RUN_BUDGET_POLICY, **{field: value})
+
+
+def test_policy_rejects_quickjs_per_call_output_above_total():
+    with pytest.raises(ValueError, match="positive and coherent"):
+        replace(
+            DEFAULT_RUN_BUDGET_POLICY,
+            max_quickjs_output_bytes=16_385,
+            max_quickjs_total_output_bytes=16_384,
+        )
 
 
 @pytest.mark.parametrize("input_tokens", [1.0, True, -1])

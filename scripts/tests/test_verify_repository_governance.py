@@ -162,6 +162,461 @@ class LocalGovernanceTests(unittest.TestCase):
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
 
+    def assert_agent_ci_job_mutation_rejected(
+        self,
+        replacements: tuple[tuple[str, str], ...],
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows/ci.yml"
+            original = workflow.read_text(encoding="utf-8")
+            agent_start = original.index("\n  agent:\n") + 1
+            agent_end = original.index("\n  eval:\n", agent_start)
+            agent_section = original[agent_start:agent_end]
+            for old, new in replacements:
+                before = agent_section
+                agent_section = agent_section.replace(old, new, 1)
+                self.assertNotEqual(before, agent_section)
+            mutated = original[:agent_start] + agent_section + original[agent_end:]
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("job 'agent' exact job AST differs" in error for error in errors),
+            errors,
+        )
+
+    def test_agent_ci_exact_job_surface_rejects_every_unreviewed_key(self) -> None:
+        header = (
+            "  agent:\n"
+            "    name: ci/agent\n"
+            "    if: always()\n"
+            "    needs:\n"
+            "      - changes\n"
+            "    runs-on: ubuntu-latest\n"
+            "    timeout-minutes: 20\n"
+        )
+        env = (
+            "    env:\n"
+            "      AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret\n"
+        )
+        mutations = {
+            "name": ((header, header.replace("name: ci/agent", "name: ci/agent-v2")),),
+            "condition": ((header, header.replace("if: always()", "if: success()")),),
+            "needs": ((header, header.replace("- changes", "- web")),),
+            "runner": (
+                (
+                    header,
+                    header.replace("runs-on: ubuntu-latest", "runs-on: self-hosted"),
+                ),
+            ),
+            "timeout": (
+                (header, header.replace("timeout-minutes: 20", "timeout-minutes: 21")),
+            ),
+            "container-and-uv-project": (
+                (
+                    header,
+                    header + "    container: attacker.invalid/agent:latest\n",
+                ),
+                (
+                    env,
+                    env + "      UV_PROJECT: ../web\n",
+                ),
+            ),
+            "services": (
+                (
+                    header,
+                    header
+                    + "    services:\n"
+                    + "      attacker:\n"
+                    + "        image: attacker.invalid/service:latest\n",
+                ),
+            ),
+            "strategy": (
+                (
+                    header,
+                    header + "    strategy:\n" + "      fail-fast: false\n",
+                ),
+            ),
+            "environment": (
+                (
+                    header,
+                    header + "    environment: Production\n",
+                ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_agent_ci_job_mutation_rejected(replacements)
+
+    def test_agent_ci_exact_step_inventory_rejects_action_mutations(self) -> None:
+        checkout = (
+            "      - uses: "
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 "
+            "# v7.0.1\n"
+            "        with:\n"
+            "          persist-credentials: false\n"
+            "      - name: Fail closed if change detection failed\n"
+        )
+        setup_python = (
+            "      - uses: "
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 "
+            "# v7.0.0\n"
+            "        if: needs.changes.outputs.agent == 'true'\n"
+            "        with:\n"
+            '          python-version: "3.12"\n'
+        )
+        setup_uv = (
+            "      - uses: "
+            "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 "
+            "# v8.3.2\n"
+            "        if: needs.changes.outputs.agent == 'true'\n"
+            "        with:\n"
+            "          enable-cache: true\n"
+            "          cache-dependency-glob: agent/uv.lock\n"
+        )
+        mutations = {
+            "checkout-ref": (
+                (
+                    checkout,
+                    checkout.replace(
+                        "          persist-credentials: false\n",
+                        "          persist-credentials: false\n          ref: main\n",
+                    ),
+                ),
+            ),
+            "checkout-repository": (
+                (
+                    checkout,
+                    checkout.replace(
+                        "          persist-credentials: false\n",
+                        "          persist-credentials: false\n"
+                        "          repository: attacker/repository\n",
+                    ),
+                ),
+            ),
+            "checkout-path": (
+                (
+                    checkout,
+                    checkout.replace(
+                        "          persist-credentials: false\n",
+                        "          persist-credentials: false\n          path: agent\n",
+                    ),
+                ),
+            ),
+            "action-replacement": (
+                (
+                    setup_python,
+                    setup_python.replace(
+                        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                        "actions/cache@" + "a" * 40,
+                    ),
+                ),
+            ),
+            "moved-action": (
+                (
+                    setup_python + setup_uv,
+                    setup_uv + setup_python,
+                ),
+            ),
+            "deleted-action": ((setup_python, ""),),
+            "extra-action": (
+                (
+                    checkout,
+                    checkout.replace(
+                        "      - name: Fail closed if change detection failed\n",
+                        "      - uses: "
+                        "actions/checkout@"
+                        "3d3c42e5aac5ba805825da76410c181273ba90b1 "
+                        "# v7.0.1\n"
+                        "        with:\n"
+                        "          persist-credentials: false\n"
+                        "      - name: Fail closed if change detection failed\n",
+                    ),
+                ),
+            ),
+            "with-change": (
+                (
+                    setup_python,
+                    setup_python.replace(
+                        'python-version: "3.12"',
+                        'python-version: "3.13"',
+                    ),
+                ),
+            ),
+            "if-change": (
+                (
+                    setup_uv,
+                    setup_uv.replace(
+                        "if: needs.changes.outputs.agent == 'true'",
+                        "if: 'false'",
+                    ),
+                ),
+            ),
+            "name-change": (
+                (
+                    setup_python,
+                    setup_python.replace(
+                        "      - uses: actions/setup-python@",
+                        "      - name: unreviewed setup\n"
+                        "        uses: actions/setup-python@",
+                    ),
+                ),
+            ),
+        }
+        for label, replacements in mutations.items():
+            with self.subTest(label=label):
+                self.assert_agent_ci_job_mutation_rejected(replacements)
+
+    def test_agent_ci_rejects_extra_local_composite_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            action = root / ".github/actions/unreviewed/action.yml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                """
+name: unreviewed
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: uv run pytest -q
+""".lstrip(),
+                encoding="utf-8",
+            )
+            workflow = root / ".github/workflows/ci.yml"
+            original = workflow.read_text(encoding="utf-8")
+            old = (
+                "      - name: Verify the agent lockfile is current\n"
+                "        if: needs.changes.outputs.agent == 'true'\n"
+            )
+            new = (
+                "      - uses: ./.github/actions/unreviewed\n"
+                "        if: needs.changes.outputs.agent == 'true'\n" + old
+            )
+            mutated = original.replace(old, new, 1)
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("job 'agent' exact job AST differs" in error for error in errors),
+            errors,
+        )
+
+    def test_agent_ci_requires_lock_check_before_frozen_install(self) -> None:
+        mutations = {
+            "removed": (
+                "      - name: Verify the agent lockfile is current\n"
+                "        if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv lock --check\n",
+                "",
+            ),
+            "after-install": (
+                "      - name: Verify the agent lockfile is current\n"
+                "        if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv lock --check\n"
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv sync --frozen --all-extras --dev\n",
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv sync --frozen --all-extras --dev\n"
+                "      - name: Verify the agent lockfile is current\n"
+                "        if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv lock --check\n",
+            ),
+            "comment-spoof": (
+                "        run: uv lock --check\n",
+                "        run: '# uv lock --check'\n",
+            ),
+            "quoted-string-spoof": (
+                "        run: uv lock --check\n",
+                '        run: echo "uv lock --check"\n',
+            ),
+        }
+        for label, (old, new) in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/ci.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        "exact run-step inventory differs" in error for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_agent_ci_rejects_non_frozen_or_misplaced_uv_run_flag(self) -> None:
+        mutations = {
+            "missing": (
+                "uv run --frozen ruff check",
+                "uv run ruff check",
+            ),
+            "passed-to-child-command": (
+                "uv run --frozen ruff check",
+                "uv run ruff --frozen check",
+            ),
+            "quoted-shell": (
+                "uv run --frozen ruff check",
+                'bash -c "uv run ruff check"',
+            ),
+        }
+        for label, (old, new) in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/ci.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        "exact run-step inventory differs" in error for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_agent_ci_requires_exact_frozen_uv_run_inventory(self) -> None:
+        mutations = {
+            "variable-executable": (
+                "uv run --frozen --all-extras pytest -q",
+                "$UV run --frozen --all-extras pytest -q",
+            ),
+            "command-variable-executable": (
+                "uv run --frozen --all-extras pytest -q",
+                'command "$UV" run --frozen --all-extras pytest -q',
+            ),
+            "deleted-pytest": (
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv run --frozen --all-extras pytest -q\n",
+                "",
+            ),
+            "renamed-child-command": (
+                "uv run --frozen ruff check",
+                "uv run --frozen ruff lint",
+            ),
+            "extra-run": (
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv run --frozen --all-extras pytest -q\n",
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv run --frozen python -V\n"
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv run --frozen --all-extras pytest -q\n",
+            ),
+        }
+        for label, (old, new) in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/ci.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        "exact run-step inventory differs" in error for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_agent_ci_rejects_indirect_runs_and_execution_overrides(self) -> None:
+        mutations = {
+            "extra-indirect-run": (
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv run --frozen --all-extras pytest -q\n",
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: 'U=uv; \"$U\" run --all-extras pytest -q'\n"
+                "      - if: needs.changes.outputs.agent == 'true'\n"
+                "        run: uv run --frozen --all-extras pytest -q\n",
+            ),
+            "step-shell": (
+                "        run: uv lock --check\n",
+                "        run: uv lock --check\n        shell: python\n",
+            ),
+            "step-env": (
+                "        run: uv lock --check\n",
+                "        run: uv lock --check\n"
+                "        env:\n"
+                "          UV_PROJECT: ../web\n",
+            ),
+            "job-env": (
+                "    env:\n"
+                "      AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret\n",
+                "    env:\n"
+                "      AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret\n"
+                "      UV_PROJECT: ../web\n",
+            ),
+            "job-shell": (
+                "      run:\n        working-directory: agent\n",
+                "      run:\n        working-directory: agent\n        shell: python\n",
+            ),
+        }
+        for label, (old, new) in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/ci.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        "exact run-step inventory differs" in error
+                        or "forbidden execution metadata" in error
+                        or "env must remain exactly" in error
+                        or "inherited shell changes are forbidden" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_agent_ci_rejects_non_frozen_install_and_disabled_lock_check(self) -> None:
+        mutations = {
+            "non-frozen-install": (
+                "uv sync --frozen --all-extras --dev",
+                "uv sync --all-extras --dev",
+            ),
+            "disabled-lock-check": (
+                "      - name: Verify the agent lockfile is current\n"
+                "        if: needs.changes.outputs.agent == 'true'\n",
+                "      - name: Verify the agent lockfile is current\n"
+                "        if: 'false'\n",
+            ),
+        }
+        for label, (old, new) in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/ci.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        "exact run-step inventory differs" in error for error in errors
+                    ),
+                    errors,
+                )
+
     def test_policy_rejects_an_overbroad_main_ruleset(self) -> None:
         policy = json.loads(json.dumps(governance.load_policy()))
         policy["main"]["ruleset"]["conditions"]["ref_name"]["include"] = ["~ALL"]
@@ -933,6 +1388,56 @@ runs:
                 )
             )
         )
+        audit_commands = [
+            governance._scalar_value(node, context="dependency audit run").strip()
+            for node in governance._nodes_for_mapping_key(document.root, "run")
+            if isinstance(node, governance.ScalarNode)
+        ]
+        self.assertEqual(
+            1,
+            audit_commands.count(governance.DEPENDENCY_WEB_AUDIT_COMMAND),
+        )
+
+    def test_dependency_audit_setup_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "checksum",
+                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829",
+                "0" * 64,
+            ),
+            (
+                "uv-version",
+                'version: "0.11.29"',
+                'version: "0.11.28"',
+            ),
+            (
+                "setup-python",
+                "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "actions/setup-python@" + "a" * 40,
+            ),
+            (
+                "setup-uv",
+                "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990",
+                "astral-sh/setup-uv@" + "b" * 40,
+            ),
+        )
+        for label, old, new in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/dependency-audit.yml"
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(old, new, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(
+                    "dependency audit agent setup differs" in error for error in errors
+                ),
+                errors,
+            )
 
     def test_dependabot_groups_match_the_exact_policy(self) -> None:
         policy = governance.load_policy()

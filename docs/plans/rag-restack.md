@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-07-26"
+updated: "2026-07-27"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -83,7 +83,9 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `@assistant-ui/react-langgraph` | `0.14.12` | **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
 
-**Drop:** `chromadb` (zero call sites), `fastapi`, `uvicorn`, `sse-starlette`, the `arq`
+**Already dropped:** `chromadb` (zero call sites).
+
+**Drop during the Aegra replacement:** `fastapi`, `uvicorn`, `sse-starlette`, the `arq`
 extra, `@langchain/react`, `@langchain/langgraph`.
 
 ## Target AI project tree
@@ -373,10 +375,16 @@ all needed - see [the registry](../reference/retrieval-methods.md#the-korean-tok
    dictionary has not caught up with still matches exactly without colliding with
    morphological tokens.
 4. **Fit once at build time.** Persist document lengths, first-seen term-order IDFs, and
-   sparse postings in deterministic SQLite (`mode=ro&immutable=1` at runtime). Do not ship
-   raw token documents or construct `BM25Okapi` while serving. The registry identity path
-   reads checksums only, so creating one registered retriever creates exactly one Kiwi
-   tokenizer instead of fitting/loading the method twice.
+   sparse postings in deterministic SQLite. At runtime, re-verify the fitted artifact
+   bytes at access time against the checksum and byte count pinned by the validated root
+   manifest, then deserialize those verified bytes into one private in-memory SQLite
+   connection. Never reopen the mutable fitted path after verification: an initialized
+   retriever has no post-init file dependency, while a new runtime fails closed if the
+   artifact drifts. Do not ship raw token documents or construct `BM25Okapi` while
+   serving. The registry identity path may reread and checksum the artifact bytes, but it
+   neither deserializes the database nor creates a tokenizer; creating one registered
+   retriever creates exactly one SQLite snapshot and one Kiwi tokenizer instead of
+   fitting/loading the method twice.
 
 Also remove the `score / max(scores)` normalisation: it forces the top hit to exactly 1.000
 for **any** query including nonsense.

@@ -69,6 +69,45 @@ composite action and reusable workflow, including nested local calls.
 This keeps a required check from remaining permanently pending after an
 upstream failure or merge-queue run.
 
+The `ci/agent` job also has an immutable-resolution contract. It runs exactly
+one executable `uv lock --check` before its exact
+`uv sync --frozen --all-extras --dev` install, and every project-bound
+`uv run` places `--frozen` immediately after `uv run`. Without that flag,
+`uv run` may resolve a stale `pyproject.toml`/`uv.lock` pair after the frozen
+sync and silently replace the environment that CI was meant to verify. The
+local verifier binds this contract to the AST-selected `agent` job and its
+`agent` working directory, tokenizes executable `run` scalars with shell
+comments removed, and binds every run step—including the fail-closed and
+unaffected-component reports—to an exact name, condition, command-token, and
+order inventory. The four frozen commands and their complete scopes—Ruff
+check, Ruff format check, index build/audit, and pytest—are exact within that
+inventory, so variable executables, wrapper commands, deletions, renames, and
+extra direct or indirect runs require a deliberate contract change. Run-step
+execution metadata is limited to `name`, `if`, and `run`; step `shell`, `env`,
+or working-directory overrides fail, as do workflow-level inherited
+defaults/environment and changes to the job's exact environment or
+agent-only working directory. A comment, `echo`, or quoted command string
+therefore cannot stand in for an executable gate.
+
+That contract binds the complete `agent` job AST, not only its `run` strings.
+The only job keys are the reviewed name, `always()` condition, `changes`
+dependency, Ubuntu runner, 20-minute timeout, agent working directory, exact CI
+environment, and ordered steps. `container`, `services`, `strategy`,
+`environment`, a self-hosted runner, or any other extra or changed job key
+fails. All eleven steps are exact and ordered: checkout is pinned to its
+reviewed SHA with only `persist-credentials: false`; setup-python v7.0.0 is
+pinned with Python 3.12; setup-uv v8.3.2 is pinned with only the reviewed cache
+inputs; and the eight run steps retain their exact names, conditions, commands,
+and allowed keys. Adding, deleting, moving, replacing, or changing an action,
+including a pinned or local composite action, is a deliberate baseline change
+in the verifier and its mutation tests.
+
+The setup-python v7 major removes only the unused `pip-install` input from this
+repository's surface. setup-uv v8 removes the deprecated custom
+`manifest-file` format and mutable major/minor tags; this repository uses
+neither, keeps full-SHA pins, and uses inputs still declared by v8.3.2:
+`version`, `checksum`, `enable-cache`, and `cache-dependency-glob`.
+
 No job in the required-check emitter or its transitive `needs` graph may use
 job-level `uses`, whether it calls a local or external reusable workflow.
 GitHub can report the caller job successful when every called-workflow job is
@@ -256,15 +295,62 @@ verifier confirms both the dedicated endpoint and the repository security
 summary, so disabling or pausing either feature is external policy drift.
 
 [`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs
-weekly and manually. It verifies both lockfiles, runs Bun's high/critical audit,
+weekly and manually. It verifies both lockfiles, runs the web policy below,
 audits the exact exported Python resolution with pinned `pip-audit`, and reports
 one stable `dependency/audit` result. It is an alerting workflow, not a required
 main check; a discovered vulnerability should create a focused fix PR rather
 than making every unrelated PR permanently pending.
 
-The introduction audit found existing dependency debt, so scheduled/manual runs
-will remain red until focused remediation PRs clear it. Do not add an ignore
-baseline, `continue-on-error`, or another false-green suppression.
+Its agent job deliberately pins uv 0.11.29 under setup-uv v8.3.2. That action's
+built-in checksum table ends at uv 0.11.28, so the workflow also pins the
+official Linux x64 0.11.29 archive SHA-256 rather than allowing an unverified
+download. Local uv commands validate the lock/export semantics but cannot
+emulate the GitHub Action's Node runtime, release download, checksum, and cache
+path. After this action rollup is pushed, manually dispatch **Dependency
+audit** and require its agent job to install uv 0.11.29 and pass before
+considering that scheduled path verified.
+
+The web policy is executable in
+[`audit-dependencies.ts`](../../web/scripts/audit-dependencies.ts) and fails
+closed in three stages:
+
+1. `bun audit --prod --audit-level=high --json` must return an empty object.
+   Production high and critical findings have no exception.
+2. The complete high/critical audit must contain exactly
+   `CVE-2026-14257` / `GHSA-mh99-v99m-4gvg`, and the lock must show every
+   affected `brace-expansion@1.1.16` path beneath the root
+   `eslint-config-next` dev dependency through the exact current
+   `eslint-plugin-import`, `eslint-plugin-jsx-a11y`, and
+   `eslint-plugin-react` chain. Any extra advisory, production move, package
+   version, or path drift fails.
+3. Only after those checks, a second audit ignoring the reviewed GHSA must
+   return zero. Bun 1.3.10 does not honor the advisory's CVE alias, despite the
+   CLI help calling the option a CVE ID, and also does not apply `--ignore`
+   with JSON output; the policy therefore validates the CVE/GHSA pair itself
+   and uses the GHSA identifier for the final non-JSON command.
+
+The exception expires after **2026-08-31**. Review it sooner when any of the
+three ESLint plugins stops depending on Minimatch 3, when Brace Expansion
+backports the fix to its CommonJS 1.x API, or when Bun fixes CVE alias handling.
+Do not force Brace Expansion 5 into Minimatch 3: version 5 returns an object
+with an `expand` member while Minimatch 3 calls the required module itself as a
+function, so that override makes lint fail. Do not add another ignore,
+`continue-on-error`, or a severity downgrade.
+
+Two temporary top-level Bun overrides cover production parents that have not
+yet released compatible ranges: PostCSS 8.5.23 replaces Next 16.2.12's exact
+8.4.31, and Sharp 0.35.3 replaces its `^0.34.5` optional dependency. Both
+resolve on every lock path and support the repository's Node floor; remove each
+override as soon as stable Next selects the patched line itself.
+
+The remediation lock is based on the pre-remediation lock and uses
+package-specific Bun 1.3.10 updates for the affected parent closures. Nine of
+the 60 direct resolutions change; the other 51 are pinned to their reviewed
+base resolutions by the executable policy. That guard deliberately includes
+Radix, Framer Motion, Pagefind, React Icons, Tailwind, and
+`use-stick-to-bottom`, so a future security update cannot silently turn into a
+repository-wide dependency refresh. Do not replace this with a clean
+re-resolution or add temporary transitive packages to `package.json`.
 
 ## Rollout order
 
@@ -301,3 +387,5 @@ they have been applied.
 - [GitHub vulnerability-alert status API](https://docs.github.com/en/rest/repos/repos#check-if-vulnerability-alerts-are-enabled-for-a-repository)
 - [GitHub Dependabot security-update status API](https://docs.github.com/en/rest/repos/repos#check-if-automated-security-fixes-are-enabled-for-a-repository)
 - [GitHub repository security-and-analysis response](https://docs.github.com/en/rest/repos/repos#get-a-repository)
+- [Bun dependency audit](https://bun.com/docs/pm/cli/audit)
+- [Brace Expansion advisory GHSA-mh99-v99m-4gvg](https://github.com/advisories/GHSA-mh99-v99m-4gvg)

@@ -107,8 +107,9 @@ Capabilities are tiered:
 
 **Follow-ups**
 
-- [ ] Fix the `/blog/` filesystem route and the `ripgrep_search` draft fallback (P3.1).
-- [ ] Add draft-exclusion regression tests through all six tools (P3.2) - the existing
+- [x] Remove the `/blog/` filesystem route and replace the raw `ripgrep_search` path
+      with published-corpus retrieval (P3.1).
+- [x] Add draft-exclusion regression tests through all six tools (P3.2) - the existing
       security tests never covered this, which is why the bugs survived.
 - [ ] Turnstile-gated anonymous token minting (P3.3).
 - [ ] `anon` scope route allowlist; strip `configurable.model`; force

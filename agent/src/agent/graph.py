@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import (
+    FilesystemPermission,
     GeneralPurposeSubagentProfile,
     HarnessProfile,
     create_deep_agent,
@@ -14,13 +15,13 @@ from deepagents import (
 )
 from deepagents.backends import (
     CompositeBackend,
+    FilesystemBackend,
     StateBackend,
     StoreBackend,
 )
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
-from agent.lib.read_only_backend import ReadOnlyFilesystemBackend
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import TOOLS
 
@@ -29,13 +30,7 @@ NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
     general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)
 )
 
-# Resolve content path relative to agent/ directory
 AGENT_DIR = Path(__file__).resolve().parent.parent.parent  # agent/
-CONTENT_DIR = str(
-    Path(
-        os.environ.get("BLOG_CONTENT_PATH", str(AGENT_DIR / ".." / "content"))
-    ).resolve()
-)
 SKILLS_DIR = str(AGENT_DIR / "skills")
 
 
@@ -78,21 +73,27 @@ def _build_backend() -> CompositeBackend:
 
     /            -> StateBackend (ephemeral working files per thread)
     /memories/   -> StoreBackend (persistent cross-thread memory)
-    /blog/       -> read-only blog content
     /skills/     -> read-only Deep Agents skills
     """
     return CompositeBackend(
         default=StateBackend(),
         routes={
             "/memories/": StoreBackend(namespace=_memory_namespace),
-            "/blog/": ReadOnlyFilesystemBackend(
-                root_dir=CONTENT_DIR, virtual_mode=True
-            ),
-            "/skills/": ReadOnlyFilesystemBackend(
-                root_dir=SKILLS_DIR, virtual_mode=True
-            ),
+            "/skills/": FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True),
         },
     )
+
+
+def _filesystem_permissions() -> list[FilesystemPermission]:
+    """Keep mounted skills read-only while leaving thread and memory files writable."""
+
+    return [
+        FilesystemPermission(
+            operations=["write"],
+            paths=["/skills", "/skills/**"],
+            mode="deny",
+        )
+    ]
 
 
 def _normalized_model_spec() -> str:
@@ -126,6 +127,7 @@ def create_graph():
         system_prompt=SYSTEM_PROMPT,
         backend=_build_backend(),
         skills=["/skills/"],
+        permissions=_filesystem_permissions(),
     )
 
 

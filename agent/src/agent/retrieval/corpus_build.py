@@ -22,16 +22,16 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from agent.retrieval.corpus import (
+    CATALOG_SCHEMA,
     DERIVED_ARTIFACT_PATHS,
     MANIFEST_SCHEMA,
+    WIKILINK_SCHEMA,
     PublishedCorpus,
     content_checksum,
     corpus_fingerprint,
 )
 from agent.retrieval.protocol import DocId
 
-CATALOG_SCHEMA = "published-corpus-catalog-v1"
-WIKILINK_SCHEMA = "published-wikilinks-v2"
 POLICY_SCHEMA_VERSION = 1
 DEFAULT_BM25_POLICY = Path(__file__).resolve().parents[3] / "bm25-policy.toml"
 
@@ -597,7 +597,9 @@ def _catalog_entry(document: SourceDocument) -> dict[str, object]:
     if not isinstance(title, str):
         title = path.stem
     date_value = metadata.get("date", metadata.get("published"))
-    if not isinstance(date_value, str):
+    if isinstance(date_value, (date, datetime)):
+        date_value = date_value.isoformat()
+    elif not isinstance(date_value, str):
         date_value = None
     tags = metadata.get("tags")
     if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):

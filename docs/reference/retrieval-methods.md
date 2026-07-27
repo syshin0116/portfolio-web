@@ -8,7 +8,7 @@ when_to_read: >
   or when looking for what has already been tried and what it scored.
 tags: [reference, retrieval, rag, evaluation, registry]
 status: draft
-updated: "2026-07-26"
+updated: "2026-07-27"
 owners: ["@syshin0116"]
 refs: [../adr/0008-chatbot-is-a-rag-evaluation-testbed.md, ../plans/rag-restack.md]
 template: reference
@@ -46,7 +46,9 @@ Two things gate every entry in this table, both from
   so comparisons drawn against it were invalid, not merely pessimistic. The corrected
   fitted baseline below is now the comparison floor. See
   [the tokenizer note](#the-korean-tokenizer-problem).
-- **One retriever interface**, used by both the chat and the harness. Methods are plugs.
+- **One retriever interface**, intended for both the chat and the harness. The chat now
+  resolves its configured method from the shared servable registry; the evaluation
+  harness still needs to be built against that interface.
 
 ## The corpus, and what it affords
 
@@ -82,7 +84,8 @@ those same links turned out to be the better prize.
 | BM25 + Kiwi morphological tokenization | `implemented` | The fitted, raw-score baseline everything else is measured against |
 | BM25 + character n-grams | `planned` | Whether morphological analysis earns its complexity, or n-grams match it on mixed-script Korean |
 | BM25 field weighting (title/tags/body) | `planned` | How much of retrieval quality is just "the title said so" |
-| Exact substring / regex | `planned` | The floor. If a method cannot beat grep, it is not earning its cost |
+| Exact substring | `implemented` | The safe literal-match floor. If a method cannot beat it, it is not earning its cost |
+| Bounded regex | `planned` | Whether regex expressiveness adds useful recall without exposing unbounded query execution |
 | SPLADE or learned sparse | `planned` | Whether learned sparse transfers to Korean at all |
 
 ### Dense
@@ -188,7 +191,7 @@ dimension rather than a row.
 | Method | Reason |
 |---|---|
 | ripgrep subprocess search | Shells out for a 2.4 MB corpus while its own in-process Python fallback does the same job correctly. Kept as an idea (see "exact substring" above), deleted as an implementation |
-| Chroma vector store | Declared in `pyproject.toml` with **zero call sites**. Never wired. Dropped rather than adopted by default - the vector-store choice should follow the embedding decision, not precede it |
+| Chroma vector store | Previously declared in `pyproject.toml` with **zero call sites** and removed after an unpatched critical advisory. Never wired. Dropped rather than adopted by default - the vector-store choice should follow the embedding decision, not precede it |
 
 ## The Korean tokenizer problem
 

@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import json
 import re
+import shlex
 import subprocess
 import sys
 from collections import Counter
@@ -131,6 +132,179 @@ EXPECTED_AUTOMATED_SECURITY_FIXES = {
     "paused": False,
 }
 EXPECTED_DEPENDABOT_SECURITY_UPDATES_STATUS = "enabled"
+AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
+AGENT_CI_JOB = "agent"
+AGENT_CI_WORKING_DIRECTORY = "agent"
+AGENT_CI_CHANGED_CONDITION = "needs.changes.outputs.agent == 'true'"
+AGENT_CI_ENV = {
+    "AGENT_AUTH_SECRET": "ci-only-agent-secret-ci-only-agent-secret",
+}
+DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
+AGENT_LOCK_COMMAND = ("uv", "lock", "--check")
+AGENT_SYNC_COMMAND = ("uv", "sync", "--frozen", "--all-extras", "--dev")
+AGENT_RUN_COMMANDS = (
+    (
+        "uv",
+        "run",
+        "--frozen",
+        "ruff",
+        "check",
+        "src",
+        "tests",
+        "../scripts/build_index.py",
+        "../scripts/ci_changed_components.py",
+        "../scripts/verify_repository_governance.py",
+        "../scripts/tests",
+    ),
+    (
+        "uv",
+        "run",
+        "--frozen",
+        "ruff",
+        "format",
+        "--check",
+        "src",
+        "tests",
+        "../scripts/build_index.py",
+        "../scripts/ci_changed_components.py",
+        "../scripts/verify_repository_governance.py",
+        "../scripts/tests",
+    ),
+    (
+        "uv",
+        "run",
+        "--frozen",
+        "python",
+        "../scripts/build_index.py",
+        "--expect-document-count",
+        "335",
+    ),
+    ("uv", "run", "--frozen", "--all-extras", "pytest", "-q"),
+)
+AGENT_RUN_STEP_INVENTORY = (
+    (
+        "Fail closed if change detection failed",
+        "needs.changes.result != 'success'",
+        ("exit", "1"),
+    ),
+    (
+        "Report an unaffected component",
+        "needs.changes.outputs.agent != 'true'",
+        (
+            "echo",
+            "No agent-affecting paths changed; "
+            "ci/agent reports success without rebuilding.",
+        ),
+    ),
+    (
+        "Verify the agent lockfile is current",
+        AGENT_CI_CHANGED_CONDITION,
+        AGENT_LOCK_COMMAND,
+    ),
+    (None, AGENT_CI_CHANGED_CONDITION, AGENT_SYNC_COMMAND),
+    (None, AGENT_CI_CHANGED_CONDITION, AGENT_RUN_COMMANDS[0]),
+    (None, AGENT_CI_CHANGED_CONDITION, AGENT_RUN_COMMANDS[1]),
+    (
+        "Build and audit the published corpus and BM25 artifacts",
+        AGENT_CI_CHANGED_CONDITION,
+        AGENT_RUN_COMMANDS[2],
+    ),
+    (None, AGENT_CI_CHANGED_CONDITION, AGENT_RUN_COMMANDS[3]),
+)
+EXPECTED_AGENT_CI_JOB = {
+    "name": "ci/agent",
+    "if": "always()",
+    "needs": ["changes"],
+    "runs-on": "ubuntu-latest",
+    "timeout-minutes": "20",
+    "defaults": {
+        "run": {
+            "working-directory": AGENT_CI_WORKING_DIRECTORY,
+        }
+    },
+    "env": AGENT_CI_ENV,
+    "steps": [
+        {
+            "uses": ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"),
+            "with": {
+                "persist-credentials": "false",
+            },
+        },
+        {
+            "name": "Fail closed if change detection failed",
+            "if": "needs.changes.result != 'success'",
+            "run": "exit 1",
+        },
+        {
+            "name": "Report an unaffected component",
+            "if": "needs.changes.outputs.agent != 'true'",
+            "run": (
+                'echo "No agent-affecting paths changed; '
+                'ci/agent reports success without rebuilding."'
+            ),
+        },
+        {
+            "uses": ("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"),
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "with": {
+                "python-version": "3.12",
+            },
+        },
+        {
+            "uses": ("astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990"),
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "with": {
+                "enable-cache": "true",
+                "cache-dependency-glob": "agent/uv.lock",
+            },
+        },
+        {
+            "name": "Verify the agent lockfile is current",
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_LOCK_COMMAND),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_SYNC_COMMAND),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[0]),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[1]),
+        },
+        {
+            "name": "Build and audit the published corpus and BM25 artifacts",
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[2]),
+        },
+        {
+            "if": AGENT_CI_CHANGED_CONDITION,
+            "run": " ".join(AGENT_RUN_COMMANDS[3]),
+        },
+    ],
+}
+EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
+    {
+        "uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+        "with": {
+            "python-version": "3.12",
+        },
+    },
+    {
+        "uses": "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990",
+        "with": {
+            "version": "0.11.29",
+            "checksum": (
+                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
+            ),
+            "enable-cache": "true",
+            "cache-dependency-glob": "agent/uv.lock",
+        },
+    },
+]
 EXPECTED_DEPENDABOT = {
     "vulnerability_alerts_enabled": True,
     "automated_security_fixes": EXPECTED_AUTOMATED_SECURITY_FIXES,
@@ -573,6 +747,162 @@ def _job_condition(job: MappingNode, *, context: str) -> str | None:
     if value.startswith("${{") and value.endswith("}}"):
         value = value[3:-2].strip()
     return value
+
+
+def _simple_shell_words(run: Node, *, context: str) -> tuple[str, ...]:
+    script = _scalar_value(run, context=f"{context} run")
+    try:
+        lexer = shlex.shlex(
+            script,
+            posix=True,
+            punctuation_chars=";&|()<>",
+        )
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        return tuple(lexer)
+    except ValueError as exc:
+        raise GovernanceError(
+            f"{context} run is not valid shell syntax: {exc}"
+        ) from exc
+
+
+def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
+    """Require one immutable, lock-checked uv resolution in the ci/agent job."""
+    errors: list[str] = []
+    for inherited_key in ("defaults", "env"):
+        if _mapping_value(document.root, inherited_key) is not None:
+            errors.append(
+                f"{AGENT_CI_WORKFLOW}: workflow-level {inherited_key} is "
+                "forbidden because it can change ci/agent command semantics"
+            )
+    jobs = _workflow_jobs(document)
+    agent = jobs.get(AGENT_CI_JOB)
+    if agent is None:
+        return [f"{AGENT_CI_WORKFLOW}: required job {AGENT_CI_JOB!r} is missing"]
+
+    context = f"{AGENT_CI_WORKFLOW}: job {AGENT_CI_JOB!r}"
+    actual_agent_job = _node_to_data(agent)
+    if not _json_exact(actual_agent_job, EXPECTED_AGENT_CI_JOB):
+        errors.append(
+            f"{context} exact job AST differs; "
+            f"expected={EXPECTED_AGENT_CI_JOB!r}, actual={actual_agent_job!r}"
+        )
+
+    defaults = _mapping_value(agent, "defaults")
+    if not isinstance(defaults, MappingNode):
+        errors.append(f"{context} defaults must be a mapping")
+    elif {key for key, _, _ in _mapping_items(defaults)} != {"run"}:
+        errors.append(f"{context} defaults may contain only the run mapping")
+    run_defaults = (
+        _mapping_value(defaults, "run") if isinstance(defaults, MappingNode) else None
+    )
+    if not isinstance(run_defaults, MappingNode):
+        errors.append(f"{context} defaults.run must be a mapping")
+    elif {key for key, _, _ in _mapping_items(run_defaults)} != {"working-directory"}:
+        errors.append(
+            f"{context} defaults.run may contain only working-directory; "
+            "inherited shell changes are forbidden"
+        )
+    working_directory = (
+        _mapping_value(run_defaults, "working-directory")
+        if isinstance(run_defaults, MappingNode)
+        else None
+    )
+    actual_working_directory = (
+        _scalar_value(
+            working_directory,
+            context=f"{context} defaults.run.working-directory",
+        )
+        if working_directory is not None
+        else None
+    )
+    if actual_working_directory != AGENT_CI_WORKING_DIRECTORY:
+        errors.append(
+            f"{context} defaults.run.working-directory must remain "
+            f"{AGENT_CI_WORKING_DIRECTORY!r}, found {actual_working_directory!r}"
+        )
+
+    agent_env = _mapping_value(agent, "env")
+    actual_agent_env = (
+        _node_to_data(agent_env) if isinstance(agent_env, MappingNode) else None
+    )
+    if actual_agent_env != AGENT_CI_ENV:
+        errors.append(
+            f"{context} env must remain exactly {AGENT_CI_ENV!r}, "
+            f"found {actual_agent_env!r}"
+        )
+
+    steps = _mapping_value(agent, "steps")
+    if not isinstance(steps, SequenceNode):
+        return [*errors, f"{context} steps must be a list"]
+
+    run_step_inventory: list[tuple[str | None, str | None, tuple[str, ...]]] = []
+    for index, step in enumerate(steps.value):
+        step_context = f"{context} step[{index}]"
+        if not isinstance(step, MappingNode):
+            errors.append(f"{step_context} must be a mapping")
+            continue
+        run = _mapping_value(step, "run")
+        if run is None:
+            continue
+        step_keys = {key for key, _, _ in _mapping_items(step)}
+        unexpected_step_keys = step_keys - {"name", "if", "run"}
+        if unexpected_step_keys:
+            errors.append(
+                f"{step_context} run step has forbidden execution metadata: "
+                f"{sorted(unexpected_step_keys)!r}"
+            )
+        try:
+            words = _simple_shell_words(run, context=step_context)
+            name_node = _mapping_value(step, "name")
+            name = (
+                _scalar_value(name_node, context=f"{step_context} name")
+                if name_node is not None
+                else None
+            )
+            condition = _job_condition(step, context=step_context)
+        except GovernanceError as exc:
+            errors.append(str(exc))
+            continue
+        run_step_inventory.append((name, condition, words))
+    if tuple(run_step_inventory) != AGENT_RUN_STEP_INVENTORY:
+        errors.append(
+            f"{context} exact run-step inventory differs; "
+            f"expected={AGENT_RUN_STEP_INVENTORY!r}, "
+            f"actual={tuple(run_step_inventory)!r}"
+        )
+    return errors
+
+
+def validate_dependency_audit_agent_setup(document: YamlDocument) -> list[str]:
+    """Require the reviewed interpreter and checksummed uv setup sequence."""
+    jobs = _workflow_jobs(document)
+    agent = jobs.get("agent")
+    if agent is None:
+        return [f"{document.path}: required dependency audit job 'agent' is missing"]
+
+    steps = _mapping_value(agent, "steps")
+    if not isinstance(steps, SequenceNode):
+        return [f"{document.path}: dependency audit job 'agent' steps must be a list"]
+
+    actual_setup: list[dict[str, Any]] = []
+    setup_prefixes = ("actions/setup-python@", "astral-sh/setup-uv@")
+    for step in steps.value:
+        if not isinstance(step, MappingNode):
+            continue
+        data = _node_to_data(step)
+        uses = data.get("uses")
+        if isinstance(uses, str) and uses.startswith(setup_prefixes):
+            actual_setup.append(data)
+
+    if _json_exact(actual_setup, EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP):
+        return []
+    return [
+        f"{document.path}: dependency audit agent setup differs from the "
+        "reviewed interpreter/checksum baseline; "
+        f"expected={EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP!r}, "
+        f"actual={actual_setup!r}"
+    ]
 
 
 def validate_required_job_graph(
@@ -1683,6 +2013,16 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         except GovernanceError as exc:
             errors.append(f"local: required check {context!r}: {exc}")
 
+    ci_workflow = (root.resolve() / AGENT_CI_WORKFLOW).resolve()
+    if ci_workflow in documents:
+        try:
+            errors.extend(
+                f"local: {error}"
+                for error in validate_agent_ci_resolution(documents[ci_workflow])
+            )
+        except GovernanceError as exc:
+            errors.append(f"local: invalid ci/agent resolution contract: {exc}")
+
     required_files = (
         ".github/CODEOWNERS",
         ".github/dependabot.yml",
@@ -1711,6 +2051,28 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
                 errors.append(
                     "local: dependency audit must fail honestly; "
                     "continue-on-error is forbidden"
+                )
+            errors.extend(
+                f"local: {error}"
+                for error in validate_dependency_audit_agent_setup(
+                    documents[dependency_audit]
+                )
+            )
+            audit_commands = [
+                _scalar_value(
+                    node,
+                    context=f"{dependency_audit}: dependency audit run",
+                ).strip()
+                for node in _nodes_for_mapping_key(
+                    documents[dependency_audit].root,
+                    "run",
+                )
+                if isinstance(node, ScalarNode)
+            ]
+            if audit_commands.count(DEPENDENCY_WEB_AUDIT_COMMAND) != 1:
+                errors.append(
+                    "local: dependency audit must invoke the reviewed web "
+                    f"policy exactly once with {DEPENDENCY_WEB_AUDIT_COMMAND!r}"
                 )
         except GovernanceError as exc:
             errors.append(f"local: invalid dependency audit workflow: {exc}")

@@ -11,18 +11,58 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime, ServerInfo
 
 from agent.graph import (
+    DEFAULT_MODEL,
     _build_backend,
     _memory_namespace,
+    _normalized_model_spec,
     _trusted_identity,
+    create_graph,
     graph,
 )
 from agent.tools import TOOLS
+
+
+def _compiled_tool_names(compiled_graph: CompiledStateGraph) -> set[str]:
+    return set(compiled_graph.nodes["tools"].bound._tools_by_name)
 
 
 def test_graph_entrypoint_is_compiled_for_aegra():
     assert isinstance(graph, CompiledStateGraph)
     assert graph.checkpointer is None
     assert graph.store is None
+
+
+def test_compiled_graph_disables_general_purpose_subagent_dispatch():
+    registered_tools = _compiled_tool_names(graph)
+
+    assert {tool.name for tool in TOOLS} <= registered_tools
+    assert "task" not in registered_tools
+
+
+@pytest.mark.parametrize(
+    ("configured_model", "expected_model"),
+    [
+        (None, DEFAULT_MODEL),
+        ("anthropic/claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+    ],
+    ids=["default-model", "normalized-model-override"],
+)
+def test_create_graph_for_selected_model_disables_general_purpose_dispatch(
+    monkeypatch,
+    configured_model,
+    expected_model,
+):
+    if configured_model is None:
+        monkeypatch.delenv("MODEL", raising=False)
+    else:
+        monkeypatch.setenv("MODEL", configured_model)
+
+    compiled_graph = create_graph()
+
+    assert _normalized_model_spec() == expected_model
+    assert isinstance(compiled_graph, CompiledStateGraph)
+    assert {tool.name for tool in TOOLS} <= _compiled_tool_names(compiled_graph)
+    assert "task" not in _compiled_tool_names(compiled_graph)
 
 
 def test_backend_uses_instances_for_all_routes():

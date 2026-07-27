@@ -76,6 +76,14 @@ def validate_runtime_preflight() -> None:
         raise RuntimeError("FF_V2_EVENT_STREAMING=true is required")
     if settings.app.ENV_MODE == "PRODUCTION" and settings.app.RUN_MIGRATIONS_ON_STARTUP:
         raise RuntimeError("RUN_MIGRATIONS_ON_STARTUP=false is required in production")
+    if settings.redis.REDIS_BROKER_ENABLED:
+        raise RuntimeError(
+            "REDIS_BROKER_ENABLED=false is required for the in-process run budget"
+        )
+    if settings.worker.BG_JOB_MAX_RETRIES != 0:
+        raise RuntimeError(
+            "BG_JOB_MAX_RETRIES=0 is required so retries cannot reset run budgets"
+        )
     for configured in {
         settings.db.database_url,
         settings.db.database_url_sync,

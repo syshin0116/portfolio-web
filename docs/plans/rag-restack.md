@@ -724,6 +724,15 @@ the bounded code interpreter.
 - Add an atomic `RunBudget` outside the model loop. Reserve before every model, tool, and
   `task` dispatch; cap task count, fan-out, depth, tokens, and elapsed time. A nested
   subagent shares the parent's remaining budget rather than receiving a fresh allowance.
+- Treat `snapshot()` as observation only. Capability evaluation must call the atomic
+  `finalize()` boundary, which terminalizes the run, rejects any open model or task
+  reservation, enforces `elapsed < limit`, and returns an immutable frozen snapshot.
+  Provider usage comes only from middleware-parsed Anthropic metadata, never executor
+  observations. The pricing buckets are uncached input, output, cache-read input, and
+  cache-write input; cache-write combines Anthropic's five-minute and one-hour creation
+  buckets when those TTL details are present. If a required usage/detail field is absent,
+  negative, unknown, or internally inconsistent, `provider_usage_complete` is false and
+  every aggregate provider bucket is `null`; no zero-valued usage is fabricated.
 - Start with max depth 1 and max two subagents per run. Parallel fan-out is permitted only
   after the reservation test proves two concurrent dispatches cannot exceed the cap.
 
@@ -742,6 +751,8 @@ the bounded code interpreter.
 instructions, explicit skill assignment, shared nested budgets, max depth/fan-out, and
 failure propagation. The 2×2 report is reproducible. Owner preview can exercise both
 capabilities, while anonymous access remains off until P5 budgets and P6 abuse tests pass.
+This run-local finalization evidence does not replace P5's lower guest policy,
+per-identity/global daily dollar ledger, rate limit, or provider-side spend cap.
 
 ---
 

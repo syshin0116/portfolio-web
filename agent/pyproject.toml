@@ -17,7 +17,6 @@ dependencies = [
     "langgraph-sdk==0.4.2",
     "PyJWT==2.13.0",
     "langchain-anthropic",
-    "langchain-openai",
     "fastapi>=0.139.2",
     "rank-bm25==0.2.2",
     "kiwipiepy==0.23.2",

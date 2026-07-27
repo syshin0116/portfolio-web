@@ -1,28 +1,26 @@
-import { NextResponse } from "next/server"
+import { randomUUID } from "node:crypto"
+import { NextRequest } from "next/server"
 import { auth } from "@/lib/auth"
 import { createAgentToken } from "@/lib/agent-auth"
+import {
+  createAgentTokenPostHandler,
+} from "@/lib/agent-token-route"
+import { SITEVERIFY_TIMEOUT_MS } from "@/lib/anonymous-agent-token"
 import { isAdminEmail, isAllowedEmail } from "@/lib/allowed-user"
 
-export async function POST() {
-  const session = await auth()
-  if (!isAllowedEmail(session?.user?.email)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-  }
-  const subject = session?.user?.id ?? session?.user?.email
-  if (!subject) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+const postAgentToken = createAgentTokenPostHandler({
+  authenticate: async () => auth(),
+  createToken: createAgentToken,
+  isAllowed: isAllowedEmail,
+  isAdmin: isAdminEmail,
+  env: process.env,
+  fetchImpl: (input, init) => fetch(input, init),
+  nowSeconds: () => Math.floor(Date.now() / 1_000),
+  randomUUID,
+  nodeEnv: process.env.NODE_ENV,
+  turnstileTimeoutMs: SITEVERIFY_TIMEOUT_MS,
+})
 
-  try {
-    const scopes = isAdminEmail(session?.user?.email) ? ["admin"] : []
-    const result = createAgentToken(subject, undefined, undefined, undefined, scopes)
-    return NextResponse.json(result, {
-      headers: { "Cache-Control": "no-store" },
-    })
-  } catch {
-    return NextResponse.json(
-      { error: "Agent authentication is not configured" },
-      { status: 503 }
-    )
-  }
+export async function POST(request: NextRequest) {
+  return postAgentToken(request)
 }

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -25,18 +27,38 @@ EXPECTED_TERRAFORM_FILES = frozenset(
         "infra/gcp/versions.tf",
     }
 )
-EXPECTED_SECURITY_RESOURCES = frozenset(
+HCL2_VERSION = "7.3.1"
+EXPECTED_TOP_LEVEL_KEYS = {
+    "infra/gcp/backend.tf": frozenset({"terraform"}),
+    "infra/gcp/iam.tf": frozenset({"locals", "resource"}),
+    "infra/gcp/imports.tf": frozenset({"import"}),
+    "infra/gcp/main.tf": frozenset({"check", "locals", "resource"}),
+    "infra/gcp/outputs.tf": frozenset({"output"}),
+    "infra/gcp/state.tf": frozenset({"resource"}),
+    "infra/gcp/variables.tf": frozenset({"variable"}),
+    "infra/gcp/versions.tf": frozenset({"data", "provider", "terraform"}),
+}
+EXPECTED_RESOURCES = frozenset(
     {
+        ("google_artifact_registry_repository", "agent"),
         ("google_iam_workload_identity_pool", "github"),
         ("google_iam_workload_identity_pool_provider", "preview"),
         ("google_iam_workload_identity_pool_provider", "production"),
+        ("google_project_service", "required"),
+        ("google_secret_manager_secret", "preview_runtime"),
+        ("google_secret_manager_secret", "runtime"),
         ("google_secret_manager_secret_iam_member", "preview_runtime_accessor"),
         ("google_secret_manager_secret_iam_member", "runtime_accessor"),
+        ("google_service_account", "deployer"),
+        ("google_service_account", "preview_runtime"),
+        ("google_service_account", "runtime"),
         ("google_service_account_iam_member", "deployer_uses_runtime"),
         ("google_service_account_iam_member", "github_preview"),
         ("google_service_account_iam_member", "github_production"),
+        ("google_storage_bucket", "terraform_state"),
     }
 )
+EXPECTED_DATA = frozenset({("google_project", "current")})
 EXPECTED_ATTRIBUTE_MAPPING = {
     "attribute.environment": "assertion.environment",
     "attribute.event_name": "assertion.event_name",
@@ -80,30 +102,231 @@ EXPECTED_PROVIDER_IDS = {
     "production": "github-production",
 }
 EXPECTED_ISSUER = "https://token.actions.githubusercontent.com"
-
-BLOCK_HEADER = re.compile(r'(?m)^[ \t]*(resource|data)\s+"([^"]+)"\s+"([^"]+)"\s*\{')
-MODULE_HEADER = re.compile(r'(?m)^[ \t]*module\s+"([^"]+)"\s*\{')
-MAPPING_ENTRY = re.compile(r'^\s*"([^"]+)"\s*=\s*"([^"]+)"\s*$')
-
-FORBIDDEN_TERRAFORM_PATTERNS = {
-    r"roles/run\.admin": (
-        "foundation deployers must not receive project-wide roles/run.admin"
-    ),
-    r"roles/artifactregistry\.writer": (
-        "foundation deployers must not build or push images"
-    ),
-    r'resource\s+"google_service_account_key"': (
-        "user-managed service-account keys are forbidden"
-    ),
-    r'resource\s+"google_secret_manager_secret_version"': (
-        "Terraform must not manage secret payload versions"
-    ),
-    r"private_key|private_key_data|service_account_key": (
-        "credential material must not enter Terraform configuration"
-    ),
-    r'variable\s+"project_number"|var\.project_number': (
-        "the project number must not be independently overridden"
-    ),
+EXPECTED_TERRAFORM_BLOCKS = {
+    "infra/gcp/backend.tf": [
+        {
+            "backend": [
+                {
+                    "gcs": {
+                        "bucket": "festive-ally-503605-v7-tfstate",
+                        "prefix": "syshin0116.dev/gcp/foundation",
+                    }
+                }
+            ]
+        }
+    ],
+    "infra/gcp/versions.tf": [
+        {
+            "required_version": "= 1.13.5",
+            "required_providers": [
+                {
+                    "google": {
+                        "source": "hashicorp/google",
+                        "version": "7.40.0",
+                    }
+                }
+            ],
+        }
+    ],
+}
+EXPECTED_PROVIDER_BLOCKS = [
+    {
+        "google": {
+            "project": "${var.project_id}",
+            "region": "${var.region}",
+        }
+    }
+]
+EXPECTED_IMPORT_BLOCKS = [
+    {
+        "to": "${google_artifact_registry_repository.agent}",
+        "id": "projects/${var.project_id}/locations/${var.region}/repositories/agent",
+    },
+    {
+        "to": "${google_storage_bucket.terraform_state}",
+        "id": "${var.project_id}-tfstate",
+    },
+    {
+        "to": "${google_service_account.runtime}",
+        "id": (
+            "projects/${var.project_id}/serviceAccounts/"
+            "agent-runtime@${var.project_id}.iam.gserviceaccount.com"
+        ),
+    },
+    {
+        "to": '${google_service_account.deployer["preview"]}',
+        "id": (
+            "projects/${var.project_id}/serviceAccounts/"
+            "agent-preview-deployer@${var.project_id}.iam.gserviceaccount.com"
+        ),
+    },
+    {
+        "to": '${google_service_account.deployer["production"]}',
+        "id": (
+            "projects/${var.project_id}/serviceAccounts/"
+            "agent-prod-deployer@${var.project_id}.iam.gserviceaccount.com"
+        ),
+    },
+    {
+        "to": "${google_iam_workload_identity_pool.github}",
+        "id": (
+            "projects/${var.project_id}/locations/global/workloadIdentityPools/github"
+        ),
+    },
+    {
+        "to": "${google_iam_workload_identity_pool_provider.preview}",
+        "id": (
+            "projects/${var.project_id}/locations/global/"
+            "workloadIdentityPools/github/providers/github-preview"
+        ),
+    },
+    {
+        "to": "${google_iam_workload_identity_pool_provider.production}",
+        "id": (
+            "projects/${var.project_id}/locations/global/"
+            "workloadIdentityPools/github/providers/github-production"
+        ),
+    },
+    {
+        "for_each": "${local.production_secret_names}",
+        "to": "${google_secret_manager_secret.runtime[each.value]}",
+        "id": "projects/${var.project_id}/secrets/${each.value}",
+    },
+]
+EXPECTED_VARIABLES = {
+    "project_id": {
+        "default": "festive-ally-503605-v7",
+        "condition": '${var.project_id == "festive-ally-503605-v7"}',
+        "error_message": (
+            "This state and backend are dedicated to festive-ally-503605-v7; "
+            "use a separate root module for another project."
+        ),
+    },
+    "region": {
+        "default": "us-east4",
+        "condition": '${var.region == "us-east4"}',
+        "error_message": (
+            "This foundation is fixed to us-east4; review state, imports, and "
+            "data residency before changing regions."
+        ),
+    },
+    "github_repository_id": {
+        "default": "1102380057",
+        "condition": '${var.github_repository_id == "1102380057"}',
+        "error_message": (
+            "This federation root is dedicated to syshin0116/syshin0116.dev "
+            "repository ID 1102380057."
+        ),
+    },
+    "github_owner_id": {
+        "default": "99532836",
+        "condition": '${var.github_owner_id == "99532836"}',
+        "error_message": (
+            "This federation root is dedicated to GitHub owner ID 99532836."
+        ),
+    },
+    "github_preview_environment": {
+        "default": "Preview",
+        "condition": '${var.github_preview_environment == "Preview"}',
+        "error_message": (
+            "The preview provider must remain bound to the exact Preview environment."
+        ),
+    },
+    "github_production_environment": {
+        "default": "Production",
+        "condition": '${var.github_production_environment == "Production"}',
+        "error_message": (
+            "The production provider must remain bound to the exact Production "
+            "environment."
+        ),
+    },
+}
+FORBIDDEN_EXECUTION_KEYS = frozenset(
+    {"connection", "local-exec", "provisioner", "remote-exec"}
+)
+EXPECTED_DATA_CONFIGS = {
+    ("google_project", "current"): {
+        "project_id": "${var.project_id}",
+    }
+}
+EXPECTED_CRITICAL_RESOURCES = {
+    ("google_iam_workload_identity_pool", "github"): {
+        "project": "${var.project_id}",
+        "workload_identity_pool_id": "github",
+        "display_name": "GitHub Actions",
+        "description": "GitHub Actions federation; no service-account keys.",
+        "disabled": False,
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_iam_workload_identity_pool_provider", "preview"): {
+        "project": "${var.project_id}",
+        "workload_identity_pool_id": (
+            "${google_iam_workload_identity_pool.github.workload_identity_pool_id}"
+        ),
+        "workload_identity_pool_provider_id": "github-preview",
+        "display_name": "GitHub Preview",
+        "disabled": False,
+        "attribute_mapping": EXPECTED_ATTRIBUTE_MAPPING,
+        "attribute_condition": "${local.preview_wif_attribute_condition}",
+        "oidc": [{"issuer_uri": EXPECTED_ISSUER}],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_iam_workload_identity_pool_provider", "production"): {
+        "project": "${var.project_id}",
+        "workload_identity_pool_id": (
+            "${google_iam_workload_identity_pool.github.workload_identity_pool_id}"
+        ),
+        "workload_identity_pool_provider_id": "github-production",
+        "display_name": "GitHub Production",
+        "disabled": False,
+        "attribute_mapping": EXPECTED_ATTRIBUTE_MAPPING,
+        "attribute_condition": "${local.production_wif_attribute_condition}",
+        "oidc": [{"issuer_uri": EXPECTED_ISSUER}],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_service_account_iam_member", "deployer_uses_runtime"): {
+        "for_each": "${local.deployer_service_accounts}",
+        "service_account_id": "${local.runtime_service_account_ids[each.key]}",
+        "role": "roles/iam.serviceAccountUser",
+        "member": "serviceAccount:${each.value}",
+    },
+    ("google_secret_manager_secret_iam_member", "runtime_accessor"): {
+        "for_each": "${google_secret_manager_secret.runtime}",
+        "project": "${var.project_id}",
+        "secret_id": "${each.value.secret_id}",
+        "role": "roles/secretmanager.secretAccessor",
+        "member": "serviceAccount:${local.runtime_service_accounts.production}",
+    },
+    ("google_secret_manager_secret_iam_member", "preview_runtime_accessor"): {
+        "for_each": "${google_secret_manager_secret.preview_runtime}",
+        "project": "${var.project_id}",
+        "secret_id": "${each.value.secret_id}",
+        "role": "roles/secretmanager.secretAccessor",
+        "member": "serviceAccount:${local.runtime_service_accounts.preview}",
+    },
+    ("google_service_account_iam_member", "github_preview"): {
+        "service_account_id": ('${google_service_account.deployer["preview"].name}'),
+        "role": "roles/iam.workloadIdentityUser",
+        "member": (
+            "principalSet://iam.googleapis.com/projects/"
+            "${data.google_project.current.number}/locations/global/"
+            "workloadIdentityPools/"
+            "${google_iam_workload_identity_pool.github.workload_identity_pool_id}/"
+            "attribute.environment/${var.github_preview_environment}"
+        ),
+    },
+    ("google_service_account_iam_member", "github_production"): {
+        "service_account_id": ('${google_service_account.deployer["production"].name}'),
+        "role": "roles/iam.workloadIdentityUser",
+        "member": (
+            "principalSet://iam.googleapis.com/projects/"
+            "${data.google_project.current.number}/locations/global/"
+            "workloadIdentityPools/"
+            "${google_iam_workload_identity_pool.github.workload_identity_pool_id}/"
+            "attribute.environment/${var.github_production_environment}"
+        ),
+    },
 }
 
 PUBLIC_MEMBERS = frozenset({"allAuthenticatedUsers", "allUsers"})
@@ -160,122 +383,182 @@ def _tracked_paths(repo_root: Path) -> list[str]:
         raise ContractError("tracked infra/gcp paths must be UTF-8") from exc
 
 
-def _find_block_end(source: str, opening_brace: int) -> int:
-    depth = 0
-    quote = False
-    escaped = False
-    line_comment = False
-    block_comment = False
-    index = opening_brace
+def _load_hcl_documents(
+    repo_root: Path,
+    tracked_tf: Iterable[str],
+) -> dict[str, dict[str, Any]]:
+    try:
+        hcl2 = importlib.import_module("hcl2")
+        installed_version = importlib.metadata.version("python-hcl2")
+    except (ImportError, importlib.metadata.PackageNotFoundError) as exc:
+        raise ContractError(
+            f"parser-backed Terraform verification requires python-hcl2=={HCL2_VERSION}"
+        ) from exc
+    if installed_version != HCL2_VERSION:
+        _fail(
+            "python-hcl2 version mismatch; "
+            f"expected={HCL2_VERSION}, got={installed_version}"
+        )
 
-    while index < len(source):
-        char = source[index]
-        next_char = source[index + 1] if index + 1 < len(source) else ""
-
-        if line_comment:
-            if char == "\n":
-                line_comment = False
-            index += 1
-            continue
-        if block_comment:
-            if char == "*" and next_char == "/":
-                block_comment = False
-                index += 2
-            else:
-                index += 1
-            continue
-        if quote:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                quote = False
-            index += 1
-            continue
-        if char == "#":
-            line_comment = True
-            index += 1
-            continue
-        if char == "/" and next_char == "/":
-            line_comment = True
-            index += 2
-            continue
-        if char == "/" and next_char == "*":
-            block_comment = True
-            index += 2
-            continue
-        if char == '"':
-            quote = True
-            index += 1
-            continue
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return index + 1
-        index += 1
-
-    _fail("unterminated Terraform block")
+    documents: dict[str, dict[str, Any]] = {}
+    for relative_path in sorted(tracked_tf):
+        path = repo_root / relative_path
+        if path.is_symlink():
+            _fail(f"tracked Terraform file must not be a symlink: {relative_path}")
+        try:
+            source = path.read_text(encoding="utf-8")
+            parsed = hcl2.loads(source)
+        except OSError as exc:
+            raise ContractError(
+                f"cannot read tracked Terraform file {relative_path}: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise ContractError(
+                f"cannot parse tracked Terraform file {relative_path}: {exc}"
+            ) from exc
+        documents[relative_path] = _json_object(
+            parsed,
+            f"parsed Terraform file {relative_path}",
+        )
+    return documents
 
 
-def _resource_blocks(
-    sources: Mapping[str, str],
-) -> dict[tuple[str, str], str]:
-    blocks: dict[tuple[str, str], str] = {}
-    for source in sources.values():
-        for match in BLOCK_HEADER.finditer(source):
-            kind, resource_type, resource_name = match.groups()
-            if kind != "resource":
-                continue
-            key = (resource_type, resource_name)
-            if key in blocks:
-                _fail(
-                    "duplicate Terraform resource declaration: "
-                    f"{resource_type}.{resource_name}"
+def _two_label_blocks(
+    documents: Mapping[str, Mapping[str, Any]],
+    block_kind: str,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    blocks: dict[tuple[str, str], dict[str, Any]] = {}
+    for relative_path, document in documents.items():
+        raw_blocks = _json_array(
+            document.get(block_kind, []),
+            f"{relative_path}.{block_kind}",
+        )
+        for raw_block in raw_blocks:
+            block = _json_object(raw_block, f"{relative_path}.{block_kind} block")
+            if len(block) != 1:
+                _fail(f"{relative_path} has malformed {block_kind} block labels")
+            block_type, raw_names = next(iter(block.items()))
+            names = _json_object(
+                raw_names,
+                f"{relative_path}.{block_kind}.{block_type}",
+            )
+            for block_name, raw_body in names.items():
+                key = (block_type, block_name)
+                if key in blocks:
+                    _fail(
+                        f"duplicate Terraform {block_kind} declaration: "
+                        f"{block_type}.{block_name}"
+                    )
+                blocks[key] = _json_object(
+                    raw_body,
+                    f"{relative_path}.{block_kind}.{block_type}.{block_name}",
                 )
-            opening_brace = source.find("{", match.start(), match.end())
-            end = _find_block_end(source, opening_brace)
-            blocks[key] = source[match.start() : end]
     return blocks
 
 
-def _require_string_assignment(block: str, key: str, expected: str) -> None:
-    pattern = re.compile(
-        rf'(?m)^[ \t]*{re.escape(key)}[ \t]*=[ \t]*"{re.escape(expected)}"[ \t]*$'
-    )
-    if len(pattern.findall(block)) != 1:
-        _fail(f"{key} must exactly equal {expected!r}")
+def _single_label_blocks(
+    documents: Mapping[str, Mapping[str, Any]],
+    block_kind: str,
+) -> dict[str, dict[str, Any]]:
+    blocks: dict[str, dict[str, Any]] = {}
+    for relative_path, document in documents.items():
+        raw_blocks = _json_array(
+            document.get(block_kind, []),
+            f"{relative_path}.{block_kind}",
+        )
+        for raw_block in raw_blocks:
+            block = _json_object(raw_block, f"{relative_path}.{block_kind} block")
+            if len(block) != 1:
+                _fail(f"{relative_path} has malformed {block_kind} block labels")
+            block_name, raw_body = next(iter(block.items()))
+            if block_name in blocks:
+                _fail(f"duplicate Terraform {block_kind} declaration: {block_name}")
+            blocks[block_name] = _json_object(
+                raw_body,
+                f"{relative_path}.{block_kind}.{block_name}",
+            )
+    return blocks
 
 
-def _require_literal_assignment(block: str, key: str, expected: str) -> None:
-    pattern = re.compile(
-        rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[ \t]*{re.escape(expected)}[ \t]*$"
-    )
-    if len(pattern.findall(block)) != 1:
-        _fail(f"{key} must exactly equal {expected}")
+def _all_blocks(
+    documents: Mapping[str, Mapping[str, Any]],
+    block_kind: str,
+) -> list[Any]:
+    blocks: list[Any] = []
+    for relative_path, document in documents.items():
+        blocks.extend(
+            _json_array(
+                document.get(block_kind, []),
+                f"{relative_path}.{block_kind}",
+            )
+        )
+    return blocks
 
 
-def _extract_mapping(block: str) -> dict[str, str]:
-    header = re.search(r"(?m)^[ \t]*attribute_mapping[ \t]*=[ \t]*\{", block)
-    if header is None:
-        _fail("WIF provider must declare attribute_mapping")
-    opening_brace = block.find("{", header.start(), header.end())
-    end = _find_block_end(block, opening_brace)
-    body = block[opening_brace + 1 : end - 1]
-    mapping: dict[str, str] = {}
-    for line in body.splitlines():
-        if not line.strip():
-            continue
-        match = MAPPING_ENTRY.fullmatch(line)
-        if match is None:
-            _fail("WIF attribute_mapping must contain only exact string mappings")
-        key, value = match.groups()
-        if key in mapping:
-            _fail(f"duplicate WIF attribute mapping: {key}")
-        mapping[key] = value
-    return mapping
+def _reject_execution_escape(value: Any, path: str) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in FORBIDDEN_EXECUTION_KEYS:
+                _fail(
+                    f"Terraform executable escape hatch {key!r} is forbidden at {path}"
+                )
+            _reject_execution_escape(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_execution_escape(child, f"{path}[{index}]")
+
+
+def _validate_variables(variables: Mapping[str, Mapping[str, Any]]) -> None:
+    if set(variables) != set(EXPECTED_VARIABLES):
+        missing = sorted(set(EXPECTED_VARIABLES) - set(variables))
+        unexpected = sorted(set(variables) - set(EXPECTED_VARIABLES))
+        _fail(
+            "Terraform variable inventory must exactly match the reviewed "
+            f"contract; missing={missing}, unexpected={unexpected}"
+        )
+
+    for variable_name, expected in EXPECTED_VARIABLES.items():
+        body = variables[variable_name]
+        if set(body) != {"default", "description", "type", "validation"}:
+            _fail(f"variable {variable_name} has unreviewed attributes")
+        if body.get("type") != "string" or body.get("default") != expected["default"]:
+            _fail(f"variable {variable_name} type/default is not exact")
+        if not isinstance(body.get("description"), str) or not body["description"]:
+            _fail(f"variable {variable_name} must retain a description")
+        validations = _json_array(
+            body.get("validation"),
+            f"variable {variable_name}.validation",
+        )
+        expected_validation = {
+            "condition": expected["condition"],
+            "error_message": expected["error_message"],
+        }
+        if validations != [expected_validation]:
+            _fail(f"variable {variable_name} validation must exactly match")
+
+
+def _validate_wif_locals(
+    documents: Mapping[str, Mapping[str, Any]],
+) -> None:
+    locals_by_name: dict[str, Any] = {}
+    for relative_path, document in documents.items():
+        for raw_locals in _json_array(
+            document.get("locals", []),
+            f"{relative_path}.locals",
+        ):
+            local_block = _json_object(raw_locals, f"{relative_path}.locals block")
+            for name, value in local_block.items():
+                if name in locals_by_name:
+                    _fail(f"duplicate Terraform local declaration: {name}")
+                locals_by_name[name] = value
+
+    for provider_name, expected_condition in EXPECTED_SOURCE_CONDITIONS.items():
+        local_name = f"{provider_name}_wif_attribute_condition"
+        if locals_by_name.get(local_name) != expected_condition:
+            _fail(
+                f"{provider_name} WIF CEL condition must exactly match "
+                "the fail-closed contract"
+            )
 
 
 def validate_static_contract(repo_root: Path) -> None:
@@ -292,87 +575,72 @@ def validate_static_contract(repo_root: Path) -> None:
             "Nested Terraform modules are prohibited in this foundation."
         )
 
-    sources: dict[str, str] = {}
-    for relative_path in sorted(tracked_tf):
-        path = repo_root / relative_path
-        if path.is_symlink():
-            _fail(f"tracked Terraform file must not be a symlink: {relative_path}")
-        try:
-            sources[relative_path] = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ContractError(
-                f"cannot read tracked Terraform file {relative_path}: {exc}"
-            ) from exc
-
-    combined = "\n".join(sources.values())
-    modules = MODULE_HEADER.findall(combined)
+    documents = _load_hcl_documents(repo_root, tracked_tf)
+    modules = _single_label_blocks(documents, "module")
     if modules:
         _fail(
             "Terraform module blocks are prohibited in this foundation: "
-            f"{sorted(set(modules))}"
+            f"{sorted(modules)}"
+        )
+    for relative_path, document in documents.items():
+        actual_keys = frozenset(document)
+        if actual_keys != EXPECTED_TOP_LEVEL_KEYS[relative_path]:
+            _fail(
+                f"{relative_path} top-level block inventory is not exact; "
+                f"expected={sorted(EXPECTED_TOP_LEVEL_KEYS[relative_path])}, "
+                f"got={sorted(actual_keys)}"
+            )
+        _reject_execution_escape(document, relative_path)
+
+    for relative_path, expected_blocks in EXPECTED_TERRAFORM_BLOCKS.items():
+        if documents[relative_path].get("terraform") != expected_blocks:
+            _fail(f"{relative_path} terraform/provider requirements are not exact")
+    provider_blocks = _all_blocks(documents, "provider")
+    if provider_blocks != EXPECTED_PROVIDER_BLOCKS:
+        _fail(
+            "Terraform provider configuration and aliases must exactly equal "
+            "the single reviewed hashicorp/google provider"
+        )
+    import_blocks = _json_array(
+        documents["infra/gcp/imports.tf"].get("import"),
+        "infra/gcp/imports.tf.import",
+    )
+    if import_blocks != EXPECTED_IMPORT_BLOCKS:
+        _fail(
+            "Terraform import targets and live object IDs must exactly match "
+            "the reviewed migration contract"
         )
 
-    resources = _resource_blocks(sources)
-    security_resources = frozenset(
-        key
-        for key in resources
-        if "_iam_" in key[0]
-        or key[0]
-        in {
-            "google_iam_workload_identity_pool",
-            "google_iam_workload_identity_pool_provider",
-        }
-    )
-    if security_resources != EXPECTED_SECURITY_RESOURCES:
-        missing = sorted(EXPECTED_SECURITY_RESOURCES - security_resources)
-        unexpected = sorted(security_resources - EXPECTED_SECURITY_RESOURCES)
+    data_blocks = _two_label_blocks(documents, "data")
+    if frozenset(data_blocks) != EXPECTED_DATA:
+        missing = sorted(EXPECTED_DATA - frozenset(data_blocks))
+        unexpected = sorted(frozenset(data_blocks) - EXPECTED_DATA)
         _fail(
-            "Terraform IAM/WIF declarations must exactly match the reviewed "
+            "Terraform data declarations must exactly match the reviewed "
             f"allowlist; missing={missing}, unexpected={unexpected}"
         )
+    for key, expected_config in EXPECTED_DATA_CONFIGS.items():
+        if data_blocks[key] != expected_config:
+            _fail(f"Terraform data configuration is not exact: {'.'.join(key)}")
 
-    for pattern, message in FORBIDDEN_TERRAFORM_PATTERNS.items():
-        if re.search(pattern, combined):
-            _fail(message)
-
-    pool = resources[("google_iam_workload_identity_pool", "github")]
-    _require_string_assignment(pool, "workload_identity_pool_id", "github")
-    _require_literal_assignment(pool, "disabled", "false")
-
-    for resource_name, provider_id in EXPECTED_PROVIDER_IDS.items():
-        provider = resources[
-            ("google_iam_workload_identity_pool_provider", resource_name)
-        ]
-        _require_string_assignment(
-            provider,
-            "workload_identity_pool_provider_id",
-            provider_id,
+    resources = _two_label_blocks(documents, "resource")
+    if frozenset(resources) != EXPECTED_RESOURCES:
+        missing = sorted(EXPECTED_RESOURCES - frozenset(resources))
+        unexpected = sorted(frozenset(resources) - EXPECTED_RESOURCES)
+        _fail(
+            "Terraform resource declarations must exactly match the reviewed "
+            f"allowlist; missing={missing}, unexpected={unexpected}"
         )
-        _require_literal_assignment(provider, "disabled", "false")
-        _require_literal_assignment(
-            provider,
-            "attribute_condition",
-            f"local.{resource_name}_wif_attribute_condition",
-        )
-        _require_string_assignment(provider, "issuer_uri", EXPECTED_ISSUER)
-        if re.search(r"(?m)^[ \t]*allowed_audiences[ \t]*=", provider):
+    for key, expected_config in EXPECTED_CRITICAL_RESOURCES.items():
+        if resources[key] != expected_config:
             _fail(
-                f"{provider_id} must use Google's default audience; "
-                "allowed_audiences must be absent"
+                "Terraform critical resource configuration is not exact: "
+                f"{'.'.join(key)}"
             )
-        if _extract_mapping(provider) != EXPECTED_ATTRIBUTE_MAPPING:
-            _fail(f"{provider_id} attribute_mapping must exactly match the contract")
 
-        condition_pattern = re.compile(
-            rf"(?m)^[ \t]*{re.escape(resource_name)}_wif_attribute_condition"
-            rf'[ \t]*=[ \t]*"{re.escape(EXPECTED_SOURCE_CONDITIONS[resource_name])}"'
-            r"[ \t]*$"
-        )
-        if len(condition_pattern.findall(combined)) != 1:
-            _fail(
-                f"{resource_name} WIF CEL condition must exactly match "
-                "the fail-closed contract"
-            )
+    variables = _single_label_blocks(documents, "variable")
+    _validate_variables(variables)
+    _validate_wif_locals(documents)
 
 
 def _provider_id(provider: Mapping[str, Any]) -> str:
@@ -470,6 +738,105 @@ def _critical_member(member: str) -> bool:
     return member.startswith(REVIEW_REQUIRED_MEMBER_PREFIXES)
 
 
+def _is_custom_role(role: str) -> bool:
+    return (
+        re.fullmatch(
+            r"(?:projects|organizations)/[^/]+/roles/[^/]+",
+            role,
+        )
+        is not None
+    )
+
+
+def _json_digest(value: Any) -> str:
+    canonical = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _permission_digest(permissions: Iterable[str]) -> str:
+    return _json_digest(sorted(set(permissions)))
+
+
+def _normalize_reviewed_bindings(
+    raw_bindings: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str, str], tuple[str | None, str | None]]:
+    normalized: dict[
+        tuple[str, str, str],
+        tuple[str | None, str | None],
+    ] = {}
+    count = 0
+    for index, raw_binding in enumerate(raw_bindings):
+        count += 1
+        binding = _json_object(raw_binding, f"reviewedBindings[{index}]")
+        required_keys = {"member", "role", "scope"}
+        allowed_keys = required_keys | {
+            "condition_sha256",
+            "permissions_sha256",
+        }
+        if not required_keys <= set(binding) or not set(binding) <= allowed_keys:
+            _fail(
+                f"reviewedBindings[{index}] must contain exact scope/role/member "
+                "and only applicable digest fields"
+            )
+        scope = binding["scope"]
+        role = binding["role"]
+        member = binding["member"]
+        if not all(
+            isinstance(value, str) and value and value == value.strip()
+            for value in (scope, role, member)
+        ):
+            _fail(
+                f"reviewedBindings[{index}] scope/role/member must be exact "
+                "non-empty strings"
+            )
+        if member in PUBLIC_MEMBERS:
+            _fail("public members cannot be present in reviewed IAM bindings")
+
+        custom_role = _is_custom_role(role)
+        if not custom_role and re.fullmatch(r"roles/[^/]+", role) is None:
+            _fail(f"reviewedBindings[{index}] has unsupported IAM role name")
+        permissions_digest = binding.get("permissions_sha256")
+        if custom_role:
+            if (
+                not isinstance(permissions_digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", permissions_digest) is None
+            ):
+                _fail(
+                    f"reviewedBindings[{index}] custom role requires exact "
+                    "permissions_sha256"
+                )
+        elif permissions_digest is not None:
+            _fail(
+                f"reviewedBindings[{index}] predefined role must not declare "
+                "permissions_sha256"
+            )
+
+        condition_digest = binding.get("condition_sha256")
+        if condition_digest is not None and (
+            not isinstance(condition_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", condition_digest) is None
+        ):
+            _fail(
+                f"reviewedBindings[{index}] condition_sha256 must be lowercase SHA-256"
+            )
+
+        key = (scope, role, member)
+        if key in normalized:
+            _fail(
+                "reviewed IAM bindings must not contain duplicate "
+                f"scope/role/member triples: {key!r}"
+            )
+        normalized[key] = (permissions_digest, condition_digest)
+    if count == 0:
+        _fail("reviewed IAM bindings must be a non-empty JSON array")
+    return normalized
+
+
 def _permission_categories(permission: str) -> frozenset[str]:
     categories: set[str] = set()
     if permission in {
@@ -499,19 +866,15 @@ def _permission_categories(permission: str) -> frozenset[str]:
             categories.add("secret-read-or-mutation")
 
     if permission.startswith("artifactregistry."):
-        write_verbs = {
-            "create",
-            "delete",
-            "import",
-            "setIamPolicy",
-            "update",
-            "upload",
-            "uploadArtifacts",
-        }
-        if permission.rsplit(".", 1)[-1] in write_verbs:
+        verb = permission.rsplit(".", 1)[-1]
+        if verb.startswith(("create", "delete", "import", "set", "update", "upload")):
             categories.add("artifact-registry-write")
-        if permission.endswith("downloadArtifacts"):
+        elif verb.startswith(("download", "export", "get", "list", "read")):
             categories.add("artifact-registry-read")
+        else:
+            # A new Artifact Registry power is sensitive until explicitly
+            # classified; future provider roles must not bypass review.
+            categories.add("artifact-registry-unclassified")
 
     if permission.startswith(
         ("storage.objects.", "storage.multipartUploads.")
@@ -536,7 +899,8 @@ def validate_policy_audit(
     document: Mapping[str, Any],
     *,
     scope: str,
-    allowed_sensitive_members: Iterable[str],
+    reviewed_bindings: Iterable[Mapping[str, Any]],
+    require_all_bindings: bool = False,
 ) -> None:
     policy = _json_object(document.get("policy"), "policy")
     bindings = _policy_bindings(policy)
@@ -544,11 +908,7 @@ def validate_policy_audit(
         document.get("rolePermissions"),
         "rolePermissions",
     )
-    allowed = frozenset(allowed_sensitive_members)
-    if not allowed:
-        _fail(f"{scope} audit requires a non-empty reviewed member allowlist")
-    if PUBLIC_MEMBERS & allowed:
-        _fail("public members cannot be allowlisted")
+    reviewed = _normalize_reviewed_bindings(reviewed_bindings)
 
     roles = {binding["role"] for binding in bindings}
     if set(role_permissions_raw) != roles:
@@ -566,12 +926,19 @@ def validate_policy_audit(
             isinstance(permission, str) and permission for permission in permissions
         ):
             _fail(f"{role}.includedPermissions must contain non-empty strings")
-        role_permissions[role] = tuple(permissions)
+        if len(set(permissions)) != len(permissions):
+            _fail(f"{role}.includedPermissions must not contain duplicates")
+        role_permissions[role] = tuple(sorted(permissions))
 
     errors: list[str] = []
+    actual_required: dict[
+        tuple[str, str, str],
+        tuple[str | None, str | None],
+    ] = {}
     for binding in bindings:
         role = binding["role"]
         members = binding["members"]
+        custom_role = _is_custom_role(role)
         categories = sorted(
             {
                 category
@@ -580,24 +947,54 @@ def validate_policy_audit(
             }
         )
         binding_is_sensitive = bool(categories)
+        condition_digest: str | None = None
+        if "condition" in binding:
+            condition = _json_object(binding["condition"], f"{role}.condition")
+            condition_digest = _json_digest(condition)
         for member in members:
             if member in PUBLIC_MEMBERS:
                 errors.append(f"{scope}: public principal {member!r} is forbidden")
-            elif _critical_member(member) and member not in allowed:
-                errors.append(
-                    f"{scope}: critical principal {member!r} is not in the "
-                    "reviewed member allowlist"
+                continue
+            if (
+                require_all_bindings
+                or binding_is_sensitive
+                or custom_role
+                or _critical_member(member)
+            ):
+                key = (scope, role, member)
+                if key in actual_required:
+                    errors.append(
+                        f"{scope}: duplicate role/member binding cannot be "
+                        f"reviewed exactly: {role!r}, {member!r}"
+                    )
+                    continue
+                permission_digest = (
+                    _permission_digest(role_permissions[role]) if custom_role else None
                 )
-            elif binding_is_sensitive and member not in allowed:
-                errors.append(
-                    f"{scope}: unreviewed member {member!r} has sensitive role "
-                    f"{role!r} ({','.join(categories)})"
-                )
-            if scope == "state-bucket" and member not in allowed:
-                errors.append(
-                    f"state-bucket: direct IAM member {member!r} is not in the "
-                    "reviewed bucket allowlist"
-                )
+                actual_required[key] = (permission_digest, condition_digest)
+
+    reviewed_for_scope = {
+        key: digests for key, digests in reviewed.items() if key[0] == scope
+    }
+    actual_keys = set(actual_required)
+    reviewed_keys = set(reviewed_for_scope)
+    for missing in sorted(actual_keys - reviewed_keys):
+        errors.append(
+            "unreviewed exact IAM binding: "
+            f"scope={missing[0]!r}, role={missing[1]!r}, member={missing[2]!r}"
+        )
+    for unexpected in sorted(reviewed_keys - actual_keys):
+        errors.append(
+            "review input has no matching live IAM binding: "
+            f"scope={unexpected[0]!r}, role={unexpected[1]!r}, "
+            f"member={unexpected[2]!r}"
+        )
+    for key in sorted(actual_keys & reviewed_keys):
+        if actual_required[key] != reviewed_for_scope[key]:
+            errors.append(
+                "IAM binding permission/condition digest drift: "
+                f"scope={key[0]!r}, role={key[1]!r}, member={key[2]!r}"
+            )
     if errors:
         _fail("; ".join(sorted(set(errors))))
 
@@ -622,17 +1019,20 @@ def validate_secret_policy(
         _fail("secret accessor binding must not contain an unreviewed condition")
 
 
-def _members_from_env(variable_name: str) -> list[str]:
+def _reviewed_bindings_from_env(
+    variable_name: str,
+) -> list[dict[str, Any]]:
     raw = os.environ.get(variable_name, "")
-    members = [line.strip() for line in raw.splitlines() if line.strip()]
-    if not members:
-        _fail(
-            f"{variable_name} must contain newline-separated members from a "
-            "reviewed live IAM inventory"
-        )
-    if len(set(members)) != len(members):
-        _fail(f"{variable_name} must not contain duplicate members")
-    return members
+    if not raw.strip():
+        _fail(f"{variable_name} must contain a reviewed JSON binding inventory")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ContractError(f"{variable_name} must contain valid JSON: {exc}") from exc
+    return [
+        _json_object(value, f"{variable_name}[{index}]")
+        for index, value in enumerate(_json_array(parsed, variable_name))
+    ]
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -646,7 +1046,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     audit = subparsers.add_parser("audit-policy")
     audit.add_argument("--scope", required=True)
-    audit.add_argument("--allowed-members-env", required=True)
+    audit.add_argument("--reviewed-bindings-env", required=True)
+    audit.add_argument("--require-all-bindings", action="store_true")
 
     secret = subparsers.add_parser("secret-policy")
     secret.add_argument("--expected-member", required=True)
@@ -664,7 +1065,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_policy_audit(
                 _read_stdin_json(),
                 scope=args.scope,
-                allowed_sensitive_members=_members_from_env(args.allowed_members_env),
+                reviewed_bindings=_reviewed_bindings_from_env(
+                    args.reviewed_bindings_env
+                ),
+                require_all_bindings=args.require_all_bindings,
             )
         elif args.command == "secret-policy":
             validate_secret_policy(

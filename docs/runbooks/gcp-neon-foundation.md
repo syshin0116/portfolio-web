@@ -60,10 +60,12 @@ organization ancestor, the Artifact Registry repository, the state bucket, servi
 accounts, and each managed secret. It resolves every role, including project and
 organization custom roles, before classifying impersonation, secret read or mutation,
 Artifact Registry read or write, state-object access, and IAM-policy escalation. Sensitive
-members and every direct state-bucket member must match operator-supplied allowlists copied
-from a separately reviewed live inventory. Group, domain, and principal-set members
-therefore fail unless explicitly reviewed; public members always fail. An unreadable
-ancestor, role, or policy is a blocker.
+bindings, every custom-role binding, and every direct state-bucket binding must match
+operator-supplied JSON records by exact `scope` + `role` + `member`. Custom roles also pin
+the SHA-256 of their complete included-permission inventory; conditional bindings pin the
+condition digest. Group, domain, and principal-set members therefore fail unless that exact
+binding was reviewed; public members always fail. An unreadable ancestor, role, or policy
+is a blocker.
 
 Terraform uses additive IAM member resources so an unreviewed apply cannot erase unrelated
 or Google-managed members. The verifier additionally rejects any direct project or
@@ -86,7 +88,13 @@ self-review settings, and deployment branches are governed only by
 `.github/repository-governance.json` and
 `scripts/verify_repository_governance.py`; this foundation does not duplicate that policy.
 When those central files are present, `--live` delegates to their live verifier. The
-canonical Production deployment-branch set is `{main}`.
+canonical Production deployment-branch set is `{main}`. Delegation requires both `uv` and
+`gh` and runs the verifier exactly as:
+
+```sh
+uv run --no-project --with pyyaml==6.0.3 \
+  python scripts/verify_repository_governance.py --live
+```
 
 ### Neon: verified repository state versus target
 
@@ -301,18 +309,43 @@ shellcheck scripts/verify_ops_foundation.sh
 scripts/verify_ops_foundation.sh --static
 ```
 
+The static command runs `uv run --no-project --with python-hcl2==7.3.1` and uses that
+pinned parser, not regular expressions. It inventories every provider and alias, import
+target and live object ID, module, data source, resource, and critical variable validation
+after HCL comments and line breaks are parsed. It rejects `moved` and `removed` blocks,
+provisioners, `local-exec`, `remote-exec`, external providers/data,
+`terraform_remote_state`, and other unreviewed executable resource types. Terraform
+`fmt`, fresh `init -backend=false`, `validate`, and mock-provider tests remain independent
+gates; the parser does not replace them.
+
 After an explicitly approved foundation apply, run the live metadata checks:
 
 ```sh
 scripts/verify_ops_foundation.sh --live
 ```
 
-Before that command, populate `OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS` and
-`OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS` as newline-separated exact principals from
-a reviewed live IAM export. The first covers reviewed sensitive principals across the
-project, ancestors, and Artifact Registry; the second covers every direct state-bucket
-member. Do not invent either list from this document. Missing, incomplete, or stale input
-fails closed.
+Before that command, populate `OPS_FOUNDATION_REVIEWED_IAM_BINDINGS` and
+`OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS` with reviewed JSON arrays. The first
+covers sensitive, critical-principal, and custom-role bindings across the project,
+ancestors, and Artifact Registry. The second contains every direct state-bucket binding.
+Each record has exact `scope`, `role`, and `member` strings. A custom role additionally
+requires `permissions_sha256`; a conditional binding additionally requires
+`condition_sha256`.
+
+Canonical scope strings are `projects/<project-id>`, `folders/<folder-id>`,
+`organizations/<organization-id>`,
+`projects/<project-id>/locations/<region>/repositories/agent`, and
+`buckets/<bucket-name>`. Records are compared only against the matching audited scope;
+missing or extra records within that scope fail.
+
+`permissions_sha256` is SHA-256 over the UTF-8 compact JSON array of the role's sorted,
+unique permission strings. `condition_sha256` uses compact JSON with recursively sorted
+object keys. These canonical forms are the ones used by
+`scripts/ops_foundation_contract.py`; a different permission, role scope, member, or
+condition fails. Do not invent records or digests from this document—derive them from a
+separately reviewed live policy and role export. Missing, extra, incomplete, or stale
+records for an audited scope fail closed, and public members cannot be reviewed through
+this input.
 
 The live verifier inspects API, direct IAM, role definitions, keys, bucket, repository,
 WIF provider, and secret-resource metadata only. It never reads secret payloads or

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -98,6 +99,54 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_governance_delegation_uses_exact_pinned_uv_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            manifest = root / ".github/repository-governance.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("{}\n", encoding="utf-8")
+            governance = root / "scripts/verify_repository_governance.py"
+            governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            args_file = root / "uv-args.txt"
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text(
+                '#!/bin/bash\nprintf \'%s\\n\' "$@" > "$UV_ARGS_FILE"\n',
+                encoding="utf-8",
+            )
+            fake_uv.chmod(0o755)
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            environment["UV_ARGS_FILE"] = str(args_file)
+            result = subprocess.run(
+                ["bash", "scripts/verify_ops_foundation.sh", "--governance-live"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(
+                [
+                    "run",
+                    "--no-project",
+                    "--with",
+                    "pyyaml==6.0.3",
+                    "python",
+                    str(governance.resolve()),
+                    "--live",
+                ],
+                args_file.read_text(encoding="utf-8").splitlines(),
+            )
+
     def test_preview_condition_mutations_fail_closed(self) -> None:
         mutations: dict[str, Callable[[str], str]] = {
             "or_true": lambda line: line.replace(
@@ -178,7 +227,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "attribute_condition must exactly equal",
+            "critical resource configuration is not exact",
             result.stderr,
         )
 
@@ -190,7 +239,8 @@ class StaticVerifierMutationTests(unittest.TestCase):
                 iam_path.read_text(encoding="utf-8")
                 + """
 
-resource "google_secret_manager_secret_iam_member" "unreviewed_accessor" {
+resource "google_secret_manager_secret_iam_member" "unreviewed_accessor" # parser-bypass
+{
   project   = var.project_id
   secret_id = google_secret_manager_secret.runtime["agent-auth-secret"].secret_id
   role      = "roles/secretmanager.secretAccessor"
@@ -204,7 +254,7 @@ resource "google_secret_manager_secret_iam_member" "unreviewed_accessor" {
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "Terraform IAM/WIF declarations must exactly match",
+            "Terraform resource declarations must exactly match",
             result.stderr,
         )
 
@@ -273,7 +323,8 @@ resource "google_project_iam_member" "rogue" {
                 main_path.read_text(encoding="utf-8")
                 + """
 
-module "rogue" {
+module "rogue" # parser-bypass
+{
   source = "./nested"
 }
 """,
@@ -314,7 +365,7 @@ resource "google_iam_workload_identity_pool_provider" "weak" {
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "Terraform IAM/WIF declarations must exactly match",
+            "Terraform resource declarations must exactly match",
             result.stderr,
         )
 
@@ -344,7 +395,228 @@ resource "google_iam_workload_identity_pool_provider" "weak" {
             result = self._run(root)
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("allowed_audiences must be absent", result.stderr)
+        self.assertIn(
+            "critical resource configuration is not exact",
+            result.stderr,
+        )
+
+    def test_changed_import_id_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            imports_path = root / "infra/gcp/imports.tf"
+            original = imports_path.read_text(encoding="utf-8")
+            expected = '"${var.project_id}-tfstate"'
+            self.assertEqual(1, original.count(expected))
+            imports_path.write_text(
+                original.replace(expected, '"unreviewed-tfstate"', 1),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("import targets and live object IDs", result.stderr)
+
+    def test_changed_import_target_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            imports_path = root / "infra/gcp/imports.tf"
+            original = imports_path.read_text(encoding="utf-8")
+            expected = "to = google_service_account.runtime"
+            self.assertEqual(1, original.count(expected))
+            imports_path.write_text(
+                original.replace(
+                    expected,
+                    "to = google_service_account.preview_runtime",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("import targets and live object IDs", result.stderr)
+
+    def test_extra_import_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            imports_path = root / "infra/gcp/imports.tf"
+            imports_path.write_text(
+                imports_path.read_text(encoding="utf-8")
+                + """
+
+import # parser-bypass
+{
+  to = google_service_account.preview_runtime
+  id = "projects/${var.project_id}/serviceAccounts/agent-preview-runtime@${var.project_id}.iam.gserviceaccount.com"
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("import targets and live object IDs", result.stderr)
+
+    def test_state_moving_blocks_fail_closed(self) -> None:
+        mutations = {
+            "moved": """
+
+moved {
+  from = google_service_account.runtime
+  to   = google_service_account.preview_runtime
+}
+""",
+            "removed": """
+
+removed {
+  from = google_service_account.runtime
+
+  lifecycle {
+    destroy = false
+  }
+}
+""",
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = self._fixture(directory)
+                imports_path = root / "infra/gcp/imports.tf"
+                imports_path.write_text(
+                    imports_path.read_text(encoding="utf-8") + mutation,
+                    encoding="utf-8",
+                )
+
+                result = self._run(root)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("top-level block inventory is not exact", result.stderr)
+
+    def test_terraform_data_local_exec_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            main_path = root / "infra/gcp/main.tf"
+            main_path.write_text(
+                main_path.read_text(encoding="utf-8")
+                + """
+
+resource "terraform_data" "escape" # parser-bypass
+{
+  provisioner "local-exec" # parser-bypass
+  {
+    command = "true"
+  }
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("executable escape hatch", result.stderr)
+
+    def test_extra_google_provider_alias_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            versions_path = root / "infra/gcp/versions.tf"
+            versions_path.write_text(
+                versions_path.read_text(encoding="utf-8")
+                + """
+
+provider "google" # parser-bypass
+{
+  alias   = "unreviewed"
+  project = var.project_id
+  region  = var.region
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("provider configuration and aliases", result.stderr)
+
+    def test_external_provider_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            versions_path = root / "infra/gcp/versions.tf"
+            versions_path.write_text(
+                versions_path.read_text(encoding="utf-8")
+                + """
+
+provider "external" # parser-bypass
+{}
+""",
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("provider configuration and aliases", result.stderr)
+
+    def test_external_and_remote_state_data_fail_closed(self) -> None:
+        mutations = {
+            "external": """
+
+data "external" "escape" # parser-bypass
+{
+  program = ["sh", "-c", "echo '{}'" ]
+}
+""",
+            "remote_state": """
+
+data "terraform_remote_state" "escape" # parser-bypass
+{
+  backend = "local"
+  config = {
+    path = "/tmp/escape.tfstate"
+  }
+}
+""",
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = self._fixture(directory)
+                versions_path = root / "infra/gcp/versions.tf"
+                versions_path.write_text(
+                    versions_path.read_text(encoding="utf-8") + mutation,
+                    encoding="utf-8",
+                )
+
+                result = self._run(root)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("data declarations must exactly match", result.stderr)
+
+    def test_weakened_wif_variable_validation_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            variables_path = root / "infra/gcp/variables.tf"
+            original = variables_path.read_text(encoding="utf-8")
+            exact = 'condition     = var.github_repository_id == "1102380057"'
+            self.assertEqual(1, original.count(exact))
+            variables_path.write_text(
+                original.replace(
+                    exact,
+                    'condition     = var.github_repository_id != ""',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "variable github_repository_id validation must exactly match",
+            result.stderr,
+        )
 
 
 if __name__ == "__main__":

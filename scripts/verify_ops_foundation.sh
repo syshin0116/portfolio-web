@@ -4,6 +4,7 @@ set -euo pipefail
 readonly PROJECT_ID="festive-ally-503605-v7"
 readonly EXPECTED_PROJECT_NUMBER="72919926064"
 readonly REGION="us-east4"
+readonly HCL2_VERSION="7.3.1"
 readonly STATE_BUCKET="${PROJECT_ID}-tfstate"
 readonly STATE_OBJECT="syshin0116.dev/gcp/foundation/default.tfstate"
 readonly PRODUCTION_RUNTIME_SA="agent-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -87,8 +88,11 @@ require_exact_trimmed_line_once() {
 }
 
 verify_static_contract() {
-  require_command python3
-  python3 "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
+  require_command uv
+  uv run \
+    --no-project \
+    --with "python-hcl2==${HCL2_VERSION}" \
+    python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
 
   if [[ -e "$GOVERNANCE_MANIFEST" && ! -f "$GOVERNANCE_VERIFIER" ]] ||
     [[ -e "$GOVERNANCE_VERIFIER" && ! -f "$GOVERNANCE_MANIFEST" ]]; then
@@ -313,17 +317,25 @@ role_permissions_for_policy() {
 audit_iam_policy() {
   local policy_json="$1"
   local scope="$2"
-  local allowed_members_env="$3"
+  local reviewed_bindings_env="$3"
+  local require_all_bindings="${4:-false}"
   local role_permissions
+  local -a audit_args
 
   role_permissions="$(role_permissions_for_policy "$policy_json")"
+  audit_args=(
+    audit-policy
+    --scope "$scope"
+    --reviewed-bindings-env "$reviewed_bindings_env"
+  )
+  if [[ "$require_all_bindings" == "true" ]]; then
+    audit_args+=(--require-all-bindings)
+  fi
   jq -cn \
     --argjson policy "$policy_json" \
     --argjson role_permissions "$role_permissions" \
     '{policy: $policy, rolePermissions: $role_permissions}' |
-    python3 "$CONTRACT_SCRIPT" audit-policy \
-      --scope "$scope" \
-      --allowed-members-env "$allowed_members_env"
+    python3 "$CONTRACT_SCRIPT" "${audit_args[@]}"
 }
 
 verify_ancestor_policies() {
@@ -367,8 +379,8 @@ verify_ancestor_policies() {
         )"
         audit_iam_policy \
           "$policy_json" \
-          "folder/${ancestor_id}" \
-          "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
+          "folders/${ancestor_id}" \
+          "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
         ;;
       organization)
         policy_json="$(
@@ -378,8 +390,8 @@ verify_ancestor_policies() {
         )"
         audit_iam_policy \
           "$policy_json" \
-          "organization/${ancestor_id}" \
-          "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
+          "organizations/${ancestor_id}" \
+          "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
         ;;
       *)
         fail "unexpected ancestor type after validation: ${ancestor_type}"
@@ -392,9 +404,14 @@ verify_ancestor_policies() {
 
 verify_canonical_repository_governance() {
   if [[ -f "$GOVERNANCE_MANIFEST" && -f "$GOVERNANCE_VERIFIER" ]]; then
+    require_command uv
+    require_command gh
     (
       cd "$REPO_ROOT"
-      python3 "$GOVERNANCE_VERIFIER" --live
+      uv run \
+        --no-project \
+        --with pyyaml==6.0.3 \
+        python "$GOVERNANCE_VERIFIER" --live
     )
   elif [[ -e "$GOVERNANCE_MANIFEST" || -e "$GOVERNANCE_VERIFIER" ]]; then
     fail "canonical repository governance manifest and verifier must land together"
@@ -467,10 +484,10 @@ verify_live_contract() {
   for command_name in gcloud jq python3; do
     require_command "$command_name"
   done
-  [[ -n "${OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS:-}" ]] ||
-    fail "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS must be a reviewed newline-separated live IAM allowlist"
-  [[ -n "${OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS:-}" ]] ||
-    fail "OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS must be a reviewed newline-separated direct bucket IAM allowlist"
+  [[ -n "${OPS_FOUNDATION_REVIEWED_IAM_BINDINGS:-}" ]] ||
+    fail "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS must be an exact reviewed JSON scope/role/member inventory"
+  [[ -n "${OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS:-}" ]] ||
+    fail "OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS must be an exact reviewed JSON bucket binding inventory"
 
   project_json="$(
     gcloud projects describe "$PROJECT_ID" --format=json
@@ -541,8 +558,9 @@ verify_live_contract() {
   )"
   audit_iam_policy \
     "$bucket_policy" \
-    "state-bucket" \
-    "OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS"
+    "buckets/${STATE_BUCKET}" \
+    "OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS" \
+    true
 
   for service_account in \
     "$PRODUCTION_RUNTIME_SA" \
@@ -557,8 +575,8 @@ verify_live_contract() {
   )"
   audit_iam_policy \
     "$project_policy" \
-    "project/${PROJECT_ID}" \
-    "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
+    "projects/${PROJECT_ID}" \
+    "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
   verify_ancestor_policies
   for inherited_role in \
     "roles/iam.serviceAccountUser" \
@@ -579,8 +597,8 @@ verify_live_contract() {
   )"
   audit_iam_policy \
     "$repository_policy" \
-    "artifact-repository/agent" \
-    "OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS"
+    "projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \
+    "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
   for repository_role in \
     "roles/artifactregistry.reader" \
     "roles/artifactregistry.writer"; do
@@ -770,7 +788,7 @@ verify_live_contract() {
 }
 
 usage() {
-  printf 'Usage: %s [--static|--live]\n' "${0##*/}"
+  printf 'Usage: %s [--static|--live|--governance-live]\n' "${0##*/}"
 }
 
 mode="${1:---live}"
@@ -781,6 +799,9 @@ case "$mode" in
   --live)
     verify_static_contract
     verify_live_contract
+    ;;
+  --governance-live)
+    verify_canonical_repository_governance
     ;;
   -h | --help)
     usage

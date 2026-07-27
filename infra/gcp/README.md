@@ -27,13 +27,15 @@ role-level bindings without a reviewed live plan could remove unrelated or
 Google-managed members. The post-apply live verifier is the acceptance gate. It reads
 project, ancestor, repository, state-bucket, service-account, and secret policies and
 resolves every predefined or custom role before checking sensitive permissions. Public
-members fail; group, domain, principal-set, other sensitive principals, and every direct
-state-bucket member must match explicit newline-separated allowlists copied from a reviewed
-live inventory. The verifier also rejects extra direct members for the managed roles and
-direct project or repository roles on the four workload identities. Before builder and
-Cloud Run image-pull identities exist, it requires repository-level reader and writer
-roles to be empty. An unreadable policy or role and any other failure require a separate
-reviewed IAM remediation; they are never ignored or overwritten blindly.
+members fail. Every sensitive, custom-role, group/domain/principal-set, and direct
+state-bucket binding must match an explicit reviewed JSON record by exact scope, role, and
+member. Custom roles additionally pin the digest of the full included-permission set, and
+conditional bindings pin their condition digest. The verifier also rejects extra direct
+members for the managed roles and direct project or repository roles on the four workload
+identities. Before builder and Cloud Run image-pull identities exist, it requires
+repository-level reader and writer roles to be empty. An unreadable policy or role and any
+other failure require a separate reviewed IAM remediation; they are never ignored or
+overwritten blindly.
 
 The production OIDC provider is currently pinned to the repository and owner numeric IDs,
 the `push` event, `refs/heads/main`, and the `Production` environment. There is no
@@ -46,7 +48,12 @@ reviewed state/import and federation migration plan; it is not an in-place harde
 GitHub environment reviewers, self-review, and the canonical Production branch set
 `{main}` live only in `.github/repository-governance.json`. When that manifest and
 `scripts/verify_repository_governance.py` are present, the live foundation verifier
-delegates to `verify_repository_governance.py --live` instead of duplicating the rules.
+requires `uv` and `gh`, then delegates without duplicating the rules:
+
+```sh
+uv run --no-project --with pyyaml==6.0.3 \
+  python scripts/verify_repository_governance.py --live
+```
 
 No user-managed service-account key is permitted.
 
@@ -87,10 +94,24 @@ terraform validate
 terraform test
 ```
 
+The static verifier runs:
+
+```sh
+uv run --no-project --with python-hcl2==7.3.1 \
+  python scripts/ops_foundation_contract.py static --repo-root .
+```
+
+It checks exact provider/alias, import target/live object ID, module, data, resource, and
+critical variable-validation inventories and rejects `moved` and `removed` blocks, every
+provisioner, external provider/data, `terraform_remote_state`, and executable escape
+resources. The Terraform commands above remain separate gates.
+
 Run `scripts/verify_ops_foundation.sh --static` before review and `--live` only after an
 explicitly approved apply. Live mode requires
-`OPS_FOUNDATION_ALLOWED_SENSITIVE_MEMBERS` and
-`OPS_FOUNDATION_STATE_BUCKET_ALLOWED_MEMBERS`, each populated with exact newline-separated
-members from reviewed live policy exports; absence or drift fails closed. Secret injection,
+`OPS_FOUNDATION_REVIEWED_IAM_BINDINGS` and
+`OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS`, each populated with exact JSON
+scope/role/member records from reviewed live policy exports. Custom-role records include
+the complete permission-set digest; conditional records include the condition digest.
+Absence, extra records within an audited scope, or drift fails closed. Secret injection,
 state recovery, Neon cutover, and deployment are documented in
 [`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md).

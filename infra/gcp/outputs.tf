@@ -3,7 +3,16 @@ output "artifact_registry_repository" {
 }
 
 output "runtime_service_account" {
+  description = "Production runtime service account; retained for compatibility."
+  value       = google_service_account.runtime.email
+}
+
+output "production_runtime_service_account" {
   value = google_service_account.runtime.email
+}
+
+output "preview_runtime_service_account" {
+  value = google_service_account.preview_runtime.email
 }
 
 output "preview_deployer_service_account" {
@@ -20,4 +29,8 @@ output "preview_workload_identity_provider" {
 
 output "production_workload_identity_provider" {
   value = google_iam_workload_identity_pool_provider.production.name
+}
+
+output "terraform_state_bucket" {
+  value = google_storage_bucket.terraform_state.name
 }

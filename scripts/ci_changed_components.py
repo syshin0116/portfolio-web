@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-COMPONENTS = ("web", "agent", "eval")
+COMPONENTS = ("web", "agent", "eval", "infra")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 ALL_ZERO_SHA = "0" * 40
 ROOT_AGENT_PATHS = frozenset(
@@ -41,10 +41,16 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         path = raw_path.removeprefix("./")
         if not path:
             continue
-        if path == ".github/workflows/ci.yml" or path.startswith("protocol/"):
-            return dict.fromkeys(COMPONENTS, True)
-        if path.startswith("content/"):
-            return dict.fromkeys(COMPONENTS, True)
+        if path.startswith(".github/workflows/"):
+            affected["infra"] = True
+            if path == ".github/workflows/ci.yml":
+                affected.update(dict.fromkeys(COMPONENTS, True))
+            continue
+        if path.startswith("protocol/") or path.startswith("content/"):
+            affected["web"] = True
+            affected["agent"] = True
+            affected["eval"] = True
+            continue
         if path.startswith("web/"):
             affected["web"] = True
         if path in PUBLICATION_SEMANTICS_WEB_PATHS:
@@ -52,13 +58,18 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
             affected["eval"] = True
         if (
             path.startswith("agent/")
-            or path.startswith("scripts/")
+            or (
+                path.startswith("scripts/")
+                and path != "scripts/verify_ops_foundation.sh"
+            )
             or path in ROOT_AGENT_PATHS
         ):
             affected["agent"] = True
             affected["eval"] = True
         if path.startswith("eval/"):
             affected["eval"] = True
+        if path.startswith("infra/") or path == "scripts/verify_ops_foundation.sh":
+            affected["infra"] = True
     return affected
 
 

@@ -1,32 +1,21 @@
 locals {
-  runtime_service_account = google_service_account.runtime.email
+  runtime_service_account_ids = {
+    preview    = google_service_account.preview_runtime.name
+    production = google_service_account.runtime.name
+  }
+  runtime_service_accounts = {
+    preview    = google_service_account.preview_runtime.email
+    production = google_service_account.runtime.email
+  }
   deployer_service_accounts = {
     for name, account in google_service_account.deployer : name => account.email
   }
 }
 
-resource "google_project_iam_member" "deployer_run_admin" {
-  for_each = local.deployer_service_accounts
-
-  project = var.project_id
-  role    = "roles/run.admin"
-  member  = "serviceAccount:${each.value}"
-}
-
-resource "google_artifact_registry_repository_iam_member" "deployer_writer" {
-  for_each = local.deployer_service_accounts
-
-  project    = var.project_id
-  location   = var.region
-  repository = google_artifact_registry_repository.agent.repository_id
-  role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${each.value}"
-}
-
 resource "google_service_account_iam_member" "deployer_uses_runtime" {
   for_each = local.deployer_service_accounts
 
-  service_account_id = google_service_account.runtime.name
+  service_account_id = local.runtime_service_account_ids[each.key]
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${each.value}"
 }
@@ -37,7 +26,16 @@ resource "google_secret_manager_secret_iam_member" "runtime_accessor" {
   project   = var.project_id
   secret_id = each.value.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.runtime_service_account}"
+  member    = "serviceAccount:${local.runtime_service_accounts.production}"
+}
+
+resource "google_secret_manager_secret_iam_member" "preview_runtime_accessor" {
+  for_each = google_secret_manager_secret.preview_runtime
+
+  project   = var.project_id
+  secret_id = each.value.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${local.runtime_service_accounts.preview}"
 }
 
 resource "google_service_account_iam_member" "github_preview" {

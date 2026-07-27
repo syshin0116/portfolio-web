@@ -4,6 +4,11 @@ import {
 }
 
 import {
+  to = google_storage_bucket.terraform_state
+  id = "festive-ally-503605-v7-tfstate"
+}
+
+import {
   to = google_service_account.runtime
   id = "projects/festive-ally-503605-v7/serviceAccounts/agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
 }
@@ -34,13 +39,7 @@ import {
 }
 
 import {
-  for_each = toset([
-    "agent-auth-secret",
-    "agent-database-url",
-    "anthropic-api-key",
-    "langsmith-api-key",
-    "openai-api-key",
-  ])
+  for_each = local.production_secret_names
 
   to = google_secret_manager_secret.runtime[each.value]
   id = "projects/festive-ally-503605-v7/secrets/${each.value}"

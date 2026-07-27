@@ -6,15 +6,24 @@ locals {
     "iamcredentials.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
+    "storage.googleapis.com",
     "sts.googleapis.com",
   ])
 
-  secret_names = toset([
+  production_secret_names = toset([
     "agent-auth-secret",
     "agent-database-url",
     "anthropic-api-key",
     "langsmith-api-key",
     "openai-api-key",
+  ])
+
+  preview_secret_names = toset([
+    "agent-preview-anthropic-api-key",
+    "agent-preview-auth-secret",
+    "agent-preview-database-url",
+    "agent-preview-langsmith-api-key",
+    "agent-preview-openai-api-key",
   ])
 
   deployers = {
@@ -44,6 +53,10 @@ resource "google_artifact_registry_repository" "agent" {
   description   = "Immutable agent images"
   format        = "DOCKER"
 
+  docker_config {
+    immutable_tags = true
+  }
+
   depends_on = [google_project_service.required]
 
   lifecycle {
@@ -54,7 +67,17 @@ resource "google_artifact_registry_repository" "agent" {
 resource "google_service_account" "runtime" {
   project      = var.project_id
   account_id   = "agent-runtime"
-  display_name = "Cloud Run agent runtime"
+  display_name = "Cloud Run production agent runtime"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_service_account" "preview_runtime" {
+  project      = var.project_id
+  account_id   = "agent-preview-runtime"
+  display_name = "Cloud Run preview agent runtime"
 
   lifecycle {
     prevent_destroy = true
@@ -74,7 +97,24 @@ resource "google_service_account" "deployer" {
 }
 
 resource "google_secret_manager_secret" "runtime" {
-  for_each = local.secret_names
+  for_each = local.production_secret_names
+
+  project   = var.project_id
+  secret_id = each.value
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.required]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "preview_runtime" {
+  for_each = local.preview_secret_names
 
   project   = var.project_id
   secret_id = each.value
@@ -112,6 +152,7 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
   attribute_mapping = {
     "google.subject"                = "assertion.sub"
     "attribute.environment"         = "assertion.environment"
+    "attribute.event_name"          = "assertion.event_name"
     "attribute.ref"                 = "assertion.ref"
     "attribute.repository_id"       = "assertion.repository_id"
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
@@ -120,6 +161,7 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
   attribute_condition = join(" && ", [
     "assertion.repository_id == '${var.github_repository_id}'",
     "assertion.repository_owner_id == '${var.github_owner_id}'",
+    "assertion.event_name == 'pull_request'",
     "assertion.environment == '${var.github_preview_environment}'",
   ])
 
@@ -129,6 +171,13 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
 
   lifecycle {
     prevent_destroy = true
+  }
+}
+
+check "runtime_environments_are_disjoint" {
+  assert {
+    condition     = length(setintersection(local.production_secret_names, local.preview_secret_names)) == 0
+    error_message = "Preview and production Secret Manager resource names must be disjoint."
   }
 }
 

@@ -1,11 +1,15 @@
 """Offline compatibility checks for the pinned Aegra runtime."""
 
+import asyncio
 import json
 import runpy
+import socket
 from importlib.metadata import version
 from pathlib import Path
 
+import httpx
 import pytest
+import uvicorn
 from aegra_api.main import app
 from aegra_api.services.event_streaming.capabilities import (
     _probe_runtime_symbols,
@@ -39,6 +43,7 @@ def test_runtime_dependencies_are_the_spike_versions():
             "langgraph-checkpoint-postgres",
             "langgraph-sdk",
             "langsmith",
+            "uvicorn",
         )
     } == {
         "aegra-api": "0.9.24",
@@ -50,6 +55,7 @@ def test_runtime_dependencies_are_the_spike_versions():
         "langgraph-checkpoint-postgres": "3.1.0",
         "langgraph-sdk": "0.4.2",
         "langsmith": "0.10.2",
+        "uvicorn": "0.51.0",
     }
 
 
@@ -86,6 +92,35 @@ def test_pinned_runtime_supports_aegra_v2_dialect(monkeypatch):
     assert "/threads/{thread_id}/stream/events" in route_paths
     assert "/threads/{thread_id}/commands" in route_paths
     assert "/threads/{thread_id}/stream" not in route_paths
+
+
+async def test_uvicorn_serves_and_stops_the_aegra_app():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", 0))
+    server_socket.listen(128)
+    host, port = server_socket.getsockname()
+    server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="warning"))
+    server_task = asyncio.create_task(server.serve(sockets=[server_socket]))
+
+    try:
+        for _ in range(200):
+            if server.started:
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
+
+        async with httpx.AsyncClient(base_url=f"http://{host}:{port}") as client:
+            response = await client.get("/info")
+
+        assert response.status_code == 200
+        assert response.json()["version"] == "0.9.24"
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(server_task, timeout=5)
+        server_socket.close()
+
+    assert server_task.done()
 
 
 @pytest.mark.filterwarnings(

@@ -142,11 +142,14 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: agent/uv.lock
+      - name: Verify the agent lockfile is current
+        if: needs.changes.outputs.agent == 'true'
+        run: uv lock --check
       - if: needs.changes.outputs.agent == 'true'
         run: uv sync --frozen --all-extras --dev
       - if: needs.changes.outputs.agent == 'true'
         run: >-
-          uv run ruff check
+          uv run --frozen ruff check
           src
           tests
           ../scripts/build_index.py
@@ -155,7 +158,7 @@ jobs:
           ../scripts/tests
       - if: needs.changes.outputs.agent == 'true'
         run: >-
-          uv run ruff format --check
+          uv run --frozen ruff format --check
           src
           tests
           ../scripts/build_index.py
@@ -168,7 +171,7 @@ jobs:
           uv run --frozen python ../scripts/build_index.py
           --expect-document-count 335
       - if: needs.changes.outputs.agent == 'true'
-        run: uv run --all-extras pytest -q
+        run: uv run --frozen --all-extras pytest -q
 
   eval:
     name: ci/eval

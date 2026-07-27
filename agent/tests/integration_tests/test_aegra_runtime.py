@@ -53,6 +53,17 @@ def test_runtime_dependencies_are_the_spike_versions():
     }
 
 
+def test_psycopg_family_is_the_verified_compatible_set():
+    assert {
+        package: version(package)
+        for package in ("psycopg", "psycopg-binary", "psycopg-pool")
+    } == {
+        "psycopg": "3.3.4",
+        "psycopg-binary": "3.3.4",
+        "psycopg-pool": "3.3.1",
+    }
+
+
 def test_aegra_config_registers_the_compiled_graph():
     config = json.loads((REPO_ROOT / "aegra.json").read_text())
 

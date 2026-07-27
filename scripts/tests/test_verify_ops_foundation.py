@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_FILES = (
     "infra/gcp/.terraform-version",
     "infra/gcp/backend.tf",
+    "infra/gcp/cloud_run.tf",
     "infra/gcp/iam.tf",
     "infra/gcp/imports.tf",
     "infra/gcp/main.tf",
@@ -28,15 +29,24 @@ PREVIEW_CONDITION_LINE = (
     "\"assertion.repository_id == '${var.github_repository_id}' && "
     "assertion.repository_owner_id == '${var.github_owner_id}' && "
     "assertion.event_name == 'pull_request' && "
-    "assertion.environment == '${var.github_preview_environment}'\"\n"
+    "assertion.environment == '${var.github_preview_environment}' && "
+    "assertion.workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
+    "assertion.ref && assertion.job_workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + "
+    "assertion.ref\"\n"
 )
 PRODUCTION_CONDITION_LINE = (
     "  production_wif_attribute_condition = "
     "\"assertion.repository_id == '${var.github_repository_id}' && "
     "assertion.repository_owner_id == '${var.github_owner_id}' && "
-    "assertion.event_name == 'push' && "
+    "assertion.event_name in ['push', 'workflow_dispatch'] && "
     "assertion.ref == 'refs/heads/main' && "
-    "assertion.environment == '${var.github_production_environment}'\"\n"
+    "assertion.environment == '${var.github_production_environment}' && "
+    "assertion.workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' "
+    "&& assertion.job_workflow_ref == "
+    "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@refs/heads/main'\"\n"
 )
 
 
@@ -488,6 +498,23 @@ printf '%s\n' \
             )
             self.assertIn(expected, result.stderr)
 
+    def test_cloud_run_source_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            cloud_run_path = root / "infra/gcp/cloud_run.tf"
+            original = cloud_run_path.read_text(encoding="utf-8")
+            expected = "      max_instance_count = 1"
+            self.assertEqual(1, original.count(expected))
+            cloud_run_path.write_text(
+                original.replace(expected, "      max_instance_count = 2", 1),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Terraform source content digest is not exact", result.stderr)
+
     def test_every_previously_unchecked_resource_body_fails_closed(self) -> None:
         mutations = {
             "project_service": (
@@ -717,8 +744,9 @@ output "unreviewed_sensitive_value" {
     def test_preview_condition_mutations_fail_closed(self) -> None:
         mutations: dict[str, Callable[[str], str]] = {
             "or_true": lambda line: line.replace(
-                "'${var.github_preview_environment}'\"",
-                "'${var.github_preview_environment}' || true\"",
+                "assertion.environment == '${var.github_preview_environment}' && ",
+                "(assertion.environment == '${var.github_preview_environment}' || "
+                "true) && ",
             ),
             "dropped_event_clause": lambda line: line.replace(
                 "assertion.event_name == 'pull_request' && ",
@@ -747,16 +775,18 @@ output "unreviewed_sensitive_value" {
     def test_production_condition_mutations_fail_closed(self) -> None:
         mutations: dict[str, Callable[[str], str]] = {
             "or_true": lambda line: line.replace(
-                "'${var.github_production_environment}'\"",
-                "'${var.github_production_environment}' || true\"",
+                "assertion.environment == '${var.github_production_environment}' && ",
+                "(assertion.environment == '${var.github_production_environment}' || "
+                "true) && ",
             ),
             "dropped_event_clause": lambda line: line.replace(
-                "assertion.event_name == 'push' && ",
+                "assertion.event_name in ['push', 'workflow_dispatch'] && ",
                 "",
             ),
             "changed_grouping": lambda line: line.replace(
-                "assertion.event_name == 'push' && assertion.ref == 'refs/heads/main'",
-                "(assertion.event_name == 'push' && "
+                "assertion.event_name in ['push', 'workflow_dispatch'] && "
+                "assertion.ref == 'refs/heads/main'",
+                "(assertion.event_name in ['push', 'workflow_dispatch'] && "
                 "assertion.ref == 'refs/heads/main')",
             ),
         }
@@ -1207,6 +1237,9 @@ class LiveShellGuardTests(unittest.TestCase):
             "agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
         )
         ancestors = json.dumps(
             [
@@ -1322,18 +1355,14 @@ class LiveShellGuardTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(
-            3,
+            2,
             verifier.count("assert_workload_accounts_have_no_direct_roles \\"),
         )
         self.assertIn(
             '"projects/${PROJECT_ID}" \\\n    "$ancestors_json"',
             verifier,
         )
-        self.assertIn(
-            '"projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \\\n'
-            '    "$ancestors_json"',
-            verifier,
-        )
+        self.assertIn("assert_policy_binding_pairs_exactly \\", verifier)
         self.assertIn(
             '"${ancestor_type}s/${ancestor_id}" \\\n      "$ancestors_json"',
             verifier,
@@ -1361,6 +1390,24 @@ class LiveShellGuardTests(unittest.TestCase):
                 {
                     "email": (
                         "agent-prod-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-migrator@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-prod-migrator@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },
@@ -1443,6 +1490,24 @@ verify_project_has_no_user_managed_service_account_keys
                 {
                     "email": (
                         "agent-prod-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-image-builder@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-migrator@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-prod-migrator@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },

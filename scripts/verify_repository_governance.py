@@ -121,6 +121,28 @@ EXPECTED_ENVIRONMENTS = {
             {"type": "branch_policy"},
         ],
     },
+    "Agent Preview": {
+        "can_admins_bypass": True,
+        "deployment_branch_policy": None,
+        "branch_policies": [],
+        "protection_rules": [],
+    },
+    "Agent Production": {
+        "can_admins_bypass": True,
+        "deployment_branch_policy": {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
+        "branch_policies": [{"name": "main", "type": "branch"}],
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "prevent_self_review": False,
+                "reviewers": [{"type": "User", "login": "syshin0116"}],
+            },
+            {"type": "branch_policy"},
+        ],
+    },
     "Preview": {
         "can_admins_bypass": True,
         "deployment_branch_policy": None,
@@ -2500,7 +2522,7 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     if not _json_exact(environments_policy, EXPECTED_ENVIRONMENTS):
         errors.append(
             "local: policy.environments differs from the complete reviewed "
-            f"environment payload; actual={environments_policy!r}, "
+            f"Vercel and agent deployment payload; actual={environments_policy!r}, "
             f"expected={EXPECTED_ENVIRONMENTS!r}"
         )
 

@@ -1,6 +1,6 @@
 locals {
-  preview_wif_attribute_condition    = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'pull_request' && assertion.environment == '${var.github_preview_environment}'"
-  production_wif_attribute_condition = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'push' && assertion.ref == 'refs/heads/main' && assertion.environment == '${var.github_production_environment}'"
+  preview_wif_attribute_condition    = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name == 'pull_request' && assertion.environment == '${var.github_preview_environment}' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + assertion.ref && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + assertion.ref"
+  production_wif_attribute_condition = "assertion.repository_id == '${var.github_repository_id}' && assertion.repository_owner_id == '${var.github_owner_id}' && assertion.event_name in ['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && assertion.environment == '${var.github_production_environment}' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@refs/heads/main'"
 
   required_services = toset([
     "artifactregistry.googleapis.com",
@@ -29,6 +29,11 @@ locals {
     "agent-preview-openai-api-key",
   ])
 
+  migration_secret_names = {
+    preview    = "agent-preview-migration-database-url"
+    production = "agent-migration-database-url"
+  }
+
   deployers = {
     preview = {
       account_id   = "agent-preview-deployer"
@@ -37,6 +42,17 @@ locals {
     production = {
       account_id   = "agent-prod-deployer"
       display_name = "GitHub production deployer"
+    }
+  }
+
+  migrators = {
+    preview = {
+      account_id   = "agent-preview-migrator"
+      display_name = "Cloud Run preview migration identity"
+    }
+    production = {
+      account_id   = "agent-prod-migrator"
+      display_name = "Cloud Run production migration identity"
     }
   }
 }
@@ -99,6 +115,28 @@ resource "google_service_account" "deployer" {
   }
 }
 
+resource "google_service_account" "builder" {
+  project      = var.project_id
+  account_id   = "agent-image-builder"
+  display_name = "GitHub immutable agent image builder"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_service_account" "migrator" {
+  for_each = local.migrators
+
+  project      = var.project_id
+  account_id   = each.value.account_id
+  display_name = each.value.display_name
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "google_secret_manager_secret" "runtime" {
   for_each = local.production_secret_names
 
@@ -118,6 +156,23 @@ resource "google_secret_manager_secret" "runtime" {
 
 resource "google_secret_manager_secret" "preview_runtime" {
   for_each = local.preview_secret_names
+
+  project   = var.project_id
+  secret_id = each.value
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.required]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "migration" {
+  for_each = local.migration_secret_names
 
   project   = var.project_id
   secret_id = each.value
@@ -158,9 +213,11 @@ resource "google_iam_workload_identity_pool_provider" "preview" {
     "google.subject"                = "assertion.sub"
     "attribute.environment"         = "assertion.environment"
     "attribute.event_name"          = "assertion.event_name"
+    "attribute.job_workflow_ref"    = "assertion.job_workflow_ref"
     "attribute.ref"                 = "assertion.ref"
     "attribute.repository_id"       = "assertion.repository_id"
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
+    "attribute.workflow_ref"        = "assertion.workflow_ref"
   }
 
   attribute_condition = local.preview_wif_attribute_condition
@@ -192,9 +249,11 @@ resource "google_iam_workload_identity_pool_provider" "production" {
     "google.subject"                = "assertion.sub"
     "attribute.environment"         = "assertion.environment"
     "attribute.event_name"          = "assertion.event_name"
+    "attribute.job_workflow_ref"    = "assertion.job_workflow_ref"
     "attribute.ref"                 = "assertion.ref"
     "attribute.repository_id"       = "assertion.repository_id"
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
+    "attribute.workflow_ref"        = "assertion.workflow_ref"
   }
 
   attribute_condition = local.production_wif_attribute_condition

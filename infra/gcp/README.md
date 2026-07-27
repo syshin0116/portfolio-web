@@ -1,26 +1,30 @@
-# GCP foundation
+# GCP agent delivery
 
-This directory declares the keyless GCP foundation for the syshin0116.dev agent. It
-intentionally does not declare a Cloud Run service, deployment workflow, Dockerfile,
-secret payload, secret version, or Neon credential.
+This directory declares the keyless GCP foundation and the reviewed Cloud Run delivery
+topology for the syshin0116.dev native Aegra agent. Terraform still never owns a secret
+payload, secret version, Neon project, or Neon credential.
 
 ## Managed resources
 
 - required Google APIs;
 - one versioned, public-access-blocked GCS Terraform backend;
 - one regional Docker Artifact Registry repository with immutable tags;
-- distinct production runtime, preview runtime, preview deployer, and production deployer
-  service accounts;
-- separate GitHub OIDC providers for `Preview` pull requests and `Production` pushes to
-  `main`;
-- environment-specific act-as and secret-access bindings;
-- five disjoint empty Secret Manager resources per runtime environment.
+- distinct production/preview runtime, migrator, and deployer service accounts plus one
+  image-builder identity;
+- separate GitHub OIDC providers for exact `Agent Preview` and `Agent Production`
+  caller/reusable workflow paths;
+- environment-specific act-as, service/job update, and secret-access bindings;
+- five disjoint empty runtime Secret Manager resources plus one separately scoped
+  migration URL resource per environment;
+- production and preview Cloud Run services fixed to one instance/one Uvicorn worker;
+- same-image migration and real-Neon runtime-grant jobs for each service;
+- repository writer only for the builder and reader only for the Cloud Run service agent.
 
 The existing `agent-runtime` resource remains the production runtime. Deployers have no
-project-wide Cloud Run role and no Artifact Registry writer role. A later deployment PR
-must create the Cloud Run services and a separate image-builder identity before granting
-service-scoped deployment permissions. It must also grant repository-scoped
-Artifact Registry reader access to the exact Cloud Run image-pull principal.
+project-wide Cloud Run role, Artifact Registry role, or Secret Manager payload access.
+They receive `roles/run.developer` only on the exact service and two jobs they operate.
+The services are publicly invokable at the Cloud Run layer so Vercel-hosted browsers can
+reach them; fail-closed Aegra bearer authentication protects APv2 operations.
 
 IAM member resources are deliberately additive: changing them to authoritative
 role-level bindings without a reviewed live plan could remove unrelated or
@@ -41,10 +45,10 @@ remediation; they are never ignored or overwritten blindly. Google Group members
 not expanded by the policy API, so any reviewed `group:` binding also requires a separately
 reviewed directory-membership export.
 
-The production OIDC provider is currently pinned to the repository and owner numeric IDs,
-the `push` event, `refs/heads/main`, and the `Production` environment. There is no
-production deployment workflow yet, so a `job_workflow_ref` condition would be fictional.
-The deployment PR must add that condition after the exact workflow path exists.
+The OIDC providers pin the immutable repository and owner numeric IDs, environment, event,
+caller `workflow_ref`, and called `job_workflow_ref`. Production additionally pins
+`refs/heads/main`; it accepts `push` plus an environment-approved `workflow_dispatch` for
+manual digest deployment or revision rollback.
 
 The existing `github` pool deliberately retains exactly the enabled `github-preview` and
 `github-production` providers. Splitting environments into separate pools requires a
@@ -131,6 +135,8 @@ explicitly approved apply. Live mode requires
 `OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS`, each populated with exact JSON
 scope/role/member records from reviewed live policy exports. Custom-role records include
 the complete permission-set digest; conditional records include the condition digest.
-Absence, extra records within an audited scope, or drift fails closed. Secret injection,
-state recovery, Neon cutover, and deployment are documented in
+Absence, extra records within an audited scope, or drift fails closed. Secret injection
+and state recovery remain in
 [`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md).
+Bootstrap, normal delivery, and rollback are in
+[`docs/runbooks/cloud-run-delivery.md`](../../docs/runbooks/cloud-run-delivery.md).

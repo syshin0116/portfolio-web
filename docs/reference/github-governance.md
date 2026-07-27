@@ -8,7 +8,7 @@ when_to_read: >
   check names, CODEOWNERS, or deployment environment branch policies.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
-updated: "2026-07-27"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/repository-governance.json
@@ -235,26 +235,26 @@ external setting disable a workflow.
 
 ## Deployment environment branches
 
-Keep the existing Vercel environments explicit:
+Keep the Vercel and agent delivery environments explicit and disjoint:
 
 | Environment | Deployment branches |
 |---|---|
 | `Preview` | No branch restriction and no required reviewer, so every contributor branch can receive a routine preview |
 | `Production` | Selected branches and tags: branch `main` only; required reviewer `syshin0116`, with self-review allowed |
+| `Agent Preview` | No branch restriction and no required reviewer; same-repository pull requests only are enforced by the workflow and WIF condition |
+| `Agent Production` | Selected branches and tags: branch `main` only; required reviewer `syshin0116`, with self-review allowed |
 
 The verifier compares these settings exactly, including branch policy,
 protection-rule types, reviewer identities, `prevent_self_review`, and admin
 bypass. The environment-name set is also exact, so an undeclared `Staging` or
 other environment cannot silently become a deployment surface. At the time
-this contract was recorded, both environments had the owner as a required
+the original two-environment contract was recorded, both environments had the owner as a required
 reviewer with `prevent_self_review: false`. The desired routine state removes
-that reviewer from `Preview`; `Production` keeps the existing owner gate and
-explicitly permits self-review so a solo owner cannot deadlock. The current
-Preview mismatch is an external rollout item, not something this PR mutates.
-
-When separate Cloud Run `preview` and `production` environments are introduced,
-add them to the checked-in policy in the same PR as their workflows; do not
-silently reuse the Vercel environments.
+that reviewer from both preview environments; both production environments keep the
+owner gate and explicitly permit self-review so a solo owner cannot deadlock. Creating
+the two `Agent ...` environments and reconciling any existing `Preview` mismatch are
+external rollout items; the checked-in contract does not claim they have already been
+applied.
 
 Environment reviewers are independent of branch policy. A solo-owner approval
 is safe only when `prevent_self_review` is disabled. Keep routine previews free

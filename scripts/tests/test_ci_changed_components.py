@@ -117,6 +117,7 @@ class PathClassificationTests(unittest.TestCase):
 
     def test_root_runtime_and_scripts_run_agent_and_eval(self) -> None:
         for path in (
+            ".dockerignore",
             "aegra.json",
             "Dockerfile",
             "pyproject.toml",
@@ -131,7 +132,9 @@ class PathClassificationTests(unittest.TestCase):
 
     def test_ops_verifier_runs_only_infrastructure_ci(self) -> None:
         for path in (
+            "scripts/deploy_cloud_run.sh",
             "scripts/ops_foundation_contract.py",
+            "scripts/tests/test_deploy_cloud_run.py",
             "scripts/tests/test_ops_foundation_contract.py",
             "scripts/verify_ops_foundation.sh",
             "scripts/tests/test_verify_ops_foundation.py",

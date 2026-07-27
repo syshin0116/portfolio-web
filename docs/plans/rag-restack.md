@@ -236,10 +236,11 @@ part of the contract; renaming one requires updating branch protection in the sa
   reassignment to that known digest, not a rebuild. Database migrations must be backward
   compatible with one previous application revision; destructive migrations require a
   separate ADR and backup/restore rehearsal.
-- Use GitHub environments `Preview` and `Production` exactly. Reviewers, self-review, and
-  deployment branches are defined only in `.github/repository-governance.json` and checked
-  by `scripts/verify_repository_governance.py`; workflow or infrastructure verifiers must
-  not restate them. The central contract keeps the exact Production branch set `{main}`.
+- Use dedicated GitHub environments `Agent Preview` and `Agent Production`; the Vercel
+  environments remain `Preview` and `Production`. Reviewers, self-review, and deployment
+  branches are defined only in `.github/repository-governance.json` and checked by
+  `scripts/verify_repository_governance.py`. The central contract keeps both production
+  branch sets at exactly `{main}`.
 
 ### Staying current without surprise upgrades
 

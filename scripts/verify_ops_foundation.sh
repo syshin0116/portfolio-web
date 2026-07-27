@@ -11,11 +11,18 @@ readonly PRODUCTION_RUNTIME_SA="agent-runtime@${PROJECT_ID}.iam.gserviceaccount.
 readonly PREVIEW_RUNTIME_SA="agent-preview-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PREVIEW_DEPLOYER_SA="agent-preview-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PRODUCTION_DEPLOYER_SA="agent-prod-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
+readonly BUILDER_SA="agent-image-builder@${PROJECT_ID}.iam.gserviceaccount.com"
+readonly PREVIEW_MIGRATOR_SA="agent-preview-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
+readonly PRODUCTION_MIGRATOR_SA="agent-prod-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
+readonly CLOUD_RUN_SERVICE_AGENT="service-${EXPECTED_PROJECT_NUMBER}@serverless-robot-prod.iam.gserviceaccount.com"
 readonly -a WORKLOAD_SERVICE_ACCOUNTS=(
   "$PRODUCTION_RUNTIME_SA"
   "$PREVIEW_RUNTIME_SA"
   "$PREVIEW_DEPLOYER_SA"
   "$PRODUCTION_DEPLOYER_SA"
+  "$BUILDER_SA"
+  "$PREVIEW_MIGRATOR_SA"
+  "$PRODUCTION_MIGRATOR_SA"
 )
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
@@ -52,6 +59,9 @@ readonly PREVIEW_SECRET_NAMES=(
   agent-preview-langsmith-api-key
   agent-preview-openai-api-key
 )
+
+readonly PREVIEW_MIGRATION_SECRET="agent-preview-migration-database-url"
+readonly PRODUCTION_MIGRATION_SECRET="agent-migration-database-url"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -168,6 +178,32 @@ assert_exact_role_member() {
     --arg expected_member "$expected_member" \
     '([.bindings[]? | select(.role == $role) | .members[]?] | unique | sort) == [$expected_member]' \
     >/dev/null <<<"$policy_json" || fail "$description"
+}
+
+assert_policy_binding_pairs_exactly() {
+  local policy_json="$1"
+  local expected_pairs_json="$2"
+  local description="$3"
+
+  jq -e \
+    --argjson expected_pairs "$expected_pairs_json" \
+    '
+      ([.bindings[]? | select(has("condition"))] | length == 0)
+      and (
+        [
+          .bindings[]?
+          | .role as $role
+          | .members[]?
+          | {role: $role, member: .}
+        ]
+        | unique_by([.role, .member])
+        | sort_by(.role, .member)
+      ) == (
+        $expected_pairs
+        | unique_by([.role, .member])
+        | sort_by(.role, .member)
+      )
+    ' >/dev/null <<<"$policy_json" || fail "$description"
 }
 
 assert_policy_lacks_role() {
@@ -514,6 +550,150 @@ verify_runtime_secret_policy() {
     <<<"$policy_json"
 }
 
+verify_service_account_act_as_policy() {
+  local service_account="$1"
+  local expected_deployer="$2"
+  local description="$3"
+  local policy_json
+  local expected_pairs
+
+  policy_json="$(
+    gcloud iam service-accounts get-iam-policy \
+      "$service_account" \
+      --project "$PROJECT_ID" \
+      --format=json
+  )"
+  expected_pairs="$(
+    jq -cn \
+      --arg member "serviceAccount:${expected_deployer}" \
+      '[{role: "roles/iam.serviceAccountUser", member: $member}]'
+  )"
+  assert_policy_binding_pairs_exactly \
+    "$policy_json" \
+    "$expected_pairs" \
+    "$description"
+  assert_policy_has_no_public_members \
+    "$policy_json" \
+    "${service_account} IAM must not trust public principals"
+}
+
+verify_cloud_run_service() {
+  local service_name="$1"
+  local runtime_service_account="$2"
+  local deployer_service_account="$3"
+  local service_json
+  local policy_json
+  local expected_pairs
+
+  service_json="$(
+    gcloud run services describe \
+      "$service_name" \
+      --project "$PROJECT_ID" \
+      --region "$REGION" \
+      --format=json
+  )"
+  jq -e \
+    --arg service_name "$service_name" \
+    --arg runtime_service_account "$runtime_service_account" \
+    '
+      .metadata.name == $service_name
+      and .spec.template.spec.serviceAccountName == $runtime_service_account
+      and .spec.template.spec.containerConcurrency == 8
+      and .spec.template.spec.timeoutSeconds == 300
+      and .spec.template.metadata.annotations["autoscaling.knative.dev/maxScale"] == "1"
+      and .spec.template.metadata.annotations["run.googleapis.com/execution-environment"] == "gen2"
+      and (.spec.template.spec.containers | length) == 1
+      and .spec.template.spec.containers[0].command == ["uvicorn"]
+      and .spec.template.spec.containers[0].args == [
+        "aegra_api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "1"
+      ]
+    ' >/dev/null <<<"$service_json" ||
+    fail "Cloud Run service ${service_name} runtime identity or single-worker limits drifted"
+
+  policy_json="$(
+    gcloud run services get-iam-policy \
+      "$service_name" \
+      --project "$PROJECT_ID" \
+      --region "$REGION" \
+      --format=json
+  )"
+  expected_pairs="$(
+    jq -cn \
+      --arg deployer "serviceAccount:${deployer_service_account}" \
+      '[
+        {role: "roles/run.developer", member: $deployer},
+        {role: "roles/run.invoker", member: "allUsers"}
+      ]'
+  )"
+  assert_policy_binding_pairs_exactly \
+    "$policy_json" \
+    "$expected_pairs" \
+    "Cloud Run service ${service_name} IAM must contain only its deployer and public invoker"
+}
+
+verify_cloud_run_job() {
+  local job_name="$1"
+  local service_account="$2"
+  local deployer_service_account="$3"
+  local container_name="$4"
+  local module_name="$5"
+  local job_json
+  local policy_json
+  local expected_pairs
+
+  job_json="$(
+    gcloud run jobs describe \
+      "$job_name" \
+      --project "$PROJECT_ID" \
+      --region "$REGION" \
+      --format=json
+  )"
+  jq -e \
+    --arg job_name "$job_name" \
+    --arg service_account "$service_account" \
+    --arg container_name "$container_name" \
+    --arg module_name "$module_name" \
+    '
+      .metadata.name == $job_name
+      and .spec.template.spec.template.spec.serviceAccountName == $service_account
+      and .spec.template.spec.template.spec.maxRetries == 0
+      and (.spec.template.spec.template.spec.containers | length) == 1
+      and .spec.template.spec.template.spec.containers[0].name == $container_name
+      and .spec.template.spec.template.spec.containers[0].command == ["python"]
+      and .spec.template.spec.template.spec.containers[0].args == [
+        "-m",
+        $module_name
+      ]
+    ' >/dev/null <<<"$job_json" ||
+    fail "Cloud Run job ${job_name} identity, retry policy, or command drifted"
+
+  policy_json="$(
+    gcloud run jobs get-iam-policy \
+      "$job_name" \
+      --project "$PROJECT_ID" \
+      --region "$REGION" \
+      --format=json
+  )"
+  expected_pairs="$(
+    jq -cn \
+      --arg deployer "serviceAccount:${deployer_service_account}" \
+      '[{role: "roles/run.developer", member: $deployer}]'
+  )"
+  assert_policy_binding_pairs_exactly \
+    "$policy_json" \
+    "$expected_pairs" \
+    "Cloud Run job ${job_name} IAM must contain only its environment deployer"
+  assert_policy_has_no_public_members \
+    "$policy_json" \
+    "Cloud Run job ${job_name} must not be publicly invokable"
+}
+
 verify_live_contract() {
   local enabled_apis
   local artifact_json
@@ -525,10 +705,10 @@ verify_live_contract() {
   local state_object_json
   local project_policy
   local repository_policy
-  local production_runtime_policy
-  local preview_runtime_policy
   local preview_deployer_policy
   local production_deployer_policy
+  local builder_policy
+  local expected_pairs
   local pool_json
   local listed_providers_json
   local preview_provider_json
@@ -641,18 +821,19 @@ verify_live_contract() {
     "$repository_policy" \
     "projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \
     "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
-  assert_workload_accounts_have_no_direct_roles \
+  expected_pairs="$(
+    jq -cn \
+      --arg builder "serviceAccount:${BUILDER_SA}" \
+      --arg cloud_run "serviceAccount:${CLOUD_RUN_SERVICE_AGENT}" \
+      '[
+        {role: "roles/artifactregistry.reader", member: $cloud_run},
+        {role: "roles/artifactregistry.writer", member: $builder}
+      ]'
+  )"
+  assert_policy_binding_pairs_exactly \
     "$repository_policy" \
-    "projects/${PROJECT_ID}/locations/${REGION}/repositories/agent" \
-    "$ancestors_json"
-  for repository_role in \
-    "roles/artifactregistry.reader" \
-    "roles/artifactregistry.writer"; do
-    assert_policy_lacks_role \
-      "$repository_policy" \
-      "$repository_role" \
-      "foundation Artifact Registry must not have a direct ${repository_role} binding before the reviewed builder/image-pull identities exist"
-  done
+    "$expected_pairs" \
+    "Artifact Registry IAM must contain only the image builder writer and Cloud Run service-agent reader"
   for deployer in "$PREVIEW_DEPLOYER_SA" "$PRODUCTION_DEPLOYER_SA"; do
     assert_member_has_no_direct_roles \
       "$project_policy" \
@@ -683,7 +864,11 @@ verify_live_contract() {
       "serviceAccount:${deployer}" \
       "${deployer} must not read runtime secrets"
   done
-  for service_account in "$PRODUCTION_RUNTIME_SA" "$PREVIEW_RUNTIME_SA"; do
+  for service_account in \
+    "$PRODUCTION_RUNTIME_SA" \
+    "$PREVIEW_RUNTIME_SA" \
+    "$PRODUCTION_MIGRATOR_SA" \
+    "$PREVIEW_MIGRATOR_SA"; do
     assert_member_has_no_direct_roles \
       "$project_policy" \
       "serviceAccount:${service_account}" \
@@ -698,51 +883,32 @@ verify_live_contract() {
       "serviceAccount:${service_account}" \
       "${service_account} must receive secret access on exact secrets, not the project"
   done
+  assert_member_has_no_direct_roles \
+    "$project_policy" \
+    "serviceAccount:${BUILDER_SA}" \
+    "${BUILDER_SA} must not hold any direct project-level role"
+  assert_policy_lacks_member \
+    "$project_policy" \
+    "roles/secretmanager.secretAccessor" \
+    "serviceAccount:${BUILDER_SA}" \
+    "${BUILDER_SA} must not read runtime or migration secrets"
 
-  production_runtime_policy="$(
-    gcloud iam service-accounts get-iam-policy \
-      "$PRODUCTION_RUNTIME_SA" \
-      --project "$PROJECT_ID" \
-      --format=json
-  )"
-  preview_runtime_policy="$(
-    gcloud iam service-accounts get-iam-policy \
-      "$PREVIEW_RUNTIME_SA" \
-      --project "$PROJECT_ID" \
-      --format=json
-  )"
-  assert_exact_role_member \
-    "$production_runtime_policy" \
-    "roles/iam.serviceAccountUser" \
-    "serviceAccount:${PRODUCTION_DEPLOYER_SA}" \
+  verify_service_account_act_as_policy \
+    "$PRODUCTION_RUNTIME_SA" \
+    "$PRODUCTION_DEPLOYER_SA" \
     "only the production deployer may act as the production runtime"
-  assert_exact_role_member \
-    "$preview_runtime_policy" \
-    "roles/iam.serviceAccountUser" \
-    "serviceAccount:${PREVIEW_DEPLOYER_SA}" \
+  verify_service_account_act_as_policy \
+    "$PREVIEW_RUNTIME_SA" \
+    "$PREVIEW_DEPLOYER_SA" \
     "only the preview deployer may act as the preview runtime"
-  assert_policy_lacks_role \
-    "$production_runtime_policy" \
-    "roles/iam.serviceAccountTokenCreator" \
-    "production runtime must not expose a direct token-creator escalation path"
-  assert_policy_lacks_role \
-    "$preview_runtime_policy" \
-    "roles/iam.serviceAccountTokenCreator" \
-    "preview runtime must not expose a direct token-creator escalation path"
-  assert_policy_has_no_public_members \
-    "$production_runtime_policy" \
-    "production runtime IAM must not trust public principals"
-  assert_policy_has_no_public_members \
-    "$preview_runtime_policy" \
-    "preview runtime IAM must not trust public principals"
-  assert_policy_roles_exactly \
-    "$production_runtime_policy" \
-    "roles/iam.serviceAccountUser" \
-    "production runtime must expose only its reviewed direct act-as role"
-  assert_policy_roles_exactly \
-    "$preview_runtime_policy" \
-    "roles/iam.serviceAccountUser" \
-    "preview runtime must expose only its reviewed direct act-as role"
+  verify_service_account_act_as_policy \
+    "$PRODUCTION_MIGRATOR_SA" \
+    "$PRODUCTION_DEPLOYER_SA" \
+    "only the production deployer may act as the production migrator"
+  verify_service_account_act_as_policy \
+    "$PREVIEW_MIGRATOR_SA" \
+    "$PREVIEW_DEPLOYER_SA" \
+    "only the preview deployer may act as the preview migrator"
 
   for secret_name in "${PRODUCTION_SECRET_NAMES[@]}"; do
     verify_runtime_secret_policy "$secret_name" "$PRODUCTION_RUNTIME_SA"
@@ -750,6 +916,12 @@ verify_live_contract() {
   for secret_name in "${PREVIEW_SECRET_NAMES[@]}"; do
     verify_runtime_secret_policy "$secret_name" "$PREVIEW_RUNTIME_SA"
   done
+  verify_runtime_secret_policy \
+    "$PRODUCTION_MIGRATION_SECRET" \
+    "$PRODUCTION_MIGRATOR_SA"
+  verify_runtime_secret_policy \
+    "$PREVIEW_MIGRATION_SECRET" \
+    "$PREVIEW_MIGRATOR_SA"
 
   pool_json="$(
     gcloud iam workload-identity-pools describe github \
@@ -802,16 +974,22 @@ verify_live_contract() {
       --project "$PROJECT_ID" \
       --format=json
   )"
+  builder_policy="$(
+    gcloud iam service-accounts get-iam-policy \
+      "$BUILDER_SA" \
+      --project "$PROJECT_ID" \
+      --format=json
+  )"
   assert_exact_role_member \
     "$preview_deployer_policy" \
     "roles/iam.workloadIdentityUser" \
-    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Preview" \
-    "preview deployer must trust only the Preview environment principal set"
+    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Preview" \
+    "preview deployer must trust only the Agent Preview environment principal set"
   assert_exact_role_member \
     "$production_deployer_policy" \
     "roles/iam.workloadIdentityUser" \
-    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Production" \
-    "production deployer must trust only the Production environment principal set"
+    "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Production" \
+    "production deployer must trust only the Agent Production environment principal set"
   assert_policy_has_no_public_members \
     "$preview_deployer_policy" \
     "preview deployer IAM must not trust public principals"
@@ -826,6 +1004,55 @@ verify_live_contract() {
     "$production_deployer_policy" \
     "roles/iam.workloadIdentityUser" \
     "production deployer must expose only its reviewed direct federation role"
+  expected_pairs="$(
+    jq -cn \
+      --arg preview "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Preview" \
+      --arg production "principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/github/attribute.environment/Agent Production" \
+      '[
+        {role: "roles/iam.workloadIdentityUser", member: $preview},
+        {role: "roles/iam.workloadIdentityUser", member: $production}
+      ]'
+  )"
+  assert_policy_binding_pairs_exactly \
+    "$builder_policy" \
+    "$expected_pairs" \
+    "image builder must trust exactly the two agent delivery environments"
+  assert_policy_has_no_public_members \
+    "$builder_policy" \
+    "image builder IAM must not trust public principals"
+
+  verify_cloud_run_service \
+    "agent-preview" \
+    "$PREVIEW_RUNTIME_SA" \
+    "$PREVIEW_DEPLOYER_SA"
+  verify_cloud_run_job \
+    "agent-preview-migrate" \
+    "$PREVIEW_MIGRATOR_SA" \
+    "$PREVIEW_DEPLOYER_SA" \
+    "migration" \
+    "agent.migrate"
+  verify_cloud_run_job \
+    "agent-preview-grants" \
+    "$PREVIEW_RUNTIME_SA" \
+    "$PREVIEW_DEPLOYER_SA" \
+    "grant-probe" \
+    "agent.neon_grant_probe"
+  verify_cloud_run_service \
+    "agent" \
+    "$PRODUCTION_RUNTIME_SA" \
+    "$PRODUCTION_DEPLOYER_SA"
+  verify_cloud_run_job \
+    "agent-migrate" \
+    "$PRODUCTION_MIGRATOR_SA" \
+    "$PRODUCTION_DEPLOYER_SA" \
+    "migration" \
+    "agent.migrate"
+  verify_cloud_run_job \
+    "agent-grants" \
+    "$PRODUCTION_RUNTIME_SA" \
+    "$PRODUCTION_DEPLOYER_SA" \
+    "grant-probe" \
+    "agent.neon_grant_probe"
 
   verify_canonical_repository_governance
 

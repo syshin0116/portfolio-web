@@ -13,6 +13,7 @@ updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
+  - cloud-run-delivery.md
   - ../adr/0006-public-anonymous-chat-access.md
   - ../adr/0007-postgres-on-neon-split-projects.md
   - ../plans/rag-restack.md
@@ -43,19 +44,27 @@ runtime. Those are the pre-hardening facts, not the accepted target.
 After this foundation is reviewed and applied, the target is:
 
 - immutable image tags;
-- distinct `agent-preview-runtime` and `agent-runtime` identities;
+- distinct builder, preview/production runtime, preview/production migrator, and
+  preview/production deployer identities;
 - the managed direct act-as role on each runtime containing only its matching deployer,
   with known project- and resource-level bypasses rejected by the live verifier;
 - no project-wide Cloud Run role and no image-writer role on either deployer;
 - five disjoint empty Secret Manager resources per environment, each with one managed
   direct `secretAccessor` member for the matching runtime;
-- preview federation restricted to the numeric repository and owner IDs, the `Preview`
-  environment, and the `pull_request` event;
-- production federation restricted to the numeric repository and owner IDs, the `push`
-  event, `refs/heads/main`, and the `Production` environment;
+- a separate migration-only database secret per environment, readable only by its
+  migrator;
+- preview federation restricted to the numeric repository and owner IDs, the
+  `Agent Preview` environment, the `pull_request` event, and the exact caller and reusable
+  delivery workflow refs;
+- production federation restricted to the numeric repository and owner IDs, `push` or
+  manually approved `workflow_dispatch`, `refs/heads/main`, the `Agent Production`
+  environment, and the exact caller and reusable delivery workflow refs;
 - evaluation publication isolated in a separate `Evaluation Publication` environment
   that is not accepted by either GCP workload-identity provider and carries no GCP or
   deployment secrets;
+- an Artifact Registry writer binding only for the builder and a reader binding only for
+  the Google-managed Cloud Run service agent;
+- resource-scoped Cloud Run developer access only for the matching deployer;
 - no user-managed service-account keys.
 
 The live verifier reads direct policies at the project, every reported folder and
@@ -68,52 +77,47 @@ operator-supplied JSON records by exact `scope` + `role` + `member`. Custom role
 the SHA-256 of their complete included-permission inventory; conditional bindings pin the
 condition digest. Group, domain, and unrelated principal-set members therefore fail unless
 that exact binding was reviewed; public members always fail. A project, containing folder,
-or containing organization `ServiceAccount` principal set includes the four workload
-identities and is forbidden at the project, ancestor, and repository scopes even when
+or containing organization `ServiceAccount` principal set includes the seven workload
+identities and is forbidden at the project and ancestor scopes even when
 listed as reviewed. An unreadable ancestor, role, or policy is a blocker.
 
 Terraform uses additive IAM member resources so an unreviewed apply cannot erase unrelated
-or Google-managed members. The verifier additionally rejects any direct role on the four
-workload identities at the project, ancestor, or repository scopes, whether granted to
+or Google-managed members. The verifier additionally rejects any direct role on the seven
+user-managed workload identities at the project or ancestor scopes, whether granted to
 their exact addresses or through an encompassing Resource Manager service-account
 principal set, project-level
 `serviceAccountUser`/`serviceAccountTokenCreator`/`secretAccessor`/Secret Manager admin,
 extra members in the managed resource roles, and direct token-creator bindings. If it
-finds drift, remediate the exact binding in a separately reviewed plan. Until the follow-up
-creates the builder and Cloud Run image-pull identities, direct repository-level Artifact
-Registry reader and writer bindings must also be empty; a Google-managed member discovered
-there is reviewed, not silently removed.
+finds drift, remediate the exact binding in a separately reviewed plan. At the repository
+scope, the complete direct policy must be exactly builder writer plus Cloud Run service
+agent reader.
 
 The policy API does not expand Google Group membership. A reviewed `group:` binding proves
 only that the exact policy binding was reviewed, not that directory membership is unchanged;
 the operator must attach a separately reviewed group-membership export before approving
 such a binding. The service-account principal-set guard does not rely on group expansion.
 
-There is no production deployment workflow in the repository yet. The production
-provider therefore cannot honestly bind `job_workflow_ref`; `push` + `main` +
-`Production` is the current fail-closed boundary. The deployment PR must add the exact
-workflow-ref claim and condition after its workflow path exists, then update both the
-Terraform exact-value test and live verifier.
-
-GitHub environment names are exactly `Preview`, `Production`, and
-`Evaluation Publication`. Their reviewers, self-review settings, admin-bypass settings,
-and deployment branches are governed only by
+The agent delivery workflows bind both the caller `workflow_ref` and reusable
+`job_workflow_ref`. Their dedicated GitHub environment names are exactly `Agent Preview`
+and `Agent Production`; evaluation publication uses `Evaluation Publication`, and Vercel
+retains `Preview` and `Production`. Reviewers, self-review settings, and deployment branches
+for all five are governed only by
 `.github/repository-governance.json` and
 `scripts/verify_repository_governance.py`; this foundation does not duplicate that policy.
 When those central files are present, `--live` delegates to their live verifier. The
-canonical Production and Evaluation Publication deployment-branch set is `{main}`.
-`Evaluation Publication` must use `syshin0116` as its required reviewer, allow the solo
-owner to review, forbid admin bypass, and contain no environment secrets or variables.
-It must never be added to the GCP WIF provider conditions.
+canonical `Agent Production`, `Evaluation Publication`, and Vercel `Production`
+deployment-branch set is `{main}`. `Evaluation Publication` must use `syshin0116` as its
+required reviewer, allow the solo owner to review, forbid admin bypass, and contain no
+environment secrets or variables. It must never be added to the GCP WIF provider
+conditions.
 
 As of 2026-07-28, the live repository has the `Evaluation Publication` environment with
-required reviewer `syshin0116`, `prevent_self_review=false`, admin bypass disabled, and
-one custom deployment branch policy for `main`. The frozen live verifier below passes,
+required reviewer `syshin0116`, `prevent_self_review=false`, admin bypass disabled, and one
+custom deployment branch policy for `main`. The frozen live verifier below passes,
 including its fail-closed zero-count checks for environment secrets and variables; an
 independent direct GitHub API check also confirmed both inventories are empty. The manual
 publication workflow has not been dispatched, and no evaluation result is claimed as
 published gold.
-
 Delegation requires both `uv` and `gh` and runs the verifier exactly as:
 
 ```sh
@@ -320,35 +324,19 @@ Rollback reassigns Cloud Run traffic to the previous healthy revision and restor
 previous secret version. Database migrations must remain compatible with one previous
 application revision.
 
-## Cloud Run and CD follow-up
+## Cloud Run and CD
 
-This foundation intentionally creates no Cloud Run service, build workflow, or deployment
-workflow. Until those resources exist, neither deployer needs a Cloud Run role.
-Deployment sequencing remains in the
-[RAG restack plan](../plans/rag-restack.md), and the public-access policy remains in
-[ADR-0006](../adr/0006-public-anonymous-chat-access.md).
+The repository-side follow-up is implemented. It declares preview/production services,
+separate runtime/migration identities and URLs, a dedicated image builder, exact
+caller/reusable-workflow WIF conditions, same-digest migration and grant-probe jobs,
+no-traffic rollout, APv2 smoke, and revision-traffic rollback.
 
-The follow-up deployment PR must:
-
-1. create preview and production services through reviewed infrastructure;
-2. grant each deployer update access only to its existing service, never project-wide
-   `roles/run.admin`;
-3. keep the existing environment-specific `serviceAccountUser` binding;
-4. build images through a distinct builder identity with repository-scoped writer access;
-5. grant repository-scoped `roles/artifactregistry.reader` to the exact Cloud Run
-   image-pull principal, not to either deployer or application runtime by assumption;
-6. pass only an immutable digest from the builder to the deployer;
-7. add exact `job_workflow_ref` mapping and conditions to both OIDC providers after the
-   workflow paths exist;
-8. use GitHub OIDC and reviewed environments, with no JSON keys or long-lived cloud
-   credentials;
-9. set `RUN_MIGRATIONS_ON_STARTUP=false` on both services and run the same-digest,
-   direct-URL `python -m agent.migrate` job before each deployment;
-10. configure and verify Cloud Run `max-instances=1` and exactly one application server
-    worker, because the concurrency guard is process-local;
-11. make the real-Neon runtime grant matrix a required preview and production deployment
-    gate; and
-12. add preview, production, smoke, rollback, and concurrency gates in a separate PR.
+Nothing in that change applies Terraform or creates/configures GCP, Neon, GitHub
+environment, or secret external state. Follow
+[`cloud-run-delivery.md`](cloud-run-delivery.md) for bootstrap and keep
+`AGENT_CLOUD_RUN_ENABLED` false until its live gates pass. The public-access policy remains
+in [ADR-0006](../adr/0006-public-anonymous-chat-access.md); application auth is still
+owner-only until that later hardening lands.
 
 ## Verification
 
@@ -360,7 +348,7 @@ scripts/verify_ops_foundation.sh --terraform-fmt
 scripts/verify_ops_foundation.sh --terraform-init
 scripts/verify_ops_foundation.sh --terraform-validate
 scripts/verify_ops_foundation.sh --terraform-test
-shellcheck scripts/verify_ops_foundation.sh
+shellcheck scripts/deploy_cloud_run.sh scripts/verify_ops_foundation.sh
 ```
 
 Each `--terraform-*` wrapper performs an on-disk preflight before invoking Terraform.
@@ -375,11 +363,13 @@ contents and does not inspect state, plan, or secret contents.
 
 The static command runs `uv run --no-project --with python-hcl2==7.3.1` and uses that
 pinned parser, not regular expressions or source-string grep. It compares the complete
-parsed bodies of all 16 resources, all locals, the root check, every output and variable,
+parsed bodies of the foundation resources, all locals, the root check, every output and variable,
 the provider/data/backend blocks, and every import target and live object ID. It rejects
 unreviewed modules, `moved` and `removed` blocks, provisioners, `local-exec`,
 `remote-exec`, external providers/data, `terraform_remote_state`, and other executable
-resource types after HCL comments and line breaks are parsed.
+resource types after HCL comments and line breaks are parsed. The seven deeply nested
+Cloud Run service/job resources are additionally covered by a byte-exact SHA-256 pin over
+`cloud_run.tf`; the total reviewed inventory is 31 resources.
 
 The only reviewed Terraform test file is
 `infra/gcp/tests/foundation.tftest.hcl`; static verification pins its exact SHA-256.
@@ -419,10 +409,10 @@ records for an audited scope fail closed, and public members cannot be reviewed 
 this input.
 
 The live verifier inspects API, direct IAM, role definitions, keys, bucket, repository,
-WIF provider, and secret-resource metadata only. It never reads secret payloads or
-Terraform state values. If the canonical repository-governance files are present, it also
-delegates GitHub environment verification to that verifier; otherwise it makes no GitHub
-environment claim.
+WIF provider, Cloud Run service/job metadata and resource IAM, and secret-resource
+metadata only. It never reads secret payloads or Terraform state values. If the canonical
+repository-governance files are present, it also delegates GitHub environment verification
+to that verifier; otherwise it makes no GitHub environment claim.
 
 ## Deletion policy
 

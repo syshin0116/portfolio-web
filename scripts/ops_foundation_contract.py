@@ -19,6 +19,7 @@ from typing import Any
 EXPECTED_TERRAFORM_FILES = frozenset(
     {
         "infra/gcp/backend.tf",
+        "infra/gcp/cloud_run.tf",
         "infra/gcp/iam.tf",
         "infra/gcp/imports.tf",
         "infra/gcp/main.tf",
@@ -30,9 +31,28 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "a7bb5925800441a1532ebe6a3dcef033dee74099406fbce9f8db7ff6eb3f3a41"
+        "e917596b49334e2809f0a9879072b33c00dc1587a7ad63c1d4419fd24c5aa4b4"
     )
 }
+EXPECTED_PINNED_TERRAFORM_FILES = {
+    # cloud_run.tf is deliberately pinned byte-for-byte because its deeply nested
+    # service/job templates are materially easier to weaken through small drift
+    # than through a reviewed replacement of the complete file.
+    "infra/gcp/cloud_run.tf": (
+        "3efc5605dc0064cfbb1b034b42eac0db70fb7a4aa927e7c4725f5d73598db955"
+    )
+}
+EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
+    {
+        ("google_cloud_run_v2_job", "grant_probe"),
+        ("google_cloud_run_v2_job", "migration"),
+        ("google_cloud_run_v2_job_iam_member", "deployer_grant_probe_job"),
+        ("google_cloud_run_v2_job_iam_member", "deployer_migration_job"),
+        ("google_cloud_run_v2_service", "agent"),
+        ("google_cloud_run_v2_service_iam_member", "deployer_service_update"),
+        ("google_cloud_run_v2_service_iam_member", "public_invoker"),
+    }
+)
 EXPECTED_TERRAFORM_TEST_ABSTRACT = {
     "tests/foundation.tftest.hcl": ["foundation_security_contract"]
 }
@@ -50,6 +70,7 @@ HCL2_VERSION = "7.3.1"
 TERRAFORM_VERSION = "1.13.5"
 EXPECTED_TOP_LEVEL_KEYS = {
     "infra/gcp/backend.tf": frozenset({"terraform"}),
+    "infra/gcp/cloud_run.tf": frozenset({"locals", "resource"}),
     "infra/gcp/iam.tf": frozenset({"locals", "resource"}),
     "infra/gcp/imports.tf": frozenset({"import"}),
     "infra/gcp/main.tf": frozenset({"check", "locals", "resource"}),
@@ -62,9 +83,11 @@ EXPECTED_DATA = frozenset({("google_project", "current")})
 EXPECTED_ATTRIBUTE_MAPPING = {
     "attribute.environment": "assertion.environment",
     "attribute.event_name": "assertion.event_name",
+    "attribute.job_workflow_ref": "assertion.job_workflow_ref",
     "attribute.ref": "assertion.ref",
     "attribute.repository_id": "assertion.repository_id",
     "attribute.repository_owner_id": "assertion.repository_owner_id",
+    "attribute.workflow_ref": "assertion.workflow_ref",
     "google.subject": "assertion.sub",
 }
 EXPECTED_SOURCE_CONDITIONS = {
@@ -72,14 +95,26 @@ EXPECTED_SOURCE_CONDITIONS = {
         "assertion.repository_id == '${var.github_repository_id}' && "
         "assertion.repository_owner_id == '${var.github_owner_id}' && "
         "assertion.event_name == 'pull_request' && "
-        "assertion.environment == '${var.github_preview_environment}'"
+        "assertion.environment == '${var.github_preview_environment}' && "
+        "assertion.workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
+        "assertion.ref && "
+        "assertion.job_workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + "
+        "assertion.ref"
     ),
     "production": (
         "assertion.repository_id == '${var.github_repository_id}' && "
         "assertion.repository_owner_id == '${var.github_owner_id}' && "
-        "assertion.event_name == 'push' && "
+        "assertion.event_name in ['push', 'workflow_dispatch'] && "
         "assertion.ref == 'refs/heads/main' && "
-        "assertion.environment == '${var.github_production_environment}'"
+        "assertion.environment == '${var.github_production_environment}' && "
+        "assertion.workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@"
+        "refs/heads/main' && "
+        "assertion.job_workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@"
+        "refs/heads/main'"
     ),
 }
 EXPECTED_LIVE_CONDITIONS = {
@@ -87,14 +122,26 @@ EXPECTED_LIVE_CONDITIONS = {
         "assertion.repository_id == '1102380057' && "
         "assertion.repository_owner_id == '99532836' && "
         "assertion.event_name == 'pull_request' && "
-        "assertion.environment == 'Preview'"
+        "assertion.environment == 'Agent Preview' && "
+        "assertion.workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + "
+        "assertion.ref && "
+        "assertion.job_workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@' + "
+        "assertion.ref"
     ),
     "github-production": (
         "assertion.repository_id == '1102380057' && "
         "assertion.repository_owner_id == '99532836' && "
-        "assertion.event_name == 'push' && "
+        "assertion.event_name in ['push', 'workflow_dispatch'] && "
         "assertion.ref == 'refs/heads/main' && "
-        "assertion.environment == 'Production'"
+        "assertion.environment == 'Agent Production' && "
+        "assertion.workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@"
+        "refs/heads/main' && "
+        "assertion.job_workflow_ref == "
+        "'syshin0116/syshin0116.dev/.github/workflows/agent-delivery.yml@"
+        "refs/heads/main'"
     ),
 }
 EXPECTED_PROVIDER_IDS = {
@@ -252,13 +299,13 @@ EXPECTED_VARIABLES = {
     "github_preview_environment": {
         "description": "Exact GitHub environment claim accepted by the preview provider.",
         "type": "string",
-        "default": "Preview",
+        "default": "Agent Preview",
         "validation": [
             {
-                "condition": '${var.github_preview_environment == "Preview"}',
+                "condition": '${var.github_preview_environment == "Agent Preview"}',
                 "error_message": (
-                    "The preview provider must remain bound to the exact Preview "
-                    "environment."
+                    "The preview provider must remain bound to the exact Agent "
+                    "Preview environment."
                 ),
             }
         ],
@@ -268,13 +315,35 @@ EXPECTED_VARIABLES = {
             "Exact GitHub environment claim accepted by the production provider."
         ),
         "type": "string",
-        "default": "Production",
+        "default": "Agent Production",
         "validation": [
             {
-                "condition": '${var.github_production_environment == "Production"}',
+                "condition": (
+                    '${var.github_production_environment == "Agent Production"}'
+                ),
                 "error_message": (
                     "The production provider must remain bound to the exact "
-                    "Production environment."
+                    "Agent Production environment."
+                ),
+            }
+        ],
+    },
+    "agent_bootstrap_image": {
+        "description": (
+            "Reviewed immutable agent image used only to create Cloud Run resources; "
+            "CD owns later digest changes."
+        ),
+        "type": "string",
+        "validation": [
+            {
+                "condition": (
+                    '${can(regex("^us-east4-docker\\\\.pkg\\\\.dev/'
+                    "festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$\", "
+                    "var.agent_bootstrap_image))}"
+                ),
+                "error_message": (
+                    "agent_bootstrap_image must be the exact regional agent "
+                    "repository path at a lowercase sha256 digest."
                 ),
             }
         ],
@@ -324,6 +393,19 @@ EXPECTED_RESOURCE_CONFIGS = {
         "display_name": "${each.value.display_name}",
         "lifecycle": [{"prevent_destroy": True}],
     },
+    ("google_service_account", "builder"): {
+        "project": "${var.project_id}",
+        "account_id": "agent-image-builder",
+        "display_name": "GitHub immutable agent image builder",
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_service_account", "migrator"): {
+        "for_each": "${local.migrators}",
+        "project": "${var.project_id}",
+        "account_id": "${each.value.account_id}",
+        "display_name": "${each.value.display_name}",
+        "lifecycle": [{"prevent_destroy": True}],
+    },
     ("google_secret_manager_secret", "runtime"): {
         "for_each": "${local.production_secret_names}",
         "project": "${var.project_id}",
@@ -334,6 +416,14 @@ EXPECTED_RESOURCE_CONFIGS = {
     },
     ("google_secret_manager_secret", "preview_runtime"): {
         "for_each": "${local.preview_secret_names}",
+        "project": "${var.project_id}",
+        "secret_id": "${each.value}",
+        "replication": [{"auto": [{}]}],
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_secret_manager_secret", "migration"): {
+        "for_each": "${local.migration_secret_names}",
         "project": "${var.project_id}",
         "secret_id": "${each.value}",
         "replication": [{"auto": [{}]}],
@@ -381,6 +471,12 @@ EXPECTED_RESOURCE_CONFIGS = {
         "role": "roles/iam.serviceAccountUser",
         "member": "serviceAccount:${each.value}",
     },
+    ("google_service_account_iam_member", "deployer_uses_migrator"): {
+        "for_each": "${local.deployer_service_accounts}",
+        "service_account_id": "${local.migrator_service_account_ids[each.key]}",
+        "role": "roles/iam.serviceAccountUser",
+        "member": "serviceAccount:${each.value}",
+    },
     ("google_secret_manager_secret_iam_member", "runtime_accessor"): {
         "for_each": "${google_secret_manager_secret.runtime}",
         "project": "${var.project_id}",
@@ -395,27 +491,43 @@ EXPECTED_RESOURCE_CONFIGS = {
         "role": "roles/secretmanager.secretAccessor",
         "member": "serviceAccount:${local.runtime_service_accounts.preview}",
     },
+    ("google_secret_manager_secret_iam_member", "migrator_accessor"): {
+        "for_each": "${google_secret_manager_secret.migration}",
+        "project": "${var.project_id}",
+        "secret_id": "${each.value.secret_id}",
+        "role": "roles/secretmanager.secretAccessor",
+        "member": "serviceAccount:${local.migrator_service_accounts[each.key]}",
+    },
     ("google_service_account_iam_member", "github_preview"): {
         "service_account_id": ('${google_service_account.deployer["preview"].name}'),
         "role": "roles/iam.workloadIdentityUser",
-        "member": (
-            "principalSet://iam.googleapis.com/projects/"
-            "${data.google_project.current.number}/locations/global/"
-            "workloadIdentityPools/"
-            "${google_iam_workload_identity_pool.github.workload_identity_pool_id}/"
-            "attribute.environment/${var.github_preview_environment}"
-        ),
+        "member": "${local.github_environment_principals.preview}",
     },
     ("google_service_account_iam_member", "github_production"): {
         "service_account_id": ('${google_service_account.deployer["production"].name}'),
         "role": "roles/iam.workloadIdentityUser",
-        "member": (
-            "principalSet://iam.googleapis.com/projects/"
-            "${data.google_project.current.number}/locations/global/"
-            "workloadIdentityPools/"
-            "${google_iam_workload_identity_pool.github.workload_identity_pool_id}/"
-            "attribute.environment/${var.github_production_environment}"
-        ),
+        "member": "${local.github_environment_principals.production}",
+    },
+    ("google_service_account_iam_member", "github_builder"): {
+        "for_each": "${local.github_environment_principals}",
+        "service_account_id": "${google_service_account.builder.name}",
+        "role": "roles/iam.workloadIdentityUser",
+        "member": "${each.value}",
+    },
+    ("google_artifact_registry_repository_iam_member", "builder_writer"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "role": "roles/artifactregistry.writer",
+        "member": "serviceAccount:${google_service_account.builder.email}",
+    },
+    ("google_artifact_registry_repository_iam_member", "cloud_run_reader"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "role": "roles/artifactregistry.reader",
+        "member": "${local.cloud_run_image_pull_principal}",
+        "depends_on": ["${google_project_service.required}"],
     },
     ("google_storage_bucket", "terraform_state"): {
         "name": "${var.project_id}-tfstate",
@@ -452,6 +564,10 @@ EXPECTED_LOCALS_BY_FILE = {
                 "agent-preview-auth-secret, agent-preview-database-url, "
                 "agent-preview-langsmith-api-key, agent-preview-openai-api-key])}"
             ),
+            "migration_secret_names": {
+                "preview": "agent-preview-migration-database-url",
+                "production": "agent-migration-database-url",
+            },
             "deployers": {
                 "preview": {
                     "account_id": "agent-preview-deployer",
@@ -460,6 +576,16 @@ EXPECTED_LOCALS_BY_FILE = {
                 "production": {
                     "account_id": "agent-prod-deployer",
                     "display_name": "GitHub production deployer",
+                },
+            },
+            "migrators": {
+                "preview": {
+                    "account_id": "agent-preview-migrator",
+                    "display_name": "Cloud Run preview migration identity",
+                },
+                "production": {
+                    "account_id": "agent-prod-migrator",
+                    "display_name": "Cloud Run production migration identity",
                 },
             },
         }
@@ -477,6 +603,36 @@ EXPECTED_LOCALS_BY_FILE = {
             "deployer_service_accounts": (
                 "${{for name , account in google_service_account.deployer : "
                 "name => account.email}}"
+            ),
+            "migrator_service_account_ids": (
+                "${{for name , account in google_service_account.migrator : "
+                "name => account.name}}"
+            ),
+            "migrator_service_accounts": (
+                "${{for name , account in google_service_account.migrator : "
+                "name => account.email}}"
+            ),
+            "github_environment_principals": {
+                "preview": (
+                    "principalSet://iam.googleapis.com/projects/"
+                    "${data.google_project.current.number}/locations/global/"
+                    "workloadIdentityPools/"
+                    "${google_iam_workload_identity_pool.github."
+                    "workload_identity_pool_id}/attribute.environment/"
+                    "${var.github_preview_environment}"
+                ),
+                "production": (
+                    "principalSet://iam.googleapis.com/projects/"
+                    "${data.google_project.current.number}/locations/global/"
+                    "workloadIdentityPools/"
+                    "${google_iam_workload_identity_pool.github."
+                    "workload_identity_pool_id}/attribute.environment/"
+                    "${var.github_production_environment}"
+                ),
+            },
+            "cloud_run_image_pull_principal": (
+                "serviceAccount:service-${data.google_project.current.number}@"
+                "serverless-robot-prod.iam.gserviceaccount.com"
             ),
         }
     ],
@@ -520,6 +676,33 @@ EXPECTED_OUTPUTS = {
     },
     "production_deployer_service_account": {
         "value": '${google_service_account.deployer["production"].email}',
+    },
+    "builder_service_account": {
+        "value": "${google_service_account.builder.email}",
+    },
+    "preview_migrator_service_account": {
+        "value": '${google_service_account.migrator["preview"].email}',
+    },
+    "production_migrator_service_account": {
+        "value": '${google_service_account.migrator["production"].email}',
+    },
+    "preview_cloud_run_service": {
+        "value": '${google_cloud_run_v2_service.agent["preview"].name}',
+    },
+    "production_cloud_run_service": {
+        "value": '${google_cloud_run_v2_service.agent["production"].name}',
+    },
+    "preview_migration_job": {
+        "value": '${google_cloud_run_v2_job.migration["preview"].name}',
+    },
+    "production_migration_job": {
+        "value": '${google_cloud_run_v2_job.migration["production"].name}',
+    },
+    "preview_grant_probe_job": {
+        "value": '${google_cloud_run_v2_job.grant_probe["preview"].name}',
+    },
+    "production_grant_probe_job": {
+        "value": '${google_cloud_run_v2_job.grant_probe["production"].name}',
     },
     "preview_workload_identity_provider": {
         "value": "${google_iam_workload_identity_pool_provider.preview.name}",
@@ -938,6 +1121,24 @@ def _validate_test_file_contract(
         _fail(f"{version_path} must exactly pin Terraform {TERRAFORM_VERSION}")
 
 
+def _validate_pinned_terraform_file_contract(repo_root: Path) -> None:
+    for relative_path, expected_sha256 in EXPECTED_PINNED_TERRAFORM_FILES.items():
+        path = repo_root / relative_path
+        if path.is_symlink():
+            _fail(f"pinned Terraform source must not be a symlink: {relative_path}")
+        try:
+            actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ContractError(
+                f"cannot read pinned Terraform source {relative_path}: {exc}"
+            ) from exc
+        if actual_sha256 != expected_sha256:
+            _fail(
+                f"Terraform source content digest is not exact: {relative_path}; "
+                f"expected={expected_sha256}, got={actual_sha256}"
+            )
+
+
 def validate_static_contract(repo_root: Path) -> None:
     tracked_paths = validate_disk_inventory(repo_root)
     tracked_tf = frozenset(
@@ -952,6 +1153,7 @@ def validate_static_contract(repo_root: Path) -> None:
             "Nested Terraform modules are prohibited in this foundation."
         )
     _validate_test_file_contract(repo_root, tracked_paths)
+    _validate_pinned_terraform_file_contract(repo_root)
 
     documents = _load_hcl_documents(repo_root, tracked_tf)
     modules = _single_label_blocks(documents, "module")
@@ -1002,7 +1204,9 @@ def validate_static_contract(repo_root: Path) -> None:
             _fail(f"Terraform data configuration is not exact: {'.'.join(key)}")
 
     resources = _two_label_blocks(documents, "resource")
-    expected_resources = frozenset(EXPECTED_RESOURCE_CONFIGS)
+    expected_resources = frozenset(EXPECTED_RESOURCE_CONFIGS) | (
+        EXPECTED_PINNED_RESOURCE_KEYS
+    )
     if frozenset(resources) != expected_resources:
         missing = sorted(expected_resources - frozenset(resources))
         unexpected = sorted(frozenset(resources) - expected_resources)

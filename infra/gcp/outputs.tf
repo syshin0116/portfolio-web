@@ -23,6 +23,42 @@ output "production_deployer_service_account" {
   value = google_service_account.deployer["production"].email
 }
 
+output "builder_service_account" {
+  value = google_service_account.builder.email
+}
+
+output "preview_migrator_service_account" {
+  value = google_service_account.migrator["preview"].email
+}
+
+output "production_migrator_service_account" {
+  value = google_service_account.migrator["production"].email
+}
+
+output "preview_cloud_run_service" {
+  value = google_cloud_run_v2_service.agent["preview"].name
+}
+
+output "production_cloud_run_service" {
+  value = google_cloud_run_v2_service.agent["production"].name
+}
+
+output "preview_migration_job" {
+  value = google_cloud_run_v2_job.migration["preview"].name
+}
+
+output "production_migration_job" {
+  value = google_cloud_run_v2_job.migration["production"].name
+}
+
+output "preview_grant_probe_job" {
+  value = google_cloud_run_v2_job.grant_probe["preview"].name
+}
+
+output "production_grant_probe_job" {
+  value = google_cloud_run_v2_job.grant_probe["production"].name
+}
+
 output "preview_workload_identity_provider" {
   value = google_iam_workload_identity_pool_provider.preview.name
 }

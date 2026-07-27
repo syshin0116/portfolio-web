@@ -29,6 +29,10 @@ EVAL_PUBLICATION_SECRETS_PAGE = (
 EVAL_PUBLICATION_VARIABLES_PAGE = (
     "environments/Evaluation%20Publication/variables?per_page=100&page=1"
 )
+AGENT_PRODUCTION_BRANCH_POLICIES_PAGE = (
+    "environments/Agent%20Production/deployment-branch-policies"
+    "?per_page=100&page=1"
+)
 LEGACY_MAIN_PROTECTION = "branches/main/protection"
 
 
@@ -121,9 +125,11 @@ def desired_live_responses() -> dict[str, object]:
             status=404,
         ),
         ENVIRONMENTS_PAGE: {
-            "total_count": 3,
+            "total_count": 5,
             "environments": [
                 {"name": "Evaluation Publication"},
+                {"name": "Agent Preview"},
+                {"name": "Agent Production"},
                 {"name": "Preview"},
                 {"name": "Production"},
             ],
@@ -131,6 +137,33 @@ def desired_live_responses() -> dict[str, object]:
         "environments/Evaluation%20Publication": {
             "name": "Evaluation Publication",
             "can_admins_bypass": False,
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [
+                        {
+                            "type": "User",
+                            "reviewer": {"login": "syshin0116"},
+                        }
+                    ],
+                },
+                {"type": "branch_policy"},
+            ],
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
+        },
+        "environments/Agent%20Preview": {
+            "name": "Agent Preview",
+            "can_admins_bypass": True,
+            "protection_rules": [],
+            "deployment_branch_policy": None,
+        },
+        "environments/Agent%20Production": {
+            "name": "Agent Production",
+            "can_admins_bypass": True,
             "protection_rules": [
                 {
                     "type": "required_reviewers",
@@ -191,6 +224,10 @@ def desired_live_responses() -> dict[str, object]:
         EVAL_PUBLICATION_VARIABLES_PAGE: {
             "total_count": 0,
             "variables": [],
+        },
+        AGENT_PRODUCTION_BRANCH_POLICIES_PAGE: {
+            "total_count": 1,
+            "branch_policies": [{"name": "main", "type": "branch"}],
         },
     }
 
@@ -3482,7 +3519,7 @@ class LiveGovernanceTests(unittest.TestCase):
     def test_extra_environment_is_rejected_as_policy_drift(self) -> None:
         responses = desired_live_responses()
         environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
-        environments["total_count"] = 4
+        environments["total_count"] = 6
         environments["environments"].append({"name": "Staging"})
         responses[ENVIRONMENTS_PAGE] = environments
 
@@ -3511,12 +3548,12 @@ class LiveGovernanceTests(unittest.TestCase):
     def test_environment_total_count_mismatch_fails_closed(self) -> None:
         responses = desired_live_responses()
         environments = json.loads(json.dumps(responses[ENVIRONMENTS_PAGE]))
-        environments["total_count"] = 4
+        environments["total_count"] = 6
         responses[ENVIRONMENTS_PAGE] = environments
 
         with self.assertRaisesRegex(
             governance.GovernanceError,
-            "total_count is 4",
+            "total_count is 6",
         ):
             governance.verify_live(self.policy, responses.__getitem__)
 

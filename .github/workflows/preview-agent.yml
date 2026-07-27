@@ -1,0 +1,39 @@
+name: Agent preview
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+    paths:
+      - ".dockerignore"
+      - "Dockerfile"
+      - "aegra.json"
+      - "agent/**"
+      - "content/**"
+      - "scripts/build_index.py"
+      - "scripts/deploy_cloud_run.sh"
+      - ".github/workflows/agent-delivery.yml"
+      - ".github/workflows/preview-agent.yml"
+permissions: {}
+
+concurrency:
+  group: agent-preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  delivery:
+    name: agent/preview
+    if: >-
+      github.event_name == 'pull_request'
+      && vars.AGENT_CLOUD_RUN_ENABLED == 'true'
+      && github.actor != 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/agent-delivery.yml
+    with:
+      environment: Agent Preview
+      service: agent-preview
+      migration_job: agent-preview-migrate
+      grant_probe_job: agent-preview-grants
+      mode: deploy

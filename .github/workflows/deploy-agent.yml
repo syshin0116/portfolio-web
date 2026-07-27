@@ -1,0 +1,49 @@
+name: Deploy agent
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".dockerignore"
+      - "Dockerfile"
+      - "aegra.json"
+      - "agent/**"
+      - "content/**"
+      - "scripts/build_index.py"
+      - "scripts/deploy_cloud_run.sh"
+      - ".github/workflows/agent-delivery.yml"
+      - ".github/workflows/deploy-agent.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Deploy main or roll traffic back to an existing revision.
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - rollback
+      rollback_revision:
+        description: Required only for rollback mode.
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: agent-production
+  cancel-in-progress: false
+
+jobs:
+  delivery:
+    name: agent/production
+    if: vars.AGENT_CLOUD_RUN_ENABLED == 'true'
+    uses: ./.github/workflows/agent-delivery.yml
+    with:
+      environment: Agent Production
+      service: agent
+      migration_job: agent-migrate
+      grant_probe_job: agent-grants
+      mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'deploy' }}
+      rollback_revision: ${{ inputs.rollback_revision || '' }}

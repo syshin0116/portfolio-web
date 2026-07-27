@@ -45,21 +45,31 @@ variable "github_owner_id" {
 variable "github_preview_environment" {
   description = "Exact GitHub environment claim accepted by the preview provider."
   type        = string
-  default     = "Preview"
+  default     = "Agent Preview"
 
   validation {
-    condition     = var.github_preview_environment == "Preview"
-    error_message = "The preview provider must remain bound to the exact Preview environment."
+    condition     = var.github_preview_environment == "Agent Preview"
+    error_message = "The preview provider must remain bound to the exact Agent Preview environment."
   }
 }
 
 variable "github_production_environment" {
   description = "Exact GitHub environment claim accepted by the production provider."
   type        = string
-  default     = "Production"
+  default     = "Agent Production"
 
   validation {
-    condition     = var.github_production_environment == "Production"
-    error_message = "The production provider must remain bound to the exact Production environment."
+    condition     = var.github_production_environment == "Agent Production"
+    error_message = "The production provider must remain bound to the exact Agent Production environment."
+  }
+}
+
+variable "agent_bootstrap_image" {
+  description = "Reviewed immutable agent image used only to create Cloud Run resources; CD owns later digest changes."
+  type        = string
+
+  validation {
+    condition     = can(regex("^us-east4-docker\\.pkg\\.dev/festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$", var.agent_bootstrap_image))
+    error_message = "agent_bootstrap_image must be the exact regional agent repository path at a lowercase sha256 digest."
   }
 }

@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import platform
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 SOURCE_TREE_DIGEST_SCHEMA = b"blogeval-source-tree-v1\0"
-PUBLICATION_PLATFORM = "digest-pinned-linux-x86_64"
-IMAGE_DIGEST_ENV = "BLOGEVAL_IMAGE_DIGEST"
-_IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+PUBLICATION_PLATFORM = "attested-digest-pinned-linux-x86_64"
+PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class ProvenanceError(ValueError):
@@ -41,46 +42,31 @@ class RunProvenance:
     eval_source_tree: str
     workspace_lock: str
     runtime: RuntimePlatform
-    image_digest: str | None
 
     @property
     def publication_eligible(self) -> bool:
-        return (
-            self.runtime.system == "Linux"
-            and self.runtime.machine.casefold() in {"amd64", "x86_64"}
-            and self.image_digest is not None
-            and _IMAGE_DIGEST.fullmatch(self.image_digest) is not None
-        )
+        # A process cannot prove the identity of the container that launched it.
+        # Publication is an external, GitHub-attested workflow decision.
+        return False
 
     def require_publication_eligible(self) -> None:
-        if not self.publication_eligible:
-            raise ProvenanceError(
-                "published evaluation results require execution inside a "
-                "digest-pinned Linux x86_64 image; set BLOGEVAL_IMAGE_DIGEST "
-                "to that running image's sha256 digest"
-            )
+        raise ProvenanceError(
+            "local runs are never publication-eligible; publication requires the "
+            f"verified GitHub attestation boundary in {PUBLICATION_WORKFLOW}"
+        )
 
     def as_dict(self) -> dict[str, object]:
         return {
             "agent_source_tree": self.agent_source_tree,
             "eval_source_tree": self.eval_source_tree,
-            "image": {
-                "digest": self.image_digest,
-            },
             "platform": self.runtime.as_dict(),
             "publication": {
-                "eligible": self.publication_eligible,
+                "eligible": False,
                 "required_platform": PUBLICATION_PLATFORM,
+                "trusted_workflow": PUBLICATION_WORKFLOW,
             },
             "workspace_lock": self.workspace_lock,
         }
-
-
-class _AutomaticImageDigest:
-    pass
-
-
-_AUTOMATIC_IMAGE_DIGEST = _AutomaticImageDigest()
 
 
 def _sha256_file(path: Path) -> str:
@@ -147,21 +133,10 @@ def _runtime_platform() -> RuntimePlatform:
     )
 
 
-def _validated_image_digest(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if _IMAGE_DIGEST.fullmatch(value) is None:
-        raise ProvenanceError(
-            f"{IMAGE_DIGEST_ENV} must be sha256 followed by 64 lowercase hex digits"
-        )
-    return value
-
-
 def collect_run_provenance(
     *,
     workspace_root: Path | None = None,
     runtime: RuntimePlatform | None = None,
-    image_digest: str | None | _AutomaticImageDigest = _AUTOMATIC_IMAGE_DIGEST,
 ) -> RunProvenance:
     """Measure every local input that can change otherwise identical run bytes."""
 
@@ -170,26 +145,81 @@ def collect_run_provenance(
         if workspace_root is None
         else workspace_root.resolve()
     )
-    resolved_image_digest = (
-        os.environ.get(IMAGE_DIGEST_ENV)
-        if isinstance(image_digest, _AutomaticImageDigest)
-        else image_digest
-    )
     return RunProvenance(
         agent_source_tree=source_tree_digest(root / "agent/src/agent"),
         eval_source_tree=source_tree_digest(root / "eval/src/blogeval"),
         workspace_lock=_sha256_file(root / "uv.lock"),
         runtime=_runtime_platform() if runtime is None else runtime,
-        image_digest=_validated_image_digest(resolved_image_digest),
+    )
+
+
+def parse_run_provenance(value: object) -> RunProvenance:
+    """Parse the exact locally-recordable provenance contract."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "agent_source_tree",
+        "eval_source_tree",
+        "platform",
+        "publication",
+        "workspace_lock",
+    }:
+        raise ProvenanceError("run provenance has an unexpected object shape")
+    raw = cast(Mapping[str, object], value)
+    digests: dict[str, str] = {}
+    for field in ("agent_source_tree", "eval_source_tree", "workspace_lock"):
+        item = raw[field]
+        if not isinstance(item, str) or _SHA256.fullmatch(item) is None:
+            raise ProvenanceError(f"run provenance {field} must be a sha256 checksum")
+        digests[field] = item
+    platform_value = raw["platform"]
+    if not isinstance(platform_value, Mapping) or set(platform_value) != {
+        "machine",
+        "python_implementation",
+        "python_version",
+        "system",
+    }:
+        raise ProvenanceError("run provenance platform has an unexpected shape")
+    platform_values = cast(Mapping[str, object], platform_value)
+    if not all(
+        isinstance(platform_values[field], str) and platform_values[field]
+        for field in platform_values
+    ):
+        raise ProvenanceError(
+            "run provenance platform values must be non-empty strings"
+        )
+    publication = raw["publication"]
+    expected_publication = {
+        "eligible": False,
+        "required_platform": PUBLICATION_PLATFORM,
+        "trusted_workflow": PUBLICATION_WORKFLOW,
+    }
+    if publication != expected_publication:
+        raise ProvenanceError(
+            "run provenance cannot claim local publication eligibility"
+        )
+    return RunProvenance(
+        agent_source_tree=digests["agent_source_tree"],
+        eval_source_tree=digests["eval_source_tree"],
+        workspace_lock=digests["workspace_lock"],
+        runtime=RuntimePlatform(
+            system=cast(str, platform_values["system"]),
+            machine=cast(str, platform_values["machine"]),
+            python_implementation=cast(
+                str,
+                platform_values["python_implementation"],
+            ),
+            python_version=cast(str, platform_values["python_version"]),
+        ),
     )
 
 
 __all__ = [
-    "IMAGE_DIGEST_ENV",
     "PUBLICATION_PLATFORM",
+    "PUBLICATION_WORKFLOW",
     "ProvenanceError",
     "RunProvenance",
     "RuntimePlatform",
     "collect_run_provenance",
+    "parse_run_provenance",
     "source_tree_digest",
 ]

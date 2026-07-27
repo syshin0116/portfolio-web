@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fractions import Fraction
+
 import pytest
 from agent.retrieval.protocol import DocId
 
@@ -39,11 +41,11 @@ def test_known_item_metrics_report_hit_mrr_and_answer_coverage_separately() -> N
     )
 
     assert summary.values == {
-        "coverage": 0.75,
-        "hit@1": 0.25,
-        "hit@3": 0.5,
-        "mrr@1": 0.25,
-        "mrr@3": 0.333333333333,
+        "coverage": Fraction(3, 4),
+        "hit@1": Fraction(1, 4),
+        "hit@3": Fraction(1, 2),
+        "mrr@1": Fraction(1, 4),
+        "mrr@3": Fraction(1, 3),
     }
     assert [item.first_relevant_rank for item in summary.per_query] == [
         1,
@@ -69,12 +71,31 @@ def test_topic_metrics_report_macro_recall_and_answer_coverage() -> None:
     )
 
     assert summary.values == {
-        "coverage": 1.0,
-        "recall@1": 0.5,
-        "recall@2": 0.75,
+        "coverage": Fraction(1),
+        "recall@1": Fraction(1, 2),
+        "recall@2": Fraction(3, 4),
     }
     assert "hit@1" not in summary.values
     assert "mrr@1" not in summary.values
+
+
+def test_mrr_rank_two_plus_rank_three_rounds_once_after_exact_aggregation() -> None:
+    qrels = (
+        _qrel("rank-two", ("b.md",)),
+        _qrel("rank-three", ("c.md",)),
+    )
+    summary = summarize_metrics(
+        kind=DatasetKind.KNOWN_ITEM,
+        qrels=qrels,
+        rankings={
+            "rank-two": ("a.md", "b.md"),
+            "rank-three": ("a.md", "b.md", "c.md"),
+        },
+        cutoffs=(3,),
+    )
+
+    assert summary.values["mrr@3"] == Fraction(5, 12)
+    assert summary.as_dict()["metrics"]["mrr@3"] == 0.416666666667
 
 
 def test_metrics_reject_missing_rankings_and_unsorted_cutoffs() -> None:

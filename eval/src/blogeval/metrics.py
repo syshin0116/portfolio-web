@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 
 from agent.retrieval.protocol import DocId
 
@@ -14,10 +15,16 @@ class MetricError(ValueError):
     """Metric inputs do not satisfy the query-set contract."""
 
 
-def _ratio(numerator: int | float, denominator: int) -> float:
+def _ratio(numerator: int | Fraction, denominator: int) -> Fraction:
     if denominator <= 0:
         raise MetricError("metric denominator must be positive")
-    return round(float(numerator) / denominator, 12)
+    return Fraction(numerator, denominator)
+
+
+def serialize_metric(value: Fraction) -> float:
+    """Round an exact metric once, only at the JSON/report boundary."""
+
+    return round(value.numerator / value.denominator, 12)
 
 
 def validate_cutoffs(cutoffs: Sequence[int]) -> tuple[int, ...]:
@@ -37,15 +44,18 @@ def validate_cutoffs(cutoffs: Sequence[int]) -> tuple[int, ...]:
 @dataclass(frozen=True, slots=True)
 class QueryMetrics:
     query_id: str
-    coverage: float
+    coverage: Fraction
     first_relevant_rank: int | None
-    values: Mapping[str, float]
+    values: Mapping[str, Fraction]
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "coverage": self.coverage,
+            "coverage": serialize_metric(self.coverage),
             "first_relevant_rank": self.first_relevant_rank,
-            "metrics": dict(sorted(self.values.items())),
+            "metrics": {
+                name: serialize_metric(value)
+                for name, value in sorted(self.values.items())
+            },
             "query_id": self.query_id,
         }
 
@@ -54,13 +64,16 @@ class QueryMetrics:
 class MetricSummary:
     dataset_kind: DatasetKind
     query_count: int
-    values: Mapping[str, float]
+    values: Mapping[str, Fraction]
     per_query: tuple[QueryMetrics, ...]
 
     def as_dict(self) -> dict[str, object]:
         return {
             "dataset_kind": self.dataset_kind.value,
-            "metrics": dict(sorted(self.values.items())),
+            "metrics": {
+                name: serialize_metric(value)
+                for name, value in sorted(self.values.items())
+            },
             "per_query": [item.as_dict() for item in self.per_query],
             "query_count": self.query_count,
         }
@@ -99,13 +112,13 @@ def summarize_metrics(
         )
 
     per_query: list[QueryMetrics] = []
-    totals: dict[str, float] = {"coverage": 0.0}
+    totals: dict[str, Fraction] = {"coverage": Fraction()}
     for cutoff in normalized_cutoffs:
         if kind is DatasetKind.KNOWN_ITEM:
-            totals[f"hit@{cutoff}"] = 0.0
-            totals[f"mrr@{cutoff}"] = 0.0
+            totals[f"hit@{cutoff}"] = Fraction()
+            totals[f"mrr@{cutoff}"] = Fraction()
         else:
-            totals[f"recall@{cutoff}"] = 0.0
+            totals[f"recall@{cutoff}"] = Fraction()
 
     for qrel in qrels:
         ranking = _deduplicated_ranking(rankings[qrel.query_id])
@@ -118,9 +131,9 @@ def summarize_metrics(
             ),
             None,
         )
-        coverage = 1.0 if ranking else 0.0
+        coverage = Fraction(bool(ranking))
         totals["coverage"] += coverage
-        query_values: dict[str, float] = {}
+        query_values: dict[str, Fraction] = {}
         for cutoff in normalized_cutoffs:
             top = ranking[:cutoff]
             if kind is DatasetKind.KNOWN_ITEM:
@@ -128,11 +141,11 @@ def summarize_metrics(
                     raise MetricError(
                         "known-item qrels must contain exactly one relevant DocId"
                     )
-                hit = 1.0 if any(doc_id in relevant for doc_id in top) else 0.0
+                hit = Fraction(any(doc_id in relevant for doc_id in top))
                 reciprocal_rank = (
-                    round(1.0 / first_relevant_rank, 12)
+                    Fraction(1, first_relevant_rank)
                     if first_relevant_rank is not None and first_relevant_rank <= cutoff
-                    else 0.0
+                    else Fraction()
                 )
                 query_values[f"hit@{cutoff}"] = hit
                 query_values[f"mrr@{cutoff}"] = reciprocal_rank
@@ -166,6 +179,7 @@ __all__ = [
     "MetricError",
     "MetricSummary",
     "QueryMetrics",
+    "serialize_metric",
     "summarize_metrics",
     "validate_cutoffs",
 ]

@@ -30,6 +30,7 @@ registry.register(
     create_char_ngram,
     implementation_id=CHAR_NGRAM_IMPLEMENTATION_ID,
     config=CHAR_NGRAM_CONFIG,
+    data_dependencies=("corpus:published-markdown",),
     servable=False,
 )
 
@@ -87,6 +88,7 @@ registry.register(
     create_rrf,
     implementation_id=RRF_IMPLEMENTATION_ID,
     config=RRF_CONFIG,
+    data_dependencies=("artifact:bm25", "corpus:published-markdown"),
     servable=False,
     identity_factory=rrf_identity,
 )

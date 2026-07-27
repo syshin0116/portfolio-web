@@ -8,12 +8,17 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, cast
 
-from agent.retrieval.corpus import WIKILINK_SCHEMA
+from agent.retrieval.corpus import WIKILINK_SCHEMA, PublishedCorpus
 from agent.retrieval.protocol import Corpus, DocId
+from agent.retrieval.serving import (
+    ServingArtifactError,
+    load_validated_wikilink_graph,
+)
 
 from blogeval.jsonio import (
     StrictJsonError,
@@ -24,7 +29,7 @@ from blogeval.jsonio import (
     write_bytes_atomic,
 )
 
-QUERYSET_SCHEMA = "blogeval-queryset-v1"
+QUERYSET_SCHEMA = "blogeval-queryset-v2"
 ALIAS_GENERATOR = "blogeval.wikilink-aliases"
 ALIAS_GENERATOR_VERSION = 1
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -36,6 +41,7 @@ _ROOT_KEYS = frozenset(
         "dataset_id",
         "dataset_kind",
         "exclusions",
+        "labels",
         "provenance",
         "qrels",
         "schema",
@@ -47,29 +53,17 @@ _PROVENANCE_KEYS = frozenset(
         "generator",
         "generator_version",
         "included_occurrence_count",
-        "source_artifact_schema",
+        "source_artifacts",
         "source_occurrence_count",
     }
 )
+_SOURCE_ARTIFACT_KEYS = frozenset({"derived_from", "path", "schema", "sha256"})
+_LABEL_KEYS = frozenset({"review", "reviewed_qrels_checksum", "status"})
+_REVIEW_KEYS = frozenset({"review_ref", "reviewed_at", "reviewer"})
 _QREL_KEYS = frozenset({"evidence", "query", "query_id", "relevant_doc_ids"})
 _EVIDENCE_KEYS = frozenset({"kind", "occurrences", "source_doc_id", "target"})
 _EXCLUSION_KEYS = frozenset(
     {"candidate_doc_ids", "query", "reason", "source_doc_id", "target"}
-)
-_GRAPH_KEYS = frozenset(
-    {
-        "adjacency",
-        "ambiguous_names",
-        "corpus_fingerprint",
-        "edge_count",
-        "excluded_links",
-        "isolated_node_count",
-        "links",
-        "node_count",
-        "nodes_with_edges",
-        "schema",
-        "unresolved",
-    }
 )
 
 
@@ -80,6 +74,12 @@ class DatasetError(ValueError):
 class DatasetKind(StrEnum):
     KNOWN_ITEM = "known-item"
     TOPIC = "topic"
+
+
+class LabelStatus(StrEnum):
+    GENERATED_OWNER_AUTHORED = "generated-owner-authored"
+    OWNER_REVIEWED = "owner-reviewed"
+    SYNTHETIC_ONLY = "synthetic-only"
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,11 +149,55 @@ class CorpusIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceArtifact:
+    path: str
+    schema: str
+    checksum: str
+    derived_from: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "derived_from": list(self.derived_from),
+            "path": self.path,
+            "schema": self.schema,
+            "sha256": self.checksum,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewProvenance:
+    reviewer: str
+    reviewed_at: date
+    review_ref: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "review_ref": self.review_ref,
+            "reviewed_at": self.reviewed_at.isoformat(),
+            "reviewer": self.reviewer,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LabelContract:
+    status: LabelStatus
+    reviewed_qrels_checksum: str | None
+    review: ReviewProvenance | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "review": self.review.as_dict() if self.review is not None else None,
+            "reviewed_qrels_checksum": self.reviewed_qrels_checksum,
+            "status": self.status.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Provenance:
     generator: str
     generator_version: int
     included_occurrence_count: int
-    source_artifact_schema: str | None
+    source_artifacts: tuple[SourceArtifact, ...]
     source_occurrence_count: int
 
     def as_dict(self) -> dict[str, object]:
@@ -161,7 +205,9 @@ class Provenance:
             "generator": self.generator,
             "generator_version": self.generator_version,
             "included_occurrence_count": self.included_occurrence_count,
-            "source_artifact_schema": self.source_artifact_schema,
+            "source_artifacts": [
+                artifact.as_dict() for artifact in self.source_artifacts
+            ],
             "source_occurrence_count": self.source_occurrence_count,
         }
 
@@ -171,6 +217,7 @@ class QuerySet:
     dataset_id: str
     kind: DatasetKind
     corpus: CorpusIdentity
+    labels: LabelContract
     provenance: Provenance
     qrels: tuple[Qrel, ...]
     exclusions: tuple[Exclusion, ...]
@@ -182,13 +229,32 @@ class QuerySet:
             "dataset_id": self.dataset_id,
             "dataset_kind": self.kind.value,
             "exclusions": [item.as_dict() for item in self.exclusions],
+            "labels": self.labels.as_dict(),
             "provenance": self.provenance.as_dict(),
             "qrels": [item.as_dict() for item in self.qrels],
             "schema": QUERYSET_SCHEMA,
         }
 
+    def require_reviewed_labels(self) -> None:
+        if self.labels.status is not LabelStatus.OWNER_REVIEWED:
+            raise DatasetError(
+                "publication requires owner-reviewed qrels; "
+                f"dataset status is {self.labels.status.value!r}"
+            )
+        expected = qrels_checksum(self.qrels)
+        if self.labels.reviewed_qrels_checksum != expected:
+            raise DatasetError(
+                "owner-reviewed qrel checksum does not match the exact qrels"
+            )
+        if self.labels.review is None:
+            raise DatasetError("owner-reviewed labels require review provenance")
+
 
 class ArtifactCorpus(Corpus, Protocol):
+    @property
+    def content_git_tree_sha(self) -> str:
+        """Return the build-derived content Git tree identity."""
+
     def read_artifact(self, path: str) -> bytes:
         """Read a verified generated corpus artifact."""
 
@@ -279,15 +345,60 @@ def _parse_corpus(value: object) -> CorpusIdentity:
     return CorpusIdentity(document_count, fingerprint, git_tree_sha)
 
 
+def _string_tuple(value: object, *, location: str) -> tuple[str, ...]:
+    raw = _array(value, location=location)
+    values = tuple(
+        _text(item, location=f"{location}[{index}]") for index, item in enumerate(raw)
+    )
+    if values != tuple(sorted(set(values))):
+        raise DatasetError(f"{location} must be sorted and unique")
+    return values
+
+
+def _parse_source_artifact(value: object, *, index: int) -> SourceArtifact:
+    location = f"provenance.source_artifacts[{index}]"
+    raw = _mapping(value, location=location)
+    _exact_keys(raw, _SOURCE_ARTIFACT_KEYS, location=location)
+    checksum = _text(raw["sha256"], location=f"{location}.sha256")
+    if _SHA256_RE.fullmatch(checksum) is None:
+        raise DatasetError(f"{location}.sha256 must be a sha256 checksum")
+    path = _text(raw["path"], location=f"{location}.path")
+    if (
+        path.startswith("/")
+        or "\\" in path
+        or "\x00" in path
+        or any(part in {"", ".", ".."} for part in Path(path).parts)
+    ):
+        raise DatasetError(f"{location}.path must be a canonical relative path")
+    return SourceArtifact(
+        path=path,
+        schema=_text(raw["schema"], location=f"{location}.schema"),
+        checksum=checksum,
+        derived_from=_string_tuple(
+            raw["derived_from"],
+            location=f"{location}.derived_from",
+        ),
+    )
+
+
 def _parse_provenance(value: object) -> Provenance:
     raw = _mapping(value, location="provenance")
     _exact_keys(raw, _PROVENANCE_KEYS, location="provenance")
-    source_schema = raw["source_artifact_schema"]
-    if source_schema is not None:
-        source_schema = _text(
-            source_schema,
-            location="provenance.source_artifact_schema",
+    source_artifacts = tuple(
+        _parse_source_artifact(item, index=index)
+        for index, item in enumerate(
+            _array(
+                raw["source_artifacts"],
+                location="provenance.source_artifacts",
+            )
         )
+    )
+    if source_artifacts != tuple(
+        sorted(source_artifacts, key=lambda artifact: artifact.path)
+    ):
+        raise DatasetError("provenance.source_artifacts must be sorted by path")
+    if len({artifact.path for artifact in source_artifacts}) != len(source_artifacts):
+        raise DatasetError("provenance.source_artifacts contains duplicate paths")
     source_count = _count(
         raw["source_occurrence_count"],
         location="provenance.source_occurrence_count",
@@ -308,9 +419,65 @@ def _parse_provenance(value: object) -> Provenance:
             positive=True,
         ),
         included_occurrence_count=included_count,
-        source_artifact_schema=source_schema,
+        source_artifacts=source_artifacts,
         source_occurrence_count=source_count,
     )
+
+
+def qrels_checksum(qrels: Sequence[Qrel]) -> str:
+    return json_checksum(canonical_json_bytes([qrel.as_dict() for qrel in qrels]))
+
+
+def _parse_review(value: object) -> ReviewProvenance:
+    raw = _mapping(value, location="labels.review")
+    _exact_keys(raw, _REVIEW_KEYS, location="labels.review")
+    reviewed_at_raw = _text(raw["reviewed_at"], location="labels.review.reviewed_at")
+    try:
+        reviewed_at = date.fromisoformat(reviewed_at_raw)
+    except ValueError as exc:
+        raise DatasetError(
+            "labels.review.reviewed_at must be an ISO calendar date"
+        ) from exc
+    return ReviewProvenance(
+        reviewer=_text(raw["reviewer"], location="labels.review.reviewer"),
+        reviewed_at=reviewed_at,
+        review_ref=_text(raw["review_ref"], location="labels.review.review_ref"),
+    )
+
+
+def _parse_labels(value: object, *, qrels: Sequence[Qrel]) -> LabelContract:
+    raw = _mapping(value, location="labels")
+    _exact_keys(raw, _LABEL_KEYS, location="labels")
+    try:
+        status = LabelStatus(raw["status"])
+    except (TypeError, ValueError) as exc:
+        raise DatasetError(
+            "labels.status must be generated-owner-authored, owner-reviewed, "
+            "or synthetic-only"
+        ) from exc
+    checksum_value = raw["reviewed_qrels_checksum"]
+    if checksum_value is not None:
+        checksum_value = _text(
+            checksum_value,
+            location="labels.reviewed_qrels_checksum",
+        )
+        if _SHA256_RE.fullmatch(checksum_value) is None:
+            raise DatasetError(
+                "labels.reviewed_qrels_checksum must be a sha256 checksum or null"
+            )
+    review = None if raw["review"] is None else _parse_review(raw["review"])
+    if status is LabelStatus.OWNER_REVIEWED:
+        if checksum_value != qrels_checksum(qrels):
+            raise DatasetError(
+                "owner-reviewed labels must checksum the exact canonical qrels"
+            )
+        if review is None:
+            raise DatasetError("owner-reviewed labels require review provenance")
+    elif checksum_value is not None or review is not None:
+        raise DatasetError(
+            "unreviewed labels cannot carry a reviewed checksum or review provenance"
+        )
+    return LabelContract(status, checksum_value, review)
 
 
 def _parse_evidence(value: object, *, location: str) -> Evidence:
@@ -458,6 +625,7 @@ def parse_queryset(value: object, *, checksum: str) -> QuerySet:
         dataset_id=_text(raw["dataset_id"], location="dataset_id"),
         kind=kind,
         corpus=corpus,
+        labels=_parse_labels(raw["labels"], qrels=qrels),
         provenance=provenance,
         qrels=qrels,
         exclusions=exclusions,
@@ -487,6 +655,22 @@ def validate_queryset_corpus(
         raise DatasetError(
             "query-set content tree differs from the requested evaluation tree"
         )
+    manifest_tree_sha = getattr(corpus, "content_git_tree_sha", None)
+    if (
+        not isinstance(manifest_tree_sha, str)
+        or _GIT_TREE_RE.fullmatch(manifest_tree_sha) is None
+    ):
+        raise DatasetError(
+            "verified corpus does not expose a build-derived content Git tree SHA"
+        )
+    if manifest_tree_sha != content_tree_sha:
+        raise DatasetError(
+            "corpus manifest content tree differs from the requested evaluation tree"
+        )
+    if dataset.corpus.git_tree_sha != manifest_tree_sha:
+        raise DatasetError(
+            "query-set content tree differs from the verified corpus manifest"
+        )
     if dataset.corpus.fingerprint != corpus.fingerprint:
         raise DatasetError(
             "query-set corpus fingerprint differs from the verified published mirror"
@@ -495,6 +679,24 @@ def validate_queryset_corpus(
         raise DatasetError(
             "query-set document count differs from the verified published mirror"
         )
+    artifact_reader = getattr(corpus, "read_artifact", None)
+    if not callable(artifact_reader):
+        raise DatasetError("verified corpus cannot read the query-set source artifacts")
+    for artifact in dataset.provenance.source_artifacts:
+        try:
+            payload = artifact_reader(artifact.path)
+        except (KeyError, OSError, ValueError) as exc:
+            raise DatasetError(
+                f"cannot read query-set source artifact {artifact.path}: {exc}"
+            ) from exc
+        if not isinstance(payload, bytes):
+            raise DatasetError(
+                f"query-set source artifact {artifact.path} did not return bytes"
+            )
+        if json_checksum(payload) != artifact.checksum:
+            raise DatasetError(
+                f"query-set source artifact checksum differs: {artifact.path}"
+            )
     available = set(corpus.doc_ids())
     referenced = {doc_id for qrel in dataset.qrels for doc_id in qrel.relevant_doc_ids}
     referenced.update(
@@ -549,23 +751,19 @@ def generate_known_item_alias_queryset(
 
     if _GIT_TREE_RE.fullmatch(content_tree_sha) is None:
         raise DatasetError("content_tree_sha must be a full lowercase git tree SHA")
-    try:
-        graph_value = load_json_bytes(
-            corpus.read_artifact("wikilinks.json"),
-            location="wikilinks.json",
+    manifest_tree_sha = getattr(corpus, "content_git_tree_sha", None)
+    if manifest_tree_sha != content_tree_sha:
+        raise DatasetError(
+            "requested content tree differs from the build-derived corpus manifest"
         )
-    except StrictJsonError as exc:
+    try:
+        validated_graph = load_validated_wikilink_graph(cast(PublishedCorpus, corpus))
+    except (ServingArtifactError, ValueError) as exc:
         raise DatasetError(str(exc)) from exc
-    graph = _mapping(graph_value, location="wikilinks")
-    _exact_keys(graph, _GRAPH_KEYS, location="wikilinks")
-    if graph["schema"] != WIKILINK_SCHEMA:
-        raise DatasetError("wikilinks.json has an unsupported schema")
-    if graph["corpus_fingerprint"] != corpus.fingerprint:
-        raise DatasetError("wikilinks.json corpus fingerprint mismatch")
 
     resolved_by_query: dict[str, list[Mapping[str, object]]] = defaultdict(list)
     source_occurrence_count = 0
-    for link in _graph_entries(graph["links"], location="wikilinks.links"):
+    for link in validated_graph.links:
         alias = _alias(link.get("alias"))
         if alias is None:
             continue
@@ -573,14 +771,11 @@ def generate_known_item_alias_queryset(
         resolved_by_query[alias].append(link)
 
     exclusions: list[Exclusion] = []
-    for collection_name, reason_override in (
-        ("unresolved", "unresolved-target"),
-        ("excluded_links", None),
+    for collection_name, entries, reason_override in (
+        ("unresolved", validated_graph.unresolved, "unresolved-target"),
+        ("excluded_links", validated_graph.excluded_links, None),
     ):
-        for entry in _graph_entries(
-            graph[collection_name],
-            location=f"wikilinks.{collection_name}",
-        ):
+        for entry in entries:
             alias = _alias(entry.get("alias"))
             if alias is None:
                 continue
@@ -708,13 +903,25 @@ def generate_known_item_alias_queryset(
         "dataset_id": dataset_id,
         "dataset_kind": DatasetKind.KNOWN_ITEM.value,
         "exclusions": [item.as_dict() for item in exclusions],
+        "labels": {
+            "review": None,
+            "reviewed_qrels_checksum": None,
+            "status": LabelStatus.GENERATED_OWNER_AUTHORED.value,
+        },
         "provenance": {
             "generator": ALIAS_GENERATOR,
             "generator_version": ALIAS_GENERATOR_VERSION,
             "included_occurrence_count": sum(
                 evidence.occurrences for qrel in qrels for evidence in qrel.evidence
             ),
-            "source_artifact_schema": WIKILINK_SCHEMA,
+            "source_artifacts": [
+                {
+                    "derived_from": ["corpus:published-markdown"],
+                    "path": "wikilinks.json",
+                    "schema": WIKILINK_SCHEMA,
+                    "sha256": validated_graph.artifact_checksum,
+                }
+            ],
             "source_occurrence_count": source_occurrence_count,
         },
         "qrels": [item.as_dict() for item in qrels],
@@ -740,13 +947,18 @@ __all__ = [
     "DatasetKind",
     "Evidence",
     "Exclusion",
+    "LabelContract",
+    "LabelStatus",
     "Provenance",
     "Qrel",
     "QUERYSET_SCHEMA",
     "QuerySet",
+    "ReviewProvenance",
+    "SourceArtifact",
     "generate_known_item_alias_queryset",
     "load_queryset",
     "parse_queryset",
+    "qrels_checksum",
     "validate_queryset_corpus",
     "write_queryset",
 ]

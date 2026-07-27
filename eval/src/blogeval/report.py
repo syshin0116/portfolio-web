@@ -49,6 +49,15 @@ def render_leaderboard(run: ReportRun) -> str:
         f"- Content tree: `{dataset.corpus.git_tree_sha}`",
         f"- Corpus fingerprint: `{dataset.corpus.fingerprint}`",
         f"- Dataset checksum: `{dataset.checksum}`",
+        f"- Label status: **{dataset.labels.status.value}**",
+        (
+            "- Reviewed qrels checksum: "
+            + (
+                f"`{dataset.labels.reviewed_qrels_checksum}`"
+                if dataset.labels.reviewed_qrels_checksum is not None
+                else "not reviewed"
+            )
+        ),
         (
             "- Publication eligible: "
             + ("yes" if run.provenance.publication_eligible else "no")
@@ -62,8 +71,10 @@ def render_leaderboard(run: ReportRun) -> str:
             [
                 "## Known-item metrics",
                 "",
-                "| Method | Fingerprint | " + " | ".join(metric_names) + " |",
-                "|---|---|" + "---:|" * len(metric_names),
+                "| Method | Data relation | Fingerprint | "
+                + " | ".join(metric_names)
+                + " |",
+                "|---|---|---|" + "---:|" * len(metric_names),
             ]
         )
         for method in methods:
@@ -72,9 +83,10 @@ def render_leaderboard(run: ReportRun) -> str:
                 + " | ".join(
                     (
                         _markdown(method.method_id),
+                        _markdown(method.evaluation_relation),
                         f"`{_markdown(method.fingerprint)}`",
                         *(
-                            f"{method.metrics.values[name]:.6f}"
+                            f"{float(method.metrics.values[name]):.6f}"
                             for name in metric_names
                         ),
                     )
@@ -99,8 +111,10 @@ def render_leaderboard(run: ReportRun) -> str:
                 "",
                 "## Topic metrics",
                 "",
-                "| Method | Fingerprint | " + " | ".join(metric_names) + " |",
-                "|---|---|" + "---:|" * len(metric_names),
+                "| Method | Data relation | Fingerprint | "
+                + " | ".join(metric_names)
+                + " |",
+                "|---|---|---|" + "---:|" * len(metric_names),
             ]
         )
         for method in methods:
@@ -109,9 +123,10 @@ def render_leaderboard(run: ReportRun) -> str:
                 + " | ".join(
                     (
                         _markdown(method.method_id),
+                        _markdown(method.evaluation_relation),
                         f"`{_markdown(method.fingerprint)}`",
                         *(
-                            f"{method.metrics.values[name]:.6f}"
+                            f"{float(method.metrics.values[name]):.6f}"
                             for name in metric_names
                         ),
                     )
@@ -222,7 +237,7 @@ def render_metrics_svg(run: ReportRun) -> str:
         color = palette[method_index % len(palette)]
         for metric_name in metric_names:
             y = top + row * row_height
-            value = method.metrics.values[metric_name]
+            value = float(method.metrics.values[metric_name])
             bar_width = round(plot_width * value, 3)
             label = f"{method.method_id} · {metric_name}"
             elements.extend(

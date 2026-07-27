@@ -10,10 +10,13 @@ from agent.retrieval.protocol import Corpus, DocId, Hit, Retrieval
 from blogeval.datasets import parse_queryset
 from blogeval.jsonio import canonical_json_bytes, json_checksum
 
+FIXTURE_SOURCE_PAYLOAD = b"synthetic fixture source\n"
+
 
 @dataclass(frozen=True)
 class MemoryCorpus(Corpus):
     documents: Mapping[DocId, str]
+    content_git_tree_sha: str = "a" * 40
 
     @property
     def fingerprint(self) -> str:
@@ -32,6 +35,11 @@ class MemoryCorpus(Corpus):
 
     def read(self, doc_id: DocId) -> str:
         return self.documents[DocId(doc_id)]
+
+    def read_artifact(self, path: str) -> bytes:
+        if path == "fixture.json":
+            return FIXTURE_SOURCE_PAYLOAD
+        raise KeyError(path)
 
 
 class RankedRetriever:
@@ -81,11 +89,23 @@ def known_dataset(memory_corpus: MemoryCorpus):
         "dataset_id": "known-contract-v1",
         "dataset_kind": "known-item",
         "exclusions": [],
+        "labels": {
+            "review": None,
+            "reviewed_qrels_checksum": None,
+            "status": "synthetic-only",
+        },
         "provenance": {
             "generator": "contract-fixture",
             "generator_version": 1,
             "included_occurrence_count": 2,
-            "source_artifact_schema": "fixture-v1",
+            "source_artifacts": [
+                {
+                    "derived_from": ["fixture:synthetic"],
+                    "path": "fixture.json",
+                    "schema": "fixture-v1",
+                    "sha256": json_checksum(FIXTURE_SOURCE_PAYLOAD),
+                }
+            ],
             "source_occurrence_count": 2,
         },
         "qrels": [
@@ -116,10 +136,10 @@ def known_dataset(memory_corpus: MemoryCorpus):
                 "relevant_doc_ids": ["AI/beta.md"],
             },
         ],
-        "schema": "blogeval-queryset-v1",
+        "schema": "blogeval-queryset-v2",
     }
     payload = canonical_json_bytes(value)
     return parse_queryset(value, checksum=json_checksum(payload))
 
 
-__all__ = ["MemoryCorpus", "RankedRetriever"]
+__all__ = ["FIXTURE_SOURCE_PAYLOAD", "MemoryCorpus", "RankedRetriever"]

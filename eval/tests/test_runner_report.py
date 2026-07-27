@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from agent.retrieval.protocol import DocId, Hit, Retrieval
 from agent.retrieval.registry import RetrieverRegistry
 
-from blogeval.runner import EvaluationError, run_evaluation, write_run_artifacts
+from blogeval.jsonio import canonical_json_bytes, json_checksum
+from blogeval.runner import (
+    EvaluationError,
+    run_evaluation,
+    verify_run_directory,
+    write_run_artifacts,
+)
 from conftest import MemoryCorpus, RankedRetriever
 
 
@@ -39,6 +47,7 @@ def _registry() -> RetrieverRegistry:
             RankedRetriever,
             implementation_id=f"tests:{method_id}@1",
             config=config,
+            data_dependencies=("fixture:rankings",),
             servable=False,
         )
     return registry
@@ -75,10 +84,18 @@ def test_runner_writes_byte_reproducible_json_markdown_and_svg(
     assert run.run_id.startswith("sha256:")
     assert _tree_digest(first.directory) == _tree_digest(second.directory)
     assert first.run_json.read_bytes() == second.run_json.read_bytes()
+    assert first.result_manifest.is_file()
+    assert (
+        verify_run_directory(
+            first.directory,
+            dataset=known_dataset,
+        ).result_digest
+        == first.result_digest
+    )
     leaderboard = first.leaderboard_markdown.read_text(encoding="utf-8")
     assert "## Known-item metrics" in leaderboard
     assert "## Topic metrics" in leaderboard
-    assert "owner-reviewed" in leaderboard
+    assert "- Label status: **synthetic-only**" in leaderboard
     assert "nDCG" not in leaderboard
     assert "source of record is run.json" in first.metrics_svg.read_text(
         encoding="utf-8"
@@ -116,6 +133,49 @@ def test_runner_records_rankings_and_method_fingerprints(
     assert run.as_dict()["provenance"] == run.provenance.as_dict()
 
 
+def test_runner_classifies_oracle_in_sample_and_clean_data_dependencies(
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    registry = RetrieverRegistry()
+    dependencies = {
+        "clean": ("corpus:unrelated-holdout",),
+        "in-sample": ("fixture:synthetic",),
+        "oracle": ("artifact:fixture.json",),
+    }
+    for method_id, data_dependencies in dependencies.items():
+        registry.register(
+            method_id,
+            RankedRetriever,
+            implementation_id=f"tests:{method_id}@1",
+            config={
+                "rankings": {
+                    "alpha": ["AI/alpha.md"],
+                    "beta": ["AI/beta.md"],
+                }
+            },
+            data_dependencies=data_dependencies,
+            servable=False,
+        )
+
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("clean", "in-sample", "oracle"),
+        cutoffs=(1,),
+        registry=registry,
+    )
+
+    by_method = {method.method_id: method for method in run.methods}
+    assert by_method["oracle"].evaluation_relation == "oracle-overlap"
+    assert by_method["oracle"].overlap_sources == ("artifact:fixture.json",)
+    assert by_method["in-sample"].evaluation_relation == "in-sample-overlap"
+    assert by_method["in-sample"].overlap_sources == ("fixture:synthetic",)
+    assert by_method["clean"].evaluation_relation == "clean-holdout"
+    assert by_method["clean"].overlap_sources == ()
+
+
 def test_result_store_refuses_to_replace_same_run_id_with_different_bytes(
     tmp_path: Path,
     memory_corpus: MemoryCorpus,
@@ -132,8 +192,105 @@ def test_result_store_refuses_to_replace_same_run_id_with_different_bytes(
     artifacts = write_run_artifacts(run, output_root=tmp_path)
     artifacts.leaderboard_markdown.write_text("tampered\n", encoding="utf-8")
 
-    with pytest.raises(OSError, match="refusing to replace non-identical"):
+    with pytest.raises(EvaluationError, match="checksum/size mismatch"):
         write_run_artifacts(run, output_root=tmp_path)
+
+
+def test_verify_run_rejects_extra_and_partial_result_directories(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1,),
+        registry=_registry(),
+    )
+    artifacts = write_run_artifacts(run, output_root=tmp_path)
+    extra = artifacts.directory / "extra.txt"
+    extra.write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(EvaluationError, match="file inventory mismatch"):
+        verify_run_directory(artifacts.directory, dataset=known_dataset)
+    extra.unlink()
+    artifacts.metrics_svg.unlink()
+    with pytest.raises(EvaluationError, match="file inventory mismatch"):
+        verify_run_directory(artifacts.directory, dataset=known_dataset)
+
+
+def test_verify_run_recomputes_metrics_even_when_tamper_manifest_is_resealed(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1,),
+        registry=_registry(),
+    )
+    artifacts = write_run_artifacts(run, output_root=tmp_path)
+    record = json.loads(artifacts.run_json.read_text(encoding="utf-8"))
+    record["methods"][0]["metrics"]["metrics"]["mrr@1"] = 0.0
+    artifacts.run_json.write_bytes(canonical_json_bytes(record))
+
+    manifest = json.loads(artifacts.result_manifest.read_text(encoding="utf-8"))
+    for item in manifest["files"]:
+        payload = (artifacts.directory / item["path"]).read_bytes()
+        item["bytes"] = len(payload)
+        item["sha256"] = json_checksum(payload)
+    manifest["result_digest"] = json_checksum(
+        canonical_json_bytes(
+            {
+                "files": manifest["files"],
+                "schema": "blogeval-result-digest-v1",
+            }
+        )
+    )
+    artifacts.result_manifest.write_bytes(canonical_json_bytes(manifest))
+
+    with pytest.raises(
+        EvaluationError, match="do not regenerate from recorded rankings"
+    ):
+        verify_run_directory(artifacts.directory, dataset=known_dataset)
+
+
+def test_concurrent_identical_writers_commit_one_complete_directory(
+    tmp_path: Path,
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    run = run_evaluation(
+        corpus=memory_corpus,
+        dataset=known_dataset,
+        content_tree_sha="a" * 40,
+        method_ids=("method-a",),
+        cutoffs=(1, 2),
+        registry=_registry(),
+    )
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        artifacts = tuple(
+            executor.map(
+                lambda _: write_run_artifacts(run, output_root=tmp_path),
+                range(16),
+            )
+        )
+
+    assert len({item.result_digest for item in artifacts}) == 1
+    assert len({item.directory for item in artifacts}) == 1
+    verified = verify_run_directory(artifacts[0].directory, dataset=known_dataset)
+    assert verified.result_digest == artifacts[0].result_digest
+    assert sorted(path.name for path in artifacts[0].directory.iterdir()) == [
+        "leaderboard.md",
+        "manifest.json",
+        "metrics.svg",
+        "per-query.md",
+        "run.json",
+    ]
 
 
 def test_run_id_changes_when_registered_method_config_changes(
@@ -151,6 +308,7 @@ def test_run_id_changes_when_registered_method_config_changes(
             RankedRetriever,
             implementation_id="tests:method@1",
             config={"rankings": {"alpha": ranking, "beta": ["AI/beta.md"]}},
+            data_dependencies=("fixture:rankings",),
             servable=False,
         )
 
@@ -199,6 +357,7 @@ def test_runner_rejects_out_of_corpus_doc_even_beyond_evaluation_cutoff(
         "method",
         OutOfCorpusTailRetriever,
         implementation_id="tests:outside-corpus@1",
+        data_dependencies=("fixture:rankings",),
         servable=False,
     )
 
@@ -231,6 +390,7 @@ def test_runner_rejects_retriever_query_mismatch(
         "method",
         QueryMismatchRetriever,
         implementation_id="tests:query-mismatch@1",
+        data_dependencies=("fixture:rankings",),
         servable=False,
     )
 

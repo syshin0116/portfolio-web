@@ -17,9 +17,11 @@ from blogeval.datasets import (
     write_queryset,
 )
 from blogeval.jsonio import canonical_json_bytes
+from blogeval.publication import verify_publication_candidate
 from blogeval.runner import (
     EvaluationError,
     run_evaluation,
+    verify_run_directory,
     write_run_artifacts,
 )
 
@@ -65,8 +67,23 @@ def _parser() -> argparse.ArgumentParser:
     sweep.add_argument(
         "--require-publishable",
         action="store_true",
-        help="fail unless running in a digest-pinned Linux x86_64 image",
+        help="always fail locally; publication requires the trusted attestation workflow",
     )
+
+    verify = subparsers.add_parser(
+        "verify-run",
+        help="regenerate and verify a complete result directory",
+    )
+    verify.add_argument("--dataset", type=Path, required=True)
+    verify.add_argument("--run-directory", type=Path, required=True)
+
+    publication = subparsers.add_parser(
+        "verify-publication",
+        help="require GitHub attestation and verify a publication candidate",
+    )
+    publication.add_argument("--archive", type=Path, required=True)
+    publication.add_argument("--dataset", type=Path, required=True)
+    publication.add_argument("--expected-commit", required=True)
     return parser
 
 
@@ -102,7 +119,15 @@ def _generate(args: argparse.Namespace) -> int:
                 "included_occurrence_count": (
                     dataset.provenance.included_occurrence_count
                 ),
+                "label_status": dataset.labels.status.value,
                 "qrel_count": len(dataset.qrels),
+                "source_artifacts": [
+                    {
+                        "path": artifact.path,
+                        "sha256": artifact.checksum,
+                    }
+                    for artifact in dataset.provenance.source_artifacts
+                ],
                 "source_occurrence_count": (dataset.provenance.source_occurrence_count),
             },
             ensure_ascii=False,
@@ -126,7 +151,15 @@ def _validate(args: argparse.Namespace) -> int:
                 "checksum": dataset.checksum,
                 "dataset_id": dataset.dataset_id,
                 "kind": dataset.kind.value,
+                "label_status": dataset.labels.status.value,
                 "qrel_count": len(dataset.qrels),
+                "source_artifacts": [
+                    {
+                        "path": artifact.path,
+                        "sha256": artifact.checksum,
+                    }
+                    for artifact in dataset.provenance.source_artifacts
+                ],
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -156,7 +189,47 @@ def _sweep(args: argparse.Namespace) -> int:
                 "method_count": len(run.methods),
                 "query_count": len(dataset.qrels),
                 "publication_eligible": run.provenance.publication_eligible,
+                "result_digest": artifacts.result_digest,
                 "run_id": run.run_id,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _verify_run(args: argparse.Namespace) -> int:
+    dataset = load_queryset(args.dataset)
+    verified = verify_run_directory(args.run_directory, dataset=dataset)
+    print(
+        json.dumps(
+            {
+                "result_digest": verified.result_digest,
+                "run_id": verified.run.run_id,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _verify_publication(args: argparse.Namespace) -> int:
+    dataset = load_queryset(args.dataset)
+    verified = verify_publication_candidate(
+        args.archive,
+        dataset=dataset,
+        expected_commit=args.expected_commit,
+    )
+    print(
+        json.dumps(
+            {
+                "commit_sha": verified.commit_sha,
+                "execution_image_digest": verified.execution_image_digest,
+                "result_digest": verified.result_digest,
+                "run_id": verified.run_id,
+                "workflow_run_id": verified.workflow_run_id,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -174,6 +247,10 @@ def main(argv: list[str] | None = None) -> int:
             return _validate(args)
         if args.command == "sweep":
             return _sweep(args)
+        if args.command == "verify-run":
+            return _verify_run(args)
+        if args.command == "verify-publication":
+            return _verify_publication(args)
         raise AssertionError(f"unhandled command: {args.command}")
     except (DatasetError, EvaluationError, OSError, ValueError) as exc:
         print(f"blogeval failed: {exc}", file=sys.stderr)

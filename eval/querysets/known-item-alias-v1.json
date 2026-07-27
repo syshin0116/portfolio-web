@@ -231,11 +231,25 @@
       "target": "2025-10-06-AppHub-개인-프로젝트-플랫폼-기획"
     }
   ],
+  "labels": {
+    "review": null,
+    "reviewed_qrels_checksum": null,
+    "status": "generated-owner-authored"
+  },
   "provenance": {
     "generator": "blogeval.wikilink-aliases",
     "generator_version": 1,
     "included_occurrence_count": 140,
-    "source_artifact_schema": "published-wikilinks-v2",
+    "source_artifacts": [
+      {
+        "derived_from": [
+          "corpus:published-markdown"
+        ],
+        "path": "wikilinks.json",
+        "schema": "published-wikilinks-v2",
+        "sha256": "sha256:6489046baa8ddf32690b58fb4e257ba582ee0adbee1d0e571140a1d8c2fdaabc"
+      }
+    ],
     "source_occurrence_count": 164
   },
   "qrels": [
@@ -1830,5 +1844,5 @@
       ]
     }
   ],
-  "schema": "blogeval-queryset-v1"
+  "schema": "blogeval-queryset-v2"
 }

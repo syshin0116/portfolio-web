@@ -1,10 +1,12 @@
+import { fixupConfigRules } from "@eslint/compat"
 import { defineConfig, globalIgnores } from "eslint/config"
 import nextVitals from "eslint-config-next/core-web-vitals"
 import nextTypescript from "eslint-config-next/typescript"
 
+// Next 16.2 bundles plugins that still call RuleContext methods removed in ESLint 10.
 export default defineConfig([
-  ...nextVitals,
-  ...nextTypescript,
+  ...fixupConfigRules(nextVitals),
+  ...fixupConfigRules(nextTypescript),
   {
     rules: {
       "react-hooks/purity": "off",

@@ -38,6 +38,23 @@ class PathClassificationTests(unittest.TestCase):
             changes.classify_paths([".github/workflows/ci.yml"]),
         )
 
+    def test_change_detector_contract_runs_every_component(self) -> None:
+        for path in (
+            "scripts/ci_changed_components.py",
+            "scripts/tests/test_ci_changed_components.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": True, "agent": True, "eval": True, "infra": True},
+                    changes.classify_paths([path]),
+                )
+
+    def test_root_gitignore_runs_infrastructure_gate(self) -> None:
+        self.assertEqual(
+            {"web": False, "agent": False, "eval": False, "infra": True},
+            changes.classify_paths([".gitignore"]),
+        )
+
     def test_all_workflows_run_every_component(self) -> None:
         for path in (
             ".github/workflows/protocol-compat.yml",

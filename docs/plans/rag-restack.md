@@ -452,13 +452,12 @@ if auth registration or its secret is missing.
   **Neon project regions are fixed at creation**, so this is only available now.
 - Set `RUN_MIGRATIONS_ON_STARTUP=false` on every Cloud Run revision. Before deployment, run
   a separate one-shot job from the same immutable image digest with a separately held
-  direct Neon `DATABASE_URL` and the command `aegra db upgrade`; require success before
-  creating or updating the service revision. Never expose the direct credential to the
-  runtime.
-- Give the service only its pooled Neon URL. Aegra 0.9.24 compatibility with the pooled
-  endpoint across its async runtime and synchronous database paths is not yet verified;
-  exercise both in preview and treat any driver or pooler incompatibility as a cutover
-  blocker.
+  elevated direct Neon `DATABASE_URL` and the command `aegra db upgrade`; require success
+  before creating or updating the service revision. Never expose the migration credential
+  to the runtime.
+- Give the service a separate least-privileged direct Neon URL. Reject `-pooler` hostnames
+  before startup in accordance with ADR-0007, and exercise both async and synchronous
+  database paths in preview.
 - Deploy initially with `--memory 1Gi --no-cpu-throttling --timeout 3600
   --max-instances 1 --concurrency 20`, a **dedicated minimal service account**, and
   Postgres pool knobs turned down (Aegra opens up to ~50 connections by default). Cloud
@@ -471,12 +470,13 @@ if auth registration or its secret is missing.
   data-not-isolated warning.
 
 **Accept:** the same-digest direct-URL `aegra db upgrade` job succeeds before deployment;
-the service starts with `RUN_MIGRATIONS_ON_STARTUP=false` and proves the pooled URL across
-the exercised async/sync database paths; `/health` 200 and `scripts/smoke.py` pass with
+the service starts with `RUN_MIGRATIONS_ON_STARTUP=false`, rejects `-pooler` hostnames, and
+proves its separate direct runtime URL across the exercised async/sync database paths;
+`/health` 200 and `scripts/smoke.py` pass with
 owner preview credentials; the same streaming requests without credentials or with a
 forged subject receive 401/403; cold-start-to-first-token and full-image cold-start plus
 concurrency-20 memory are measured and recorded without approaching the 1 GiB limit. Do
-not continue if graph routes are anonymously reachable, pooled compatibility is unproven,
+not continue if graph routes are anonymously reachable, a pooler endpoint is configured,
 or the measured memory leaves inadequate headroom.
 
 ---

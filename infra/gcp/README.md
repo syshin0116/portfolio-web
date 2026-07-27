@@ -111,8 +111,9 @@ provider/data, `terraform_remote_state`, and executable escape resources. The re
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
 Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
 uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or
-gitignored Terraform 1.13.5 `.tf`, `.tfvars`, `.tftest.hcl`, or `.tfmock.hcl` format
-candidate, each reviewed JSON/load variant, and every symlink or non-regular candidate.
+gitignored Terraform 1.13.5 `.tf`, `.tfvars`, `.tftest.hcl`, `.tfmock.hcl`, or
+`.tfmock.json` candidate, including every reviewed JSON/load variant, and every symlink
+or non-regular candidate.
 It permits `.terraform/` only as an ignored, untracked real directory, checks that
 boundary without traversing it, and never opens state, plan, secret, or rejected-extra
 contents. `--terraform-test` validates Terraform's JSON event stream and requires the

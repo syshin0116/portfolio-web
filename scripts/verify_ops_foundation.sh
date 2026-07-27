@@ -11,6 +11,12 @@ readonly PRODUCTION_RUNTIME_SA="agent-runtime@${PROJECT_ID}.iam.gserviceaccount.
 readonly PREVIEW_RUNTIME_SA="agent-preview-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PREVIEW_DEPLOYER_SA="agent-preview-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PRODUCTION_DEPLOYER_SA="agent-prod-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
+readonly -a WORKLOAD_SERVICE_ACCOUNTS=(
+  "$PRODUCTION_RUNTIME_SA"
+  "$PREVIEW_RUNTIME_SA"
+  "$PREVIEW_DEPLOYER_SA"
+  "$PRODUCTION_DEPLOYER_SA"
+)
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
@@ -186,6 +192,19 @@ assert_member_has_no_direct_roles() {
     >/dev/null <<<"$policy_json" || fail "$description"
 }
 
+assert_workload_accounts_have_no_direct_roles() {
+  local policy_json="$1"
+  local scope="$2"
+  local service_account
+
+  for service_account in "${WORKLOAD_SERVICE_ACCOUNTS[@]}"; do
+    assert_member_has_no_direct_roles \
+      "$policy_json" \
+      "serviceAccount:${service_account}" \
+      "${service_account} must not inherit a direct role from ${scope}"
+  done
+}
+
 assert_policy_has_no_public_members() {
   local policy_json="$1"
   local description="$2"
@@ -344,6 +363,9 @@ verify_ancestor_policies() {
           "$policy_json" \
           "folders/${ancestor_id}" \
           "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
+        assert_workload_accounts_have_no_direct_roles \
+          "$policy_json" \
+          "folders/${ancestor_id}"
         ;;
       organization)
         policy_json="$(
@@ -355,6 +377,9 @@ verify_ancestor_policies() {
           "$policy_json" \
           "organizations/${ancestor_id}" \
           "OPS_FOUNDATION_REVIEWED_IAM_BINDINGS"
+        assert_workload_accounts_have_no_direct_roles \
+          "$policy_json" \
+          "organizations/${ancestor_id}"
         ;;
       *)
         fail "unexpected ancestor type after validation: ${ancestor_type}"
@@ -400,6 +425,40 @@ verify_service_account_has_no_user_keys() {
   )"
   [[ "$user_key_count" == "0" ]] ||
     fail "user-managed key exists for ${service_account}"
+}
+
+verify_project_has_no_user_managed_service_account_keys() {
+  local service_accounts_json
+  local service_account
+
+  service_accounts_json="$(
+    gcloud iam service-accounts list \
+      --project "$PROJECT_ID" \
+      --format=json
+  )"
+  jq -e \
+    '
+      type == "array"
+      and length > 0
+      and all(.[];
+        type == "object"
+        and (.email | type == "string" and length > 0)
+      )
+      and ([.[].email] | length) == ([.[].email] | unique | length)
+    ' >/dev/null <<<"$service_accounts_json" ||
+    fail "project service-account inventory is empty, duplicate, or unreadable"
+
+  for service_account in "${WORKLOAD_SERVICE_ACCOUNTS[@]}"; do
+    jq -e \
+      --arg expected_email "$service_account" \
+      'any(.[]; .email == $expected_email)' \
+      >/dev/null <<<"$service_accounts_json" ||
+      fail "managed workload service account is absent from project inventory: ${service_account}"
+  done
+
+  while IFS= read -r service_account; do
+    verify_service_account_has_no_user_keys "$service_account"
+  done < <(jq -r '.[].email' <<<"$service_accounts_json")
 }
 
 verify_runtime_secret_policy() {
@@ -512,13 +571,7 @@ verify_live_contract() {
     "OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS" \
     true
 
-  for service_account in \
-    "$PRODUCTION_RUNTIME_SA" \
-    "$PREVIEW_RUNTIME_SA" \
-    "$PREVIEW_DEPLOYER_SA" \
-    "$PRODUCTION_DEPLOYER_SA"; do
-    verify_service_account_has_no_user_keys "$service_account"
-  done
+  verify_project_has_no_user_managed_service_account_keys
 
   project_policy="$(
     gcloud projects get-iam-policy "$PROJECT_ID" --format=json

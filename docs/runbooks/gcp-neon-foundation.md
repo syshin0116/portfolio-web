@@ -121,9 +121,11 @@ The accepted target from
 | Rollback source | `syshin0116-dev` | `aws-ap-southeast-1` | `main` | Last recorded in ADR-0007; re-verify before relying on it |
 
 Web and agent use different projects, credentials, and failure domains. Application
-runtimes use Neon pooled endpoints. Schema or migration commands use separately held
-direct endpoints only; never expose a direct migration credential to Vercel or Cloud Run
-runtime configuration.
+runtimes use branch-scoped, least-privileged Neon direct endpoints. Schema or migration
+commands use separately held elevated direct credentials; never expose a migration
+credential to Vercel or Cloud Run runtime configuration. Transaction-mode `-pooler`
+endpoints remain prohibited by ADR-0007 until a separately reviewed compatibility change
+amends that decision.
 
 ## Terraform state
 
@@ -222,11 +224,12 @@ PR adds and tests that contract.
 3. Land a reviewed Auth.js schema/migration contract, then apply it to preview through a
    direct endpoint held only for migration.
 4. Configure GitHub and Google OAuth callback URLs for Vercel Preview first.
-5. Bind Vercel Preview `DATABASE_URL` to the preview branch's pooled endpoint.
+5. Bind Vercel Preview `DATABASE_URL` to the preview branch's least-privileged direct
+   endpoint.
 6. Verify login, callback rejection, logout, session refresh, and a fresh browser session.
 7. Apply the same reviewed schema contract to production through its direct migration
    endpoint.
-8. Promote the same application revision with a separately scoped production pooled
+8. Promote the same application revision with a separately scoped production direct
    runtime credential after approval.
 9. Re-authenticate the sole owner; do not migrate old sessions.
 10. Preserve the old database as the rollback source.
@@ -242,11 +245,11 @@ repository does not yet contain the one-shot deployment job that must run it. Ru
 startup migration must be disabled with the non-secret setting
 `RUN_MIGRATIONS_ON_STARTUP=false`; a service revision is never the migration runner.
 
-The migration job uses the same immutable image digest as the service, receives a direct
-Neon `DATABASE_URL` only for the duration of the job, and must succeed before deployment.
-The service receives only the pooled runtime URL. Compatibility of that pooled URL with
-all Aegra 0.9.24 async runtime and synchronous database paths remains unverified external
-behavior, so preview evidence is a cutover blocker rather than an assumption.
+The migration job uses the same immutable image digest as the service, receives an
+elevated direct Neon `DATABASE_URL` only for the duration of the job, and must succeed
+before deployment. The service receives a separate least-privileged direct runtime URL.
+Preview must exercise every Aegra 0.9.24 async and synchronous database path before
+cutover; a `-pooler` endpoint is not an allowed substitute.
 
 1. Confirm or create `syshin0116-agent-prod`.
 2. Create an isolated preview branch and credentials that cannot access the `production`
@@ -255,17 +258,17 @@ behavior, so preview evidence is a cutover blocker rather than an assumption.
    digest selected for deployment.
 4. Give the preview migration job its separately held direct `DATABASE_URL`, run it, and
    require success before creating or updating the service revision.
-5. Inject only the preview branch's pooled runtime endpoint into
+5. Inject only the preview branch's least-privileged direct runtime endpoint into
    `agent-preview-database-url`, and set `RUN_MIGRATIONS_ON_STARTUP=false`.
 6. Record table names and migration revision only; never print a connection string.
 7. Deploy the same immutable image digest with the matching runtime service account.
-8. Prove the pooled endpoint works through every Aegra runtime database path exercised by
-   the preview smoke; stop the cutover on async/sync driver or pooler incompatibility.
+8. Prove the direct runtime endpoint works through every Aegra database path exercised by
+   the preview smoke; reject any accidental `-pooler` hostname before startup.
 9. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
    persistence, and exact Agent Protocol v2 streaming.
 10. Run the same digest's migration job against production through a separately held
-    direct endpoint, inject only its pooled runtime endpoint, and shift traffic after
-    smoke tests pass.
+    elevated direct endpoint, inject only its least-privileged direct runtime endpoint,
+    and shift traffic after smoke tests pass.
 
 Rollback reassigns Cloud Run traffic to the previous healthy revision and restores the
 previous secret version. Database migrations must remain compatible with one previous
@@ -311,13 +314,13 @@ shellcheck scripts/verify_ops_foundation.sh
 ```
 
 Each `--terraform-*` wrapper performs an on-disk preflight before invoking Terraform.
-The preflight enumerates Terraform 1.13.5's native `.tf`, `.tfvars`, `.tftest.hcl`, and
-`.tfmock.hcl` format candidates plus the reviewed JSON/load variants below `infra/gcp`,
-then requires the exact reviewed tracked allowlist of regular files. An extra tracked,
-untracked, or gitignored candidate, symlink, FIFO, socket, device, or directory fails
-closed. Rejected candidates are classified from directory metadata only; their contents
-are never opened. Terraform's internal `.terraform/` path is allowed only as an ignored,
-untracked real directory; the preflight checks that boundary without traversing its
+The preflight enumerates Terraform 1.13.5's native `.tf`, `.tfvars`, `.tftest.hcl`,
+`.tfmock.hcl`, and `.tfmock.json` candidates plus the reviewed JSON/load variants below
+`infra/gcp`, then requires the exact reviewed tracked allowlist of regular files. An extra
+tracked, untracked, or gitignored candidate, symlink, FIFO, socket, device, or directory
+fails closed. Rejected candidates are classified from directory metadata only; their
+contents are never opened. Terraform's internal `.terraform/` path is allowed only as an
+ignored, untracked real directory; the preflight checks that boundary without traversing its
 contents and does not inspect state, plan, or secret contents.
 
 The static command runs `uv run --no-project --with python-hcl2==7.3.1` and uses that

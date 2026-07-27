@@ -36,6 +36,12 @@ OPS_FOUNDATION_PATHS = frozenset(
         "scripts/verify_ops_foundation.sh",
     }
 )
+CHANGE_DETECTION_PATHS = frozenset(
+    {
+        "scripts/ci_changed_components.py",
+        "scripts/tests/test_ci_changed_components.py",
+    }
+)
 
 
 class ChangeDetectionError(RuntimeError):
@@ -49,8 +55,10 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         path = raw_path.removeprefix("./")
         if not path:
             continue
-        if path.startswith(".github/workflows/"):
+        if path.startswith(".github/workflows/") or path in CHANGE_DETECTION_PATHS:
             return dict.fromkeys(COMPONENTS, True)
+        if path == ".gitignore":
+            affected["infra"] = True
         if path.startswith("protocol/") or path.startswith("content/"):
             affected["web"] = True
             affected["agent"] = True

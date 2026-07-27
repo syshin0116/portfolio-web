@@ -616,6 +616,7 @@ def _is_terraform_loadable_name(name: str) -> bool:
             ".tftest.hcl",
             ".tftest.json",
             ".tfmock.hcl",
+            ".tfmock.json",
         )
     )
 

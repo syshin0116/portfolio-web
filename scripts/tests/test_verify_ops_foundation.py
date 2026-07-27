@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -146,6 +147,7 @@ resource "google_project_service" "required" {
             "infra/gcp/unreviewed.tftest.hcl",
             "infra/gcp/tests/unreviewed.tftest.json",
             "infra/gcp/unreviewed.tfmock.hcl",
+            "infra/gcp/unreviewed.tfmock.json",
         )
         for relative_path in candidates:
             with self.subTest(relative_path=relative_path):
@@ -1170,6 +1172,185 @@ data "terraform_remote_state" "escape" # parser-bypass
             "variable github_repository_id body must exactly match",
             result.stderr,
         )
+
+
+class LiveShellGuardTests(unittest.TestCase):
+    def _run_helper(self, body: str) -> subprocess.CompletedProcess[str]:
+        verifier = shlex.quote(str(REPO_ROOT / "scripts/verify_ops_foundation.sh"))
+        return subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"source {verifier} --help >/dev/null\n{body}",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_every_workload_account_is_forbidden_on_ancestor_policies(self) -> None:
+        accounts = (
+            "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
+        )
+        for account in accounts:
+            with self.subTest(account=account):
+                policy = json.dumps(
+                    {
+                        "bindings": [
+                            {
+                                "role": "roles/run.admin",
+                                "members": [f"serviceAccount:{account}"],
+                            }
+                        ]
+                    },
+                    separators=(",", ":"),
+                )
+                result = self._run_helper(
+                    "assert_workload_accounts_have_no_direct_roles "
+                    f"{shlex.quote(policy)} folders/123"
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(account, result.stderr)
+                self.assertIn("folders/123", result.stderr)
+        accepted = self._run_helper(
+            "assert_workload_accounts_have_no_direct_roles "
+            f"{shlex.quote(json.dumps({'bindings': []}))} organizations/456"
+        )
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+
+    def test_project_key_scan_checks_accounts_outside_the_managed_four(self) -> None:
+        legacy_account = "legacy@festive-ally-503605-v7.iam.gserviceaccount.com"
+        inventory = json.dumps(
+            [
+                {
+                    "email": "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+                },
+                {
+                    "email": (
+                        "agent-preview-runtime@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-prod-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {"email": legacy_account},
+            ],
+            separators=(",", ":"),
+        )
+        result = self._run_helper(
+            f"""
+gcloud() {{
+  case "$*" in
+    "iam service-accounts list --project $PROJECT_ID --format=json")
+      printf '%s\\n' {shlex.quote(inventory)}
+      ;;
+    iam\\ service-accounts\\ describe\\ *)
+      return 0
+      ;;
+    *"iam service-accounts keys list"*"{legacy_account}"*)
+      printf '%s\\n' projects/example/serviceAccounts/legacy/keys/user-key
+      ;;
+    iam\\ service-accounts\\ keys\\ list\\ *)
+      return 0
+      ;;
+    *)
+      printf 'unexpected gcloud call: %s\\n' "$*" >&2
+      return 99
+      ;;
+  esac
+}}
+verify_project_has_no_user_managed_service_account_keys
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(f"user-managed key exists for {legacy_account}", result.stderr)
+
+    def test_project_key_scan_requires_all_managed_accounts(self) -> None:
+        incomplete_inventory = json.dumps(
+            [{"email": "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"}],
+            separators=(",", ":"),
+        )
+        result = self._run_helper(
+            f"""
+gcloud() {{
+  case "$*" in
+    "iam service-accounts list --project $PROJECT_ID --format=json")
+      printf '%s\\n' {shlex.quote(incomplete_inventory)}
+      ;;
+    *)
+      return 99
+      ;;
+  esac
+}}
+verify_project_has_no_user_managed_service_account_keys
+"""
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "managed workload service account is absent from project inventory",
+            result.stderr,
+        )
+
+    def test_project_key_scan_accepts_complete_keyless_inventory(self) -> None:
+        inventory = json.dumps(
+            [
+                {
+                    "email": "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+                },
+                {
+                    "email": (
+                        "agent-preview-runtime@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-preview-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-prod-deployer@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+            ],
+            separators=(",", ":"),
+        )
+        result = self._run_helper(
+            f"""
+gcloud() {{
+  case "$*" in
+    "iam service-accounts list --project $PROJECT_ID --format=json")
+      printf '%s\\n' {shlex.quote(inventory)}
+      ;;
+    iam\\ service-accounts\\ describe\\ *|iam\\ service-accounts\\ keys\\ list\\ *)
+      return 0
+      ;;
+    *)
+      return 99
+      ;;
+  esac
+}}
+verify_project_has_no_user_managed_service_account_keys
+"""
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
 
 
 class StateBucketMetadataTests(unittest.TestCase):

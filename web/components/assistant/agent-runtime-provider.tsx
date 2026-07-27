@@ -25,6 +25,12 @@ import {
   type AgentErrorRoutingState,
 } from "./runtime/error-state"
 import { AegraThreadAdapter } from "./runtime/thread-adapter"
+import {
+  advanceActiveThreadSource,
+  runtimeSourceIsActive,
+  type ActiveThreadSource,
+  type RuntimeThreadSource,
+} from "./runtime/thread-source"
 
 const MAX_VISIBLE_ACTIVITIES = 24
 type InspectionAvailability = "waiting" | "live" | "past-unavailable"
@@ -72,7 +78,9 @@ function ConfiguredAgentRuntimeProvider({
 }: AgentRuntimeProviderProps & { apiUrl: string; assistantId: string }) {
   const [activities, setActivities] = useState<AgentActivity[]>([])
   const [activeThreadId, setActiveThreadId] = useState<string>()
-  const activeThreadIdRef = useRef<string | undefined>(undefined)
+  const activeThreadSourceRef = useRef<ActiveThreadSource>({
+    generation: 0,
+  })
   const [inspectionAvailability, setInspectionAvailability] =
     useState<InspectionAvailability>("waiting")
   const [connectionAttempt, setConnectionAttempt] = useState(0)
@@ -81,15 +89,9 @@ function ConfiguredAgentRuntimeProvider({
   })
   const handleActivity = useCallback((
     activity: AgentActivity,
-    sourceThreadId?: string
+    source: RuntimeThreadSource
   ) => {
-    if (
-      sourceThreadId !== undefined &&
-      activeThreadIdRef.current !== undefined &&
-      activeThreadIdRef.current !== sourceThreadId
-    ) {
-      return
-    }
+    if (!runtimeSourceIsActive(activeThreadSourceRef.current, source)) return
     setInspectionAvailability("live")
     setActivities((current) => {
       const withoutCurrent = current.filter(
@@ -113,15 +115,9 @@ function ConfiguredAgentRuntimeProvider({
   }, [])
   const handleRuntimeError = useCallback((
     error: unknown,
-    sourceThreadId?: string
+    source: RuntimeThreadSource
   ) => {
-    if (
-      sourceThreadId !== undefined &&
-      activeThreadIdRef.current !== undefined &&
-      activeThreadIdRef.current !== sourceThreadId
-    ) {
-      return
-    }
+    if (!runtimeSourceIsActive(activeThreadSourceRef.current, source)) return
     setErrorRouting((current) =>
       reduceAgentError(current, error, "turn")
     )
@@ -132,6 +128,8 @@ function ConfiguredAgentRuntimeProvider({
         apiUrl,
         assistantId,
         identity,
+        getSourceGeneration: () =>
+          activeThreadSourceRef.current.generation,
         onActivity: handleActivity,
         onError: handleRuntimeError,
       }),
@@ -162,15 +160,16 @@ function ConfiguredAgentRuntimeProvider({
   const runtime = useLangGraphRuntime({
     stream: native.stream,
     load: async (threadId, config) => {
+      const source: RuntimeThreadSource = {
+        generation: activeThreadSourceRef.current.generation,
+        threadId,
+      }
       try {
         const loaded = await threadAdapter.load(
           threadId,
           config?.signal ?? new AbortController().signal
         )
-        if (
-          activeThreadIdRef.current === undefined ||
-          activeThreadIdRef.current === threadId
-        ) {
+        if (runtimeSourceIsActive(activeThreadSourceRef.current, source)) {
           setInspectionAvailability(
             loaded.messages.length > 0 ? "past-unavailable" : "waiting"
           )
@@ -180,8 +179,10 @@ function ConfiguredAgentRuntimeProvider({
         if (config?.signal.aborted) {
           return { messages: [], interrupts: [], uiMessages: [] }
         }
-        handleRuntimeError(error, threadId)
-        setInspectionAvailability("waiting")
+        handleRuntimeError(error, source)
+        if (runtimeSourceIsActive(activeThreadSourceRef.current, source)) {
+          setInspectionAvailability("waiting")
+        }
         // react-langgraph logs rejected load promises. Resolve with a closed,
         // empty projection after routing the safe inline error instead.
         return { messages: [], interrupts: [], uiMessages: [] }
@@ -191,14 +192,14 @@ function ConfiguredAgentRuntimeProvider({
     unstable_allowCancellation: true,
     unstable_enableMessageQueue: false,
     onThreadIdChange: (threadId) => {
-      activeThreadIdRef.current = threadId
+      activeThreadSourceRef.current = advanceActiveThreadSource(
+        activeThreadSourceRef.current,
+        threadId
+      )
       setActiveThreadId(threadId)
       setActivities([])
       setInspectionAvailability("waiting")
       dismissTurnError()
-    },
-    eventHandlers: {
-      onError: handleRuntimeError,
     },
   })
 

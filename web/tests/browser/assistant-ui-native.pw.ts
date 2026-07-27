@@ -22,6 +22,7 @@ interface FixtureState {
     response?: unknown
   }>
   revision: string
+  staleSourceDeliveries: number
   streamSubscriptions: Array<{
     authorization: boolean
     body: Record<string, unknown>
@@ -42,7 +43,13 @@ const revision =
 
 async function resetFixture(
   page: Page,
-  scenario: "default" | "load-error" | "reconnect" = "default"
+  scenario:
+    | "cancel-auth-failure"
+    | "default"
+    | "delayed-replay"
+    | "load-error"
+    | "reconnect"
+    | "stale-source" = "default"
 ): Promise<void> {
   const response = await page.request.post(
     `${fixtureOrigin}/__fixture/reset`,
@@ -355,6 +362,46 @@ test.describe.serial("native assistant-ui production journey", () => {
     await expectNoBrowserErrors(page, diagnostics)
   })
 
+  test("shows a redacted error after one cancellation credential refresh", async ({
+    page,
+  }) => {
+    const diagnostics = collectDiagnostics(page)
+    await resetFixture(page, "cancel-auth-failure")
+    await page.goto("/")
+    await page
+      .getByRole("button", { name: /브라우저 테스트 대화/ })
+      .click()
+    const composer = page.getByRole("textbox", {
+      name: "AI에게 보낼 메시지",
+    })
+    await composer.fill("취소 인증 갱신 실패 검증")
+    await composer.press("Enter")
+    const stop = page.getByRole("button", { name: "응답 중지" })
+    await expect(stop).toBeVisible()
+    await expect
+      .poll(async () => (await fixtureState(page)).commands.length)
+      .toBe(1)
+    await stop.click()
+
+    await expect
+      .poll(async () => (await fixtureState(page)).cancellations.length)
+      .toBe(2)
+    await expect(
+      page.getByText(
+        "로그인 세션이 만료되었습니다. 다시 로그인해 주세요."
+      )
+    ).toBeVisible()
+    await expect(page.locator("body")).not.toContainText(
+      "PRIVATE_CANCEL_AUTH_BODY_MUST_NOT_RENDER"
+    )
+    expect(diagnostics.consoleIssues).toEqual([
+      expect.stringContaining("401 (Unauthorized)"),
+      expect.stringContaining("401 (Unauthorized)"),
+    ])
+    diagnostics.consoleIssues.length = 0
+    await expectNoBrowserErrors(page, diagnostics)
+  })
+
   test("reconnects the native APv2 content stream without duplicating the nested lifecycle", async ({
     page,
   }, testInfo) => {
@@ -393,6 +440,71 @@ test.describe.serial("native assistant-ui production journey", () => {
     diagnostics.consoleIssues.length = 0
     await expectNoBrowserErrors(page, diagnostics)
     await attachEvidence(page, testInfo, "native-reconnect")
+  })
+
+  test("never projects delayed history from a different nonce-resolved run", async ({
+    page,
+  }) => {
+    const diagnostics = collectDiagnostics(page)
+    await resetFixture(page, "delayed-replay")
+    await page.goto("/")
+    await page
+      .getByRole("button", { name: /브라우저 테스트 대화/ })
+      .click()
+    const composer = page.getByRole("textbox", {
+      name: "AI에게 보낼 메시지",
+    })
+    await composer.fill("지연 replay 상관관계 검증")
+    await composer.press("Enter")
+
+    await expect(
+      page.getByText("브라우저 fixture 검색을 계속할까요?")
+    ).toBeVisible({ timeout: 12_000 })
+    await expect(page.locator("body")).not.toContainText(
+      "STALE_BROWSER_HISTORY_MUST_NOT_RENDER"
+    )
+    await expectNoBrowserErrors(page, diagnostics)
+  })
+
+  test("keeps old nested activity and errors out of a new empty thread", async ({
+    page,
+  }) => {
+    const diagnostics = collectDiagnostics(page)
+    await resetFixture(page, "stale-source")
+    await page.goto("/")
+    await page
+      .getByRole("button", { name: /브라우저 테스트 대화/ })
+      .click()
+    const composer = page.getByRole("textbox", {
+      name: "AI에게 보낼 메시지",
+    })
+    await composer.fill("새 대화 source 격리 검증")
+    await composer.press("Enter")
+    await expect
+      .poll(async () => (await fixtureState(page)).commands.length)
+      .toBe(1)
+
+    await page.getByRole("button", { name: "새 대화" }).click()
+    await expect(
+      page.getByRole("heading", {
+        name: /블로그를 아는 AI가 아니라/,
+      })
+    ).toBeVisible()
+    await expect
+      .poll(async () => (await fixtureState(page)).staleSourceDeliveries)
+      .toBeGreaterThanOrEqual(2)
+    await expect(
+      page.getByText("중첩 작업을 실행 중입니다.")
+    ).toHaveCount(0)
+    await expect(
+      page.getByText(
+        "에이전트 실행을 완료하지 못했습니다. 같은 대화에서 다시 시도해 주세요."
+      )
+    ).toHaveCount(0)
+    await expect(page.locator("body")).not.toContainText(
+      "PRIVATE_STALE_SOURCE_ERROR"
+    )
+    await expectNoBrowserErrors(page, diagnostics)
   })
 
   test("blocks an over-byte composer submission before it reaches APv2", async ({

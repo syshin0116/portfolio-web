@@ -41,7 +41,14 @@ interface FixtureState {
   renameAttempts: number
   reconnectDisconnects: number
   responses: JsonRecord[]
-  scenario: "default" | "load-error" | "reconnect"
+  scenario:
+    | "cancel-auth-failure"
+    | "default"
+    | "delayed-replay"
+    | "load-error"
+    | "reconnect"
+    | "stale-source"
+  staleSourceDeliveries: number
   streamSubscriptions: Array<{
     authorization: boolean
     body: JsonRecord
@@ -94,6 +101,7 @@ function resetState(
     reconnectDisconnects: 0,
     responses: [],
     scenario,
+    staleSourceDeliveries: 0,
     streamSubscriptions: [],
     subscribers: new Map(),
     threads: new Map([[thread.thread_id, thread]]),
@@ -171,15 +179,17 @@ function subscriberMatches(
 function writeEvent(
   subscriber: Subscriber,
   event: JsonRecord
-): void {
-  if (subscriber.closed) return
+): boolean {
+  if (subscriber.closed) return false
   try {
     subscriber.controller.enqueue(
       encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
     )
+    return true
   } catch {
     subscriber.closed = true
     state.subscribers.delete(subscriber.id)
+    return false
   }
 }
 
@@ -187,7 +197,8 @@ function emit(
   threadId: string,
   event: JsonRecord,
   audience: "all" | "content" | "watcher" = "all"
-): void {
+): number {
+  let deliveries = 0
   for (const subscriber of state.subscribers.values()) {
     if (
       subscriber.threadId !== threadId ||
@@ -208,19 +219,31 @@ function emit(
     ) {
       continue
     }
-    writeEvent(subscriber, event)
+    if (writeEvent(subscriber, event)) deliveries += 1
   }
+  return deliveries
 }
 
 function protocolEvent(
   method: string,
   namespace: string[],
   data: JsonRecord,
-  sequence = state.nextSequence++
+  sequence = state.nextSequence++,
+  runId?: string
 ): JsonRecord {
+  const rootRunning =
+    runId !== undefined &&
+    method === "lifecycle" &&
+    namespace.length === 0 &&
+    data.event === "running"
   return {
     type: "event",
-    event_id: `browser-event-${sequence}`,
+    event_id:
+      runId === undefined
+        ? `browser-event-${sequence}`
+        : rootRunning
+          ? `${runId}:running:0`
+          : `${runId}_event_${sequence}:0`,
     seq: sequence,
     method,
     params: {
@@ -242,39 +265,124 @@ async function waitForStreams(threadId: string): Promise<void> {
   throw new Error("browser fixture streams were not opened")
 }
 
-function messageEvents(): JsonRecord[] {
-  const messageId = `browser-answer-${state.nextSequence}`
+function messageEvents(
+  runId: string,
+  text = "브라우저 fixture 응답이 완료되었습니다.",
+  messageId = `browser-answer-${state.nextSequence}`
+): JsonRecord[] {
   return [
     protocolEvent("messages", [], {
       event: "message-start",
       role: "ai",
       id: messageId,
-    }),
+    }, undefined, runId),
     protocolEvent("messages", [], {
       event: "content-block-start",
       index: 0,
       content: { type: "text", text: "" },
-    }),
+    }, undefined, runId),
     protocolEvent("messages", [], {
       event: "content-block-delta",
       index: 0,
       delta: {
         type: "text-delta",
-        text: "브라우저 fixture 응답이 완료되었습니다.",
+        text,
       },
-    }),
+    }, undefined, runId),
     protocolEvent("messages", [], {
       event: "content-block-finish",
       index: 0,
       content: {
         type: "text",
-        text: "브라우저 fixture 응답이 완료되었습니다.",
+        text,
       },
-    }),
+    }, undefined, runId),
     protocolEvent("messages", [], {
       event: "message-finish",
-    }),
+    }, undefined, runId),
   ]
+}
+
+async function emitDelayedReplayThenInitial(
+  threadId: string,
+  run: RunRow
+): Promise<void> {
+  const staleRunId = "browser-stale-run"
+  await waitForStreams(threadId)
+  await Bun.sleep(300)
+  emit(
+    threadId,
+    protocolEvent(
+      "lifecycle",
+      [],
+      { event: "running", graph_name: "agent" },
+      undefined,
+      staleRunId
+    )
+  )
+  for (const event of messageEvents(
+    staleRunId,
+    "STALE_BROWSER_HISTORY_MUST_NOT_RENDER",
+    "stale-browser-answer"
+  )) {
+    emit(threadId, event)
+  }
+  emit(
+    threadId,
+    protocolEvent(
+      "lifecycle",
+      [],
+      { event: "completed", graph_name: "agent" },
+      undefined,
+      staleRunId
+    )
+  )
+  await Bun.sleep(50)
+  await emitInitialRun(threadId, run)
+}
+
+async function emitStaleSourceFailure(
+  threadId: string,
+  run: RunRow
+): Promise<void> {
+  await waitForStreams(threadId)
+  emit(
+    threadId,
+    protocolEvent(
+      "lifecycle",
+      [],
+      { event: "running", graph_name: "agent" },
+      undefined,
+      run.run_id
+    )
+  )
+  await Bun.sleep(80)
+  state.staleSourceDeliveries += emit(
+    threadId,
+    protocolEvent(
+      "lifecycle",
+      ["nested_subgraph:stale-source"],
+      { event: "running", graph_name: "nested" },
+      undefined,
+      run.run_id
+    ),
+    "watcher"
+  )
+  state.staleSourceDeliveries += emit(
+    threadId,
+    protocolEvent(
+      "lifecycle",
+      [],
+      {
+        event: "failed",
+        graph_name: "agent",
+        error: "PRIVATE_STALE_SOURCE_ERROR",
+      },
+      undefined,
+      run.run_id
+    )
+  )
+  run.status = "error"
 }
 
 async function emitInitialRun(threadId: string, run: RunRow): Promise<void> {
@@ -284,14 +392,14 @@ async function emitInitialRun(threadId: string, run: RunRow): Promise<void> {
     protocolEvent("lifecycle", [], {
       event: "running",
       graph_name: "agent",
-    })
+    }, undefined, run.run_id)
   )
   emit(
     threadId,
     protocolEvent("lifecycle", ["nested_subgraph:browser-task"], {
       event: "running",
       graph_name: "nested",
-    }),
+    }, undefined, run.run_id),
     "watcher"
   )
   const nestedInput = protocolEvent(
@@ -306,12 +414,20 @@ async function emitInitialRun(threadId: string, run: RunRow): Promise<void> {
         prompt: "브라우저 fixture 검색을 계속할까요?",
         input_hint: "수정할 내용을 입력해 재개",
       },
-    }
+    },
+    undefined,
+    run.run_id
   )
-  const rootInterrupted = protocolEvent("lifecycle", [], {
-    event: "interrupted",
-    graph_name: "agent",
-  })
+  const rootInterrupted = protocolEvent(
+    "lifecycle",
+    [],
+    {
+      event: "interrupted",
+      graph_name: "agent",
+    },
+    undefined,
+    run.run_id
+  )
   // Deliberately deliver the terminal over the root content SSE before the
   // earlier nested input reaches the independent SDK watcher SSE.
   emit(threadId, rootInterrupted, "content")
@@ -322,7 +438,7 @@ async function emitInitialRun(threadId: string, run: RunRow): Promise<void> {
     protocolEvent("lifecycle", ["nested_subgraph:browser-task"], {
       event: "interrupted",
       graph_name: "nested",
-    }),
+    }, undefined, run.run_id),
     "watcher"
   )
   emit(threadId, rootInterrupted, "watcher")
@@ -341,23 +457,23 @@ async function emitCompletedRun(
     protocolEvent("lifecycle", [], {
       event: "running",
       graph_name: "agent",
-    })
+    }, undefined, run.run_id)
   )
   emit(
     threadId,
     protocolEvent("lifecycle", ["nested_subgraph:browser-task"], {
       event: "running",
       graph_name: "nested",
-    }),
+    }, undefined, run.run_id),
     "watcher"
   )
-  for (const event of messageEvents()) emit(threadId, event)
+  for (const event of messageEvents(run.run_id)) emit(threadId, event)
   emit(
     threadId,
     protocolEvent("lifecycle", ["nested_subgraph:browser-task"], {
       event: "completed",
       graph_name: "nested",
-    }),
+    }, undefined, run.run_id),
     "watcher"
   )
   emit(
@@ -365,7 +481,7 @@ async function emitCompletedRun(
     protocolEvent("lifecycle", [], {
       event: "completed",
       graph_name: "agent",
-    })
+    }, undefined, run.run_id)
   )
   run.status = "success"
   const thread = state.threads.get(threadId)
@@ -437,6 +553,7 @@ function publicState(): JsonRecord {
     responses: state.responses,
     revision: process.env.GITHUB_SHA ?? "local",
     scenario: state.scenario,
+    staleSourceDeliveries: state.staleSourceDeliveries,
     streamSubscriptions: state.streamSubscriptions,
   }
 }
@@ -454,11 +571,13 @@ const server = Bun.serve({
     if (url.pathname === "/__fixture/reset" && request.method === "POST") {
       const body = await jsonBody(request)
       state = resetState(
-        body.scenario === "load-error"
-          ? "load-error"
-          : body.scenario === "reconnect"
-            ? "reconnect"
-            : "default"
+        body.scenario === "cancel-auth-failure" ||
+          body.scenario === "delayed-replay" ||
+          body.scenario === "load-error" ||
+          body.scenario === "reconnect" ||
+          body.scenario === "stale-source"
+          ? body.scenario
+          : "default"
       )
       return responseJson(publicState())
     }
@@ -575,7 +694,27 @@ const server = Bun.serve({
             : {}
         const run = newRun(threadId, metadata)
         const serialized = JSON.stringify(params.input ?? "")
-        if (serialized.includes("취소")) {
+        if (state.scenario === "delayed-replay") {
+          void emitDelayedReplayThenInitial(threadId, run).catch(
+            (error: unknown) => {
+              state.errors.push(
+                error instanceof Error
+                  ? error.message
+                  : "delayed replay emit failed"
+              )
+            }
+          )
+        } else if (state.scenario === "stale-source") {
+          void emitStaleSourceFailure(threadId, run).catch(
+            (error: unknown) => {
+              state.errors.push(
+                error instanceof Error
+                  ? error.message
+                  : "stale source emit failed"
+              )
+            }
+          )
+        } else if (serialized.includes("취소")) {
           void waitForStreams(threadId)
             .then(() => {
               emit(
@@ -583,7 +722,7 @@ const server = Bun.serve({
                 protocolEvent("lifecycle", [], {
                   event: "running",
                   graph_name: "agent",
-                })
+                }, undefined, run.run_id)
               )
             })
             .catch((error: unknown) => {
@@ -669,11 +808,17 @@ const server = Bun.serve({
       /^\/threads\/([^/]+)\/runs\/([^/]+)\/cancel$/.exec(url.pathname)
     if (cancelMatch && request.method === "POST") {
       const [, threadId, runId] = cancelMatch
+      state.cancellations.push({ threadId: threadId!, runId: runId! })
+      if (state.scenario === "cancel-auth-failure") {
+        return responseJson(
+          { error: "PRIVATE_CANCEL_AUTH_BODY_MUST_NOT_RENDER" },
+          401
+        )
+      }
       const run = (state.runs.get(threadId!) ?? []).find(
         (candidate) => candidate.run_id === runId
       )
       if (run) run.status = "interrupted"
-      state.cancellations.push({ threadId: threadId!, runId: runId! })
       return emptyResponse()
     }
     const runMatch =

@@ -218,16 +218,25 @@ function validatedRunIdentifier(value: string, label: string): string {
   return value
 }
 
+type MintRestrictedCredential = (
+  signal: AbortSignal
+) => Promise<CachedToken>
+
 /**
- * A bearer credential captured before a stream starts and restricted to one
- * run's POST /cancel plus bounded read-only status polling. It bypasses the
- * broker's refresh path by design, so a 401 can never mint another identity's
- * token while an old run is being disposed.
+ * A bearer credential capability captured before a stream starts and
+ * restricted to one run's POST /cancel plus bounded read-only status polling.
+ * The token is refreshed inside this restricted wrapper at its expiry margin
+ * or once after a 401. Every refreshed JWT is revalidated against the captured
+ * identity before it can reach the exact run endpoint.
  */
 class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
   readonly identity: string
   readonly #fetch: FetchLike
-  #token: string | undefined
+  readonly #mint: MintRestrictedCredential
+  readonly #nowSeconds: () => number
+  readonly #refreshMarginSeconds: number
+  #credential: CachedToken | undefined
+  #disposed = false
   #bound = false
   #resolutionBound = false
   #resolutionPolls = 0
@@ -235,10 +244,20 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
   #statusPolls = 0
   #expectedRunsList?: URL
 
-  constructor(identity: string, token: string, fetchImplementation: FetchLike) {
+  constructor(
+    identity: string,
+    credential: CachedToken,
+    fetchImplementation: FetchLike,
+    mint: MintRestrictedCredential,
+    nowSeconds: () => number,
+    refreshMarginSeconds: number
+  ) {
     this.identity = identity
-    this.#token = token
+    this.#credential = credential
     this.#fetch = fetchImplementation
+    this.#mint = mint
+    this.#nowSeconds = nowSeconds
+    this.#refreshMarginSeconds = refreshMarginSeconds
   }
 
   createRunResolverFetch(target: AgentRunResolutionTarget): FetchLike {
@@ -265,8 +284,7 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
     this.#resolutionBound = true
 
     return async (input, init) => {
-      const token = this.#token
-      if (!token) {
+      if (this.#disposed) {
         throw new AgentAuthenticationError(
           "Run-resolution credential has been disposed"
         )
@@ -304,20 +322,17 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
         )
       }
       this.#resolutionPolls += 1
-      return await this.#fetch(
+      return await this.#fetchWithFreshCredential(
         url.toString(),
-        withAuthorization(
-          {
-            method: "GET",
-            signal:
-              init?.signal instanceof AbortSignal ? init.signal : undefined,
-            cache: "no-store",
-            credentials: "omit",
-            redirect: "error",
-            referrerPolicy: "no-referrer",
-          },
-          token
-        )
+        {
+          method: "GET",
+          signal:
+            init?.signal instanceof AbortSignal ? init.signal : undefined,
+          cache: "no-store",
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+        }
       )
     }
   }
@@ -360,8 +375,7 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
     this.#bound = true
 
     return async (input, init) => {
-      const token = this.#token
-      if (!token) {
+      if (this.#disposed) {
         throw new AgentAuthenticationError(
           "Cancellation credential has been disposed"
         )
@@ -419,24 +433,81 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
         )
       }
 
-      const authorized = withAuthorization(
-        {
-          method,
-          signal:
-            init?.signal instanceof AbortSignal ? init.signal : undefined,
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "error",
-          referrerPolicy: "no-referrer",
-        },
-        token
-      )
-      return await this.#fetch(url.toString(), authorized)
+      return await this.#fetchWithFreshCredential(url.toString(), {
+        method,
+        signal:
+          init?.signal instanceof AbortSignal ? init.signal : undefined,
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      })
     }
   }
 
+  async #fetchWithFreshCredential(
+    url: string,
+    init: RequestInit
+  ): Promise<Response> {
+    const signal =
+      init.signal instanceof AbortSignal
+        ? init.signal
+        : new AbortController().signal
+    const firstToken = await this.#getCredential(signal)
+    const first = await this.#fetch(
+      url,
+      withAuthorization(init, firstToken)
+    )
+    if (first.status !== 401) return first
+
+    await first.body?.cancel()
+    this.#credential = undefined
+    const refreshedToken = await this.#getCredential(signal, true)
+    const retried = await this.#fetch(
+      url,
+      withAuthorization(init, refreshedToken)
+    )
+    if (retried.status !== 401) return retried
+    await retried.body?.cancel()
+    throw new AgentAuthenticationError(
+      "Run-scoped agent authentication failed",
+      401
+    )
+  }
+
+  async #getCredential(
+    signal: AbortSignal,
+    forceRefresh = false
+  ): Promise<string> {
+    if (this.#disposed) {
+      throw new AgentAuthenticationError(
+        "Run-scoped credential has been disposed"
+      )
+    }
+    signal.throwIfAborted()
+    const current = this.#credential
+    if (
+      !forceRefresh &&
+      current?.identity === this.identity &&
+      current.expiresAt - this.#nowSeconds() >
+        this.#refreshMarginSeconds
+    ) {
+      return current.token
+    }
+    const refreshed = await this.#mint(signal)
+    signal.throwIfAborted()
+    if (refreshed.identity !== this.identity) {
+      throw new AgentAuthenticationError(
+        "Run-scoped credential identity changed"
+      )
+    }
+    this.#credential = refreshed
+    return refreshed.token
+  }
+
   dispose(): void {
-    this.#token = undefined
+    this.#disposed = true
+    this.#credential = undefined
   }
 }
 
@@ -539,7 +610,19 @@ export class AgentTokenBroker {
     if (this.#sealed || this.#identity !== identity) {
       throw new DOMException("Agent identity changed", "AbortError")
     }
-    return new RunScopedCancellationSnapshot(identity, token, this.#fetch)
+    const credential: CachedToken = {
+      token,
+      expiresAt: decodeJwtExpiration(token),
+      identity,
+    }
+    return new RunScopedCancellationSnapshot(
+      identity,
+      credential,
+      this.#fetch,
+      (mintSignal) => this.#requestToken(identity, mintSignal),
+      this.#nowSeconds,
+      this.#refreshMarginSeconds
+    )
   }
 
   async get(signal: AbortSignal, forceRefresh = false): Promise<string> {
@@ -631,7 +714,7 @@ export class AgentTokenBroker {
       settled: false,
       promise: Promise.resolve({ token: "", expiresAt: 0, identity }),
     }
-    flight.promise = this.#mint(identity, controller.signal)
+    flight.promise = this.#requestToken(identity, controller.signal)
       .then((token) => {
         if (this.#sealed || this.#identity !== identity) {
           throw new DOMException("Agent identity changed", "AbortError")
@@ -647,7 +730,10 @@ export class AgentTokenBroker {
     return flight
   }
 
-  async #mint(identity: string, signal: AbortSignal): Promise<CachedToken> {
+  async #requestToken(
+    identity: string,
+    signal: AbortSignal
+  ): Promise<CachedToken> {
     const response = await this.#fetch(TOKEN_ENDPOINT, {
       method: "POST",
       cache: "no-store",

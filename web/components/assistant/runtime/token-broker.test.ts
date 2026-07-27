@@ -431,6 +431,143 @@ describe("AgentTokenBroker", () => {
     })
   })
 
+  test("refreshes the restricted cancellation credential at its expiry margin", async () => {
+    let now = 1_000
+    let mintCalls = 0
+    const requests: Array<{
+      authorization: string | null
+      url: string
+    }> = []
+    const first = token(1_120, "old-user")
+    const refreshed = token(1_400, "old-user")
+    const broker = new AgentTokenBroker("old-user", {
+      agentOrigin: "https://agent.example",
+      nowSeconds: () => now,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url === "/api/agent-token") {
+          mintCalls += 1
+          return jsonResponse({
+            token: mintCalls === 1 ? first : refreshed,
+          })
+        }
+        requests.push({
+          authorization: new Headers(init?.headers).get("Authorization"),
+          url,
+        })
+        return new Response(null, { status: 204 })
+      },
+    })
+    const snapshot = await broker.captureCancellationSnapshot(
+      new AbortController().signal
+    )
+    const cancellationFetch = snapshot.createFetch({
+      apiUrl: "https://agent.example",
+      threadId: "thread-1",
+      runId: "run-1",
+    })
+
+    now = 1_060
+    broker.seal()
+    expect(
+      (
+        await cancellationFetch(
+          "https://agent.example/threads/thread-1/runs/run-1/cancel?wait=0&action=interrupt",
+          { method: "POST" }
+        )
+      ).status
+    ).toBe(204)
+    expect(mintCalls).toBe(2)
+    expect(requests).toEqual([
+      {
+        authorization: `Bearer ${refreshed}`,
+        url: "https://agent.example/threads/thread-1/runs/run-1/cancel?wait=0&action=interrupt",
+      },
+    ])
+  })
+
+  test("retries one cancellation 401 with a fresh same-identity credential", async () => {
+    let mintCalls = 0
+    let cancellationCalls = 0
+    const authorizations: Array<string | null> = []
+    const broker = new AgentTokenBroker("old-user", {
+      agentOrigin: "https://agent.example",
+      nowSeconds: () => 1_000,
+      fetch: async (input, init) => {
+        if (String(input) === "/api/agent-token") {
+          mintCalls += 1
+          return jsonResponse({
+            token: token(2_000 + mintCalls, "old-user"),
+          })
+        }
+        cancellationCalls += 1
+        authorizations.push(
+          new Headers(init?.headers).get("Authorization")
+        )
+        return new Response(null, {
+          status: cancellationCalls === 1 ? 401 : 204,
+        })
+      },
+    })
+    const snapshot = await broker.captureCancellationSnapshot(
+      new AbortController().signal
+    )
+    const cancellationFetch = snapshot.createFetch({
+      apiUrl: "https://agent.example",
+      threadId: "thread-1",
+      runId: "run-1",
+    })
+
+    expect(
+      (
+        await cancellationFetch(
+          "https://agent.example/threads/thread-1/runs/run-1/cancel?wait=0&action=interrupt",
+          { method: "POST" }
+        )
+      ).status
+    ).toBe(204)
+    expect({ cancellationCalls, mintCalls }).toEqual({
+      cancellationCalls: 2,
+      mintCalls: 2,
+    })
+    expect(authorizations[0]).not.toBe(authorizations[1])
+  })
+
+  test("rejects a second cancellation 401 without exposing the response body", async () => {
+    const privateBody =
+      "postgres://owner:PRIVATE_CANCEL_SECRET@db.internal"
+    const broker = new AgentTokenBroker("old-user", {
+      agentOrigin: "https://agent.example",
+      nowSeconds: () => 1_000,
+      fetch: async (input) =>
+        String(input) === "/api/agent-token"
+          ? jsonResponse({ token: token(2_000, "old-user") })
+          : new Response(privateBody, { status: 401 }),
+    })
+    const snapshot = await broker.captureCancellationSnapshot(
+      new AbortController().signal
+    )
+    const cancellationFetch = snapshot.createFetch({
+      apiUrl: "https://agent.example",
+      threadId: "thread-1",
+      runId: "run-1",
+    })
+
+    let observed: unknown
+    try {
+      await cancellationFetch(
+        "https://agent.example/threads/thread-1/runs/run-1/cancel?wait=0&action=interrupt",
+        { method: "POST" }
+      )
+    } catch (error) {
+      observed = error
+    }
+    expect(observed).toBeInstanceOf(AgentAuthenticationError)
+    expect(observed).toMatchObject({ status: 401 })
+    expect(JSON.stringify(observed)).not.toContain(privateBody)
+    expect((observed as Error).message).not.toContain("PRIVATE_CANCEL_SECRET")
+  })
+
   test("pins resumed-run discovery to one exact read-only thread endpoint and old identity", async () => {
     const oldToken = token(2_000, "old-user")
     const newToken = token(2_100, "new-user")

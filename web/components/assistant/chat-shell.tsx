@@ -546,6 +546,19 @@ function Composer() {
     runtimeUi.dismissTurnError()
     restoreComposerFocus()
   }
+  const rejectOversizedComposer = () => {
+    const value = composerInputRef.current?.value ?? ""
+    if (
+      value.length <= MAX_COMPOSER_CODE_UNITS &&
+      composerEncoder.encode(value).byteLength <= MAX_COMPOSER_UTF8_BYTES
+    ) {
+      setComposerError(undefined)
+      return false
+    }
+    setComposerError(COMPOSER_LIMIT_ERROR)
+    setTimeout(() => composerInputRef.current?.focus(), 0)
+    return true
+  }
 
   return (
     <div className="border-t bg-background/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur md:px-6">
@@ -591,19 +604,10 @@ function Composer() {
       <ComposerPrimitive.Root
         className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border bg-card p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/20"
         onSubmitCapture={(event) => {
-          const value = composerInputRef.current?.value ?? ""
-          if (
-            value.length > MAX_COMPOSER_CODE_UNITS ||
-            composerEncoder.encode(value).byteLength >
-              MAX_COMPOSER_UTF8_BYTES
-          ) {
+          if (rejectOversizedComposer()) {
             event.preventDefault()
             event.stopPropagation()
-            setComposerError(COMPOSER_LIMIT_ERROR)
-            setTimeout(() => composerInputRef.current?.focus(), 0)
-            return
           }
-          setComposerError(undefined)
         }}
       >
         <ComposerPrimitive.Input
@@ -651,6 +655,14 @@ function Composer() {
         <ThreadPrimitive.If running={false}>
           <ComposerPrimitive.Send
             aria-label="메시지 보내기"
+            onClick={(event) => {
+              if (rejectOversizedComposer()) {
+                // ComposerPrimitive.Send invokes the runtime directly instead
+                // of submitting its parent form. Cancelling this first handler
+                // prevents assistant-ui's composed send callback from running.
+                event.preventDefault()
+              }
+            }}
             className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform motion-reduce:transition-none hover:scale-105 motion-reduce:hover:scale-100 disabled:opacity-40"
           >
             <ArrowUp className="size-4" />

@@ -892,12 +892,12 @@ describe("native stream lifecycle", () => {
     const fakeClient = makeClient([
       {
         events: [
+          lifecycle("running"),
           lifecycle(
             "failed",
             "postgres://owner:nested-secret@db.internal",
             ["nested_worker:task-1"]
           ),
-          lifecycle("running"),
           lifecycle("completed"),
         ],
       },
@@ -1109,6 +1109,7 @@ describe("native stream lifecycle", () => {
     let startAttempted = false
     const fakeClient = makeClient([
       {
+        runId: "late-run-id",
         events: [],
         waitForClose: () => undefined,
         startRun: async () => {
@@ -1216,8 +1217,12 @@ describe("native stream lifecycle", () => {
       prompt: "재개할까요?",
     })
     const fakeClient = makeClient([
-      { events: [requested, lifecycle("interrupted")] },
       {
+        runId: "initial-run-before-stop",
+        events: [requested, lifecycle("interrupted")],
+      },
+      {
+        runId: "resumed-run-after-stop",
         events: [lifecycle("running")],
         waitForClose: () => undefined,
       },
@@ -1356,16 +1361,21 @@ describe("native stream lifecycle", () => {
     ).rejects.toThrow("disposed")
   })
 
-  test("401 during identity cancellation never refreshes or leaks across identities", async () => {
+  test("reports a redacted failure after one same-identity cancellation refresh", async () => {
     const oldAuth = makeAuthHarness("old-user", { cancelStatus: 401 })
     const newAuth = makeAuthHarness("new-user")
+    const observed: Error[] = []
     const fakeClient = makeClient([
       {
         events: [lifecycle("running")],
         waitForClose: () => undefined,
       },
     ])
-    const native = makeNative(fakeClient, {}, oldAuth)
+    const native = makeNative(
+      fakeClient,
+      { onError: (error) => observed.push(error) },
+      oldAuth
+    )
     const iterator = await native.stream(
       [{ id: "human-1", type: "human", content: "취소될 질문" }],
       streamConfig()
@@ -1380,10 +1390,21 @@ describe("native stream lifecycle", () => {
     await expect(pending).resolves.toMatchObject({ done: true })
 
     const cancels = cancellationRequests(oldAuth)
-    expect(cancels).toHaveLength(1)
-    expect(cancels[0]!.authorization).toBe(`Bearer ${oldAuth.token}`)
-    expect(cancels[0]!.authorization).not.toBe(`Bearer ${newToken}`)
-    expect(oldAuth.mintCalls).toBe(1)
+    expect(cancels).toHaveLength(2)
+    expect(
+      cancels.every(
+        (request) =>
+          request.authorization === `Bearer ${oldAuth.token}` &&
+          request.authorization !== `Bearer ${newToken}`
+      )
+    ).toBe(true)
+    expect(oldAuth.mintCalls).toBe(2)
+    expect(observed).toHaveLength(1)
+    expect(observed[0]).toMatchObject({
+      message: "로그인 세션이 만료되었습니다. 다시 로그인해 주세요.",
+      status: 401,
+    })
+    expect(JSON.stringify(observed)).not.toContain("cancel rejected")
     const oldReads = oldAuth.requests.filter(
       (request) => request.method === "GET"
     )
@@ -1500,18 +1521,69 @@ describe("native stream lifecycle", () => {
     expect(JSON.stringify(observed)).not.toContain("reconnect exhaustion")
   })
 
-  test("uses the public ordering watermark to drop fresh-client Aegra history", async () => {
+  test("drops arbitrarily delayed Aegra history by the nonce-resolved run identity", async () => {
     const activities: AgentActivity[] = []
+    const staleText = "STALE_HISTORY_SENT_AFTER_DISPATCH"
     const fakeClient = makeClient([
       {
         preserveSequence: true,
+        preserveEventId: true,
         appliedThroughSeq: 0,
-        preDispatchEvents: [
-          sequenced(lifecycle("interrupted"), 1, "historical-terminal"),
-        ],
+        initialEventsDelayMs: 300,
         events: [
-          sequenced(lifecycle("running"), 2, "current-running"),
-          sequenced(lifecycle("completed"), 3, "current-completed"),
+          sequenced(
+            lifecycle("running"),
+            1,
+            "historical-run:running:0"
+          ),
+          sequenced(
+            messageEvent({
+              event: "message-start",
+              role: "ai",
+              id: "stale-answer",
+            }),
+            2,
+            "historical-run_event_1:0"
+          ),
+          sequenced(
+            messageEvent({
+              event: "content-block-start",
+              index: 0,
+              content: { type: "text", text: "" },
+            }),
+            3,
+            "historical-run_event_2:0"
+          ),
+          sequenced(
+            messageEvent({
+              event: "content-block-delta",
+              index: 0,
+              delta: { type: "text-delta", text: staleText },
+            }),
+            4,
+            "historical-run_event_3:0"
+          ),
+          sequenced(
+            messageEvent({
+              event: "content-block-finish",
+              index: 0,
+              content: { type: "text", text: staleText },
+            }),
+            5,
+            "historical-run_event_4:0"
+          ),
+          sequenced(
+            messageEvent({ event: "message-finish" }),
+            6,
+            "historical-run_event_5:0"
+          ),
+          sequenced(
+            lifecycle("completed"),
+            7,
+            "historical-run_event_6:0"
+          ),
+          sequenced(lifecycle("running"), 8),
+          sequenced(lifecycle("completed"), 9),
         ],
       },
     ])
@@ -1519,12 +1591,13 @@ describe("native stream lifecycle", () => {
       onActivity: (activity) => activities.push(activity),
     })
 
-    await collect(
+    const projected = await collect(
       native.stream(
         [{ id: "human-1", type: "human", content: "새 실행" }],
         streamConfig()
       )
     )
+    expect(JSON.stringify(projected)).not.toContain(staleText)
     expect(activities.map((activity) => activity.status)).toEqual([
       "running",
       "completed",
@@ -1563,11 +1636,7 @@ describe("native stream lifecycle", () => {
 
   test("deduplicates lifecycle event IDs without projecting root activity twice", async () => {
     const activities: AgentActivity[] = []
-    const duplicate = sequenced(
-      lifecycle("running"),
-      1,
-      "same-running-event"
-    )
+    const duplicate = sequenced(lifecycle("running"), 1)
     const fakeClient = makeClient([
       {
         preserveSequence: true,
@@ -1575,7 +1644,7 @@ describe("native stream lifecycle", () => {
         events: [
           duplicate,
           duplicate,
-          sequenced(lifecycle("completed"), 2, "terminal-event"),
+          sequenced(lifecycle("completed"), 2),
         ],
       },
     ])
@@ -1599,6 +1668,7 @@ describe("native stream lifecycle", () => {
   test("recovers an empty run.start result only through the exact nonce metadata", async () => {
     const fakeClient = makeClient([
       {
+        runId: "nonce-matched-run",
         events: [lifecycle("running"), lifecycle("completed")],
         startRun: async () => ({}),
       },
@@ -1763,7 +1833,7 @@ describe("native stream lifecycle", () => {
     }
   })
 
-  test("bounds replay buffered before the dispatch barrier", async () => {
+  test("bounds replay buffered before exact run correlation", async () => {
     const sentinel = `PRIVATE_PRE_BARRIER_${"가".repeat(80_000)}`
     const fakeClient = makeClient([
       {
@@ -1943,8 +2013,12 @@ describe("native stream lifecycle", () => {
   })
 })
 
-function sequenced(event: Event, seq: number, eventId: string): Event {
-  return { ...event, seq, event_id: eventId } as Event
+function sequenced(event: Event, seq: number, eventId?: string): Event {
+  return {
+    ...event,
+    seq,
+    ...(eventId === undefined ? {} : { event_id: eventId }),
+  } as Event
 }
 
 function lifecycle(
@@ -2018,6 +2092,7 @@ function customEvent(
 
 interface FakeStreamPlan {
   events: readonly Event[]
+  initialEventsDelayMs?: number
   preDispatchEvents?: Event[]
   watcherEvents?: Event[]
   delayedWatcherEvents?: Event[]
@@ -2026,7 +2101,9 @@ interface FakeStreamPlan {
   startRun?: (params: unknown) => Promise<unknown>
   waitForClose?: (resolve: () => void) => void
   appliedThroughSeq?: number
+  preserveEventId?: boolean
   preserveSequence?: boolean
+  runId?: string
   streamError?: unknown
 }
 
@@ -2075,6 +2152,7 @@ function makeClient(
           lastEventId?: string
         } = {}
         let nextSequence = 1
+        let activeRunId: string | undefined
         const emit = (rawEvent: Event): Event => {
           const rawSequence = (rawEvent as Event & { seq?: number }).seq
           const sequence = plan.preserveSequence
@@ -2083,9 +2161,19 @@ function makeClient(
           const rawEventId = (
             rawEvent as Event & { event_id?: string }
           ).event_id
-          const eventId = plan.preserveSequence
-            ? rawEventId
-            : `fake-event-${sequence}`
+          const defaultEventId =
+            activeRunId !== undefined && sequence !== undefined
+              ? rawEvent.method === "lifecycle" &&
+                Array.isArray(rawEvent.params.namespace) &&
+                rawEvent.params.namespace.length === 0 &&
+                rawEvent.params.data.event === "running"
+                ? `${activeRunId}:running:0`
+                : `${activeRunId}_event_${sequence}:0`
+              : undefined
+          const eventId =
+            (plan.preserveEventId ? rawEventId : undefined) ??
+            defaultEventId ??
+            (sequence === undefined ? undefined : `historical_event_${sequence}:0`)
           const event = {
             ...rawEvent,
             ...(sequence === undefined ? {} : { seq: sequence }),
@@ -2124,6 +2212,9 @@ function makeClient(
         const subscription = {
           unsubscribe: async () => undefined,
           async *[Symbol.asyncIterator]() {
+            if (plan.initialEventsDelayMs !== undefined) {
+              await Bun.sleep(plan.initialEventsDelayMs)
+            }
             for (const rawEvent of plan.events) {
               const event = emit(rawEvent)
               if (
@@ -2166,11 +2257,21 @@ function makeClient(
               isTestRecord(params.config)
               ? params.config
               : undefined
+            const submitNonce =
+              testing.lastMetadata?.syshin_ui_submit_nonce
+            activeRunId =
+              plan.runId ??
+              (typeof submitNonce === "string"
+                ? `run-${submitNonce}`
+                : `run-${testing.runStarts}`)
             ordering.lastAppliedThroughSeq =
               plan.appliedThroughSeq ?? 0
+            if ((plan.watcherEvents?.length ?? 0) > 0) {
+              emit(lifecycle("running"))
+            }
             for (const event of plan.watcherEvents ?? []) emit(event)
             if (plan.startRun) return await plan.startRun(params)
-            return { run_id: `run-${testing.runStarts}` }
+            return { run_id: activeRunId }
           },
           respondInput: async (params: unknown) => {
             testing.responds.push(params)
@@ -2182,8 +2283,18 @@ function makeClient(
               isTestRecord(params.config)
               ? params.config
               : undefined
+            const submitNonce =
+              testing.lastMetadata?.syshin_ui_submit_nonce
+            activeRunId =
+              plan.runId ??
+              (typeof submitNonce === "string"
+                ? `run-${submitNonce}`
+                : `run-${testing.runStarts + 1}`)
             ordering.lastAppliedThroughSeq =
               plan.appliedThroughSeq ?? 0
+            if ((plan.watcherEvents?.length ?? 0) > 0) {
+              emit(lifecycle("running"))
+            }
             for (const event of plan.watcherEvents ?? []) emit(event)
             await plan.onRespond?.(params)
           },

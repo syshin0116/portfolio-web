@@ -11,6 +11,7 @@ import type {
 import inspectionFixture from "../../../protocol/fixtures/inspection-events-v1.json"
 import {
   NativeMessageProjection,
+  nativeClientTesting,
   projectInputEventForRuntime,
 } from "../../components/assistant/runtime/native-client"
 import { projectInterruptForUi } from "../../components/assistant/runtime/interrupt-projection"
@@ -148,29 +149,6 @@ async function openPhase() {
     thread,
     unsubscribeEvent,
   }
-}
-
-async function replayWatermark(
-  thread: Awaited<ReturnType<typeof openPhase>>["thread"]
-): Promise<number> {
-  let previous = thread.ordering.lastSeenSeq
-  let stable = 0
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    const current = thread.ordering.lastSeenSeq
-    if (current === previous) stable += 1
-    else {
-      previous = current
-      stable = 0
-    }
-    if (stable >= 5) break
-  }
-  const value = thread.ordering.lastSeenSeq ?? 0
-  invariant(
-    Number.isSafeInteger(value) && value >= 0,
-    "SDK replay watermark was invalid"
-  )
-  return value
 }
 
 const assembler = new MessageAssembler()
@@ -372,6 +350,27 @@ async function closePhase(
   await phase.thread.close().catch(() => undefined)
 }
 
+async function waitForCorrelatedRun(
+  phase: string,
+  nonce: string
+): Promise<{ run_id: string }> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const matches = (
+      await client.runs.list(threadId, {
+        limit: 10,
+        offset: 0,
+      })
+    ).filter((run) => runHasPersistedCorrelation(run, phase, nonce))
+    invariant(
+      matches.length <= 1,
+      `multiple runs matched ${phase} nonce correlation`
+    )
+    if (matches.length === 1) return matches[0]!
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`run did not persist ${phase} nonce correlation`)
+}
+
 try {
   const initial = await openPhase()
   phases.push(initial)
@@ -415,7 +414,6 @@ try {
   const resumed = await openPhase()
   phases.push(resumed)
   const resumedNonce = crypto.randomUUID()
-  const beforeRespond = await replayWatermark(resumed.thread)
   await resumed.thread.respondInput({
     namespace: interruptTarget.namespace,
     interrupt_id: interruptTarget.interruptId,
@@ -431,6 +429,7 @@ try {
       [SUBMIT_NONCE_METADATA_KEY]: resumedNonce,
     },
   })
+  const resumedRun = await waitForCorrelatedRun("resumed", resumedNonce)
   const appliedThrough = resumed.thread.ordering.lastAppliedThroughSeq
   invariant(
     typeof appliedThrough === "number" &&
@@ -438,16 +437,17 @@ try {
       appliedThrough >= 0,
     "SDK command response omitted applied_through_seq"
   )
-  // Aegra 0.9.24's stateless command POST returns zero. Its fresh SSE
-  // session replays history, so the pre-dispatch public ordering watermark
-  // is the dialect-compatible side of the barrier.
+  // Aegra 0.9.24's stateless command POST returns zero. Correlation therefore
+  // comes from the persisted nonce plus exact run-scoped event identities,
+  // never timing or a replay watermark.
   invariant(
     appliedThrough === 0,
     `unexpected Aegra applied_through_seq: ${String(appliedThrough)}`
   )
-  const resumeBarrier = Math.max(appliedThrough, beforeRespond)
   let resumedTerminal: ReturnType<typeof recordEvent>
-  let lastAcceptedSequence = resumeBarrier
+  let lastObservedSequence: number | undefined
+  let sawCorrelatedRootLifecycle = false
+  let droppedReplayEvents = 0
   while (!resumedTerminal) {
     for await (const event of resumed.subscription) {
       invariant(
@@ -456,12 +456,35 @@ try {
           event.seq >= 0,
         "fresh-client APv2 event omitted a valid sequence"
       )
-      if (event.seq <= resumeBarrier) continue
       invariant(
-        event.seq > lastAcceptedSequence,
+        lastObservedSequence === undefined ||
+          event.seq > lastObservedSequence,
         "fresh-client APv2 sequence was not strictly monotonic"
       )
-      lastAcceptedSequence = event.seq
+      lastObservedSequence = event.seq
+      invariant(
+        typeof event.event_id === "string",
+        "fresh-client APv2 event omitted event_id"
+      )
+      if (
+        !nativeClientTesting.eventIdBelongsToRun(
+          event.event_id,
+          resumedRun.run_id
+        )
+      ) {
+        droppedReplayEvents += 1
+        continue
+      }
+      if (
+        event.method === "lifecycle" &&
+        event.params.namespace.length === 0
+      ) {
+        sawCorrelatedRootLifecycle = true
+      }
+      invariant(
+        sawCorrelatedRootLifecycle,
+        "current run event arrived before its root lifecycle identity"
+      )
       const terminal = recordEvent(event)
       if (terminal === "completed") {
         resumedTerminal = terminal
@@ -481,6 +504,14 @@ try {
       })
       .join(", ")}`
   )
+  invariant(
+    sawCorrelatedRootLifecycle,
+    "resumed run omitted its correlated root lifecycle"
+  )
+  invariant(
+    droppedReplayEvents > 0,
+    "fresh client did not exercise durable history replay"
+  )
   const persistedRuns = await client.runs.list(threadId, {
     limit: 10,
     offset: 0,
@@ -498,7 +529,8 @@ try {
   )
   invariant(
     resumedCorrelationMatches.length === 1 &&
-      resumedCorrelationMatches[0]!.run_id !== started.run_id,
+      resumedCorrelationMatches[0]!.run_id === resumedRun.run_id &&
+      resumedRun.run_id !== started.run_id,
     "resumed run correlation was not persisted on one fresh run"
   )
 
@@ -601,7 +633,8 @@ try {
       nestedInputOnContent: sawNestedInputOnContent,
       nestedInterruptNamespace: interruptTarget.namespace.length > 0,
       rawPrivateStateObserved,
-      replayBarrierUsesOrdering: resumeBarrier >= beforeRespond,
+      replayDroppedByRunIdentity: droppedReplayEvents > 0,
+      runCorrelationUsesEventIdentity: sawCorrelatedRootLifecycle,
       runCorrelationPersisted:
         initialCorrelationMatches.length === 1 &&
         resumedCorrelationMatches.length === 1,

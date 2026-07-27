@@ -37,6 +37,7 @@ import {
   readRuntimeInterruptProjection,
   type InterruptUiProjection,
 } from "./interrupt-projection"
+import type { RuntimeThreadSource } from "./thread-source"
 
 const TERMINAL_RUN_STATUSES = new Set([
   "success",
@@ -52,9 +53,6 @@ const RESUMED_RUN_ID_POLL_MS = 50
 const INTERRUPT_WATCHER_WAIT_MS = 1_000
 const INTERRUPT_WATCHER_POLL_MS = 10
 const INTERRUPT_WATCHER_STABLE_POLLS = 5
-const REPLAY_QUIESCENCE_WAIT_MS = 250
-const REPLAY_QUIESCENCE_POLL_MS = 10
-const REPLAY_QUIESCENCE_STABLE_POLLS = 5
 const MAX_STATE_MESSAGES = 500
 const MAX_STATE_CONTENT_BLOCKS = 256
 const MAX_STATE_TEXT_BYTES = 100_000
@@ -96,8 +94,12 @@ export interface NativeAgentClientOptions {
   identity: string
   tokenBroker?: AgentTokenBroker
   client?: Client
-  onActivity?: (activity: AgentActivity, threadId?: string) => void
-  onError?: (error: Error, threadId?: string) => void
+  getSourceGeneration?: () => number
+  onActivity?: (
+    activity: AgentActivity,
+    source: RuntimeThreadSource
+  ) => void
+  onError?: (error: Error, source: RuntimeThreadSource) => void
 }
 
 interface ActiveNativeStream {
@@ -902,19 +904,117 @@ class LiveRunBudget {
   }
 }
 
+function isBoundedDecimal(value: string): boolean {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) return false
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0
+}
+
+function eventIdBelongsToRun(eventId: string, runId: string): boolean {
+  const brokerPrefix = `${runId}_event_`
+  if (eventId.startsWith(brokerPrefix)) {
+    const parts = eventId.slice(brokerPrefix.length).split(":")
+    return (
+      parts.length === 2 &&
+      isBoundedDecimal(parts[0]!) &&
+      isBoundedDecimal(parts[1]!)
+    )
+  }
+  for (const lifecycle of ["running", "status-end"] as const) {
+    const prefix = `${runId}:${lifecycle}:`
+    if (
+      eventId.startsWith(prefix) &&
+      isBoundedDecimal(eventId.slice(prefix.length))
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function isRootLifecycle(
+  event: ProtocolStreamEvent
+): event is Extract<ProtocolStreamEvent, { method: "lifecycle" }> {
+  return (
+    event.method === "lifecycle" &&
+    event.params.namespace.length === 0
+  )
+}
+
+class RunCorrelationGate {
+  readonly #queuedLifecycle: LifecycleEvent[] = []
+  #configured = false
+  #correlated = false
+  #runId?: string
+  #queuedBytes = 0
+
+  observeLifecycle(event: LifecycleEvent): void {
+    if (event.params.namespace.length !== 0) return
+    if (!this.#configured) {
+      const eventBytes = serializedUtf8Bytes(event)
+      this.#queuedBytes += eventBytes
+      this.#queuedLifecycle.push(event)
+      if (
+        this.#queuedLifecycle.length > MAX_LIVE_MESSAGES ||
+        this.#queuedBytes > MAX_PRE_BARRIER_BYTES
+      ) {
+        throw new AgentProtocolBoundaryError()
+      }
+      return
+    }
+    this.#observeMarker(event)
+  }
+
+  configure(runId: string): void {
+    if (this.#configured) throw new AgentProtocolBoundaryError()
+    safeLiveIdentifier(runId)
+    this.#configured = true
+    this.#runId = runId
+    const queued = this.#queuedLifecycle.splice(0)
+    this.#queuedBytes = 0
+    for (const event of queued) this.#observeMarker(event)
+  }
+
+  accepts(event: ProtocolStreamEvent, eventId: string): boolean {
+    const runId = this.#runId
+    if (!this.#configured || runId === undefined) {
+      throw new AgentProtocolBoundaryError()
+    }
+    if (!eventIdBelongsToRun(eventId, runId)) return false
+    if (isRootLifecycle(event)) this.#correlated = true
+    if (!this.#correlated) throw new AgentProtocolBoundaryError()
+    return true
+  }
+
+  #observeMarker(event: LifecycleEvent): void {
+    const eventId =
+      "event_id" in event && typeof event.event_id === "string"
+        ? event.event_id
+        : undefined
+    if (eventId === undefined) throw new AgentProtocolBoundaryError()
+    safeLiveIdentifier(eventId)
+    if (eventIdBelongsToRun(eventId, this.#runId!)) {
+      this.#correlated = true
+    }
+  }
+}
+
 class RunEventBoundary {
   readonly #budget: LiveRunBudget
+  readonly #correlation: RunCorrelationGate
   readonly #accepted = new WeakMap<object, boolean>()
   readonly #seenEventIds: Set<string>
   readonly #queued: ProtocolStreamEvent[] = []
-  #barrier?: number
+  #configured = false
   #lastSequence?: number
   #queuedBytes = 0
 
   constructor(
+    correlation: RunCorrelationGate,
     budget = new LiveRunBudget(),
     seenEventIds = new Set<string>()
   ) {
+    this.#correlation = correlation
     this.#budget = budget
     this.#seenEventIds = seenEventIds
   }
@@ -922,7 +1022,7 @@ class RunEventBoundary {
   queueOrObserve(event: ProtocolStreamEvent): boolean | undefined {
     const cached = this.#accepted.get(event)
     if (cached !== undefined) return cached
-    if (this.#barrier === undefined) {
+    if (!this.#configured) {
       const eventBytes = serializedUtf8Bytes(event)
       if (eventBytes > MAX_EVENT_BYTES) {
         throw new AgentProtocolBoundaryError()
@@ -940,15 +1040,9 @@ class RunEventBoundary {
     return this.#observe(event)
   }
 
-  configure(barrier: number): void {
-    if (
-      this.#barrier !== undefined ||
-      !Number.isSafeInteger(barrier) ||
-      barrier < 0
-    ) {
-      throw new AgentProtocolBoundaryError()
-    }
-    this.#barrier = barrier
+  configure(): void {
+    if (this.#configured) throw new AgentProtocolBoundaryError()
+    this.#configured = true
     const queued = this.#queued.splice(0)
     this.#queuedBytes = 0
     for (const event of queued) this.#observe(event)
@@ -967,14 +1061,13 @@ class RunEventBoundary {
       "event_id" in event && typeof event.event_id === "string"
         ? event.event_id
         : undefined
-    if (eventId !== undefined) {
-      safeLiveIdentifier(eventId)
-      if (this.#seenEventIds.has(eventId)) {
-        this.#accepted.set(event, false)
-        return false
-      }
-      this.#seenEventIds.add(eventId)
+    if (eventId === undefined) throw new AgentProtocolBoundaryError()
+    safeLiveIdentifier(eventId)
+    if (this.#seenEventIds.has(eventId)) {
+      this.#accepted.set(event, false)
+      return false
     }
+    this.#seenEventIds.add(eventId)
     const sequence = "seq" in event ? event.seq : undefined
     if (
       typeof sequence !== "number" ||
@@ -985,7 +1078,7 @@ class RunEventBoundary {
       throw new AgentProtocolBoundaryError()
     }
     this.#lastSequence = sequence
-    const accepted = sequence > this.#barrier!
+    const accepted = this.#correlation.accepts(event, eventId)
     this.#accepted.set(event, accepted)
     if (accepted) this.#budget.observe(event)
     return accepted
@@ -1063,56 +1156,6 @@ function runMatchesSubmitNonce(
     observed.length > 0 &&
     observed.every((candidate) => candidate === submitNonce)
   )
-}
-
-async function snapshotReplayWatermark(
-  thread: ThreadStream,
-  signal: AbortSignal
-): Promise<number> {
-  const bounded = timeoutController(REPLAY_QUIESCENCE_WAIT_MS)
-  const waitSignal = AbortSignal.any([signal, bounded.controller.signal])
-  let previous = thread.ordering.lastSeenSeq
-  let stablePolls = 0
-  try {
-    while (!waitSignal.aborted) {
-      await waitForDelay(REPLAY_QUIESCENCE_POLL_MS, waitSignal)
-      const current = thread.ordering.lastSeenSeq
-      if (current === previous) stablePolls += 1
-      else {
-        previous = current
-        stablePolls = 0
-      }
-      if (stablePolls >= REPLAY_QUIESCENCE_STABLE_POLLS) break
-    }
-  } catch (error) {
-    if (!bounded.controller.signal.aborted || signal.aborted) throw error
-  } finally {
-    bounded.clear()
-  }
-  const watermark = thread.ordering.lastSeenSeq
-  if (watermark === undefined) return 0
-  if (!Number.isSafeInteger(watermark) || watermark < 0) {
-    throw new AgentProtocolBoundaryError()
-  }
-  return watermark
-}
-
-function appliedSequenceBarrier(
-  thread: ThreadStream,
-  replayWatermark: number
-): number {
-  const applied = thread.ordering.lastAppliedThroughSeq
-  if (
-    typeof applied !== "number" ||
-    !Number.isSafeInteger(applied) ||
-    applied < 0
-  ) {
-    throw new AgentProtocolBoundaryError()
-  }
-  // Aegra 0.9.24 reports zero for stateless command POSTs. Its fresh SSE
-  // session replays durable history first, so the public pre-dispatch
-  // lastSeenSeq watermark is the dialect-compatible lower bound.
-  return Math.max(applied, replayWatermark)
 }
 
 function timeoutController(milliseconds: number): {
@@ -1466,8 +1509,12 @@ export class NativeAgentClient {
   readonly tokenBroker: AgentTokenBroker
   readonly assistantId: string
   readonly #apiUrl: string
-  readonly #onActivity?: (activity: AgentActivity, threadId?: string) => void
-  readonly #onError?: (error: Error, threadId?: string) => void
+  readonly #getSourceGeneration: () => number
+  readonly #onActivity?: (
+    activity: AgentActivity,
+    source: RuntimeThreadSource
+  ) => void
+  readonly #onError?: (error: Error, source: RuntimeThreadSource) => void
   readonly #pendingInterrupts = new Map<string, PendingInterrupt>()
   readonly #activeStreams = new Set<ActiveNativeStream>()
   #disposed = false
@@ -1476,6 +1523,7 @@ export class NativeAgentClient {
   constructor(options: NativeAgentClientOptions) {
     this.#apiUrl = options.apiUrl
     this.assistantId = options.assistantId
+    this.#getSourceGeneration = options.getSourceGeneration ?? (() => 0)
     this.#onActivity = options.onActivity
     this.#onError = options.onError
     this.tokenBroker =
@@ -1505,9 +1553,8 @@ export class NativeAgentClient {
   dispose(): Promise<void> {
     if (this.#disposePromise) return this.#disposePromise
     this.#disposed = true
-    // Seal immediately so no old runtime request can mint, refresh, or attach
-    // a credential. A stream-start snapshot remains usable only for its
-    // already-bound cancellation target.
+    // Seal general runtime requests immediately. A stream-start snapshot may
+    // refresh only inside its already-bound run-resolution/cancel capability.
     this.tokenBroker.seal()
     this.#pendingInterrupts.clear()
     const activeStreams = [...this.#activeStreams]
@@ -1568,6 +1615,13 @@ export class NativeAgentClient {
     if (this.#disposed) {
       throw new Error("폐기된 에이전트 런타임은 다시 사용할 수 없습니다.")
     }
+    const sourceGeneration = this.#getSourceGeneration()
+    if (
+      !Number.isSafeInteger(sourceGeneration) ||
+      sourceGeneration < 0
+    ) {
+      throw new AgentProtocolBoundaryError()
+    }
     const active = createActiveStream()
     this.#activeStreams.add(active)
     const signal = AbortSignal.any([
@@ -1575,6 +1629,12 @@ export class NativeAgentClient {
       active.controller.signal,
     ])
     let threadId: string | undefined
+    const runtimeSource = (
+      currentThreadId: string | undefined = threadId
+    ): RuntimeThreadSource => ({
+      generation: sourceGeneration,
+      threadId: currentThreadId,
+    })
     let thread: ThreadStream | undefined
     let subscription:
       | Awaited<ReturnType<ThreadStream["subscribe"]>>
@@ -1587,11 +1647,14 @@ export class NativeAgentClient {
     let nestedInputFailed = false
     const liveRunBudget = new LiveRunBudget()
     const seenEventIds = new Set<string>()
+    const correlation = new RunCorrelationGate()
     const contentBoundary = new RunEventBoundary(
+      correlation,
       liveRunBudget,
       seenEventIds
     )
     const watcherBoundary = new RunEventBoundary(
+      correlation,
       liveRunBudget,
       seenEventIds
     )
@@ -1629,7 +1692,7 @@ export class NativeAgentClient {
             namespace: [],
             status: "reconnecting",
             label: `연결을 복구하는 중입니다 (${attempt}/5).`,
-          }, boundThreadId)
+          }, runtimeSource(boundThreadId))
         },
       })
       active.stream = thread
@@ -1640,7 +1703,7 @@ export class NativeAgentClient {
         if (event.method === "lifecycle") {
           this.#onActivity?.(
             inspection.consumeLifecycle(event),
-            boundThreadId
+            runtimeSource(boundThreadId)
           )
           return
         }
@@ -1686,7 +1749,12 @@ export class NativeAgentClient {
           ) {
             throw new AgentProtocolBoundaryError()
           }
-          if (event.params.namespace.length === 0) return
+          if (event.params.namespace.length === 0) {
+            if (event.method === "lifecycle") {
+              correlation.observeLifecycle(event)
+            }
+            return
+          }
           const accepted = watcherBoundary.queueOrObserve(event)
           if (accepted === undefined) {
             preBarrierWatcherEvents.push(event)
@@ -1753,12 +1821,6 @@ export class NativeAgentClient {
           config.runConfig,
           submitNonce
         )
-        const replayWatermark = await snapshotReplayWatermark(thread, signal)
-        // This read is deliberately adjacent to dispatch. Aegra's stateless
-        // command response reports applied_through_seq=0, while the SDK's
-        // public ordering watermark records replay already observed here.
-        const immediateReplayWatermark =
-          thread.ordering.lastSeenSeq ?? replayWatermark
         const commandSettlement = settleCommand(
           config.command
             ? thread.respondInput({
@@ -1804,33 +1866,12 @@ export class NativeAgentClient {
           )
         } else {
           command = first.result
-          if (command.status === "rejected" || config.command) {
-            const resolved = await awaitCommandSettlement(
-              resolverSettlement,
-              runResolution.controller.signal
-            )
-            if (resolved.status === "rejected") throw resolved.reason
-            runId = resolved.value as string
-          } else {
-            const result = command.value
-            const responseRunId =
-              isRecord(result) && typeof result.run_id === "string"
-                ? result.run_id
-                : undefined
-            if (responseRunId) {
-              runId = responseRunId
-              runResolution.controller.abort(
-                new DOMException("Run ID returned by command", "AbortError")
-              )
-            } else {
-              const resolved = await awaitCommandSettlement(
-                resolverSettlement,
-                runResolution.controller.signal
-              )
-              if (resolved.status === "rejected") throw resolved.reason
-              runId = resolved.value as string
-            }
-          }
+          const resolved = await awaitCommandSettlement(
+            resolverSettlement,
+            runResolution.controller.signal
+          )
+          if (resolved.status === "rejected") throw resolved.reason
+          runId = resolved.value as string
         }
         if (command.status === "rejected") throw command.reason
         if (
@@ -1841,12 +1882,9 @@ export class NativeAgentClient {
         ) {
           throw new AgentProtocolBoundaryError()
         }
-        const barrier = appliedSequenceBarrier(
-          thread,
-          Math.max(replayWatermark, immediateReplayWatermark)
-        )
-        contentBoundary.configure(barrier)
-        watcherBoundary.configure(barrier)
+        correlation.configure(runId)
+        contentBoundary.configure()
+        watcherBoundary.configure()
         for (const event of preBarrierWatcherEvents.splice(0)) {
           if (watcherBoundary.wasAccepted(event)) projectWatcherEvent(event)
         }
@@ -1889,7 +1927,9 @@ export class NativeAgentClient {
         if (!contentBoundary.wasAccepted(event)) continue
         if (event.method === "messages") {
           const activity = inspection.consumeMessage(event)
-          if (activity) this.#onActivity?.(activity, boundThreadId)
+          if (activity) {
+            this.#onActivity?.(activity, runtimeSource(boundThreadId))
+          }
           // Nested-agent transcript text is not a user-facing answer.
           // Lifecycle/custom summaries remain visible; root-message reasoning
           // is locally removed but may already have crossed the SSE boundary.
@@ -1926,25 +1966,27 @@ export class NativeAgentClient {
         if (event.method === "tools") {
           this.#onActivity?.(
             inspection.consumeTool(event),
-            boundThreadId
+            runtimeSource(boundThreadId)
           )
           continue
         }
         if (event.method === "custom") {
           const activity = inspection.consumeCustom(event)
-          if (activity) this.#onActivity?.(activity, boundThreadId)
+          if (activity) {
+            this.#onActivity?.(activity, runtimeSource(boundThreadId))
+          }
           continue
         }
         if (event.method === "lifecycle") {
           this.#onActivity?.(
             inspection.consumeLifecycle(event),
-            boundThreadId
+            runtimeSource(boundThreadId)
           )
           const root = event.params.namespace.length === 0
           if (root && event.params.data.event === "failed") {
             this.#onError?.(
               new AgentLifecycleError(),
-              boundThreadId
+              runtimeSource(boundThreadId)
             )
             yield {
               event: "error",
@@ -1983,7 +2025,7 @@ export class NativeAgentClient {
     } catch (error) {
       if (!signal.aborted) {
         const normalized = sanitizeAgentError(error)
-        this.#onError?.(normalized, threadId)
+        this.#onError?.(normalized, runtimeSource())
         throw normalized
       }
     } finally {
@@ -2009,9 +2051,11 @@ export class NativeAgentClient {
             },
           })
           await cancelRunAndWait(cancellationClient, threadId, runId)
-        } catch {
-          // Cancellation is bounded best effort. Cleanup below is mandatory
-          // even when the old credential is rejected or the API is offline.
+        } catch (error) {
+          this.#onError?.(
+            sanitizeAgentError(error),
+            runtimeSource()
+          )
         }
       }
       signal.removeEventListener("abort", closeOnAbort)
@@ -2028,6 +2072,7 @@ export class NativeAgentClient {
 
 export const nativeClientTesting = {
   assembledMessageToLangChain,
+  eventIdBelongsToRun,
   inspect(client: NativeAgentClient) {
     const read = nativeClientInspectionReaders.get(client)
     if (!read) throw new Error("Unknown NativeAgentClient")

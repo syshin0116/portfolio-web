@@ -1,14 +1,79 @@
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /web
+  - package-ecosystem: "npm"
+    directory: "/web"
     schedule:
-      interval: weekly
-  - package-ecosystem: pip
-    directory: /agent
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      web-routine:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        exclude-patterns:
+          # Framework/protocol/auth bumps need focused compatibility evidence.
+          - "@assistant-ui/*"
+          - "@langchain/*"
+          - "next"
+          - "next-auth"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "pip"
+    directory: "/agent"
     schedule:
-      interval: weekly
-  - package-ecosystem: github-actions
-    directory: /
+      interval: "weekly"
+      day: "monday"
+      time: "04:20"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      agent-routine:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        exclude-patterns:
+          # These are compatibility surfaces and must remain isolated bump PRs.
+          - "aegra-*"
+          - "deepagents"
+          - "langchain"
+          - "langchain-core"
+          - "langgraph"
+          - "langgraph-sdk"
+          - "langchain-quickjs"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
+      day: "monday"
+      time: "04:40"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    groups:
+      actions-routine:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

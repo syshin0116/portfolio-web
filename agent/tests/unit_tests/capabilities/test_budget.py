@@ -621,6 +621,101 @@ async def test_unauthorized_native_prompt_shape_drift_fails_before_count():
     assert budget.snapshot().model_calls == 0
 
 
+async def test_unauthorized_native_prompt_removal_preserves_later_capability_prompt():
+    budget = RunBudget()
+    counted_requests = []
+    generated_requests = []
+    native_prompt = "expected native task prompt"
+    quickjs_prompt = "\n\nbounded QuickJS eval prompt"
+
+    async def counter(request):
+        counted_requests.append(request)
+        return 1
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=counter,
+        native_subagent_prompt=native_prompt,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        system_message=SystemMessage(
+            content=[
+                {"type": "text", "text": "root prompt"},
+                {"type": "text", "text": f"\n\n{native_prompt}"},
+                {"type": "text", "text": quickjs_prompt},
+            ]
+        ),
+        messages=[],
+        tools=[{"name": "task"}, {"name": "quickjs_eval"}],
+    )
+
+    async def capture(filtered_request):
+        generated_requests.append(filtered_request)
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="done",
+                    usage_metadata={
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(request, capture)
+
+    assert len(counted_requests) == len(generated_requests) == 1
+    assert counted_requests[0] == generated_requests[0]
+    filtered = generated_requests[0]
+    assert filtered.tools == [{"name": "quickjs_eval"}]
+    assert filtered.system_message.content == [
+        {"type": "text", "text": "root prompt"},
+        {"type": "text", "text": quickjs_prompt},
+    ]
+
+
+async def test_duplicate_native_task_prompt_fails_closed_before_count():
+    budget = RunBudget()
+    counted = False
+    native_prompt = "expected native task prompt"
+
+    async def counter(_request):
+        nonlocal counted
+        counted = True
+        return 1
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=counter,
+        native_subagent_prompt=native_prompt,
+    )
+    native_block = {"type": "text", "text": f"\n\n{native_prompt}"}
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        system_message=SystemMessage(content=[native_block, native_block]),
+        messages=[],
+        tools=[{"name": "task"}],
+    )
+
+    with pytest.raises(CapabilityDeniedError, match="shape changed"):
+        await middleware.awrap_model_call(
+            request,
+            lambda _request: pytest.fail("provider must not run"),
+        )
+
+    assert counted is False
+    assert budget.snapshot().model_calls == 0
+
+
 @pytest.mark.parametrize(
     ("description", "subagent_type", "message"),
     [

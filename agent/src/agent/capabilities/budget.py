@@ -535,17 +535,31 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             system_message = request.system_message
             content = system_message.content if system_message is not None else None
             expected_text = f"\n\n{self._native_subagent_prompt}"
-            if (
-                not isinstance(content, list)
-                or not content
-                or not isinstance(content[-1], Mapping)
-                or content[-1].get("type") != "text"
-                or content[-1].get("text") != expected_text
-            ):
+            if not isinstance(content, list) or not content:
                 raise CapabilityDeniedError(
                     "pinned Deep Agents task prompt shape changed"
                 )
-            system_message = system_message.model_copy(update={"content": content[:-1]})
+            matching_indexes = [
+                index
+                for index, block in enumerate(content)
+                if isinstance(block, Mapping)
+                and block.get("type") == "text"
+                and block.get("text") == expected_text
+            ]
+            if len(matching_indexes) != 1:
+                raise CapabilityDeniedError(
+                    "pinned Deep Agents task prompt shape changed"
+                )
+            native_prompt_index = matching_indexes[0]
+            system_message = system_message.model_copy(
+                update={
+                    "content": [
+                        block
+                        for index, block in enumerate(content)
+                        if index != native_prompt_index
+                    ]
+                }
+            )
             request = request.override(system_message=system_message)
 
         return request.override(

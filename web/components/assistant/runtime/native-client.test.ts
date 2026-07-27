@@ -24,6 +24,7 @@ import {
   tokenBrokerTesting,
 } from "./token-broker"
 import type { AgentActivity } from "./inspection"
+import { GENERIC_INTERRUPT_PROJECTION } from "./interrupt-projection"
 
 const protocolEvents = (fixture: {
   records: Array<{ kind: string; payload: unknown }>
@@ -261,7 +262,7 @@ describe("APv2 state and HITL normalization", () => {
     expect(extractPendingInterrupt(state)).toEqual({
       interruptId: "top-level",
       namespace: ["tools"],
-      value: { action: "approve_tool" },
+      value: GENERIC_INTERRUPT_PROJECTION,
       resumable: true,
       when: "during",
     })
@@ -277,7 +278,7 @@ describe("APv2 state and HITL normalization", () => {
     expect(pending).toEqual({
       interruptId: "0123456789abcdef0123456789abcdef",
       namespace: [],
-      value: { action: "approve_tool", tool_name: "search_blog" },
+      value: GENERIC_INTERRUPT_PROJECTION,
       resumable: true,
       when: "during",
     })
@@ -592,9 +593,338 @@ describe("APv2 state and HITL normalization", () => {
       "동시에 여러 승인 요청"
     )
   })
+
+  test("does not misclassify resumed-run resolver exhaustion as user cancellation", async () => {
+    const controller = new AbortController()
+    controller.abort(
+      new DOMException("private resolver timed out", "TimeoutError")
+    )
+    const error = await nativeClientTesting
+      .resolveResumedRunIdOrThrow(
+        {
+          runs: {
+            list: async () => [],
+          },
+        } as unknown as Pick<Client, "runs">,
+        "thread-1",
+        new Set(),
+        controller.signal
+      )
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).name).toBe("Error")
+    expect((error as Error).message).toBe(
+      "재개된 실행 식별자를 확인하지 못했습니다."
+    )
+  })
 })
 
 describe("native stream lifecycle", () => {
+  test("projects and deduplicates a nested watcher interrupt, then resumes its exact namespace", async () => {
+    const secret = "NESTED_OPAQUE_PAYLOAD_MUST_NOT_BE_RETAINED"
+    const requested = inputRequested(
+      "interrupt-nested-1",
+      ["nested_worker:task-1"],
+      {
+        schema: "syshin.rag.interrupt.v1",
+        kind: "approval",
+        title: "검색 실행 승인",
+        prompt: "블로그 검색을 실행할까요?",
+        private: secret,
+      }
+    )
+    const responded: unknown[] = []
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("running"), lifecycle("interrupted")],
+        watcherEvents: [requested, requested],
+      },
+      {
+        events: [lifecycle("running"), lifecycle("completed")],
+        onRespond: (params) => responded.push(params),
+      },
+    ])
+    const native = makeNative(fakeClient)
+
+    const output = await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "중첩 승인" }],
+        streamConfig()
+      )
+    )
+    expect(
+      output.filter(
+        (item) =>
+          item.event === "updates" &&
+          "__interrupt__" in (item.data as Record<string, unknown>)
+      )
+    ).toHaveLength(1)
+    expect(output).toMatchObject([
+      {
+        event: "updates",
+        data: {
+          __interrupt__: [
+            {
+              ns: ["nested_worker:task-1"],
+              value: {
+                recognized: false,
+                kind: "unknown",
+              },
+            },
+          ],
+        },
+      },
+    ])
+    expect(JSON.stringify(output)).not.toContain(secret)
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(1)
+
+    await collect(
+      native.stream([], {
+        ...streamConfig(),
+        command: { resume: "approve" } as never,
+      })
+    )
+    expect(responded).toEqual([
+      {
+        namespace: ["nested_worker:task-1"],
+        interrupt_id: "interrupt-nested-1",
+        response: "approve",
+      },
+    ])
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+    expect(fakeClient.testing.subscriptions).toEqual([
+      {
+        channels: ["messages", "lifecycle", "input", "tools", "custom"],
+        options: { namespaces: [[]], depth: 0 },
+      },
+      {
+        channels: ["messages", "lifecycle", "input", "tools", "custom"],
+        options: { namespaces: [[]], depth: 0 },
+      },
+    ])
+  })
+
+  test("waits for a delayed nested watcher interrupt after root interrupted arrives", async () => {
+    const requested = inputRequested(
+      "interrupt-delayed",
+      ["nested_worker:delayed"],
+      {
+        schema: "syshin.rag.interrupt.v1",
+        kind: "approval",
+        prompt: "지연된 중첩 승인을 계속할까요?",
+      }
+    )
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("running"), lifecycle("interrupted")],
+        delayedWatcherEvents: [requested],
+        watcherDelayMs: 25,
+      },
+    ])
+    const native = makeNative(fakeClient)
+
+    const output = await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "역순 이벤트" }],
+        streamConfig()
+      )
+    )
+    expect(output).toMatchObject([
+      {
+        event: "updates",
+        data: {
+          __interrupt__: [
+            {
+              ns: ["nested_worker:delayed"],
+              value: {
+                recognized: true,
+                kind: "approval",
+                prompt: "지연된 중첩 승인을 계속할까요?",
+              },
+            },
+          ],
+        },
+      },
+    ])
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(1)
+  })
+
+  test("fails closed and retains no pending value when distinct nested interrupts race", async () => {
+    const observedErrors: Error[] = []
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("interrupted")],
+        watcherEvents: [
+          inputRequested("interrupt-1", ["worker:one"], {
+            private: "FIRST_SECRET",
+          }),
+          inputRequested("interrupt-2", ["worker:two"], {
+            private: "SECOND_SECRET",
+          }),
+          inputRequested("interrupt-3", ["worker:three"], {
+            private: "THIRD_SECRET",
+          }),
+        ],
+      },
+    ])
+    const native = makeNative(fakeClient, {
+      onError: (error) => observedErrors.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "동시 승인" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(observedErrors).toHaveLength(1)
+    expect(JSON.stringify(observedErrors)).not.toContain("FIRST_SECRET")
+    expect(JSON.stringify(observedErrors)).not.toContain("SECOND_SECRET")
+    expect(JSON.stringify(observedErrors)).not.toContain("THIRD_SECRET")
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+  })
+
+  test("fails closed when a watcher delivers malformed interrupt identifiers", async () => {
+    const malformed = {
+      type: "event",
+      method: "input.requested",
+      params: {
+        namespace: null,
+        timestamp: 1,
+        data: {
+          interrupt_id: "../unsafe",
+          payload: { private: "MALFORMED_SECRET" },
+        },
+      },
+    } as unknown as Event
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("interrupted")],
+        watcherEvents: [malformed],
+      },
+    ])
+    const native = makeNative(fakeClient)
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-1", type: "human", content: "잘못된 승인" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+  })
+
+  test("treats a nested failure as activity while allowing the root run to recover", async () => {
+    const activities: AgentActivity[] = []
+    const observedErrors: Error[] = []
+    const fakeClient = makeClient([
+      {
+        events: [
+          lifecycle(
+            "failed",
+            "postgres://owner:nested-secret@db.internal",
+            ["nested_worker:task-1"]
+          ),
+          lifecycle("running"),
+          lifecycle("completed"),
+        ],
+      },
+    ])
+    const native = makeNative(fakeClient, {
+      onActivity: (activity) => activities.push(activity),
+      onError: (error) => observedErrors.push(error),
+    })
+
+    const output = await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "복구 테스트" }],
+        streamConfig()
+      )
+    )
+    expect(output).toEqual([])
+    expect(observedErrors).toEqual([])
+    expect(activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "nested",
+          namespace: ["nested_worker:task-1"],
+          status: "failed",
+        }),
+        expect.objectContaining({
+          kind: "lifecycle",
+          namespace: [],
+          status: "completed",
+        }),
+      ])
+    )
+    expect(JSON.stringify(activities)).not.toContain("nested-secret")
+  })
+
+  test("keeps a pending interrupt after input.respond rejects and permits a safe retry", async () => {
+    const requested = inputRequested("interrupt-retry", [], {
+      private: "OPAQUE_RETRY_SECRET",
+    })
+    const responded: unknown[] = []
+    const fakeClient = makeClient([
+      { events: [requested, lifecycle("interrupted")] },
+      {
+        events: [],
+        onRespond: () => {
+          throw new Error("postgres://owner:respond-secret@db.internal")
+        },
+      },
+      {
+        events: [lifecycle("running"), lifecycle("completed")],
+        onRespond: (params) => responded.push(params),
+      },
+    ])
+    const auth = makeAuthHarness("user-1", {
+      runLists: [
+        [],
+        [],
+        [{ run_id: "resumed-run-retry", status: "running" }],
+      ],
+    })
+    const native = makeNative(fakeClient, {}, auth)
+    await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "재시도 승인" }],
+        streamConfig()
+      )
+    )
+
+    await expect(
+      collect(
+        native.stream([], {
+          ...streamConfig(),
+          command: { resume: "approve" } as never,
+        })
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(1)
+
+    await collect(
+      native.stream([], {
+        ...streamConfig(),
+        command: { resume: "approve" } as never,
+      })
+    )
+    expect(responded).toEqual([
+      {
+        namespace: [],
+        interrupt_id: "interrupt-retry",
+        response: "approve",
+      },
+    ])
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+    expect(JSON.stringify(responded)).not.toContain("respond-secret")
+  })
+
   test("subscribes to custom inspection events and suppresses nested transcript text", async () => {
     const activities: AgentActivity[] = []
     const events = [
@@ -803,6 +1133,57 @@ describe("native stream lifecycle", () => {
     expect(cancellationRequests(authFor(native))).toHaveLength(1)
   })
 
+  test("finishes resumed-run discovery after Stop and cancels only the discovered run", async () => {
+    const requested = inputRequested("interrupt-race", [], {
+      schema: "syshin.rag.interrupt.v1",
+      kind: "approval",
+      prompt: "재개할까요?",
+    })
+    const fakeClient = makeClient([
+      { events: [requested, lifecycle("interrupted")] },
+      {
+        events: [lifecycle("running")],
+        waitForClose: () => undefined,
+      },
+    ])
+    const auth = makeAuthHarness("user-1", {
+      runLists: [
+        [],
+        [],
+        [{ run_id: "resumed-run-after-stop", status: "running" }],
+      ],
+    })
+    const native = makeNative(fakeClient, {}, auth)
+    await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "승인 필요" }],
+        streamConfig()
+      )
+    )
+
+    const controller = new AbortController()
+    const iterator = await native.stream([], {
+      ...streamConfig(),
+      command: { resume: "approve" } as never,
+      abortSignal: controller.signal,
+    })
+    const pending = iterator.next()
+    await waitUntil(() => auth.runListCalls === 2)
+    controller.abort(
+      new DOMException("stop while resolving resumed run", "AbortError")
+    )
+
+    await expect(pending).resolves.toMatchObject({ done: true })
+    expect(cancellationRequests(auth)).toEqual([
+      expect.objectContaining({
+        method: "POST",
+        url: expect.stringContaining(
+          "/threads/thread-1/runs/resumed-run-after-stop/cancel?wait=0&action=interrupt"
+        ),
+      }),
+    ])
+  })
+
   test("identity dispose cancels exactly once with the stream-start old token before clearing it", async () => {
     let brokerStateDuringCancel:
       | ReturnType<typeof tokenBrokerTesting.inspect>
@@ -823,7 +1204,7 @@ describe("native stream lifecycle", () => {
     native.setPendingInterrupt("thread-pending", {
       interruptId: "interrupt-pending",
       namespace: [],
-      value: { private: "opaque" },
+      value: GENERIC_INTERRUPT_PROJECTION,
       resumable: true,
       when: "during",
     })
@@ -972,13 +1353,14 @@ describe("native stream lifecycle", () => {
 
 function lifecycle(
   status: "started" | "running" | "completed" | "failed" | "interrupted",
-  error?: string
+  error?: string,
+  namespace: string[] = []
 ): Event {
   return {
     type: "event",
     method: "lifecycle",
     params: {
-      namespace: [],
+      namespace,
       timestamp: 1,
       data: {
         event: status,
@@ -989,8 +1371,30 @@ function lifecycle(
   }
 }
 
+function inputRequested(
+  interruptId: string,
+  namespace: string[],
+  payload: unknown
+): Event {
+  return {
+    type: "event",
+    method: "input.requested",
+    params: {
+      namespace,
+      timestamp: 1,
+      data: {
+        interrupt_id: interruptId,
+        payload,
+      },
+    },
+  } as Event
+}
+
 interface FakeStreamPlan {
   events: Event[]
+  watcherEvents?: Event[]
+  delayedWatcherEvents?: Event[]
+  watcherDelayMs?: number
   onRespond?: (params: unknown) => void
   startRun?: () => Promise<{ run_id: string }>
   waitForClose?: (resolve: () => void) => void
@@ -1017,6 +1421,35 @@ function makeClient(
       stream: () => {
         const plan = plans.shift()
         if (!plan) throw new Error("Missing fake stream plan")
+        const listeners = new Set<(event: Event) => void>()
+        const interrupts: Array<{
+          interruptId: string
+          namespace: string[]
+          payload: unknown
+        }> = []
+        const emit = (event: Event) => {
+          if (
+            event.method === "input.requested" &&
+            Array.isArray(event.params.namespace)
+          ) {
+            const data = event.params.data as typeof event.params.data & {
+              value?: unknown
+            }
+            interrupts.push({
+              interruptId: data.interrupt_id,
+              namespace: [...event.params.namespace],
+              payload: data.payload ?? data.value,
+            })
+          }
+          for (const listener of listeners) {
+            try {
+              listener(event)
+            } catch {
+              // Match the SDK watcher contract: observer failures do not
+              // wedge the shared transport.
+            }
+          }
+        }
         let close: (() => void) | undefined
         const closed = new Promise<void>((resolve) => {
           close = resolve
@@ -1025,17 +1458,34 @@ function makeClient(
         const subscription = {
           unsubscribe: async () => undefined,
           async *[Symbol.asyncIterator]() {
-            for (const event of plan.events) yield event
+            for (const event of plan.events) {
+              emit(event)
+              if (
+                event.method === "lifecycle" &&
+                event.params.namespace.length === 0 &&
+                event.params.data.event === "interrupted" &&
+                plan.delayedWatcherEvents
+              ) {
+                setTimeout(() => {
+                  for (const delayed of plan.delayedWatcherEvents ?? []) {
+                    emit(delayed)
+                  }
+                }, plan.watcherDelayMs ?? 10)
+              }
+              yield event
+            }
             if (plan.waitForClose) await closed
           },
         }
         return {
           submitRun: async () => {
             testing.runStarts += 1
+            for (const event of plan.watcherEvents ?? []) emit(event)
             if (plan.startRun) return await plan.startRun()
             return { run_id: `run-${testing.runStarts}` }
           },
           respondInput: async (params: unknown) => plan.onRespond?.(params),
+          interrupts,
           run: {
             start: async () => {
               testing.runStarts += 1
@@ -1052,6 +1502,10 @@ function makeClient(
               options: streamOptions,
             })
             return subscription
+          },
+          onEvent: (listener: (event: Event) => void) => {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
           },
           close: async () => close?.(),
         } as unknown as ThreadStream
@@ -1081,6 +1535,7 @@ interface AuthHarness {
   broker: AgentTokenBroker
   mintCalls: number
   requests: AuthRequest[]
+  runListCalls: number
   token: string
 }
 
@@ -1104,12 +1559,14 @@ function makeAuthHarness(
       token: string
     ) => Promise<Response>
     onCancel?: () => void
+    runLists?: unknown[][]
   } = {}
 ): AuthHarness {
   const harness = {
     broker: undefined as unknown as AgentTokenBroker,
     mintCalls: 0,
     requests: [] as AuthRequest[],
+    runListCalls: 0,
     token: jwtToken(2_000, identity),
   }
   harness.broker = new AgentTokenBroker(identity, {
@@ -1134,6 +1591,25 @@ function makeAuthHarness(
         method: init?.method ?? "GET",
         url,
       })
+      const parsedUrl = new URL(url)
+      if (
+        parsedUrl.pathname.endsWith("/runs") &&
+        parsedUrl.searchParams.get("limit") === "10" &&
+        parsedUrl.searchParams.get("offset") === "0"
+      ) {
+        const runLists =
+          options.runLists ??
+          [
+            [],
+            [{ run_id: "resumed-run-1", status: "running" }],
+          ]
+        const index = Math.min(harness.runListCalls, runLists.length - 1)
+        harness.runListCalls += 1
+        return new Response(JSON.stringify(runLists[index] ?? []), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
       if (url.includes("/cancel?")) {
         options.onCancel?.()
         const status = options.cancelStatus ?? 204

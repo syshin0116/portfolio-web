@@ -142,19 +142,30 @@ function ConfiguredAgentRuntimeProvider({
   const runtime = useLangGraphRuntime({
     stream: native.stream,
     load: async (threadId, config) => {
-      const loaded = await threadAdapter.load(
-        threadId,
-        config?.signal ?? new AbortController().signal
-      )
-      if (
-        activeThreadIdRef.current === undefined ||
-        activeThreadIdRef.current === threadId
-      ) {
-        setInspectionAvailability(
-          loaded.messages.length > 0 ? "past-unavailable" : "waiting"
+      try {
+        const loaded = await threadAdapter.load(
+          threadId,
+          config?.signal ?? new AbortController().signal
         )
+        if (
+          activeThreadIdRef.current === undefined ||
+          activeThreadIdRef.current === threadId
+        ) {
+          setInspectionAvailability(
+            loaded.messages.length > 0 ? "past-unavailable" : "waiting"
+          )
+        }
+        return loaded
+      } catch (error) {
+        if (config?.signal.aborted) {
+          return { messages: [], interrupts: [], uiMessages: [] }
+        }
+        handleRuntimeError(error)
+        setInspectionAvailability("waiting")
+        // react-langgraph logs rejected load promises. Resolve with a closed,
+        // empty projection after routing the safe inline error instead.
+        return { messages: [], interrupts: [], uiMessages: [] }
       }
-      return loaded
     },
     unstable_threadListAdapter: threadAdapter,
     unstable_allowCancellation: true,

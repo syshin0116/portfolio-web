@@ -13,6 +13,7 @@ import {
   NativeMessageProjection,
   projectInputEventForRuntime,
 } from "../../components/assistant/runtime/native-client"
+import { projectInterruptForUi } from "../../components/assistant/runtime/interrupt-projection"
 
 const INSPECTION_EVENT_NAME = "syshin.rag.inspection.v1"
 const PRIVATE_STATE_SENTINEL = "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"
@@ -115,6 +116,12 @@ async function openPhase() {
     ) {
       sawNestedLifecycle = true
     }
+    if (
+      event.method === "input.requested" &&
+      event.params.namespace.length > 0
+    ) {
+      acceptNestedInputEvent(event)
+    }
   })
   const subscription = await thread.subscribe(CHANNELS, {
     namespaces: [[]],
@@ -133,14 +140,140 @@ const observedEvents: Event[] = []
 const observedEventKeys = new Set<string>()
 const runtimeOutput: unknown[] = []
 const inspectionPayloads: unknown[] = []
-let interrupt: InputEvent | undefined
+let interruptTarget:
+  | {
+      interruptId: string
+      namespace: string[]
+    }
+  | undefined
 let assistantText: string | undefined
+let interruptProjectionRecognized = false
+let interruptProjection: unknown
 let sawNestedLifecycle = false
+let sawNestedInputOnContent = false
 let sawToolStart = false
 let sawToolFinish = false
 let sawRootCompletion = false
 let rawPrivateStateObserved = false
+let watcherFailure: Error | undefined
 const phases: Awaited<ReturnType<typeof openPhase>>[] = []
+
+function interruptKey(target: {
+  interruptId: string
+  namespace: string[]
+}): string {
+  return `${target.namespace.join("\u001f")}\u001e${target.interruptId}`
+}
+
+function acceptProjectedInterrupt(
+  target: { interruptId: string; namespace: string[] },
+  projected: ReturnType<typeof projectInputEventForRuntime>
+): void {
+  try {
+    invariant(target.namespace.length > 0, "nested interrupt namespace was empty")
+    const current = interruptTarget
+    if (current) {
+      invariant(
+        interruptKey(current) === interruptKey(target),
+        "multiple concurrent interrupts were observed"
+      )
+      return
+    }
+    interruptTarget = {
+      interruptId: target.interruptId,
+      namespace: [...target.namespace],
+    }
+    interruptProjectionRecognized =
+      isRecord(projected.value) && projected.value.recognized === true
+    interruptProjection = projected.value
+    runtimeOutput.push({
+      event: "updates",
+      data: {
+        __interrupt__: [projected],
+      },
+    })
+  } catch (error) {
+    watcherFailure =
+      error instanceof Error ? error : new Error("nested input watcher failed")
+  }
+}
+
+function acceptNestedInputEvent(event: InputEvent): void {
+  try {
+    acceptProjectedInterrupt(
+      {
+        interruptId: event.params.data.interrupt_id,
+        namespace: [...event.params.namespace],
+      },
+      projectInputEventForRuntime(event)
+    )
+  } catch (error) {
+    watcherFailure =
+      error instanceof Error ? error : new Error("nested input watcher failed")
+  }
+}
+
+async function waitForNestedInterrupt(
+  thread: Awaited<ReturnType<typeof openPhase>>["thread"]
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (watcherFailure) throw watcherFailure
+    const unique = new Map<
+      string,
+      {
+        interruptId: string
+        namespace: string[]
+        payload: unknown
+      }
+    >()
+    for (const candidate of [...thread.interrupts]) {
+      const target = {
+        interruptId: candidate.interruptId,
+        namespace: [...candidate.namespace],
+      }
+      unique.set(interruptKey(target), {
+        ...target,
+        payload: candidate.payload,
+      })
+    }
+    invariant(
+      unique.size <= 1,
+      "SDK watcher retained multiple concurrent interrupts"
+    )
+    const candidate = unique.values().next().value
+    if (candidate) {
+      acceptProjectedInterrupt(
+        {
+          interruptId: candidate.interruptId,
+          namespace: candidate.namespace,
+        },
+        {
+          value: projectInterruptForUi(candidate.payload),
+          resumable: true,
+          when: "during",
+          ns: candidate.namespace,
+        }
+      )
+      // Hold a short stable window so a second pre-terminal input cannot
+      // arrive just after the first one is accepted.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      invariant(
+        new Set(
+          thread.interrupts.map((entry) =>
+            interruptKey({
+              interruptId: entry.interruptId,
+              namespace: entry.namespace,
+            })
+          )
+        ).size === 1,
+        "SDK watcher retained multiple concurrent interrupts"
+      )
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error("SDK watcher did not capture the nested interrupt")
+}
 
 function recordEvent(event: Event): "interrupted" | "completed" | undefined {
   const replayKey =
@@ -173,13 +306,7 @@ function recordEvent(event: Event): "interrupted" | "completed" | undefined {
     return undefined
   }
   if (event.method === "input.requested") {
-    interrupt = event
-    runtimeOutput.push({
-      event: "updates",
-      data: {
-        __interrupt__: [projectInputEventForRuntime(event)],
-      },
-    })
+    sawNestedInputOnContent ||= event.params.namespace.length > 0
     return undefined
   }
   if (event.method !== "lifecycle") return undefined
@@ -230,14 +357,16 @@ try {
     if (initialTerminal) break
   }
   invariant(initialTerminal === "interrupted", "initial run did not interrupt")
-  invariant(interrupt !== undefined, "input.requested was not observed")
+  await waitForNestedInterrupt(initial.thread)
+  invariant(watcherFailure === undefined, "nested input watcher failed")
+  invariant(interruptTarget !== undefined, "input.requested was not observed")
   await closePhase(initial)
 
   const resumed = await openPhase()
   phases.push(resumed)
   await resumed.thread.respondInput({
-    namespace: interrupt.params.namespace,
-    interrupt_id: interrupt.params.data.interrupt_id,
+    namespace: interruptTarget.namespace,
+    interrupt_id: interruptTarget.interruptId,
     response: "approved-via-js-sdk",
   })
   let resumedTerminal: ReturnType<typeof recordEvent>
@@ -290,10 +419,25 @@ try {
     isDeepStrictEqual(inspectionPayloads[0], canonicalInspection),
     "inspection event did not match the canonical fixture"
   )
+  invariant(interruptProjectionRecognized, "unexpected interrupt projection")
   invariant(
-    isRecord(interrupt.params.data.value) &&
-      interrupt.params.data.value.kind === "fixture-approval",
-    "unexpected interrupt projection"
+    isDeepStrictEqual(interruptProjection, {
+      recognized: true,
+      kind: "approval",
+      title: "Deterministic fixture approval",
+      prompt: "Continue the deterministic Aegra fixture?",
+      inputHint: "수정할 내용을 입력해 재개",
+    }),
+    "interrupt projection exceeded the reviewed UI contract"
+  )
+  invariant(
+    interruptTarget.namespace.length > 0 &&
+      interruptTarget.namespace[0]?.startsWith("nested_subgraph:"),
+    "nested interrupt namespace was not preserved"
+  )
+  invariant(
+    !sawNestedInputOnContent,
+    "root-only content subscription received a nested input event"
   )
   invariant(sawToolStart && sawToolFinish, "tool lifecycle was incomplete")
   invariant(sawNestedLifecycle, "nested lifecycle was not observed")
@@ -309,11 +453,9 @@ try {
     PRIVATE_STATE_SENTINEL,
     "private_state",
     "nested_result",
-    "approval",
     "todos",
     "files",
     "scratch",
-    "Continue the deterministic Aegra fixture?",
   ]) {
     invariant(
       !serializedRuntimeOutput.includes(forbidden),
@@ -355,6 +497,9 @@ try {
       assistantText,
       inspectionEvents: inspectionPayloads.length,
       protocol: "v2",
+      interruptProjectionRecognized,
+      nestedInputOnContent: sawNestedInputOnContent,
+      nestedInterruptNamespace: interruptTarget.namespace.length > 0,
       rawPrivateStateObserved,
       runtimeBoundarySafe: true,
       sawNestedLifecycle,

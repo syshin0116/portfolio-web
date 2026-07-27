@@ -394,6 +394,7 @@ function InterruptResponseCard({
   const sendCommand = useLangGraphSendCommand()
   const [response, setResponse] = useState("")
   const [sending, setSending] = useState(false)
+  const [resumeError, setResumeError] = useState<string>()
   const respond = async (answer: string) => {
     const normalized = answer.trim()
     if (
@@ -405,11 +406,16 @@ function InterruptResponseCard({
     ) {
       return
     }
+    setResumeError(undefined)
     setSending(true)
     try {
       // Resume carries only the user's bounded decision/input. The opaque
       // interrupt value remains protocol state and is never echoed back.
       await sendCommand({ resume: normalized })
+    } catch {
+      setResumeError(
+        "응답을 보내지 못했습니다. 승인 요청은 유지되었습니다. 다시 시도해 주세요."
+      )
     } finally {
       setSending(false)
       restoreComposerFocus()
@@ -460,9 +466,16 @@ function InterruptResponseCard({
         <input
           id="interrupt-response"
           value={response}
-          onChange={(event) => setResponse(event.target.value)}
+          onChange={(event) => {
+            setResponse(event.target.value)
+            setResumeError(undefined)
+          }}
           maxLength={MAX_INTERRUPT_RESPONSE_CODE_UNITS}
           placeholder={projection.inputHint}
+          aria-describedby={
+            resumeError ? "interrupt-response-error" : undefined
+          }
+          aria-invalid={resumeError !== undefined}
           className="min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 text-sm"
         />
         <Button
@@ -474,6 +487,15 @@ function InterruptResponseCard({
           수정 후 재개
         </Button>
       </form>
+      {resumeError ? (
+        <p
+          id="interrupt-response-error"
+          role="alert"
+          className="mt-2 text-xs text-destructive"
+        >
+          {resumeError}
+        </p>
+      ) : null}
     </div>
   )
 }
@@ -636,16 +658,34 @@ function ThreadListItem() {
   const runtime = useThreadListItemRuntime()
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(item.title ?? "")
+  const [renameError, setRenameError] = useState<string>()
+  const [renaming, setRenaming] = useState(false)
+  const renameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (!editing) setTitle(item.title ?? "")
+    if (!editing) {
+      setTitle(item.title ?? "")
+      setRenameError(undefined)
+    }
   }, [editing, item.title])
 
   const submitRename = async (event: FormEvent) => {
     event.preventDefault()
     const normalized = title.trim()
-    if (!normalized) return
-    await runtime.rename(normalized)
+    if (!normalized || renaming) return
+    setRenameError(undefined)
+    setRenaming(true)
+    try {
+      await runtime.rename(normalized)
+    } catch {
+      setRenaming(false)
+      setRenameError(
+        "대화 제목을 바꾸지 못했습니다. 잠시 후 다시 시도해 주세요."
+      )
+      requestAnimationFrame(() => renameInputRef.current?.focus())
+      return
+    }
+    setRenaming(false)
     setEditing(false)
   }
 
@@ -657,13 +697,35 @@ function ThreadListItem() {
             대화 제목
           </label>
           <input
+            ref={renameInputRef}
             id={`title-${item.id}`}
             autoFocus
             value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            onBlur={() => setEditing(false)}
+            onChange={(event) => {
+              setTitle(event.target.value)
+              setRenameError(undefined)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setEditing(false)
+              }
+            }}
+            disabled={renaming}
+            aria-describedby={
+              renameError ? `title-error-${item.id}` : undefined
+            }
+            aria-invalid={renameError !== undefined}
             className="w-full rounded border bg-background px-2 py-1.5 text-sm"
           />
+          {renameError ? (
+            <p
+              id={`title-error-${item.id}`}
+              role="alert"
+              className="px-1 pt-1 text-xs text-destructive"
+            >
+              {renameError}
+            </p>
+          ) : null}
         </form>
       ) : (
         <ThreadListItemPrimitive.Trigger className="min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm">
@@ -682,7 +744,10 @@ function ThreadListItem() {
           type="button"
           aria-label="대화 제목 변경"
           className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity motion-reduce:transition-none hover:bg-background hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100"
-          onClick={() => setEditing(true)}
+          onClick={() => {
+            setRenameError(undefined)
+            setEditing(true)
+          }}
         >
           <Pencil className="size-3.5" />
         </button>

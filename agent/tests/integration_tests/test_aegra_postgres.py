@@ -353,9 +353,14 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
             )
             interrupt = interrupt_envelope["params"]["data"]
             assert interrupt["value"] == {
-                "kind": "fixture-approval",
-                "question": "Continue the deterministic Aegra fixture?",
+                "schema": "syshin.rag.interrupt.v1",
+                "kind": "approval",
+                "title": "Deterministic fixture approval",
+                "prompt": "Continue the deterministic Aegra fixture?",
             }
+            interrupt_namespace = interrupt_envelope["params"]["namespace"]
+            assert interrupt_namespace
+            assert interrupt_namespace[0].startswith("nested_subgraph:")
 
             resume_response = await command_client.post(
                 f"/threads/{thread_id}/commands",
@@ -364,6 +369,7 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
                     "id": 2,
                     "method": "input.respond",
                     "params": {
+                        "namespace": interrupt_namespace,
                         "interrupt_id": interrupt["interrupt_id"],
                         "response": "approved-over-http",
                     },
@@ -469,6 +475,9 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
             assert summary == {
                 "assistantText": "fixture-complete",
                 "inspectionEvents": 1,
+                "interruptProjectionRecognized": True,
+                "nestedInputOnContent": False,
+                "nestedInterruptNamespace": True,
                 "protocol": "v2",
                 "rawPrivateStateObserved": False,
                 "runtimeBoundarySafe": True,
@@ -744,8 +753,8 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
                 bob_config,
             )
 
-        assert alice_first["__interrupt__"][0].value["kind"] == "fixture-approval"
-        assert bob_first["__interrupt__"][0].value["kind"] == "fixture-approval"
+        assert alice_first["__interrupt__"][0].value["kind"] == "approval"
+        assert bob_first["__interrupt__"][0].value["kind"] == "approval"
         assert alice_config["configurable"]["langgraph_auth_user"].identity == "alice"
         assert bob_config["configurable"]["langgraph_auth_user"].identity == "bob"
         assert alice_memory_config["configurable"]["user_id"] == "bob"

@@ -32,7 +32,11 @@ import {
   sourcesFromContent,
   type AgentActivity,
 } from "./inspection"
-import { projectInterruptForUi } from "./interrupt-projection"
+import {
+  projectInterruptForUi,
+  readRuntimeInterruptProjection,
+  type InterruptUiProjection,
+} from "./interrupt-projection"
 
 const TERMINAL_RUN_STATUSES = new Set([
   "success",
@@ -43,23 +47,33 @@ const TERMINAL_RUN_STATUSES = new Set([
 const TERMINAL_WAIT_MS = 2_000
 const TERMINAL_POLL_MS = 100
 const DISPOSE_WAIT_MS = TERMINAL_WAIT_MS + 500
+const RESUMED_RUN_ID_WAIT_MS = 2_000
+const RESUMED_RUN_ID_POLL_MS = 50
+const INTERRUPT_WATCHER_WAIT_MS = 1_000
+const INTERRUPT_WATCHER_POLL_MS = 10
+const INTERRUPT_WATCHER_STABLE_POLLS = 5
 const MAX_STATE_MESSAGES = 500
 const MAX_STATE_CONTENT_BLOCKS = 256
 const MAX_STATE_TEXT_CODE_UNITS = 100_000
 const MAX_STATE_MESSAGE_ID_CODE_UNITS = 256
 const SAFE_STATE_MESSAGE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
+const MAX_INTERRUPT_ID_CODE_UNITS = 256
+const MAX_INTERRUPT_NAMESPACE_PARTS = 32
+const MAX_INTERRUPT_NAMESPACE_PART_CODE_UNITS = 256
+const SAFE_INTERRUPT_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
+const SAFE_INTERRUPT_NAMESPACE_PART = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
 
 export type { AgentActivity } from "./inspection"
 
 export interface PendingInterrupt {
   interruptId: string
   namespace: string[]
-  value: unknown
+  value: InterruptUiProjection
   resumable: boolean
   when: string
 }
 
-interface NativeAgentClientOptions {
+export interface NativeAgentClientOptions {
   apiUrl: string
   assistantId: string
   identity: string
@@ -75,6 +89,67 @@ interface ActiveNativeStream {
   controller: AbortController
   settle: () => void
   stream?: ThreadStream
+}
+
+type QueuedNestedInput =
+  | { type: "pending"; pending: PendingInterrupt }
+  | { type: "error"; error: Error }
+  | { type: "done" }
+
+class NestedInputQueue {
+  readonly #items: QueuedNestedInput[] = []
+  readonly #waiters: Array<(item: QueuedNestedInput) => void> = []
+  #closed = false
+
+  push(pending: PendingInterrupt): void {
+    if (this.#closed) return
+    this.#deliver({ type: "pending", pending })
+  }
+
+  fail(): void {
+    if (this.#closed) return
+    this.#closed = true
+    this.#items.length = 0
+    this.#deliver({
+      type: "error",
+      error: new Error(
+        "동시에 여러 승인 요청이 도착했습니다. 안전하게 재개할 수 없어 중단했습니다."
+      ),
+    })
+  }
+
+  close(): void {
+    if (this.#closed) return
+    this.#closed = true
+    this.#items.length = 0
+    this.#deliver({ type: "done" })
+  }
+
+  async next(signal: AbortSignal): Promise<QueuedNestedInput> {
+    signal.throwIfAborted()
+    const current = this.#items.shift()
+    if (current) return current
+    if (this.#closed) return { type: "done" }
+    return await new Promise<QueuedNestedInput>((resolve, reject) => {
+      const deliver = (item: QueuedNestedInput) => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(item)
+      }
+      const onAbort = () => {
+        const index = this.#waiters.indexOf(deliver)
+        if (index >= 0) this.#waiters.splice(index, 1)
+        reject(signal.reason)
+      }
+      signal.addEventListener("abort", onAbort, { once: true })
+      this.#waiters.push(deliver)
+    })
+  }
+
+  #deliver(item: QueuedNestedInput): void {
+    const waiter = this.#waiters.shift()
+    if (waiter) waiter(item)
+    else this.#items.push(item)
+  }
 }
 
 const nativeClientInspectionReaders = new WeakMap<
@@ -381,14 +456,67 @@ export class NativeMessageProjection {
   }
 }
 
+function safeInterruptIdentifier(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length <= MAX_INTERRUPT_ID_CODE_UNITS &&
+    SAFE_INTERRUPT_ID.test(value)
+    ? value
+    : undefined
+}
+
+function safeInterruptNamespace(value: unknown): string[] | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_INTERRUPT_NAMESPACE_PARTS
+  ) {
+    return undefined
+  }
+  const result: string[] = []
+  for (const part of value) {
+    if (
+      typeof part !== "string" ||
+      part.length === 0 ||
+      part.length > MAX_INTERRUPT_NAMESPACE_PART_CODE_UNITS ||
+      !SAFE_INTERRUPT_NAMESPACE_PART.test(part)
+    ) {
+      return undefined
+    }
+    result.push(part)
+  }
+  return result
+}
+
 function pendingFromInputEvent(event: InputEvent): PendingInterrupt {
   const data = event.params.data as typeof event.params.data & {
     value?: unknown
   }
+  const interruptId = safeInterruptIdentifier(data.interrupt_id)
+  const namespace = safeInterruptNamespace(event.params.namespace)
+  if (!interruptId || !namespace) {
+    throw new Error("승인 요청 식별 정보가 올바르지 않습니다.")
+  }
   return {
-    interruptId: data.interrupt_id,
-    namespace: [...event.params.namespace],
-    value: data.payload ?? data.value,
+    interruptId,
+    namespace,
+    value: projectInterruptForUi(data.payload ?? data.value),
+    resumable: true,
+    when: "during",
+  }
+}
+
+function pendingFromSdkInterrupt(value: unknown): PendingInterrupt {
+  if (!isRecord(value)) {
+    throw new Error("승인 요청 형식을 읽을 수 없습니다.")
+  }
+  const interruptId = safeInterruptIdentifier(value.interruptId)
+  const namespace = safeInterruptNamespace(value.namespace)
+  if (!interruptId || !namespace) {
+    throw new Error("승인 요청 식별 정보가 올바르지 않습니다.")
+  }
+  return {
+    interruptId,
+    namespace,
+    value: projectInterruptForUi(value.payload),
     resumable: true,
     when: "during",
   }
@@ -398,7 +526,7 @@ export function projectPendingInterruptForRuntime(
   pending: PendingInterrupt
 ): LangGraphInterruptState {
   return {
-    value: projectInterruptForUi(pending.value),
+    value: pending.value,
     resumable: pending.resumable,
     when: pending.when,
     ns: pending.namespace,
@@ -440,23 +568,26 @@ export function extractPendingInterrupt(
   if (!isRecord(candidate)) {
     throw new Error("승인 요청 형식을 읽을 수 없습니다.")
   }
-  const interruptId =
+  const interruptId = safeInterruptIdentifier(
     typeof candidate.interrupt_id === "string"
       ? candidate.interrupt_id
       : typeof candidate.id === "string"
         ? candidate.id
         : undefined
+  )
   if (!interruptId) {
-    throw new Error("승인 요청 식별자가 없습니다.")
+    throw new Error("승인 요청 식별 정보가 올바르지 않습니다.")
+  }
+  const namespace = safeInterruptNamespace(candidate.ns ?? [])
+  if (!namespace) {
+    throw new Error("승인 요청 식별 정보가 올바르지 않습니다.")
   }
   return {
     interruptId,
-    namespace: Array.isArray(candidate.ns)
-      ? candidate.ns.filter((part): part is string => typeof part === "string")
-      : [],
-    value: candidate.value ?? candidate.payload,
+    namespace,
+    value: projectInterruptForUi(candidate.value ?? candidate.payload),
     resumable: candidate.resumable !== false,
-    when: typeof candidate.when === "string" ? candidate.when : "during",
+    when: candidate.when === "before" ? "before" : "during",
   }
 }
 
@@ -578,18 +709,220 @@ export async function cancelRunAndWait(
   }
 }
 
-async function resolveActiveRunId(
+async function waitForResumedRunId(
   client: Pick<Client, "runs">,
   threadId: string,
+  knownRunIds: ReadonlySet<string>,
   signal: AbortSignal
-): Promise<string | undefined> {
-  const runs = await client.runs.list(threadId, {
-    limit: 10,
-    signal,
+): Promise<string> {
+  while (!signal.aborted) {
+    const runs = await client.runs.list(threadId, {
+      limit: 10,
+      offset: 0,
+      signal,
+    })
+    const created = runs.find(
+      (run) =>
+        typeof run.run_id === "string" && !knownRunIds.has(run.run_id)
+    )
+    if (created) return created.run_id
+    await waitForDelay(RESUMED_RUN_ID_POLL_MS, signal)
+  }
+  throw signal.reason
+}
+
+async function resolveResumedRunIdOrThrow(
+  client: Pick<Client, "runs">,
+  threadId: string,
+  knownRunIds: ReadonlySet<string>,
+  signal: AbortSignal
+): Promise<string> {
+  try {
+    return await waitForResumedRunId(
+      client,
+      threadId,
+      knownRunIds,
+      signal
+    )
+  } catch {
+    // This resolver uses only its own bounded signal. Convert its
+    // TimeoutError/AbortError into an ordinary failure so the outer stream
+    // cannot mistake resolver exhaustion for user Stop.
+    throw new Error("재개된 실행 식별자를 확인하지 못했습니다.")
+  }
+}
+
+async function waitForDelay(
+  milliseconds: number,
+  signal: AbortSignal
+): Promise<void> {
+  signal.throwIfAborted()
+  await new Promise<void>((resolve, reject) => {
+    const onTimer = () => {
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }
+    const timer = setTimeout(onTimer, milliseconds)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+    if (signal.aborted) onAbort()
   })
-  return runs.find(
-    (run) => run.status === "pending" || run.status === "running"
-  )?.run_id
+}
+
+function pendingInterruptKey(pending: PendingInterrupt): string {
+  return `${pending.namespace.join("\u001f")}\u001e${pending.interruptId}`
+}
+
+async function waitForInterruptedInput(
+  thread: ThreadStream,
+  pendingInterrupts: Map<string, PendingInterrupt>,
+  threadId: string,
+  signal: AbortSignal
+): Promise<PendingInterrupt> {
+  const bounded = timeoutController(INTERRUPT_WATCHER_WAIT_MS)
+  const waitSignal = AbortSignal.any([
+    signal,
+    bounded.controller.signal,
+  ])
+  let stableKey: string | undefined
+  let stablePolls = 0
+  try {
+    while (!waitSignal.aborted) {
+      const unique = new Map<string, PendingInterrupt>()
+      for (const raw of [...thread.interrupts]) {
+        const pending = pendingFromSdkInterrupt(raw)
+        unique.set(pendingInterruptKey(pending), pending)
+      }
+      if (unique.size > 1) {
+        pendingInterrupts.delete(threadId)
+        throw new Error(
+          "동시에 여러 승인 요청이 도착했습니다. 안전하게 재개할 수 없어 중단했습니다."
+        )
+      }
+      const sdkPending = unique.values().next().value as
+        | PendingInterrupt
+        | undefined
+      const observed = pendingInterrupts.get(threadId)
+      if (
+        observed &&
+        sdkPending &&
+        pendingInterruptKey(observed) !== pendingInterruptKey(sdkPending)
+      ) {
+        pendingInterrupts.delete(threadId)
+        throw new Error(
+          "동시에 여러 승인 요청이 도착했습니다. 안전하게 재개할 수 없어 중단했습니다."
+        )
+      }
+      const pending = observed ?? sdkPending
+      // ThreadStream applies input.requested to `interrupts` before onEvent.
+      // Requiring the SDK projection (not only our callback queue) creates a
+      // bounded barrier against the root content SSE reaching interrupted
+      // before the wildcard lifecycle/input watcher catches up.
+      if (sdkPending && pending) {
+        const key = pendingInterruptKey(pending)
+        if (key === stableKey) {
+          stablePolls += 1
+        } else {
+          stableKey = key
+          stablePolls = 1
+        }
+        pendingInterrupts.set(threadId, pending)
+        if (stablePolls >= INTERRUPT_WATCHER_STABLE_POLLS) {
+          return pending
+        }
+      } else {
+        stableKey = undefined
+        stablePolls = 0
+      }
+      await waitForDelay(INTERRUPT_WATCHER_POLL_MS, waitSignal)
+    }
+    throw waitSignal.reason
+  } catch (error) {
+    if (bounded.controller.signal.aborted && !signal.aborted) {
+      pendingInterrupts.delete(threadId)
+      throw new Error(
+        "승인 요청을 확인하지 못했습니다. 안전하게 재개할 수 없어 중단했습니다."
+      )
+    }
+    throw error
+  } finally {
+    bounded.clear()
+  }
+}
+
+async function* mergeContentAndNestedInputs(
+  subscription: Awaited<ReturnType<ThreadStream["subscribe"]>>,
+  nestedInputs: NestedInputQueue,
+  signal: AbortSignal
+): AsyncGenerator<
+  | { type: "content"; event: ProtocolStreamEvent }
+  | Exclude<QueuedNestedInput, { type: "done" }>
+> {
+  signal.throwIfAborted()
+  let contentIterator = subscription[Symbol.asyncIterator]()
+  let contentNext = contentIterator.next()
+  let nestedNext = nestedInputs.next(signal)
+
+  while (!signal.aborted) {
+    const winner = await Promise.race([
+      nestedNext.then(
+        (result) => ({ source: "nested" as const, result }),
+        (error) => ({ source: "failure" as const, error })
+      ),
+      contentNext.then(
+        (result) => ({ source: "content" as const, result }),
+        (error) => ({ source: "failure" as const, error })
+      ),
+    ])
+    if (winner.source === "failure") throw winner.error
+    if (winner.source === "nested") {
+      if (winner.result.type === "done") {
+        nestedNext = new Promise<QueuedNestedInput>(() => undefined)
+        continue
+      }
+      nestedNext = nestedInputs.next(signal)
+      yield winner.result
+      continue
+    }
+    if (!winner.result.done) {
+      contentNext = contentIterator.next()
+      yield {
+        type: "content",
+        event: winner.result.value as ProtocolStreamEvent,
+      }
+      continue
+    }
+    if (!subscription.isPaused) return
+
+    let resumed = false
+    const resume = subscription.waitForResume().then(() => {
+      resumed = true
+    })
+    while (!resumed) {
+      const waiting = await Promise.race([
+        nestedNext.then(
+          (result) => ({ source: "nested" as const, result }),
+          (error) => ({ source: "failure" as const, error })
+        ),
+        resume.then(() => ({ source: "resume" as const })),
+      ])
+      if (waiting.source === "failure") throw waiting.error
+      if (waiting.source === "nested") {
+        if (waiting.result.type === "done") {
+          nestedNext = new Promise<QueuedNestedInput>(() => undefined)
+          continue
+        }
+        nestedNext = nestedInputs.next(signal)
+        yield waiting.result
+      }
+    }
+    contentIterator = subscription[Symbol.asyncIterator]()
+    contentNext = contentIterator.next()
+  }
+  signal.throwIfAborted()
 }
 
 function isRootTerminal(event: LifecycleEvent): boolean {
@@ -680,8 +1013,22 @@ export class NativeAgentClient {
     threadId: string,
     pending: PendingInterrupt | undefined
   ): void {
-    if (pending) this.#pendingInterrupts.set(threadId, pending)
-    else this.#pendingInterrupts.delete(threadId)
+    if (!pending) {
+      this.#pendingInterrupts.delete(threadId)
+      return
+    }
+    const interruptId = safeInterruptIdentifier(pending.interruptId)
+    const namespace = safeInterruptNamespace(pending.namespace)
+    if (!interruptId || !namespace) {
+      throw new Error("승인 요청 식별 정보가 올바르지 않습니다.")
+    }
+    this.#pendingInterrupts.set(threadId, {
+      interruptId,
+      namespace,
+      value: readRuntimeInterruptProjection(pending.value),
+      resumable: pending.resumable !== false,
+      when: pending.when === "before" ? "before" : "during",
+    })
   }
 
   readonly stream: LangGraphStreamCallback<LangChainMessage> = async function* (
@@ -706,6 +1053,10 @@ export class NativeAgentClient {
     let runId: string | undefined
     let terminal = false
     let cancelIssued = false
+    const presentedInterruptKeys = new Set<string>()
+    const nestedInputs = new NestedInputQueue()
+    let nestedInputFailed = false
+    let unsubscribeThreadEvents: (() => void) | undefined
     const closeOnAbort = () => {
       closeThreadBestEffort(thread)
     }
@@ -722,8 +1073,9 @@ export class NativeAgentClient {
         throw new Error("대화 ID 매핑이 일치하지 않습니다.")
       }
       threadId = initialized.externalId
+      const boundThreadId = threadId
       signal.throwIfAborted()
-      thread = this.client.threads.stream(threadId, {
+      thread = this.client.threads.stream(boundThreadId, {
         assistantId: this.assistantId,
         transport: "sse",
         fetch: this.tokenBroker.fetchWithAuthRetry as typeof fetch,
@@ -741,6 +1093,33 @@ export class NativeAgentClient {
       active.stream = thread
       signal.addEventListener("abort", closeOnAbort, { once: true })
       if (signal.aborted) closeOnAbort()
+      unsubscribeThreadEvents = thread.onEvent((event) => {
+        if (event.method !== "input.requested") return
+        if (nestedInputFailed) return
+        try {
+          if (!Array.isArray(event.params.namespace)) {
+            throw new Error("승인 요청 식별 정보가 올바르지 않습니다.")
+          }
+          if (event.params.namespace.length === 0) return
+          const pending = pendingFromInputEvent(event)
+          const existing = this.#pendingInterrupts.get(boundThreadId)
+          if (existing) {
+            if (pendingInterruptKey(existing) === pendingInterruptKey(pending)) {
+              return
+            }
+            this.#pendingInterrupts.delete(boundThreadId)
+            nestedInputFailed = true
+            nestedInputs.fail()
+            return
+          }
+          this.#pendingInterrupts.set(boundThreadId, pending)
+          nestedInputs.push(pending)
+        } catch {
+          this.#pendingInterrupts.delete(boundThreadId)
+          nestedInputFailed = true
+          nestedInputs.fail()
+        }
+      })
       subscription = await thread.subscribe(
         [
           "messages",
@@ -756,22 +1135,51 @@ export class NativeAgentClient {
       )
 
       if (config.command) {
-        const pending = this.#pendingInterrupts.get(threadId)
+        const pending = this.#pendingInterrupts.get(boundThreadId)
         if (!pending) {
           throw new Error("재개할 승인 요청이 없습니다.")
         }
-        await thread.respondInput({
-          namespace: pending.namespace,
-          interrupt_id: pending.interruptId,
-          response: config.command.resume,
-        })
-        // APv2 input.respond creates/resumes a run but the SDK's native
-        // respondInput method intentionally returns void. Resolve the active
-        // ID once so Stop can still cancel a resumed run exactly once.
-        runId = await resolveActiveRunId(this.client, threadId, signal).catch(
-          () => undefined
-        )
-        this.#pendingInterrupts.delete(threadId)
+        const runResolution = timeoutController(RESUMED_RUN_ID_WAIT_MS)
+        try {
+          const runResolutionClient = new Client({
+            apiUrl: this.#apiUrl,
+            apiKey: null,
+            callerOptions: {
+              fetch: active.cancellationSnapshot.createRunResolverFetch({
+                apiUrl: this.#apiUrl,
+                threadId: boundThreadId,
+              }) as typeof fetch,
+              maxRetries: 0,
+            },
+          })
+          const knownRunIds = new Set(
+            (
+              await runResolutionClient.runs.list(boundThreadId, {
+                limit: 10,
+                offset: 0,
+                signal: runResolution.controller.signal,
+              })
+            ).map((run) => run.run_id)
+          )
+          await thread.respondInput({
+            namespace: pending.namespace,
+            interrupt_id: pending.interruptId,
+            response: config.command.resume,
+          })
+          // The SDK intentionally returns void for input.respond. Resolve the
+          // newly-created run through a bounded, old-identity, read-only
+          // snapshot before clearing HITL so Stop can always target it.
+          runId = await resolveResumedRunIdOrThrow(
+            runResolutionClient,
+            boundThreadId,
+            knownRunIds,
+            runResolution.controller.signal
+          )
+        } finally {
+          runResolution.clear()
+        }
+        signal.throwIfAborted()
+        this.#pendingInterrupts.delete(boundThreadId)
         yield { event: "updates", data: { __interrupt__: [] } }
       } else {
         const result = await thread.submitRun({
@@ -788,78 +1196,121 @@ export class NativeAgentClient {
       const resuming = config.command !== undefined
       let sawRootRunning = false
 
-      // ThreadStream pauses, rather than closes, a subscription at a root
-      // terminal. A newly attached resume stream can first replay the prior
-      // `interrupted` event and then resume when the new `running` event
-      // arrives. Re-entering the iterator is therefore required by the SDK's
-      // SubscriptionHandle contract; otherwise a successful resumed run can
-      // look like an empty stream.
-      while (!terminal) {
-        for await (const event of subscription as AsyncIterable<ProtocolStreamEvent>) {
-          signal.throwIfAborted()
-          if (event.method === "messages") {
-            const activity = inspection.consumeMessage(event)
-            if (activity) this.#onActivity?.(activity)
-            // Nested-agent transcript text is not a user-facing answer.
-            // Lifecycle/custom summaries remain visible; root-message reasoning
-            // is locally removed but may already have crossed the SSE boundary.
-            if (event.params.namespace.length > 0) continue
-            const projected = projection.consume(event)
-            if (projected) yield projected
-            continue
+      // The root-only content pump is merged locally with only bounded nested
+      // input projections received from ThreadStream.onEvent. The watcher
+      // never widens message, state, tool, or custom content delivery.
+      for await (const item of mergeContentAndNestedInputs(
+        subscription,
+        nestedInputs,
+        signal
+      )) {
+        if (item.type === "error") throw item.error
+        if (item.type === "pending") {
+          presentedInterruptKeys.add(pendingInterruptKey(item.pending))
+          yield {
+            event: "updates",
+            data: {
+              __interrupt__: [
+                projectPendingInterruptForRuntime(item.pending),
+              ],
+            },
           }
-          if (event.method === "input.requested") {
-            const pending = pendingFromInputEvent(event)
-            const existing = this.#pendingInterrupts.get(threadId)
-            if (existing && existing.interruptId !== pending.interruptId) {
-              throw new Error(
-                "동시에 여러 승인 요청이 도착했습니다. 안전하게 재개할 수 없어 중단했습니다."
-              )
-            }
-            this.#pendingInterrupts.set(threadId, pending)
+          continue
+        }
+        const event = item.event
+        signal.throwIfAborted()
+        if (event.method === "messages") {
+          const activity = inspection.consumeMessage(event)
+          if (activity) this.#onActivity?.(activity)
+          // Nested-agent transcript text is not a user-facing answer.
+          // Lifecycle/custom summaries remain visible; root-message reasoning
+          // is locally removed but may already have crossed the SSE boundary.
+          if (event.params.namespace.length > 0) continue
+          const projected = projection.consume(event)
+          if (projected) yield projected
+          continue
+        }
+        if (event.method === "input.requested") {
+          const pending = pendingFromInputEvent(event)
+          const existing = this.#pendingInterrupts.get(boundThreadId)
+          if (
+            existing &&
+            pendingInterruptKey(existing) !== pendingInterruptKey(pending)
+          ) {
+            this.#pendingInterrupts.delete(boundThreadId)
+            throw new Error(
+              "동시에 여러 승인 요청이 도착했습니다. 안전하게 재개할 수 없어 중단했습니다."
+            )
+          }
+          if (existing) continue
+          this.#pendingInterrupts.set(boundThreadId, pending)
+          presentedInterruptKeys.add(pendingInterruptKey(pending))
+          yield {
+            event: "updates",
+            data: {
+              __interrupt__: [
+                projectPendingInterruptForRuntime(pending),
+              ],
+            },
+          }
+          continue
+        }
+        if (event.method === "tools") {
+          this.#onActivity?.(inspection.consumeTool(event))
+          continue
+        }
+        if (event.method === "custom") {
+          const activity = inspection.consumeCustom(event)
+          if (activity) this.#onActivity?.(activity)
+          continue
+        }
+        if (event.method === "lifecycle") {
+          this.#onActivity?.(inspection.consumeLifecycle(event))
+          const root = event.params.namespace.length === 0
+          if (root && event.params.data.event === "running") {
+            sawRootRunning = true
+          }
+          if (root && event.params.data.event === "failed") {
+            this.#onError?.(new AgentLifecycleError())
             yield {
-              event: "updates",
-              data: {
-                __interrupt__: [projectInputEventForRuntime(event)],
-              },
+              event: "error",
+              data: { message: safeLifecycleError(event) },
             }
-            continue
           }
-          if (event.method === "tools") {
-            this.#onActivity?.(inspection.consumeTool(event))
-            continue
-          }
-          if (event.method === "custom") {
-            const activity = inspection.consumeCustom(event)
-            if (activity) this.#onActivity?.(activity)
-            continue
-          }
-          if (event.method === "lifecycle") {
-            this.#onActivity?.(inspection.consumeLifecycle(event))
-            const root = event.params.namespace.length === 0
-            if (root && event.params.data.event === "running") {
-              sawRootRunning = true
-            }
-            if (event.params.data.event === "failed") {
-              this.#onError?.(new AgentLifecycleError())
+          const staleResumeInterrupt =
+            root &&
+            event.params.data.event === "interrupted" &&
+            resuming &&
+              !sawRootRunning
+          if (
+            root &&
+            event.params.data.event === "interrupted" &&
+            !staleResumeInterrupt
+          ) {
+            const pending = await waitForInterruptedInput(
+              thread,
+              this.#pendingInterrupts,
+              boundThreadId,
+              signal
+            )
+            const key = pendingInterruptKey(pending)
+            if (!presentedInterruptKeys.has(key)) {
+              presentedInterruptKeys.add(key)
               yield {
-                event: "error",
-                data: { message: safeLifecycleError(event) },
+                event: "updates",
+                data: {
+                  __interrupt__: [
+                    projectPendingInterruptForRuntime(pending),
+                  ],
+                },
               }
             }
-            const staleResumeInterrupt =
-              root &&
-              event.params.data.event === "interrupted" &&
-              resuming &&
-              !sawRootRunning
-            if (isRootTerminal(event) && !staleResumeInterrupt) {
-              terminal = true
-              break
-            }
+          }
+          if (isRootTerminal(event) && !staleResumeInterrupt) {
+            terminal = true
+            break
           }
         }
-        if (terminal || !subscription.isPaused) break
-        await subscription.waitForResume()
       }
     } catch (error) {
       if (
@@ -900,6 +1351,8 @@ export class NativeAgentClient {
         }
       }
       signal.removeEventListener("abort", closeOnAbort)
+      nestedInputs.close()
+      unsubscribeThreadEvents?.()
       await subscription?.unsubscribe().catch(() => undefined)
       await thread?.close().catch(() => undefined)
       active.cancellationSnapshot?.dispose()
@@ -917,6 +1370,6 @@ export const nativeClientTesting = {
     return read()
   },
   pendingFromInputEvent,
-  resolveActiveRunId,
+  resolveResumedRunIdOrThrow,
   safeLifecycleError,
 }

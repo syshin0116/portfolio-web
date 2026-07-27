@@ -38,6 +38,9 @@
   ],
   "exclude": [
     "node_modules",
-    "scripts"
+    "scripts",
+    "tests/browser/fixture/.next",
+    "test-results",
+    "playwright-report"
   ]
 }

@@ -64,9 +64,11 @@ const EXPECTED_NATIVE_AGENT_PINS = new Map([
 ])
 
 const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
+  ["@axe-core/playwright", "@axe-core/playwright@4.12.1"],
   ["@eslint/compat", "@eslint/compat@2.1.0"],
   ["@giscus/react", "@giscus/react@3.1.0"],
   ["@neondatabase/serverless", "@neondatabase/serverless@1.0.2"],
+  ["@playwright/test", "@playwright/test@1.62.0"],
   ["@radix-ui/react-accordion", "@radix-ui/react-accordion@1.2.12"],
   ["@radix-ui/react-avatar", "@radix-ui/react-avatar@1.1.11"],
   ["@radix-ui/react-checkbox", "@radix-ui/react-checkbox@1.3.3"],

@@ -298,4 +298,151 @@ describe("AgentTokenBroker", () => {
       sealed: true,
     })
   })
+
+  test("pins resumed-run discovery to one exact read-only thread endpoint and old identity", async () => {
+    const oldToken = token(2_000, "old-user")
+    const newToken = token(2_100, "new-user")
+    const calls: Array<{
+      authorization: string | null
+      credentials: RequestCredentials | undefined
+      method: string
+      untrustedHeader: string | null
+      url: string
+    }> = []
+    let mintCalls = 0
+    const broker = new AgentTokenBroker("old-user", {
+      nowSeconds: () => 1_000,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url === "/api/agent-token") {
+          mintCalls += 1
+          return jsonResponse({
+            token: mintCalls === 1 ? oldToken : newToken,
+          })
+        }
+        calls.push({
+          authorization: new Headers(init?.headers).get("Authorization"),
+          credentials: init?.credentials,
+          method: init?.method ?? "GET",
+          untrustedHeader: new Headers(init?.headers).get("x-untrusted"),
+          url,
+        })
+        return jsonResponse([])
+      },
+    })
+    const signal = new AbortController().signal
+    const snapshot = await broker.captureCancellationSnapshot(signal)
+    const resolverFetch = snapshot.createRunResolverFetch({
+      apiUrl: "https://agent.example",
+      threadId: "thread-1",
+    })
+
+    broker.setIdentity("new-user")
+    expect(await broker.get(signal)).toBe(newToken)
+    await resolverFetch(
+      "https://agent.example/threads/thread-1/runs?offset=0&limit=10",
+      {
+        headers: { "x-untrusted": "drop-me" },
+        credentials: "include",
+      }
+    )
+
+    expect(calls).toEqual([
+      {
+        authorization: `Bearer ${oldToken}`,
+        credentials: "omit",
+        method: "GET",
+        untrustedHeader: null,
+        url: "https://agent.example/threads/thread-1/runs?offset=0&limit=10",
+      },
+    ])
+    expect(calls[0]!.authorization).not.toBe(`Bearer ${newToken}`)
+    await expect(
+      resolverFetch(
+        "https://agent.example/threads/thread-1/runs?limit=11&offset=0"
+      )
+    ).rejects.toThrow("out-of-scope")
+    await expect(
+      resolverFetch(
+        "https://agent.example/threads/thread-1/runs?limit=10&offset=0",
+        { method: "POST" }
+      )
+    ).rejects.toThrow("out-of-scope")
+    await expect(
+      resolverFetch(
+        "https://agent.example/threads/thread-1/runs?limit=10&offset=0",
+        { body: "opaque" }
+      )
+    ).rejects.toThrow("out-of-scope")
+    await expect(
+      resolverFetch(
+        "https://user:password@agent.example/threads/thread-1/runs?limit=10&offset=0"
+      )
+    ).rejects.toThrow("out-of-scope")
+  })
+
+  test("bounds resumed-run polling and seals discovery after exact run binding", async () => {
+    const broker = new AgentTokenBroker("user-1", {
+      nowSeconds: () => 1_000,
+      fetch: async (input) =>
+        String(input) === "/api/agent-token"
+          ? jsonResponse({ token: token(2_000) })
+          : jsonResponse([]),
+    })
+    const signal = new AbortController().signal
+    const snapshot = await broker.captureCancellationSnapshot(signal)
+    const resolverFetch = snapshot.createRunResolverFetch({
+      apiUrl: "https://agent.example",
+      threadId: "thread-1",
+    })
+    const exactList =
+      "https://agent.example/threads/thread-1/runs?limit=10&offset=0"
+    for (let index = 0; index < 32; index += 1) {
+      expect((await resolverFetch(exactList)).status).toBe(200)
+    }
+    await expect(resolverFetch(exactList)).rejects.toThrow("out-of-scope")
+
+    expect(() =>
+      snapshot.createFetch({
+        apiUrl: "https://agent.example",
+        threadId: "thread-2",
+        runId: "run-1",
+      })
+    ).toThrow("does not match")
+    const cancellationFetch = snapshot.createFetch({
+      apiUrl: "https://agent.example",
+      threadId: "thread-1",
+      runId: "run-1",
+    })
+    await expect(resolverFetch(exactList)).rejects.toThrow(
+      "closed after run binding"
+    )
+    await cancellationFetch(
+      "https://agent.example/threads/thread-1/runs/run-1/cancel?wait=0&action=interrupt",
+      { method: "POST" }
+    )
+  })
+
+  test("rejects credential-bearing restricted-fetch base URLs", async () => {
+    const broker = new AgentTokenBroker("user-1", {
+      nowSeconds: () => 1_000,
+      fetch: async () => jsonResponse({ token: token(2_000) }),
+    })
+    const snapshot = await broker.captureCancellationSnapshot(
+      new AbortController().signal
+    )
+    expect(() =>
+      snapshot.createRunResolverFetch({
+        apiUrl: "https://user:password@agent.example",
+        threadId: "thread-1",
+      })
+    ).toThrow("must not contain")
+    expect(() =>
+      snapshot.createFetch({
+        apiUrl: "https://user:password@agent.example",
+        threadId: "thread-1",
+        runId: "run-1",
+      })
+    ).toThrow("must not contain")
+  })
 })

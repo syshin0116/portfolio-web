@@ -17,6 +17,9 @@ export default defineConfig([
   globalIgnores([
     ".next/**",
     ".generated/**",
+    "tests/browser/fixture/.next/**",
+    "test-results/**",
+    "playwright-report/**",
     "out/**",
     "build/**",
     "public/pagefind/**",

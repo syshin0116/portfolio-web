@@ -1,6 +1,7 @@
 const TOKEN_ENDPOINT = "/api/agent-token"
 export const TOKEN_REFRESH_MARGIN_SECONDS = 60
 const MAX_CANCELLATION_STATUS_POLLS = 32
+const MAX_RUN_RESOLUTION_POLLS = 32
 const MAX_RUN_IDENTIFIER_CODE_UNITS = 128
 const RUN_IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]+$/
 
@@ -45,8 +46,14 @@ export interface AgentCancellationTarget {
   runId: string
 }
 
+export type AgentRunResolutionTarget = Omit<
+  AgentCancellationTarget,
+  "runId"
+>
+
 export interface AgentCancellationSnapshot {
   readonly identity: string
+  createRunResolverFetch(target: AgentRunResolutionTarget): FetchLike
   createFetch(target: AgentCancellationTarget): FetchLike
   dispose(): void
 }
@@ -162,13 +169,97 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
   readonly #fetch: FetchLike
   #token: string | undefined
   #bound = false
+  #resolutionBound = false
+  #resolutionPolls = 0
   #cancelCalls = 0
   #statusPolls = 0
+  #expectedRunsList?: URL
 
   constructor(identity: string, token: string, fetchImplementation: FetchLike) {
     this.identity = identity
     this.#token = token
     this.#fetch = fetchImplementation
+  }
+
+  createRunResolverFetch(target: AgentRunResolutionTarget): FetchLike {
+    if (this.#resolutionBound || this.#bound) {
+      throw new AgentAuthenticationError(
+        "Run-resolution credential is already bound"
+      )
+    }
+    const apiUrl = new URL(target.apiUrl)
+    if (
+      apiUrl.search ||
+      apiUrl.hash ||
+      apiUrl.username ||
+      apiUrl.password
+    ) {
+      throw new AgentAuthenticationError(
+        "Run-resolution API URL must not contain query or fragment data"
+      )
+    }
+    const threadId = validatedRunIdentifier(target.threadId, "thread ID")
+    this.#expectedRunsList = new URL(
+      `${apiUrl.toString().replace(/\/$/, "")}/threads/${threadId}/runs`
+    )
+    this.#resolutionBound = true
+
+    return async (input, init) => {
+      const token = this.#token
+      if (!token) {
+        throw new AgentAuthenticationError(
+          "Run-resolution credential has been disposed"
+        )
+      }
+      if (this.#bound) {
+        throw new AgentAuthenticationError(
+          "Run-resolution credential was closed after run binding"
+        )
+      }
+      const url = new URL(
+        typeof Request !== "undefined" && input instanceof Request
+          ? input.url
+          : String(input)
+      )
+      const method = requestMethod(input, init)
+      const expected = this.#expectedRunsList
+      const isExactList =
+        expected !== undefined &&
+        !url.username &&
+        !url.password &&
+        url.origin === expected.origin &&
+        url.pathname === expected.pathname &&
+        method === "GET" &&
+        !url.hash &&
+        !requestHasBody(input, init) &&
+        url.searchParams.size === 2 &&
+        url.searchParams.get("limit") === "10" &&
+        url.searchParams.get("offset") === "0"
+      if (
+        !isExactList ||
+        this.#resolutionPolls >= MAX_RUN_RESOLUTION_POLLS
+      ) {
+        throw new AgentAuthenticationError(
+          "Run-resolution credential rejected an out-of-scope request"
+        )
+      }
+      this.#resolutionPolls += 1
+      return await this.#fetch(
+        url.toString(),
+        withAuthorization(
+          {
+            method: "GET",
+            signal:
+              init?.signal instanceof AbortSignal ? init.signal : undefined,
+            cache: "no-store",
+            credentials: "omit",
+            redirect: "error",
+            referrerPolicy: "no-referrer",
+          },
+          token
+        )
+      )
+    }
   }
 
   createFetch(target: AgentCancellationTarget): FetchLike {
@@ -178,7 +269,12 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
       )
     }
     const apiUrl = new URL(target.apiUrl)
-    if (apiUrl.search || apiUrl.hash) {
+    if (
+      apiUrl.search ||
+      apiUrl.hash ||
+      apiUrl.username ||
+      apiUrl.password
+    ) {
       throw new AgentAuthenticationError(
         "Cancellation API URL must not contain query or fragment data"
       )
@@ -188,6 +284,19 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
     const runUrl = `${apiUrl.toString().replace(/\/$/, "")}/threads/${threadId}/runs/${runId}`
     const expectedRun = new URL(runUrl)
     const expectedCancel = new URL(`${runUrl}/cancel`)
+    if (
+      this.#expectedRunsList !== undefined &&
+      (this.#expectedRunsList.origin !== expectedRun.origin ||
+        this.#expectedRunsList.pathname !==
+          `${expectedRun.pathname.slice(
+            0,
+            expectedRun.pathname.lastIndexOf("/")
+          )}`)
+    ) {
+      throw new AgentAuthenticationError(
+        "Cancellation target does not match the resolved thread"
+      )
+    }
     this.#bound = true
 
     return async (input, init) => {
@@ -203,7 +312,12 @@ class RunScopedCancellationSnapshot implements AgentCancellationSnapshot {
           : String(input)
       )
       const method = requestMethod(input, init)
-      if (url.hash || requestHasBody(input, init)) {
+      if (
+        url.hash ||
+        url.username ||
+        url.password ||
+        requestHasBody(input, init)
+      ) {
         throw new AgentAuthenticationError(
           "Cancellation credential rejected an out-of-scope request"
         )
@@ -287,7 +401,11 @@ export class AgentTokenBroker {
       throw new AgentAuthenticationError("Agent identity is required")
     }
     this.#identity = identity
-    this.#fetch = options.fetch ?? fetch
+    // Browser `window.fetch` rejects an arbitrary receiver. Wrap the global
+    // instead of storing it as a method-valued field that would be invoked
+    // with the broker instance as `this`.
+    this.#fetch =
+      options.fetch ?? ((input, init) => fetch(input, init))
     this.#nowSeconds = options.nowSeconds ?? (() => Date.now() / 1_000)
     this.#refreshMarginSeconds =
       options.refreshMarginSeconds ?? TOKEN_REFRESH_MARGIN_SECONDS

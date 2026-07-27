@@ -37,7 +37,9 @@ describe("native assistant-ui architecture contract", () => {
     expect(provider).toContain("useLangGraphRuntime({")
     expect(provider).toContain("<AssistantRuntimeProvider runtime={runtime}>")
     expect(provider).toContain("unstable_threadListAdapter: threadAdapter")
-    expect(nativeClient).toContain("this.client.threads.stream(threadId")
+    expect(nativeClient).toContain(
+      "this.client.threads.stream(boundThreadId"
+    )
     expect(nativeClient).toContain("new MessageAssembler()")
     expect(nativeClient).toContain("thread.submitRun({")
     expect(nativeClient).toContain("thread.respondInput({")
@@ -170,7 +172,13 @@ describe("native assistant-ui architecture contract", () => {
       'INTERRUPT_UI_SCHEMA = "syshin.rag.interrupt.v1"'
     )
     expect(projector).toContain("GENERIC_INTERRUPT_PROJECTION")
-    expect(nativeClient).toContain("projectInterruptForUi(pending.value)")
+    expect(nativeClient).toContain(
+      "value: projectInterruptForUi(data.payload ?? data.value)"
+    )
+    expect(nativeClient).toContain(
+      "value: projectInterruptForUi(value.payload)"
+    )
+    expect(nativeClient).toContain("value: pending.value")
     expect(nativeClient).not.toContain("...values")
   })
 })

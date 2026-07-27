@@ -156,6 +156,52 @@ The currently committed 90-query set intentionally fails step 3 until its qrels 
 an explicit owner review. As of 2026-07-28, the manual publication workflow has not been
 dispatched and no evaluation result is claimed as published gold.
 
+## QuickJS × dynamic-subagent capability experiment
+
+`querysets/capability-tasks-v1.json` is a separate, content-tree-pinned contract for
+P4.5. It contains structured direct-answer, ranked-list transform, stateless evidence,
+and combined tasks. It is not a retrieval query-set and is never accepted by `sweep` or
+rendered into `leaderboard.md`. Its v1 label status is `synthetic-only`; it proves the
+harness and capability boundaries but is not owner-reviewed evidence for public
+enablement.
+
+`blogeval.capability_runner.run_capability_experiment` owns the exact four arms:
+QuickJS off/on × subagents off/on. A provider adapter implements `CapabilityExecutor`
+and receives a server-owned `CapabilityExecutionContext` containing the fixed arm, a
+deterministic per-task seed, an ordinary Aegra run config with no capability override,
+and one real non-serializable `RunBudget`. `build_capability_graph` compiles the native
+Deep Agents graph from that context. The server selection may remove an otherwise
+authorized capability; client config still cannot grant one.
+
+The executor must return one redacted structured observation per task. The runner derives
+model/tool/QuickJS/task calls and charged tokens from the shared ledger, rejects usage in
+a disabled arm, requires every enabled axis to be exercised, and aborts on missing,
+duplicate, reordered, unsettled, token-drifted, or otherwise malformed data. Input/output
+token counts must sum exactly to the ledger charge. Model cost uses recorded integer
+micro-US-dollar rates and rounds up per task; latency uses monotonic elapsed nanoseconds
+rounded to the nearest millisecond.
+
+Artifacts are written atomically and immutably beneath a distinct namespace:
+
+```text
+results/capabilities/<dataset-id>/<run-id>/
+├── capability-report.md
+├── manifest.json
+└── run.json
+```
+
+The run ID binds the task-set checksum and content tree, all four arm definitions,
+executor/model/seed/pricing identity, `RunBudgetPolicy`, agent/eval source trees, root
+lock, and runtime platform. The canonical JSON and Markdown projection are byte-stable
+for the same complete observations. A same-ID rerun with different bytes is rejected,
+making nondeterministic provider output explicit instead of silently replacing a result.
+
+PR CI does not call a paid model. `tests/test_capability_runner.py` uses a deterministic
+structured executor while spending through the production `RunBudget` reservation API;
+it proves the complete four-arm report and the bounded combined arm. Provider-backed
+experiments remain owner/eval operations and must declare their exact model pricing and
+seed.
+
 ## Development gates
 
 ```bash

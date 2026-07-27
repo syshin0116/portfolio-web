@@ -1,0 +1,171 @@
+{
+  "content_tree_sha": "71c5bbda097cc20be0cb15ca4666fd6917f89d5f",
+  "dataset_id": "capability-tasks-v1",
+  "description": "Structured capability tasks that isolate direct answering, deterministic JavaScript transforms, stateless evidence delegation, and their bounded combination.",
+  "label_status": "synthetic-only",
+  "schema": "blogeval-capability-taskset-v1",
+  "tasks": [
+    {
+      "expected": {
+        "answer": {
+          "summary": "LangGraph는 상태 기반 그래프 오케스트레이션을 다룬다."
+        },
+        "citations": [
+          "AI/LangGraph.md"
+        ]
+      },
+      "inputs": {
+        "evidence": [
+          {
+            "doc_id": "AI/LangGraph.md",
+            "statement": "LangGraph는 상태 기반 그래프 오케스트레이션을 다룬다."
+          }
+        ],
+        "output_schema": {
+          "summary": "string"
+        }
+      },
+      "prompt": "주어진 근거 한 건만 사용해 한 문장 요약을 만들고 정확한 content-relative DocId를 인용하라.",
+      "tags": [
+        "baseline",
+        "citation"
+      ],
+      "task_id": "baseline-citation-shape"
+    },
+    {
+      "expected": {
+        "answer": {
+          "bm25_hit_at_2": true,
+          "char_ngram_hit_at_2": false,
+          "supported_claim_ids": [
+            "claim-docker"
+          ]
+        },
+        "citations": [
+          "Study/Docker/2023-12-23-Docker.md"
+        ]
+      },
+      "inputs": {
+        "claims": [
+          {
+            "claim_id": "claim-docker",
+            "evidence_doc_ids": [
+              "Study/Docker/2023-12-23-Docker.md"
+            ],
+            "text": "Docker 기본 개념 문서는 관련 근거다."
+          }
+        ],
+        "rankings": {
+          "bm25": [
+            "AI/LangGraph.md",
+            "Study/Docker/2023-12-23-Docker.md",
+            "Projects/Blog-rag/00-Overview.md"
+          ],
+          "char-ngram": [
+            "AI/LangGraph.md",
+            "Projects/Blog-rag/00-Overview.md",
+            "Study/Docker/2023-12-23-Docker.md"
+          ]
+        },
+        "relevant_doc_id": "Study/Docker/2023-12-23-Docker.md"
+      },
+      "prompt": "두 고정 랭킹의 Hit@2를 계산하고, 별도 근거 검증 결과와 결합해 지원되는 claim ID와 정확한 citation을 구조화하라.",
+      "tags": [
+        "citation",
+        "combined",
+        "metrics"
+      ],
+      "task_id": "combined-metric-evidence"
+    },
+    {
+      "expected": {
+        "answer": {
+          "jaccard_basis_points": 5000,
+          "overlap_doc_ids": [
+            "Study/Docker/2023-12-23-Docker.md",
+            "Tools/Docker/2023-05-08-Docker와 VM 차이.md"
+          ]
+        },
+        "citations": [
+          "Study/Docker/2023-12-23-Docker.md",
+          "Tools/Docker/2023-05-08-Docker와 VM 차이.md"
+        ]
+      },
+      "inputs": {
+        "rankings": {
+          "bm25": [
+            "Study/Docker/2023-12-23-Docker.md",
+            "Tools/Docker/2023-05-08-Docker와 VM 차이.md",
+            "AI/LangGraph.md"
+          ],
+          "char-ngram": [
+            "Tools/Docker/2023-05-08-Docker와 VM 차이.md",
+            "Study/Docker/2023-12-23-Docker.md",
+            "Projects/Blog-rag/00-Overview.md"
+          ]
+        }
+      },
+      "prompt": "두 랭킹의 교집합을 정렬하고 Jaccard 값을 basis point 정수로 계산해, 교집합 DocId만 citation으로 반환하라.",
+      "tags": [
+        "citation",
+        "quickjs",
+        "ranked-list"
+      ],
+      "task_id": "quickjs-ranked-list-overlap"
+    },
+    {
+      "expected": {
+        "answer": {
+          "verdicts": [
+            {
+              "claim_id": "claim-agent",
+              "supported": true
+            },
+            {
+              "claim_id": "claim-rag",
+              "supported": true
+            }
+          ]
+        },
+        "citations": [
+          "AI/2025-06-04-Agent Architecture Comparison.md",
+          "Projects/Blog-rag/00-Overview.md"
+        ]
+      },
+      "inputs": {
+        "claims": [
+          {
+            "claim_id": "claim-agent",
+            "evidence": {
+              "doc_id": "AI/2025-06-04-Agent Architecture Comparison.md",
+              "statement": "에이전트 아키텍처 비교 근거가 제공됐다."
+            }
+          },
+          {
+            "claim_id": "claim-rag",
+            "evidence": {
+              "doc_id": "Projects/Blog-rag/00-Overview.md",
+              "statement": "Blog RAG 프로젝트 개요 근거가 제공됐다."
+            }
+          }
+        ],
+        "expected_output_schema": {
+          "verdicts": [
+            {
+              "claim_id": "string",
+              "supported": "boolean"
+            }
+          ]
+        },
+        "stopping_condition": "각 claim을 한 번씩 판정하면 종료한다."
+      },
+      "prompt": "두 독립 claim을 stateless evidence-checker 작업으로 검증하고, 입력 순서의 verdict와 검증된 DocId citation만 합성하라.",
+      "tags": [
+        "citation",
+        "evidence",
+        "subagents"
+      ],
+      "task_id": "subagent-evidence-verification"
+    }
+  ]
+}

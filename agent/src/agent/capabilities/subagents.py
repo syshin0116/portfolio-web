@@ -199,10 +199,20 @@ def _permission_set(permissions: object) -> frozenset[str]:
     return frozenset(permissions)
 
 
-def dynamic_subagents_allowed(runtime: ServerRuntime[Any]) -> bool:
-    """Authorize only from the authenticated server runtime, never run config."""
+def dynamic_subagents_allowed(
+    runtime: ServerRuntime[Any],
+    *,
+    server_enabled: bool = True,
+) -> bool:
+    """Authorize from server selection plus runtime identity, never run config."""
+    if not isinstance(server_enabled, bool):
+        raise TypeError("server_enabled must be a boolean")
     user = runtime.user
-    if user is None or getattr(user, "is_authenticated", False) is not True:
+    if (
+        not server_enabled
+        or user is None
+        or getattr(user, "is_authenticated", False) is not True
+    ):
         return False
     return bool(
         _permission_set(getattr(user, "permissions", None))

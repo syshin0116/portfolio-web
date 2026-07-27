@@ -919,6 +919,55 @@ async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model
     assert "Available subagent types" in str(counted.system_message.content)
 
 
+@pytest.mark.parametrize(
+    (
+        "quickjs_enabled",
+        "dynamic_subagents_enabled",
+        "expected_quickjs",
+        "expected_task",
+    ),
+    [
+        (False, False, False, False),
+        (False, True, False, True),
+        (True, False, True, False),
+        (True, True, True, True),
+    ],
+    ids=[
+        "quickjs-off-subagents-off",
+        "quickjs-off-subagents-on",
+        "quickjs-on-subagents-off",
+        "quickjs-on-subagents-on",
+    ],
+)
+async def test_server_selected_capability_axes_bind_four_distinct_model_surfaces(
+    quickjs_enabled,
+    dynamic_subagents_enabled,
+    expected_quickjs,
+    expected_task,
+):
+    thread_id = (
+        f"capability-factorial-{int(quickjs_enabled)}-"
+        f"{int(dynamic_subagents_enabled)}"
+    )
+    model = ToolCapableFakeModel(responses=[_final_message("arm complete")])
+    compiled = create_graph(
+        runtime=_server_runtime(["eval"]),
+        config={"configurable": {"thread_id": thread_id}},
+        model=model,
+        budget=RunBudget(),
+        quickjs_enabled=quickjs_enabled,
+        dynamic_subagents_enabled=dynamic_subagents_enabled,
+    )
+
+    await compiled.ainvoke(
+        {"messages": [{"role": "user", "content": "run one arm"}]},
+        {"configurable": {"thread_id": thread_id}},
+    )
+
+    assert (QUICKJS_TOOL_NAME in model.bound_tool_names[0]) is expected_quickjs
+    assert ("task" in model.bound_tool_names[0]) is expected_task
+
+
 @pytest.mark.parametrize("permission", ["admin", "eval"])
 async def test_owner_or_eval_server_opt_in_executes_native_quickjs(permission):
     model = ToolCapableFakeModel(

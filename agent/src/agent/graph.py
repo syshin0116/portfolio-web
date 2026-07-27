@@ -252,10 +252,13 @@ def create_graph(
         and type(dynamic_subagents_enabled) is not bool
     ):
         raise TypeError("dynamic_subagents_enabled must be a boolean")
-    allow_subagents = (
-        not is_guest
-        and dynamic_subagents_allowed(runtime)
-        and (dynamic_subagents_enabled is not False)
+    allow_subagents = not is_guest and dynamic_subagents_allowed(
+        runtime,
+        server_enabled=(
+            True
+            if dynamic_subagents_enabled is None
+            else dynamic_subagents_enabled
+        ),
     )
     allow_quickjs = not is_guest and quickjs_allowed(
         runtime,

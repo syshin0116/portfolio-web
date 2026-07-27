@@ -130,7 +130,15 @@ EXPECTED_ENVIRONMENTS = {
         ],
     },
 }
+EXPECTED_AUTOMATED_SECURITY_FIXES = {
+    "enabled": True,
+    "paused": False,
+}
+EXPECTED_DEPENDABOT_SECURITY_UPDATES_STATUS = "enabled"
 EXPECTED_DEPENDABOT = {
+    "vulnerability_alerts_enabled": True,
+    "automated_security_fixes": EXPECTED_AUTOMATED_SECURITY_FIXES,
+    "repository_security_updates_status": EXPECTED_DEPENDABOT_SECURITY_UPDATES_STATUS,
     "version": 2,
     "updates": [
         {
@@ -659,6 +667,7 @@ def validate_required_execution_safety(
         *,
         source: Path,
         job_name: str,
+        required_graph: bool,
     ) -> None:
         context = f"{display(source)}: job {job_name!r}"
         reject_continue_on_error(job, context=context)
@@ -666,6 +675,12 @@ def validate_required_execution_safety(
         if uses is not None:
             try:
                 reference = _scalar_value(uses, context=f"{context} uses")
+                if required_graph:
+                    errors.append(
+                        f"{context} uses reusable workflow {reference!r}; "
+                        "job-level uses is forbidden on a required-check "
+                        "emitter or needs path"
+                    )
                 if not reference.startswith("./"):
                     return
                 target = _resolve_local_workflow_reference(
@@ -727,7 +742,12 @@ def validate_required_execution_safety(
             errors.append(str(exc))
             return
         for job_name, job in jobs.items():
-            inspect_job(job, source=resolved, job_name=job_name)
+            inspect_job(
+                job,
+                source=resolved,
+                job_name=job_name,
+                required_graph=False,
+            )
 
     try:
         root_jobs = _workflow_jobs(document)
@@ -741,7 +761,12 @@ def validate_required_execution_safety(
         job = root_jobs.get(job_name)
         if job is None:
             return
-        inspect_job(job, source=document.path, job_name=job_name)
+        inspect_job(
+            job,
+            source=document.path,
+            job_name=job_name,
+            required_graph=True,
+        )
         try:
             needs = _job_needs(
                 job,
@@ -1744,8 +1769,22 @@ def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
                 f"GitHub API GET {endpoint!r} selected version "
                 f"{selected_version!r}; expected {api_version!r}"
             )
+        stripped_body = body.strip()
+        if status == 204:
+            if stripped_body:
+                raise GovernanceError(
+                    f"GitHub API GET {endpoint!r} returned a body for HTTP 204"
+                )
+            payload = None
+        else:
+            if not stripped_body:
+                raise GovernanceError(
+                    f"GitHub API GET {endpoint!r} returned an empty body "
+                    f"for HTTP {status}"
+                )
+            payload = json.loads(body)
         return ApiResponse(
-            payload=json.loads(body),
+            payload=payload,
             headers=headers,
             status=status,
         )
@@ -2219,6 +2258,81 @@ def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:
             "external: repository merge methods are "
             f"{actual_merge_methods!r}; expected {expected_merge_methods!r} "
             "to match the main pull-request rule"
+        )
+
+    security_and_analysis = repository_settings.get("security_and_analysis")
+    if not isinstance(security_and_analysis, dict):
+        raise GovernanceError(
+            "GitHub repository response is missing security_and_analysis; "
+            "the live verifier requires repository-admin read access"
+        )
+    dependabot_security_updates = security_and_analysis.get(
+        "dependabot_security_updates"
+    )
+    if not isinstance(dependabot_security_updates, dict):
+        raise GovernanceError(
+            "GitHub repository response is missing "
+            "security_and_analysis.dependabot_security_updates; "
+            "the live verifier requires repository-admin read access"
+        )
+    repository_security_updates_status = dependabot_security_updates.get("status")
+    if not isinstance(repository_security_updates_status, str):
+        raise GovernanceError(
+            "GitHub repository response is missing a string "
+            "security_and_analysis.dependabot_security_updates.status; "
+            "the live verifier requires repository-admin read access"
+        )
+
+    vulnerability_alerts = _api_response(api_get("vulnerability-alerts"))
+    if vulnerability_alerts.status == 204:
+        if vulnerability_alerts.payload is not None:
+            raise GovernanceError(
+                "Dependabot vulnerability-alerts HTTP 204 response must have no body"
+            )
+    elif vulnerability_alerts.status == 404:
+        if (
+            not isinstance(vulnerability_alerts.payload, dict)
+            or vulnerability_alerts.payload.get("message")
+            != "Vulnerability alerts are disabled."
+        ):
+            raise GovernanceError(
+                "Dependabot vulnerability-alerts 404 did not confirm that "
+                "alerts are disabled"
+            )
+        errors.append(
+            "external: Dependabot vulnerability alerts are disabled; expected enabled"
+        )
+    else:
+        raise GovernanceError(
+            "Dependabot vulnerability-alerts query returned HTTP "
+            f"{vulnerability_alerts.status}"
+        )
+
+    automated_security_fixes_response = _api_response(
+        api_get("automated-security-fixes")
+    )
+    if automated_security_fixes_response.status != 200:
+        raise GovernanceError(
+            "Dependabot automated-security-fixes query returned HTTP "
+            f"{automated_security_fixes_response.status}"
+        )
+    automated_security_fixes = automated_security_fixes_response.payload
+    if (
+        not _json_exact(
+            automated_security_fixes,
+            EXPECTED_AUTOMATED_SECURITY_FIXES,
+        )
+        or repository_security_updates_status
+        != EXPECTED_DEPENDABOT_SECURITY_UPDATES_STATUS
+    ):
+        errors.append(
+            "external: Dependabot security updates differ exactly; "
+            f"automated_security_fixes={automated_security_fixes!r}, "
+            f"repository_status={repository_security_updates_status!r}; "
+            "expected automated_security_fixes="
+            f"{EXPECTED_AUTOMATED_SECURITY_FIXES!r}, "
+            "repository_status="
+            f"{EXPECTED_DEPENDABOT_SECURITY_UPDATES_STATUS!r}"
         )
 
     summaries = _single_page_items(

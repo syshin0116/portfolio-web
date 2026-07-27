@@ -30,6 +30,18 @@ def desired_live_responses() -> dict[str, object]:
             "allow_merge_commit": True,
             "allow_squash_merge": True,
             "allow_rebase_merge": True,
+            "security_and_analysis": {
+                "dependabot_security_updates": {"status": "enabled"}
+            },
+        },
+        "vulnerability-alerts": governance.ApiResponse(
+            payload=None,
+            headers={},
+            status=204,
+        ),
+        "automated-security-fixes": {
+            "enabled": True,
+            "paused": False,
         },
         RULESETS_PAGE: [{"id": 7}],
         "rulesets/7": {
@@ -325,15 +337,47 @@ class LocalGovernanceTests(unittest.TestCase):
     def test_dependabot_policy_cannot_move_with_yaml_without_baseline_review(
         self,
     ) -> None:
-        policy = json.loads(json.dumps(governance.load_policy()))
-        policy["dependabot"]["updates"][0]["schedule"]["day"] = "tuesday"
-
-        errors = governance.validate_local(REPO_ROOT, policy)
-
-        self.assertTrue(
-            any("policy.dependabot differs" in error for error in errors),
-            errors,
+        mutations = (
+            (
+                "vulnerability-alerts",
+                ("vulnerability_alerts_enabled",),
+                False,
+            ),
+            (
+                "security-updates-enabled",
+                ("automated_security_fixes", "enabled"),
+                False,
+            ),
+            (
+                "security-updates-paused",
+                ("automated_security_fixes", "paused"),
+                True,
+            ),
+            (
+                "repository-security-status",
+                ("repository_security_updates_status",),
+                "disabled",
+            ),
+            (
+                "version-update-schedule",
+                ("updates", 0, "schedule", "day"),
+                "tuesday",
+            ),
         )
+        for label, path, value in mutations:
+            with self.subTest(label=label):
+                policy = json.loads(json.dumps(governance.load_policy()))
+                target = policy["dependabot"]
+                for component in path[:-1]:
+                    target = target[component]
+                target[path[-1]] = value
+
+                errors = governance.validate_local(REPO_ROOT, policy)
+
+                self.assertTrue(
+                    any("policy.dependabot differs" in error for error in errors),
+                    errors,
+                )
 
     def test_policy_keeps_status_checks_enforced_on_existing_main(self) -> None:
         policy = json.loads(json.dumps(governance.load_policy()))
@@ -1349,6 +1393,85 @@ jobs:
                     errors,
                 )
 
+    def test_required_emitter_and_needs_jobs_forbid_reusable_workflows(
+        self,
+    ) -> None:
+        external = "example/required-checks/.github/workflows/check.yml@" + "a" * 40
+        mutations = (
+            ("emitter-local", "emitter", "./.github/workflows/required-call.yml"),
+            ("emitter-external", "emitter", external),
+            ("needs-local", "needs", "./.github/workflows/required-call.yml"),
+            ("needs-external", "needs", external),
+        )
+        for label, location, reference in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                if reference.startswith("./"):
+                    reusable = root / ".github/workflows/required-call.yml"
+                    reusable.write_text(
+                        """
+name: required call
+on:
+  workflow_call:
+jobs:
+  skipped:
+    if: github.actor == 'nobody'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo skipped
+""".lstrip(),
+                        encoding="utf-8",
+                    )
+                ci = root / ".github/workflows/ci.yml"
+                original = ci.read_text(encoding="utf-8")
+                if location == "emitter":
+                    replacement = (
+                        "  check:\n"
+                        "    name: ci/check\n"
+                        "    if: always()\n"
+                        "    needs:\n"
+                        "      - changes\n"
+                        "      - web\n"
+                        "      - agent\n"
+                        "      - eval\n"
+                        f"    uses: {reference}\n"
+                    )
+                    mutated = re.sub(
+                        r"(?ms)^  check:\n.*\Z",
+                        replacement,
+                        original,
+                        count=1,
+                    )
+                    expected_context = "job 'check'"
+                else:
+                    mutated = original.replace(
+                        "  check:\n",
+                        f"  delegated-required:\n    uses: {reference}\n\n  check:\n",
+                        1,
+                    ).replace(
+                        "    needs:\n      - changes\n      - web\n",
+                        "    needs:\n"
+                        "      - delegated-required\n"
+                        "      - changes\n"
+                        "      - web\n",
+                        1,
+                    )
+                    expected_context = "job 'delegated-required'"
+                self.assertNotEqual(original, mutated)
+                ci.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+                self.assertTrue(
+                    any(
+                        expected_context in error
+                        and reference in error
+                        and "job-level uses is forbidden" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
     def test_reachable_local_composite_actions_forbid_continue_on_error(
         self,
     ) -> None:
@@ -1832,6 +1955,236 @@ class LiveGovernanceTests(unittest.TestCase):
                 "2026-03-10",
                 "actions/permissions",
             )
+
+    def test_gh_api_accepts_an_empty_204_response(self) -> None:
+        completed = governance.subprocess.CompletedProcess(
+            args=["gh", "api"],
+            returncode=0,
+            stdout=(
+                "HTTP/2.0 204 No Content\nX-GitHub-Api-Version-Selected: 2026-03-10\n\n"
+            ),
+            stderr="",
+        )
+        with mock.patch.object(
+            governance.subprocess,
+            "run",
+            return_value=completed,
+        ):
+            response = governance._gh_api(
+                "owner/repository",
+                "2026-03-10",
+                "vulnerability-alerts",
+            )
+
+        self.assertEqual(204, response.status)
+        self.assertIsNone(response.payload)
+
+    def test_gh_api_rejects_a_body_on_204(self) -> None:
+        completed = governance.subprocess.CompletedProcess(
+            args=["gh", "api"],
+            returncode=0,
+            stdout=(
+                "HTTP/2.0 204 No Content\n"
+                "X-GitHub-Api-Version-Selected: 2026-03-10\n\n{}\n"
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(
+                governance.subprocess,
+                "run",
+                return_value=completed,
+            ),
+            self.assertRaisesRegex(
+                governance.GovernanceError,
+                "returned a body for HTTP 204",
+            ),
+        ):
+            governance._gh_api(
+                "owner/repository",
+                "2026-03-10",
+                "vulnerability-alerts",
+            )
+
+    def test_disabled_vulnerability_alerts_are_reported(self) -> None:
+        responses = desired_live_responses()
+        responses["vulnerability-alerts"] = governance.ApiResponse(
+            payload={
+                "message": "Vulnerability alerts are disabled.",
+                "status": "404",
+            },
+            headers={},
+            status=404,
+        )
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertIn(
+            "external: Dependabot vulnerability alerts are disabled; expected enabled",
+            errors,
+        )
+
+    def test_vulnerability_alerts_404_requires_disabled_message(self) -> None:
+        responses = desired_live_responses()
+        responses["vulnerability-alerts"] = governance.ApiResponse(
+            payload={"message": "Not Found", "status": "404"},
+            headers={},
+            status=404,
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "404 did not confirm that alerts are disabled",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_vulnerability_alerts_query_fails_closed_on_forbidden(self) -> None:
+        responses = desired_live_responses()
+        responses["vulnerability-alerts"] = governance.ApiResponse(
+            payload={"message": "Resource not accessible"},
+            headers={},
+            status=403,
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "vulnerability-alerts query returned HTTP 403",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_vulnerability_alerts_204_requires_no_body(self) -> None:
+        responses = desired_live_responses()
+        responses["vulnerability-alerts"] = governance.ApiResponse(
+            payload={},
+            headers={},
+            status=204,
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "HTTP 204 response must have no body",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_automated_security_fixes_object_is_exact(self) -> None:
+        mutations = (
+            ("disabled", {"enabled": False, "paused": False}),
+            ("paused", {"enabled": True, "paused": True}),
+            ("missing", {"enabled": True}),
+            (
+                "extra",
+                {
+                    "enabled": True,
+                    "paused": False,
+                    "undocumented_setting": False,
+                },
+            ),
+        )
+        for label, payload in mutations:
+            with self.subTest(label=label):
+                responses = desired_live_responses()
+                responses["automated-security-fixes"] = payload
+
+                errors = governance.verify_live(
+                    self.policy,
+                    responses.__getitem__,
+                )
+
+                self.assertTrue(
+                    any(
+                        "Dependabot security updates differ exactly" in error
+                        and f"automated_security_fixes={payload!r}" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_automated_security_fixes_query_fails_closed_on_forbidden(self) -> None:
+        responses = desired_live_responses()
+        responses["automated-security-fixes"] = governance.ApiResponse(
+            payload={"message": "Resource not accessible"},
+            headers={},
+            status=403,
+        )
+
+        with self.assertRaisesRegex(
+            governance.GovernanceError,
+            "automated-security-fixes query returned HTTP 403",
+        ):
+            governance.verify_live(self.policy, responses.__getitem__)
+
+    def test_repository_security_updates_status_is_cross_checked(self) -> None:
+        responses = desired_live_responses()
+        repository = json.loads(json.dumps(responses[""]))
+        repository["security_and_analysis"]["dependabot_security_updates"]["status"] = (
+            "disabled"
+        )
+        responses[""] = repository
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertTrue(
+            any(
+                "Dependabot security updates differ exactly" in error
+                and "repository_status='disabled'" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_disabled_security_updates_produce_one_combined_gap(self) -> None:
+        responses = desired_live_responses()
+        repository = json.loads(json.dumps(responses[""]))
+        repository["security_and_analysis"]["dependabot_security_updates"]["status"] = (
+            "disabled"
+        )
+        responses[""] = repository
+        responses["automated-security-fixes"] = {
+            "enabled": False,
+            "paused": False,
+        }
+
+        errors = governance.verify_live(self.policy, responses.__getitem__)
+
+        self.assertEqual(
+            1,
+            sum(
+                "Dependabot security updates differ exactly" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_repository_security_updates_status_requires_admin_shape(self) -> None:
+        def remove_security_and_analysis(repository: dict[str, object]) -> None:
+            del repository["security_and_analysis"]
+
+        def remove_dependabot_status_object(repository: dict[str, object]) -> None:
+            repository["security_and_analysis"] = {}
+
+        def remove_status(repository: dict[str, object]) -> None:
+            repository["security_and_analysis"]["dependabot_security_updates"] = {}
+
+        mutations = (
+            ("security-and-analysis", remove_security_and_analysis),
+            ("dependabot-security-updates", remove_dependabot_status_object),
+            ("status", remove_status),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                responses = desired_live_responses()
+                repository = json.loads(json.dumps(responses[""]))
+                mutate(repository)
+                responses[""] = repository
+
+                with self.assertRaisesRegex(
+                    governance.GovernanceError,
+                    "repository-admin read access",
+                ):
+                    governance.verify_live(
+                        self.policy,
+                        responses.__getitem__,
+                    )
 
     def test_solo_deadlocks_and_missing_guards_are_reported(self) -> None:
         responses = desired_live_responses()

@@ -69,6 +69,14 @@ composite action and reusable workflow, including nested local calls.
 This keeps a required check from remaining permanently pending after an
 upstream failure or merge-queue run.
 
+No job in the required-check emitter or its transitive `needs` graph may use
+job-level `uses`, whether it calls a local or external reusable workflow.
+GitHub can report the caller job successful when every called-workflow job is
+skipped, so a reusable workflow is not a safe required-check boundary. The
+verifier still descends into a referenced local workflow after reporting that
+boundary violation, preserving the recursive `continue-on-error` audit instead
+of letting the first error mask a nested false-green path.
+
 Each required check is bound to GitHub Actions integration ID `15368`, not just
 its mutable display context. A read-only check-runs query against
 `main@d058ebc` confirmed all three contexts came from app slug
@@ -76,14 +84,19 @@ its mutable display context. A read-only check-runs query against
 bound to another integration, duplicate bindings, and undocumented contexts.
 
 The live verifier additionally reads GitHub rulesets, Actions policy, and
-environment branch and protection policies. It also requires the legacy
-`main` branch-protection endpoint to return the exact unprotected-branch 404;
-rulesets are the only allowed main-protection surface. It performs GET requests
-only and verifies that GitHub selected the API version pinned in the manifest.
-An inaccessible endpoint, unexpected status/body, or API-version downgrade
-fails closed. It reads the repository's enabled merge methods as well, so the
-pull-request rule cannot require a method that the repository has disabled.
-The repository response must also report the exact `full_name`
+environment branch and protection policies. It checks that vulnerability
+alerts return an empty HTTP 204, that `automated-security-fixes` returns exactly
+`{"enabled": true, "paused": false}`, and that the admin-only repository
+response independently reports
+`security_and_analysis.dependabot_security_updates.status: enabled`. It also
+requires the legacy `main` branch-protection endpoint to return the exact
+unprotected-branch 404; rulesets are the only allowed main-protection surface.
+It performs GET requests only and verifies that GitHub selected the API version
+pinned in the manifest. An inaccessible endpoint, unexpected status/body,
+missing admin-only security state, or API-version downgrade fails closed. It
+reads the repository's enabled merge methods as well, so the pull-request rule
+cannot require a method that the repository has disabled. The repository
+response must also report the exact `full_name`
 `syshin0116/syshin0116.dev` and `default_branch: main`; a rename, transfer, API
 redirect, or default-branch change is explicit drift. `~DEFAULT_BRANCH` is
 evaluated against that live default ref, not treated as an alias that always
@@ -215,6 +228,18 @@ surface. The local verifier compares version, update identity set, schedule,
 open-PR limit, full cooldown object, and every group exactly; missing,
 duplicate, changed, or extra updates/groups fail.
 
+The version-update schedule in `dependabot.yml` does not itself enable GitHub's
+repository security features. The external contract separately requires
+vulnerability alerts and unpaused Dependabot security updates. The security
+update state is checked through both the dedicated
+`automated-security-fixes` endpoint and the admin-only repository security
+summary so one stale or incomplete surface cannot appear green by itself. A
+missing summary fails closed rather than assuming the caller lacks permission.
+At the time this contract was recorded, vulnerability alerts were disabled and
+the security-update API and repository summary both reported security updates
+disabled. Those are two intentional rollout gaps; this PR detects them but does
+not change the external settings.
+
 [`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs
 weekly and manually. It verifies both lockfiles, runs Bun's high/critical audit,
 audits the exact exported Python resolution with pinned `pip-audit`, and reports
@@ -234,14 +259,16 @@ baseline, `continue-on-error`, or another false-green suppression.
 3. Remove legacy `main` branch protection, then create the single main ruleset
    with zero required approvals and no bypass.
 4. Enable repository Actions and its full-SHA policy.
-5. Remove the required reviewer from routine `Preview`; retain the existing
+5. Enable vulnerability alerts and Dependabot security updates, then confirm
+   that security updates are not paused.
+6. Remove the required reviewer from routine `Preview`; retain the existing
    `syshin0116` reviewer on `Production` with self-review allowed, and confirm
    both branch policies.
-6. Run the `--live` command from this runbook; it must pass.
-7. Manually dispatch **Dependency audit** once and triage any reported
+7. Run the `--live` command from this runbook; it must pass.
+8. Manually dispatch **Dependency audit** once and triage any reported
    vulnerabilities in separate PRs.
 
-The settings in steps 3–5 live outside Git. A green local verifier does not mean
+The settings in steps 3–6 live outside Git. A green local verifier does not mean
 they have been applied.
 
 ## Official references
@@ -251,3 +278,6 @@ they have been applied.
 - [GitHub deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
 - [GitHub deployment branch policy API](https://docs.github.com/en/rest/deployments/branch-policies)
 - [Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
+- [GitHub vulnerability-alert status API](https://docs.github.com/en/rest/repos/repos#check-if-vulnerability-alerts-are-enabled-for-a-repository)
+- [GitHub Dependabot security-update status API](https://docs.github.com/en/rest/repos/repos#check-if-automated-security-fixes-are-enabled-for-a-repository)
+- [GitHub repository security-and-analysis response](https://docs.github.com/en/rest/repos/repos#get-a-repository)

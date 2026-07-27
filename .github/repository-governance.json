@@ -153,6 +153,12 @@
     }
   },
   "dependabot": {
+    "vulnerability_alerts_enabled": true,
+    "automated_security_fixes": {
+      "enabled": true,
+      "paused": false
+    },
+    "repository_security_updates_status": "enabled",
     "version": 2,
     "updates": [
       {

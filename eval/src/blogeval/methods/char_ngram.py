@@ -13,10 +13,13 @@ from agent.retrieval.fingerprint import canonical_config, retriever_fingerprint
 from agent.retrieval.protocol import Corpus, DocId, Hit, Retrieval
 
 CHAR_NGRAM_METHOD_ID = "char-ngram"
-CHAR_NGRAM_IMPLEMENTATION_ID = "blogeval.methods.char_ngram:create@1"
+CHAR_NGRAM_IMPLEMENTATION_ID = "blogeval.methods.char_ngram:create@2"
 CHAR_NGRAM_CONFIG: dict[str, object] = {
-    "algorithm": "bm25-okapi",
+    "algorithm": "bm25-lucene-idf",
     "b": 0.75,
+    "comparison_scope": "compound-document-representation-and-ranker",
+    "document_representation": "raw-published-markdown",
+    "idf_variant": "lucene-positive",
     "k1": 1.5,
     "max_n": 3,
     "min_n": 2,

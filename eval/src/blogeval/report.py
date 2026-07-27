@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Protocol
 from blogeval.datasets import DatasetKind, QuerySet
 
 if TYPE_CHECKING:
+    from blogeval.provenance import RunProvenance
     from blogeval.runner import MethodResult
 
 
@@ -16,6 +17,7 @@ class ReportRun(Protocol):
     dataset: QuerySet
     cutoffs: tuple[int, ...]
     methods: tuple[MethodResult, ...]
+    provenance: RunProvenance
 
 
 def _markdown(value: object) -> str:
@@ -47,6 +49,10 @@ def render_leaderboard(run: ReportRun) -> str:
         f"- Content tree: `{dataset.corpus.git_tree_sha}`",
         f"- Corpus fingerprint: `{dataset.corpus.fingerprint}`",
         f"- Dataset checksum: `{dataset.checksum}`",
+        (
+            "- Publication eligible: "
+            + ("yes" if run.provenance.publication_eligible else "no")
+        ),
         f"- Queries: {len(dataset.qrels)}",
         f"- Recorded exclusions: {len(dataset.exclusions)}",
         "",

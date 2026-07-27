@@ -8,7 +8,7 @@ when_to_read: >
   or when looking for what has already been tried and what it scored.
 tags: [reference, retrieval, rag, evaluation, registry]
 status: draft
-updated: "2026-07-27"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs: [../adr/0008-chatbot-is-a-rag-evaluation-testbed.md, ../plans/rag-restack.md]
 template: reference
@@ -82,7 +82,7 @@ those same links turned out to be the better prize.
 | Method | Status | Meant to teach |
 |---|---|---|
 | BM25 + Kiwi morphological tokenization | `implemented` | The fitted, raw-score baseline everything else is measured against |
-| BM25 + character n-grams | `implemented` | Whether morphological analysis earns its complexity, or n-grams match it on mixed-script Korean |
+| Character n-grams over raw Markdown + positive-IDF BM25 variant | `implemented` | A compound lexical alternative; it changes document representation and IDF/ranker behavior, so it is not a tokenizer-only morphology ablation |
 | BM25 field weighting (title/tags/body) | `planned` | How much of retrieval quality is just "the title said so" |
 | Exact substring | `implemented` | The safe literal-match floor. If a method cannot beat it, it is not earning its cost |
 | Bounded regex | `planned` | Whether regex expressiveness adds useful recall without exposing unbounded query execution |
@@ -272,16 +272,22 @@ the postings needed for the query; it neither retains raw token documents nor co
 `BM25Okapi`. Scores at or below zero are intentionally omitted, including common-term
 negative IDFs and the exact half-corpus zero-IDF boundary.
 
+The current `char-ngram` method reads raw published Markdown (including frontmatter) and
+uses Lucene's always-positive BM25 IDF, while the Kiwi baseline uses structured fields
+and `rank-bm25`'s Okapi IDF behavior. Its fingerprint declares both differences. Treat
+its result as a compound lexical baseline; a tokenizer-only morphology experiment still
+needs a shared field extractor and ranker.
+
 ## Results
 
-Populated once the harness runs. Until then this section is empty on purpose - an empty
-results table is honest, and a table of guesses is not.
+Populated once the harness runs inside the digest-pinned Linux x86_64 deployment image.
+The earlier macOS ARM bootstrap run is intentionally unpublished: its run identity did
+not bind source trees, the shared lock, or execution image provenance. An empty results
+table is honest, and a table of non-comparable numbers is not.
 
 > **Do not headline nDCG yet.** On four smoke queries nDCG@10 read **1.000 for every one**
 > while recall@10 ranged 0.23 to 0.77. With large, ungraded relevant-sets nDCG saturates
 > and stops discriminating. Lead with recall@k and coverage until the qrels are small and
 > genuinely graded.
 
-| Run | Date | Methods | Dataset | Metrics | Result |
-|---|---|---|---|---|---|
-| `sha256:2b4b9e88…986fa` | 2026-07-27 | BM25, character n-grams, sparse RRF | `known-item-alias-v1` (90 queries) | Hit@10 / MRR@10 / coverage | BM25 0.900 / 0.537 / 1.000; char 0.844 / 0.576 / 1.000; RRF 0.856 / 0.562 / 1.000. Bootstrap run only; no topic claim. |
+No publication-qualified run exists yet.

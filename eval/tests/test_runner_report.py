@@ -4,9 +4,10 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from agent.retrieval.protocol import DocId, Hit, Retrieval
 from agent.retrieval.registry import RetrieverRegistry
 
-from blogeval.runner import run_evaluation, write_run_artifacts
+from blogeval.runner import EvaluationError, run_evaluation, write_run_artifacts
 from conftest import MemoryCorpus, RankedRetriever
 
 
@@ -112,6 +113,7 @@ def test_runner_records_rankings_and_method_fingerprints(
         ("AI/alpha.md", "AI/beta.md"),
         ("AI/beta.md",),
     ]
+    assert run.as_dict()["provenance"] == run.provenance.as_dict()
 
 
 def test_result_store_refuses_to_replace_same_run_id_with_different_bytes(
@@ -171,3 +173,73 @@ def test_run_id_changes_when_registered_method_config_changes(
 
     assert first.methods[0].fingerprint != second.methods[0].fingerprint
     assert first.run_id != second.run_id
+
+
+class OutOfCorpusTailRetriever:
+    def __init__(self, _corpus, _config) -> None:
+        pass
+
+    def retrieve(self, query: str, *, limit: int = 10) -> Retrieval:
+        del limit
+        return Retrieval(
+            query=query,
+            hits=(
+                Hit(doc_id=DocId("AI/alpha.md"), rank=1, score=None),
+                Hit(doc_id=DocId("ghost.md"), rank=2, score=None),
+            ),
+        )
+
+
+def test_runner_rejects_out_of_corpus_doc_even_beyond_evaluation_cutoff(
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    registry = RetrieverRegistry()
+    registry.register(
+        "method",
+        OutOfCorpusTailRetriever,
+        implementation_id="tests:outside-corpus@1",
+        servable=False,
+    )
+
+    with pytest.raises(EvaluationError, match="outside the verified corpus.*ghost.md"):
+        run_evaluation(
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            content_tree_sha="a" * 40,
+            method_ids=("method",),
+            cutoffs=(1,),
+            registry=registry,
+        )
+
+
+class QueryMismatchRetriever:
+    def __init__(self, _corpus, _config) -> None:
+        pass
+
+    def retrieve(self, query: str, *, limit: int = 10) -> Retrieval:
+        del limit
+        return Retrieval(query=f"{query}-changed")
+
+
+def test_runner_rejects_retriever_query_mismatch(
+    memory_corpus: MemoryCorpus,
+    known_dataset,
+) -> None:
+    registry = RetrieverRegistry()
+    registry.register(
+        "method",
+        QueryMismatchRetriever,
+        implementation_id="tests:query-mismatch@1",
+        servable=False,
+    )
+
+    with pytest.raises(EvaluationError, match="returned query.*alpha-changed"):
+        run_evaluation(
+            corpus=memory_corpus,
+            dataset=known_dataset,
+            content_tree_sha="a" * 40,
+            method_ids=("method",),
+            cutoffs=(1,),
+            registry=registry,
+        )

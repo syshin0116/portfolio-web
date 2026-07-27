@@ -62,6 +62,11 @@ def _parser() -> argparse.ArgumentParser:
     sweep.add_argument("--output-root", type=Path, default=Path("results"))
     sweep.add_argument("--method", action="append", dest="methods")
     sweep.add_argument("--cutoff", action="append", type=int, dest="cutoffs")
+    sweep.add_argument(
+        "--require-publishable",
+        action="store_true",
+        help="fail unless running in a digest-pinned Linux x86_64 image",
+    )
     return parser
 
 
@@ -141,6 +146,7 @@ def _sweep(args: argparse.Namespace) -> int:
         content_tree_sha=args.content_tree_sha,
         method_ids=methods,
         cutoffs=cutoffs,
+        require_publishable=args.require_publishable,
     )
     artifacts = write_run_artifacts(run, output_root=args.output_root)
     print(
@@ -149,6 +155,7 @@ def _sweep(args: argparse.Namespace) -> int:
                 "directory": str(artifacts.directory),
                 "method_count": len(run.methods),
                 "query_count": len(dataset.qrels),
+                "publication_eligible": run.provenance.publication_eligible,
                 "run_id": run.run_id,
             },
             ensure_ascii=False,

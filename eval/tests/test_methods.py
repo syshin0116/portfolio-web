@@ -6,7 +6,7 @@ import pytest
 from agent.retrieval import registry as agent_registry
 from agent.retrieval.protocol import Corpus, DocId, Hit, Retrieval
 
-from blogeval.methods.char_ngram import CharNgramRetriever
+from blogeval.methods.char_ngram import CHAR_NGRAM_CONFIG, CharNgramRetriever
 from blogeval.methods.rrf import ReciprocalRankFusionRetriever
 from blogeval.registry import registry
 from conftest import MemoryCorpus
@@ -96,3 +96,15 @@ def test_char_ngram_rejects_invalid_limit(memory_corpus: Corpus) -> None:
     retriever = CharNgramRetriever(memory_corpus)
     with pytest.raises(ValueError, match="non-negative integer"):
         retriever.retrieve("query", limit=-1)
+
+
+def test_char_ngram_identity_declares_compound_comparison_not_tokenizer_ablation() -> (
+    None
+):
+    assert CHAR_NGRAM_CONFIG["algorithm"] == "bm25-lucene-idf"
+    assert (
+        CHAR_NGRAM_CONFIG["comparison_scope"]
+        == "compound-document-representation-and-ranker"
+    )
+    assert CHAR_NGRAM_CONFIG["document_representation"] == "raw-published-markdown"
+    assert CHAR_NGRAM_CONFIG["idf_variant"] == "lucene-positive"

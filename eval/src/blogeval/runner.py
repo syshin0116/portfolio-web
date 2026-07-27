@@ -13,11 +13,12 @@ from agent.retrieval.registry import RetrieverRegistry
 from blogeval.datasets import QuerySet, validate_queryset_corpus
 from blogeval.jsonio import canonical_json_bytes, write_bytes_immutable
 from blogeval.metrics import MetricSummary, summarize_metrics, validate_cutoffs
+from blogeval.provenance import RunProvenance, collect_run_provenance
 from blogeval.registry import registry as default_registry
 from blogeval.report import render_leaderboard, render_metrics_svg, render_per_query
 
-RUN_SCHEMA = "blogeval-run-v1"
-RUNNER_ID = "blogeval.runner@1"
+RUN_SCHEMA = "blogeval-run-v2"
+RUNNER_ID = "blogeval.runner@2"
 
 
 class EvaluationError(ValueError):
@@ -66,6 +67,7 @@ class EvaluationRun:
     dataset: QuerySet
     cutoffs: tuple[int, ...]
     methods: tuple[MethodResult, ...]
+    provenance: RunProvenance
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -77,6 +79,7 @@ class EvaluationRun:
                 "dataset_kind": self.dataset.kind.value,
             },
             "methods": [method.as_dict() for method in self.methods],
+            "provenance": self.provenance.as_dict(),
             "run_id": self.run_id,
             "runner": RUNNER_ID,
             "schema": RUN_SCHEMA,
@@ -113,6 +116,7 @@ def _run_id(
     dataset: QuerySet,
     cutoffs: Sequence[int],
     identities: Sequence[tuple[str, str]],
+    provenance: RunProvenance,
 ) -> str:
     payload = {
         "corpus": dataset.corpus.as_dict(),
@@ -122,6 +126,7 @@ def _run_id(
             {"fingerprint": fingerprint, "method_id": method_id}
             for method_id, fingerprint in identities
         ],
+        "provenance": provenance.as_dict(),
         "runner": RUNNER_ID,
         "schema": RUN_SCHEMA,
     }
@@ -137,6 +142,7 @@ def run_evaluation(
     method_ids: Sequence[str],
     cutoffs: Sequence[int] = (1, 5, 10),
     registry: RetrieverRegistry = default_registry,
+    require_publishable: bool = False,
 ) -> EvaluationRun:
     """Run every method against the same qrels and verified corpus snapshot."""
 
@@ -148,6 +154,10 @@ def run_evaluation(
     normalized_cutoffs = validate_cutoffs(cutoffs)
     normalized_method_ids = _method_ids(method_ids, registry=registry)
     retrieval_limit = normalized_cutoffs[-1]
+    provenance = collect_run_provenance()
+    if require_publishable:
+        provenance.require_publication_eligible()
+    corpus_doc_ids = frozenset(DocId(value) for value in corpus.doc_ids())
 
     methods: list[MethodResult] = []
     identities: list[tuple[str, str]] = []
@@ -158,10 +168,33 @@ def run_evaluation(
             query_results: list[QueryResult] = []
             rankings: dict[str, tuple[DocId, ...]] = {}
             for qrel in dataset.qrels:
-                ranking = resolved.retrieve(
+                retrieval = resolved.retrieve(
                     qrel.query,
                     limit=retrieval_limit,
-                ).doc_ids(limit=retrieval_limit)
+                )
+                if retrieval.query != qrel.query:
+                    raise EvaluationError(
+                        f"retriever {method_id!r} returned query "
+                        f"{retrieval.query!r} for expected query {qrel.query!r}"
+                    )
+                returned_doc_ids = retrieval.doc_ids()
+                outside_corpus = tuple(
+                    sorted(
+                        (
+                            doc_id
+                            for doc_id in returned_doc_ids
+                            if doc_id not in corpus_doc_ids
+                        ),
+                        key=str,
+                    )
+                )
+                if outside_corpus:
+                    values = ", ".join(str(value) for value in outside_corpus)
+                    raise EvaluationError(
+                        f"retriever {method_id!r} returned DocIds outside the "
+                        f"verified corpus for query {qrel.query_id!r}: {values}"
+                    )
+                ranking = returned_doc_ids[:retrieval_limit]
                 rankings[qrel.query_id] = ranking
                 query_results.append(
                     QueryResult(
@@ -197,10 +230,12 @@ def run_evaluation(
             dataset=dataset,
             cutoffs=normalized_cutoffs,
             identities=identities,
+            provenance=provenance,
         ),
         dataset=dataset,
         cutoffs=normalized_cutoffs,
         methods=tuple(methods),
+        provenance=provenance,
     )
 
 
@@ -245,6 +280,7 @@ __all__ = [
     "RUNNER_ID",
     "RUN_SCHEMA",
     "RunArtifacts",
+    "RunProvenance",
     "run_evaluation",
     "write_run_artifacts",
 ]

@@ -73,6 +73,7 @@ updates:
           - "langgraph-*"
           - "langsmith"
           - "numpy"
+          - "quickjs-rs"
         update-types:
           - "minor"
           - "patch"

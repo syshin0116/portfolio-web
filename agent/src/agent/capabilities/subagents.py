@@ -19,6 +19,7 @@ from langchain_core.tools import BaseTool, tool
 from langgraph_sdk.runtime import ServerRuntime
 
 from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
+from agent.capabilities.quickjs import QUICKJS_TOOL_NAME
 from agent.capabilities.token_counting import InputTokenCounter
 from agent.tools import (
     graph_traverse,
@@ -294,6 +295,8 @@ def _compiled_subagent(
                 allow_subagents=False,
                 allowed_subagents=frozenset(),
                 input_token_counter=input_token_counter,
+                quickjs_tool_name=QUICKJS_TOOL_NAME,
+                allow_quickjs=False,
             ),
         ],
         name=name,

@@ -6,7 +6,8 @@ description: >
 when_to_read: >
   When the dependency/upstream-versions job fails, before changing its targets or
   release semantics, or when adding a pinned framework such as QuickJS.
-tags: [operations, dependencies, github-actions, aegra, agent-protocol, langgraph]
+tags:
+  [operations, dependencies, github-actions, aegra, agent-protocol, langgraph, quickjs]
 status: stable
 updated: "2026-07-28"
 owners: ["@syshin0116"]
@@ -39,6 +40,8 @@ The required targets are:
 | `deepagents` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/deepagents/json` |
 | `langgraph` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/langgraph/json` |
 | Python `langgraph-sdk` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/langgraph-sdk/json` |
+| `langchain-quickjs` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/langchain-quickjs/json` |
+| direct `quickjs-rs` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/quickjs-rs/json` |
 
 The allowlist is compiled from typed target records. There is no CLI URL, package, or
 repository override. Requests use HTTPS, a 15-second timeout, a 4 MiB response ceiling,
@@ -68,12 +71,28 @@ workspace and resolved by matching Bun lock entries. Their stable releases come 
 `https://registry.npmjs.org/%40langchain%2Flanggraph-sdk`. A partial group or a range such
 as `^1.9.28` fails before any result can be called current.
 
+### QuickJS direct-pin contract
+
+The native QuickJS capability makes both `langchain-quickjs` and its `quickjs-rs` runtime
+required audit targets. `quickjs-rs` remains an exact direct project dependency even
+though `langchain-quickjs` also depends on it: the reviewed native runtime version must
+not move only because an upstream transitive range changed. Each package must appear
+exactly once with the same stable `==` version in `agent/pyproject.toml`, its official
+PyPI resolution in `uv.lock`, and the root project's `requires-dist` metadata.
+
+Removing both packages, leaving only one, using a range, resolving from a non-PyPI
+source, or allowing either manifest/lock record to drift fails closed before that target
+makes a network request. Release checks are allowlisted only to
+`https://pypi.org/pypi/langchain-quickjs/json` and
+`https://pypi.org/pypi/quickjs-rs/json`.
+
 At implementation time, the official stable versions were Aegra API/CLI `0.9.24`, Agent
 Protocol `langchain-protocol==0.0.18`, Deep Agents `0.6.12`, LangGraph `1.2.9`, Python
-LangGraph SDK `0.4.2`, assistant-ui React `0.14.28`, its LangGraph adapter `0.14.13`, and
-JavaScript LangGraph SDK `1.9.28`. This dated snapshot is evidence, not the audit input;
-each run reads the official endpoint again and exposes normalized `installed`, `latest`,
-`source`, and `releaseUrl` fields for every active target.
+LangGraph SDK `0.4.2`, LangChain QuickJS `0.3.4`, QuickJS Rust binding `0.2.5`,
+assistant-ui React `0.14.28`, its LangGraph adapter `0.14.13`, and JavaScript LangGraph
+SDK `1.9.28`. This dated snapshot is evidence, not the audit input; each run reads the
+official endpoint again and exposes normalized `installed`, `latest`, `source`, and
+`releaseUrl` fields for every active target.
 
 ## Stable-release semantics
 
@@ -125,19 +144,27 @@ target is never converted to a skip or a cached success.
    matrix, fixtures, runtime integration, and live protocol evidence together.
 5. For Deep Agents or LangGraph, run the agent, PostgreSQL, retrieval, RunBudget, and
    capability suites appropriate to the changed surface.
-6. For assistant-ui or the JavaScript SDK, update `web/package.json` and `web/bun.lock`
+6. For either QuickJS package, update both direct manifest/lock pins deliberately and
+   rerun the native runtime, sandbox hardening, lifecycle, RunBudget, and graph-topology
+   suites.
+7. For assistant-ui or the JavaScript SDK, update `web/package.json` and `web/bun.lock`
    together and rerun unit, browser, responsive, IME, and Aegra transport evidence.
-7. Merge only after the focused PR's normal required checks pass. The scheduled audit
+8. Merge only after the focused PR's normal required checks pass. The scheduled audit
    remains red until the reviewed exact pin reaches `main`.
 
 ## Extending the target set
 
-Do not add QuickJS until its product dependency lands. In that PR, add a new typed target
-or `OptionalTargetGroup` beside `OPTIONAL_TARGET_GROUPS`; this automatically extends the
-compiled URL allowlist. Require its exact manifest and lock evidence, add a minimal
-official-response fixture, and test absence, partial activation, prerelease filtering,
-malformed response, and a newer stable release. Update this table and the governance
-mutation coverage in the same PR.
+QuickJS is now part of the required typed target set. Its focused official-response
+fixtures prove prerelease and yanked filtering, schema drift, missing or partial pins,
+and newer stable releases. The local governance verifier binds the complete audit script
+by reviewed SHA-256, so changing or removing a target also requires an explicit
+governance-baseline update and mutation test.
+
+For another capability, add a typed required target or an `OptionalTargetGroup` beside
+`OPTIONAL_TARGET_GROUPS`; either form automatically extends the compiled URL allowlist.
+Require exact manifest and lock evidence, add a minimal official-response fixture, and
+test absence, partial presence or activation, prerelease filtering, malformed responses,
+and a newer stable release. Update this table and the governance digest in the same PR.
 
 Never accept a package name, registry URL, GitHub repository, tag prefix, timeout, or
 response limit from workflow input. A new source is a reviewed code change.

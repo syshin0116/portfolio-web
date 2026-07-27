@@ -315,7 +315,8 @@
               "langgraph",
               "langgraph-*",
               "langsmith",
-              "numpy"
+              "numpy",
+              "quickjs-rs"
             ],
             "update_types": [
               "minor",

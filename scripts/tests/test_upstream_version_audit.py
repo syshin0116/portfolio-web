@@ -16,13 +16,18 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import upstream_version_audit as audit  # noqa: E402
 
-PYTHON_VERSIONS = {
+CORE_PYTHON_VERSIONS = {
     "aegra-api": "0.9.24",
     "aegra-cli": "0.9.24",
     "deepagents": "0.6.12",
     "langgraph": "1.2.9",
     "langgraph-sdk": "0.4.2",
 }
+QUICKJS_VERSIONS = {
+    "langchain-quickjs": "0.3.4",
+    "quickjs-rs": "0.2.5",
+}
+PYTHON_VERSIONS = {**CORE_PYTHON_VERSIONS, **QUICKJS_VERSIONS}
 NPM_VERSIONS = {
     "@assistant-ui/react": "0.14.28",
     "@assistant-ui/react-langgraph": "0.14.13",
@@ -99,12 +104,9 @@ class OfflineFetcher:
         )
 
 
-def write_base_repository(root: Path) -> None:
-    (root / "agent").mkdir(parents=True)
-    (root / "protocol").mkdir()
-    (root / "web").mkdir()
+def write_python_repository(root: Path, versions: dict[str, str]) -> None:
     dependency_lines = "\n".join(
-        f'    "{package}=={version}",' for package, version in PYTHON_VERSIONS.items()
+        f'    "{package}=={version}",' for package, version in versions.items()
     )
     (root / audit.PYTHON_MANIFEST).write_text(
         (
@@ -123,11 +125,11 @@ def write_base_repository(root: Path) -> None:
             f'version = "{version}"\n'
             'source = { registry = "https://pypi.org/simple" }\n'
         )
-        for package, version in PYTHON_VERSIONS.items()
+        for package, version in versions.items()
     )
     requirement_lines = "\n".join(
         (f'    {{ name = "{package}", specifier = "=={version}" }},')
-        for package, version in PYTHON_VERSIONS.items()
+        for package, version in versions.items()
     )
     (root / audit.PYTHON_LOCK).write_text(
         (
@@ -143,6 +145,13 @@ def write_base_repository(root: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def write_base_repository(root: Path) -> None:
+    (root / "agent").mkdir(parents=True)
+    (root / "protocol").mkdir()
+    (root / "web").mkdir()
+    write_python_repository(root, PYTHON_VERSIONS)
     protocol_lock = {
         "lockVersion": 1,
         "protocol": {
@@ -264,6 +273,54 @@ class OfficialShapeTests(unittest.TestCase):
         )
 
         self.assertEqual("0.9.24", release.version.text)
+
+    def test_quickjs_pypi_fixtures_ignore_prerelease_and_yanked_releases(
+        self,
+    ) -> None:
+        cases = (
+            ("langchain-quickjs", "langchain-quickjs-pypi.json", "0.3.4"),
+            ("quickjs-rs", "quickjs-rs-pypi.json", "0.2.5"),
+        )
+        for package, fixture_name, expected in cases:
+            source = audit._pypi_source(package)
+            with self.subTest(package=package):
+                release = audit._latest_pypi(
+                    source,
+                    audit.JsonResponse(
+                        fixture(fixture_name),
+                        source.canonical_url,
+                        {},
+                    ),
+                )
+
+                self.assertEqual(expected, release.version.text)
+
+    def test_quickjs_pypi_fixtures_fail_closed_on_schema_drift(self) -> None:
+        cases = (
+            ("langchain-quickjs", "langchain-quickjs-pypi.json", "0.3.4"),
+            ("quickjs-rs", "quickjs-rs-pypi.json", "0.2.5"),
+        )
+        for package, fixture_name, stable_version in cases:
+            payload = copy.deepcopy(fixture(fixture_name))
+            if not isinstance(payload, dict):
+                self.fail("invalid fixture")
+            releases = payload["releases"]
+            if not isinstance(releases, dict):
+                self.fail("invalid fixture")
+            files = releases[stable_version]
+            if not isinstance(files, list) or not isinstance(files[0], dict):
+                self.fail("invalid fixture")
+            files[0]["yanked"] = "false"
+            source = audit._pypi_source(package)
+
+            with (
+                self.subTest(package=package),
+                self.assertRaisesRegex(audit.SourceError, "must be a boolean"),
+            ):
+                audit._latest_pypi(
+                    source,
+                    audit.JsonResponse(payload, source.canonical_url, {}),
+                )
 
     def test_npm_fixture_ignores_prerelease_and_deprecated_release(self) -> None:
         source = audit._npm_source("@assistant-ui/react")
@@ -574,7 +631,7 @@ class RepositoryAuditTests(unittest.TestCase):
         }
         self.assertEqual("current", document["status"])
         self.assertEqual(before, after, "the audit must never update repository pins")
-        self.assertEqual(6, document["activeTargetCount"])
+        self.assertEqual(8, document["activeTargetCount"])
         self.assertEqual(3, document["inactiveTargetCount"])
         groups = document["groups"]
         self.assertIsInstance(groups, list)
@@ -590,6 +647,16 @@ class RepositoryAuditTests(unittest.TestCase):
             "https://registry.npmjs.org/%40assistant-ui%2Freact",
             inactive["source"],
         )
+        for target_id, expected_version in QUICKJS_VERSIONS.items():
+            result = target(document, target_id)
+            self.assertEqual("current", result["status"])
+            self.assertEqual(expected_version, result["installed"])
+            self.assertEqual(expected_version, result["latest"])
+            self.assertEqual(
+                f"https://pypi.org/pypi/{target_id}/json",
+                result["source"],
+            )
+            self.assertIn(result["source"], audit.ALLOWED_SOURCE_URLS)
 
     def test_assistant_ui_activation_requires_and_audits_complete_exact_group(
         self,
@@ -600,7 +667,7 @@ class RepositoryAuditTests(unittest.TestCase):
         document = audit.audit_repository(self.root, fetch=fetcher)
 
         self.assertEqual("current", document["status"])
-        self.assertEqual(9, document["activeTargetCount"])
+        self.assertEqual(11, document["activeTargetCount"])
         for target_id, expected in (
             ("assistant-ui-react", "0.14.28"),
             ("assistant-ui-react-langgraph", "0.14.13"),
@@ -664,6 +731,150 @@ class RepositoryAuditTests(unittest.TestCase):
                 self.assertIsNone(result["installed"])
         manifest.write_text(original, encoding="utf-8")
 
+    def test_quickjs_required_targets_fail_when_both_or_one_pin_is_missing(
+        self,
+    ) -> None:
+        cases = (
+            ("both-missing", {}),
+            (
+                "langchain-quickjs-only",
+                {"langchain-quickjs": QUICKJS_VERSIONS["langchain-quickjs"]},
+            ),
+            (
+                "quickjs-rs-only",
+                {"quickjs-rs": QUICKJS_VERSIONS["quickjs-rs"]},
+            ),
+        )
+        for label, partial in cases:
+            with self.subTest(label=label):
+                write_python_repository(
+                    self.root,
+                    {**CORE_PYTHON_VERSIONS, **partial},
+                )
+                fetcher = OfflineFetcher()
+
+                document = audit.audit_repository(self.root, fetch=fetcher)
+
+                self.assertEqual("error", document["status"])
+                for package in QUICKJS_VERSIONS:
+                    result = target(document, package)
+                    if package in partial:
+                        self.assertEqual("current", result["status"])
+                        self.assertIn(package, fetcher.calls)
+                    else:
+                        self.assertEqual("error", result["status"])
+                        self.assertIn(
+                            "expected exactly one dependency", result["message"]
+                        )
+                        self.assertNotIn(package, fetcher.calls)
+
+    def test_quickjs_manifest_and_uv_lock_evidence_must_remain_exact(
+        self,
+    ) -> None:
+        previous_versions = {
+            "langchain-quickjs": "0.3.3",
+            "quickjs-rs": "0.2.4",
+        }
+        for package, version in QUICKJS_VERSIONS.items():
+            with self.subTest(package=package, evidence="manifest"):
+                write_python_repository(self.root, PYTHON_VERSIONS)
+                manifest = self.root / audit.PYTHON_MANIFEST
+                manifest.write_text(
+                    manifest.read_text(encoding="utf-8").replace(
+                        f"{package}=={version}",
+                        f"{package}>={version}",
+                    ),
+                    encoding="utf-8",
+                )
+                fetcher = OfflineFetcher()
+
+                document = audit.audit_repository(self.root, fetch=fetcher)
+
+                result = target(document, package)
+                self.assertEqual("error", result["status"])
+                self.assertIn("exact '==<version>' pin", result["message"])
+                self.assertNotIn(package, fetcher.calls)
+
+            with self.subTest(package=package, evidence="uv-lock"):
+                write_python_repository(self.root, PYTHON_VERSIONS)
+                lock = self.root / audit.PYTHON_LOCK
+                lock.write_text(
+                    lock.read_text(encoding="utf-8").replace(
+                        f'{{ name = "{package}", specifier = "=={version}" }}',
+                        (
+                            f'{{ name = "{package}", specifier = '
+                            f'"=={previous_versions[package]}" }}'
+                        ),
+                    ),
+                    encoding="utf-8",
+                )
+                fetcher = OfflineFetcher()
+
+                document = audit.audit_repository(self.root, fetch=fetcher)
+
+                result = target(document, package)
+                self.assertEqual("error", result["status"])
+                self.assertIn("project metadata must pin", result["message"])
+                self.assertNotIn(package, fetcher.calls)
+
+            with self.subTest(package=package, evidence="resolved-version"):
+                write_python_repository(self.root, PYTHON_VERSIONS)
+                lock = self.root / audit.PYTHON_LOCK
+                previous_version = previous_versions[package]
+                lock.write_text(
+                    lock.read_text(encoding="utf-8")
+                    .replace(
+                        f'name = "{package}"\nversion = "{version}"',
+                        f'name = "{package}"\nversion = "{previous_version}"',
+                    )
+                    .replace(
+                        f'{{ name = "{package}", specifier = "=={version}" }}',
+                        (
+                            f'{{ name = "{package}", specifier = '
+                            f'"=={previous_version}" }}'
+                        ),
+                    ),
+                    encoding="utf-8",
+                )
+                fetcher = OfflineFetcher()
+
+                document = audit.audit_repository(self.root, fetch=fetcher)
+
+                result = target(document, package)
+                self.assertEqual("error", result["status"])
+                self.assertIn("manifest pin", result["message"])
+                self.assertIn("lock pin", result["message"])
+                self.assertNotIn(package, fetcher.calls)
+
+            with self.subTest(package=package, evidence="official-pypi-source"):
+                write_python_repository(self.root, PYTHON_VERSIONS)
+                lock = self.root / audit.PYTHON_LOCK
+                official_block = (
+                    f'name = "{package}"\n'
+                    f'version = "{version}"\n'
+                    'source = { registry = "https://pypi.org/simple" }'
+                )
+                unreviewed_block = (
+                    f'name = "{package}"\n'
+                    f'version = "{version}"\n'
+                    'source = { registry = "https://packages.example.invalid/simple" }'
+                )
+                lock.write_text(
+                    lock.read_text(encoding="utf-8").replace(
+                        official_block,
+                        unreviewed_block,
+                    ),
+                    encoding="utf-8",
+                )
+                fetcher = OfflineFetcher()
+
+                document = audit.audit_repository(self.root, fetch=fetcher)
+
+                result = target(document, package)
+                self.assertEqual("error", result["status"])
+                self.assertIn("official PyPI", result["message"])
+                self.assertNotIn(package, fetcher.calls)
+
     def test_manifest_and_lock_pin_mismatch_fails(self) -> None:
         lock = self.root / audit.PYTHON_LOCK
         lock.write_text(
@@ -725,6 +936,24 @@ class RepositoryAuditTests(unittest.TestCase):
             "https://pypi.org/pypi/deepagents/json",
             result["source"],
         )
+
+    def test_newer_quickjs_releases_are_visible_and_fail_the_audit(self) -> None:
+        cases = (
+            ("langchain-quickjs", "0.3.5"),
+            ("quickjs-rs", "0.2.6"),
+        )
+        for package, newer_version in cases:
+            with self.subTest(package=package):
+                document = audit.audit_repository(
+                    self.root,
+                    fetch=OfflineFetcher(overrides={package: newer_version}),
+                )
+
+                self.assertEqual("outdated", document["status"])
+                self.assertEqual([package], document["outdatedTargets"])
+                result = target(document, package)
+                self.assertEqual(QUICKJS_VERSIONS[package], result["installed"])
+                self.assertEqual(newer_version, result["latest"])
 
     def test_network_failure_is_an_error_not_a_skipped_target(self) -> None:
         document = audit.audit_repository(

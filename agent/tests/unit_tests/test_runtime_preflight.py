@@ -42,6 +42,7 @@ def _import_runtime(
         "RUN_MIGRATIONS_ON_STARTUP": "false",
         "REDIS_BROKER_ENABLED": "false",
         "BG_JOB_MAX_RETRIES": "0",
+        "QUICKJS_ENABLED": "false",
         "PYTHONDONTWRITEBYTECODE": "1",
         **environment,
     }
@@ -154,6 +155,16 @@ def test_local_runtime_may_run_startup_migrations(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_runtime_accepts_exact_quickjs_opt_in(tmp_path):
+    result = _import_runtime(
+        tmp_path,
+        VALID_CONFIG,
+        QUICKJS_ENABLED="true",
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("environment", "message"),
     [
@@ -162,6 +173,7 @@ def test_local_runtime_may_run_startup_migrations(tmp_path):
         ({"RUN_MIGRATIONS_ON_STARTUP": "true"}, "RUN_MIGRATIONS_ON_STARTUP"),
         ({"REDIS_BROKER_ENABLED": "true"}, "REDIS_BROKER_ENABLED"),
         ({"BG_JOB_MAX_RETRIES": "1"}, "BG_JOB_MAX_RETRIES"),
+        ({"QUICKJS_ENABLED": "TRUE"}, "QUICKJS_ENABLED"),
         (
             {
                 "DATABASE_URL": (
@@ -193,6 +205,7 @@ def test_local_runtime_may_run_startup_migrations(tmp_path):
         "startup-migrations",
         "redis-budget-bypass",
         "retry-budget-reset",
+        "invalid-quickjs-opt-in",
         "neon-pooler",
         "neon-pooler-query-host",
         "neon-pooler-component-host",

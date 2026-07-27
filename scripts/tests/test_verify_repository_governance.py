@@ -2165,6 +2165,26 @@ runs:
             errors,
         )
 
+    def test_dependency_audit_target_contract_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            script = root / governance.UPSTREAM_VERSION_AUDIT_SCRIPT
+            original = script.read_text(encoding="utf-8")
+            mutated = original.replace(
+                'package="langchain-quickjs"',
+                'package="not-the-reviewed-package"',
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            script.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("exact reviewed target/source contract" in error for error in errors),
+            errors,
+        )
+
     def test_repository_wide_uv_toolchain_mutations_are_rejected(self) -> None:
         mutations = (
             (
@@ -2262,6 +2282,7 @@ runs:
                     "langgraph-*",
                     "langsmith",
                     "numpy",
+                    "quickjs-rs",
                 ]
             ),
             groups["uv:/:python-routine"]["exclude_patterns"],
@@ -2281,6 +2302,22 @@ runs:
 
         self.assertTrue(
             any("@auth/*" in error and "web-routine" in error for error in errors)
+        )
+
+    def test_dependabot_quickjs_runtime_exclusion_removal_is_rejected(self) -> None:
+        policy = governance.load_policy()
+        original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            mutated = Path(directory) / "dependabot.yml"
+            mutated.write_text(
+                original.replace('          - "quickjs-rs"\n', ""),
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_dependabot_grouping(mutated, policy)
+
+        self.assertTrue(
+            any("quickjs-rs" in error and "python-routine" in error for error in errors)
         )
 
     def test_dependabot_full_contract_field_mutations_are_rejected(self) -> None:

@@ -1,0 +1,28 @@
+{
+  "info": {
+    "name": "langchain-quickjs",
+    "version": "0.3.4"
+  },
+  "releases": {
+    "0.3.3": [
+      {
+        "yanked": false
+      }
+    ],
+    "0.3.4": [
+      {
+        "yanked": false
+      }
+    ],
+    "0.4.0rc1": [
+      {
+        "yanked": false
+      }
+    ],
+    "1.0.0": [
+      {
+        "yanked": true
+      }
+    ]
+  }
+}

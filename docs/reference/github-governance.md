@@ -126,8 +126,11 @@ In **Settings → Rules → Rulesets**, create one active branch ruleset named
 4. Allow merge commits, squash merges, and rebases, matching the repository
    settings.
 5. Leave stale-review dismissal, Code Owner review, last-push approval, and
-   required review-thread resolution disabled; leave dismissal restrictions
-   disabled with no actors and the beta required-reviewer list empty.
+   required review-thread resolution disabled. Leave review-dismissal
+   restrictions disabled and the beta required-reviewer list empty. GitHub's
+   repository ruleset API omits `dismissal_restriction` from the returned
+   parameter object when that optional restriction is disabled; the reviewed
+   manifest therefore expects the field to be absent.
 6. Require `ci/check`, `protocol/compat`, and `wiki/verify`, with the branch
    required to be up to date and `do_not_enforce_on_create: false`.
 7. Block force pushes.
@@ -150,14 +153,16 @@ broader `~ALL` include is rejected even though it also matches `main`.
 
 Required checks and the full pull-request and status-check parameter objects
 are compared exactly with JSON types preserved. This includes disabled/default
-values, empty dismissal and reviewer collections, allowed merge methods,
-strict status checks, and `do_not_enforce_on_create: false`; a newly returned
-semantic parameter fails closed until it is reviewed. The complete rule-type
-allowlist is also exact: `deletion`, `non_fast_forward`, `pull_request`, and
-`required_status_checks`. An additional rule such as `required_deployments`, a
-missing rule, or a duplicate type is policy drift. GitHub-supplied ruleset
-metadata such as IDs, links, and timestamps is ignored; owned identity, target,
-conditions, rule types, and parameter objects are not.
+values returned by GitHub, the empty reviewer collection, allowed merge
+methods, strict status checks, and `do_not_enforce_on_create: false`. The
+API-normalized omission of a disabled `dismissal_restriction` is part of that
+exact response contract; if GitHub starts returning it or another semantic
+parameter, verification fails closed until it is reviewed. The complete
+rule-type allowlist is also exact: `deletion`, `non_fast_forward`,
+`pull_request`, and `required_status_checks`. An additional rule such as
+`required_deployments`, a missing rule, or a duplicate type is policy drift.
+GitHub-supplied ruleset metadata such as IDs, links, and timestamps is ignored;
+owned identity, target, conditions, rule types, and parameter objects are not.
 
 The verifier also contains a deliberately hardcoded reviewed baseline for the
 repository/API/main identities, required-check emitters, Actions object,
@@ -256,8 +261,11 @@ baseline, `continue-on-error`, or another false-green suppression.
 1. Merge the repository-side governance PR after the existing three required
    checks pass.
 2. Confirm each required check has reported successfully on `main`.
-3. Remove legacy `main` branch protection, then create the single main ruleset
-   with zero required approvals and no bypass.
+3. Confirm the ruleset list is empty and legacy `main` branch protection
+   returns the exact unprotected `404`. Create the single main ruleset as
+   `disabled`, read it back, and compare the complete normalized contract.
+   Delete it on any mismatch; otherwise activate that same ruleset ID and
+   verify it again. It must have zero required approvals and no bypass.
 4. Enable repository Actions and its full-SHA policy.
 5. Enable vulnerability alerts and Dependabot security updates, then confirm
    that security updates are not paused.

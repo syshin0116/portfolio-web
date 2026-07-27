@@ -64,10 +64,6 @@ MERGE_METHODS = ["merge", "squash", "rebase"]
 SOLO_PULL_REQUEST_PARAMETERS = {
     "allowed_merge_methods": MERGE_METHODS,
     "dismiss_stale_reviews_on_push": False,
-    "dismissal_restriction": {
-        "allowed_actors": [],
-        "enabled": False,
-    },
     "require_code_owner_review": False,
     "require_last_push_approval": False,
     "required_approving_review_count": 0,

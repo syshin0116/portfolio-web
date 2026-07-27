@@ -1,0 +1,85 @@
+{
+  "fixture_version": 1,
+  "name": "Aegra 0.9.24 HITL dialect translation",
+  "description": "The raw Aegra value field is translated once into the official generated payload field.",
+  "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+  "wire_profile": "official-generated-snake-case",
+  "records": [
+    {
+      "kind": "aegra_raw_event",
+      "translation_id": "hitl-value-to-payload",
+      "sse": {
+        "id": "7",
+        "event": "input.requested"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "aegra-run-001:interrupt:0",
+        "seq": 7,
+        "method": "input.requested",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031600007,
+          "data": {
+            "interrupt_id": "0123456789abcdef0123456789abcdef",
+            "value": {
+              "action": "approve_tool",
+              "tool_name": "search_blog"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "normalized_event",
+      "translation_id": "hitl-value-to-payload",
+      "payload": {
+        "type": "event",
+        "event_id": "aegra-run-001:interrupt:0",
+        "seq": 7,
+        "method": "input.requested",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031600007,
+          "data": {
+            "interrupt_id": "0123456789abcdef0123456789abcdef",
+            "payload": {
+              "action": "approve_tool",
+              "tool_name": "search_blog"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "command",
+      "payload": {
+        "id": 40,
+        "method": "input.respond",
+        "params": {
+          "namespace": [],
+          "interrupt_id": "0123456789abcdef0123456789abcdef",
+          "response": {
+            "action": "approve"
+          }
+        }
+      }
+    },
+    {
+      "kind": "command_response",
+      "payload": {
+        "type": "success",
+        "id": 40,
+        "result": {
+          "run_id": "aegra-run-002"
+        },
+        "meta": {
+          "applied_through_seq": 7
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "coverage": ["aegra_translation", "hitl"]
+  }
+}

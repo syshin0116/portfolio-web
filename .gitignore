@@ -52,6 +52,7 @@ __pycache__/
 *.egg-info/
 
 # agent
+agent/.index*/
 agent/.langgraph_api/
 agent/supabase/.temp/
 

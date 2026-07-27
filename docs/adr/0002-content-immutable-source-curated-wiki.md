@@ -1,15 +1,30 @@
 ---
-id: 0002-content-immutable-source-curated-wiki
 title: "ADR-0002: Content model - immutable source posts + curated wiki (LLM-wiki)"
+description: >
+  Blog posts outside content/wiki/ are read-only source material; the curated
+  knowledge layer that feeds the RAG chatbot is built additively in content/wiki/.
+when_to_read: >
+  Before letting anything write to content/, or when deciding where curated
+  knowledge should live.
+tags: [adr, content, llm-wiki, rag]
 status: accepted
 date: "2026-05-22"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-tags: [adr, content, llm-wiki, rag]
+updated: "2026-07-26"
+owners: ["@syshin0116"]
+refs: [0003-agent-code-changes-via-pr.md, ../conventions/frontmatter.md]
+template: adr
 ---
 
 # ADR-0002: Content model - immutable source posts + curated wiki (LLM-wiki)
+
+> **Partially amended.** The third decision bullet - `web/` and `agent/` as
+> off-limits "human territory" - is superseded by
+> [ADR-0003](0003-agent-code-changes-via-pr.md), which replaces the blanket ban with
+> a branch-and-PR requirement. **The content rules (bullets one and two) are
+> unchanged and still in force**: source posts remain immutable.
 
 ## Context
 

@@ -1,0 +1,240 @@
+{
+  "fixture_version": 1,
+  "name": "nested agent namespace lifecycle",
+  "description": "A root run spawns a retrieval researcher and streams its answer.",
+  "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+  "wire_profile": "official-generated-snake-case",
+  "records": [
+    {
+      "kind": "stream_request",
+      "connection": "initial",
+      "payload": {
+        "channels": ["messages", "lifecycle"],
+        "namespaces": [[]],
+        "depth": 2
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-001",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-001",
+        "seq": 1,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031300001,
+          "data": {
+            "event": "running",
+            "graph_name": "agent"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-002",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-002",
+        "seq": 2,
+        "method": "lifecycle",
+        "params": {
+          "namespace": ["retrieval-researcher"],
+          "timestamp": 1785031300002,
+          "data": {
+            "event": "started",
+            "graph_name": "retrieval-researcher",
+            "cause": {
+              "type": "toolCall",
+              "tool_call_id": "call-subagent-001"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-003",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-003",
+        "seq": 3,
+        "method": "messages",
+        "params": {
+          "namespace": ["retrieval-researcher"],
+          "timestamp": 1785031300003,
+          "node": "model",
+          "data": {
+            "event": "message-start",
+            "role": "ai",
+            "id": "msg-subagent"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-004",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-004",
+        "seq": 4,
+        "method": "messages",
+        "params": {
+          "namespace": ["retrieval-researcher"],
+          "timestamp": 1785031300004,
+          "node": "model",
+          "data": {
+            "event": "content-block-start",
+            "index": 0,
+            "content": {
+              "type": "text",
+              "text": ""
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-005",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-005",
+        "seq": 5,
+        "method": "messages",
+        "params": {
+          "namespace": ["retrieval-researcher"],
+          "timestamp": 1785031300005,
+          "node": "model",
+          "data": {
+            "event": "content-block-delta",
+            "index": 0,
+            "delta": {
+              "type": "text-delta",
+              "text": "근거를 찾았습니다."
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-006",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-006",
+        "seq": 6,
+        "method": "messages",
+        "params": {
+          "namespace": ["retrieval-researcher"],
+          "timestamp": 1785031300006,
+          "node": "model",
+          "data": {
+            "event": "content-block-finish",
+            "index": 0,
+            "content": {
+              "type": "text",
+              "text": "근거를 찾았습니다."
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-007",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-007",
+        "seq": 7,
+        "method": "messages",
+        "params": {
+          "namespace": ["retrieval-researcher"],
+          "timestamp": 1785031300007,
+          "node": "model",
+          "data": {
+            "event": "message-finish"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-008",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-008",
+        "seq": 8,
+        "method": "lifecycle",
+        "params": {
+          "namespace": ["retrieval-researcher"],
+          "timestamp": 1785031300008,
+          "data": {
+            "event": "completed",
+            "graph_name": "retrieval-researcher"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-nested-009",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-nested-009",
+        "seq": 9,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031300009,
+          "data": {
+            "event": "completed",
+            "graph_name": "agent"
+          }
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "coverage": ["content_blocks", "run_lifecycle", "nested_namespace"]
+  }
+}

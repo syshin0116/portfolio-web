@@ -1,0 +1,446 @@
+{
+  "fixture_version": 1,
+  "name": "content blocks, tool lifecycle, and root run lifecycle",
+  "description": "A tool-calling turn followed by a streamed Korean answer.",
+  "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
+  "wire_profile": "official-generated-snake-case",
+  "records": [
+    {
+      "kind": "stream_request",
+      "connection": "initial",
+      "payload": {
+        "channels": ["messages", "tools", "lifecycle"],
+        "namespaces": [[]],
+        "depth": 2
+      }
+    },
+    {
+      "kind": "command",
+      "payload": {
+        "id": 1,
+        "method": "run.start",
+        "params": {
+          "assistant_id": "agent",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "도커 글을 검색해서 한 문장으로 알려줘."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "command_response",
+      "payload": {
+        "type": "success",
+        "id": 1,
+        "result": {
+          "run_id": "run-tool-001"
+        },
+        "meta": {
+          "applied_through_seq": 0
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-001",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-001",
+        "seq": 1,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200001,
+          "data": {
+            "event": "running",
+            "graph_name": "agent"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-002",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-002",
+        "seq": 2,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200002,
+          "node": "model",
+          "data": {
+            "event": "message-start",
+            "role": "ai",
+            "id": "msg-tool-call",
+            "metadata": {
+              "model": "fixture-model",
+              "run_id": "run-tool-001"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-003",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-003",
+        "seq": 3,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200003,
+          "node": "model",
+          "data": {
+            "event": "content-block-start",
+            "index": 0,
+            "content": {
+              "type": "tool_call_chunk",
+              "id": "call-search-001",
+              "name": "search_blog",
+              "args": ""
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-004",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-004",
+        "seq": 4,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200004,
+          "node": "model",
+          "data": {
+            "event": "content-block-delta",
+            "index": 0,
+            "delta": {
+              "type": "block-delta",
+              "fields": {
+                "type": "tool_call_chunk",
+                "args": "{\"query\":\"도커\"}"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-005",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-005",
+        "seq": 5,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200005,
+          "node": "model",
+          "data": {
+            "event": "content-block-finish",
+            "index": 0,
+            "content": {
+              "type": "tool_call",
+              "id": "call-search-001",
+              "name": "search_blog",
+              "args": {
+                "query": "도커"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-006",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-006",
+        "seq": 6,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200006,
+          "node": "model",
+          "data": {
+            "event": "message-finish"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-007",
+        "event": "tools"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-007",
+        "seq": 7,
+        "method": "tools",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200007,
+          "node": "tools",
+          "data": {
+            "event": "tool-started",
+            "tool_call_id": "call-search-001",
+            "tool_name": "search_blog",
+            "input": {
+              "query": "도커"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-008",
+        "event": "tools"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-008",
+        "seq": 8,
+        "method": "tools",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200008,
+          "node": "tools",
+          "data": {
+            "event": "tool-output-delta",
+            "tool_call_id": "call-search-001",
+            "delta": "1 result"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-009",
+        "event": "tools"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-009",
+        "seq": 9,
+        "method": "tools",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200009,
+          "node": "tools",
+          "data": {
+            "event": "tool-finished",
+            "tool_call_id": "call-search-001",
+            "output": {
+              "path": "content/Tools/Docker/example.md",
+              "title": "Docker"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-010",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-010",
+        "seq": 10,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200010,
+          "node": "model",
+          "data": {
+            "event": "message-start",
+            "role": "ai",
+            "id": "msg-answer"
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-011",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-011",
+        "seq": 11,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200011,
+          "node": "model",
+          "data": {
+            "event": "content-block-start",
+            "index": 0,
+            "content": {
+              "type": "text",
+              "text": ""
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-012",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-012",
+        "seq": 12,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200012,
+          "node": "model",
+          "data": {
+            "event": "content-block-delta",
+            "index": 0,
+            "delta": {
+              "type": "text-delta",
+              "text": "도커 관련 글을 찾았습니다."
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-013",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-013",
+        "seq": 13,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200013,
+          "node": "model",
+          "data": {
+            "event": "content-block-finish",
+            "index": 0,
+            "content": {
+              "type": "text",
+              "text": "도커 관련 글을 찾았습니다."
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-014",
+        "event": "messages"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-014",
+        "seq": 14,
+        "method": "messages",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200014,
+          "node": "model",
+          "data": {
+            "event": "message-finish",
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 8,
+              "total_tokens": 20
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "connection": "initial",
+      "sse": {
+        "id": "evt-tool-015",
+        "event": "lifecycle"
+      },
+      "payload": {
+        "type": "event",
+        "event_id": "evt-tool-015",
+        "seq": 15,
+        "method": "lifecycle",
+        "params": {
+          "namespace": [],
+          "timestamp": 1785031200015,
+          "data": {
+            "event": "completed",
+            "graph_name": "agent"
+          }
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "coverage": ["content_blocks", "tool_lifecycle", "run_lifecycle"]
+  }
+}

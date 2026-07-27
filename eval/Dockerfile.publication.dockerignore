@@ -1,4 +1,33 @@
-# Common build-context exclusions. Dockerfile-specific allowlists may be stricter.
+# The evaluation publication image receives only reviewed Dockerfile inputs.
+**
+
+# Root workspace resolution.
+!pyproject.toml
+!uv.lock
+
+# Agent runtime and retrieval policies.
+!agent/
+!agent/pyproject.toml
+!agent/src/
+!agent/src/**
+!agent/corpus-policy.toml
+!agent/bm25-policy.toml
+
+# Evaluation runtime and committed query sets.
+!eval/
+!eval/pyproject.toml
+!eval/src/
+!eval/src/**
+!eval/querysets/
+!eval/querysets/**
+
+# Reproducible index builder and immutable corpus.
+!scripts/
+!scripts/build_index.py
+!content/
+!content/**
+
+# Generated build and test output inside allowed trees stays local.
 **/.git
 **/.git/**
 **/.venv
@@ -24,7 +53,7 @@ eval/results/**
 **/htmlcov
 **/htmlcov/**
 
-# Local credentials and generated secrets must never reach any builder.
+# Sensitive rules are terminal so broad source/corpus exceptions cannot reopen them.
 **/.env
 **/.env.*
 **/.envrc

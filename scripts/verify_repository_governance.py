@@ -488,6 +488,169 @@ EXPECTED_DEPENDABOT = {
         },
     ],
 }
+PUBLICATION_DOCKERFILE = "eval/Dockerfile.publication"
+PUBLICATION_DOCKERIGNORE = f"{PUBLICATION_DOCKERFILE}.dockerignore"
+EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES = (
+    "pyproject.toml",
+    "uv.lock",
+    "agent/pyproject.toml",
+    "eval/pyproject.toml",
+    "agent/src",
+    "eval/src",
+    "agent/corpus-policy.toml",
+    "agent/bm25-policy.toml",
+    "scripts/build_index.py",
+    "content",
+    "eval/querysets",
+)
+PUBLICATION_DOCKER_DIRECTORY_SOURCES = frozenset(
+    {
+        "agent/src",
+        "eval/src",
+        "content",
+        "eval/querysets",
+    }
+)
+EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES = (
+    "!pyproject.toml",
+    "!uv.lock",
+    "!agent/",
+    "!agent/pyproject.toml",
+    "!agent/src/",
+    "!agent/src/**",
+    "!agent/corpus-policy.toml",
+    "!agent/bm25-policy.toml",
+    "!eval/",
+    "!eval/pyproject.toml",
+    "!eval/src/",
+    "!eval/src/**",
+    "!eval/querysets/",
+    "!eval/querysets/**",
+    "!scripts/",
+    "!scripts/build_index.py",
+    "!content/",
+    "!content/**",
+)
+REQUIRED_PUBLICATION_DOCKER_DENY_RULES = (
+    "**/.env",
+    "**/.env.*",
+    "**/.envrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/.netrc",
+    "**/.git-credentials",
+    "**/artifacts",
+    "**/artifacts/**",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.ppk",
+    "**/*.crt",
+    "**/*.cer",
+    "**/*.der",
+    "**/*.jks",
+    "**/*.keystore",
+    "**/*credentials*.json",
+    "**/*service-account*.json",
+    "**/*service_account*.json",
+    "**/application_default_credentials.json",
+    "**/*.tfstate*",
+    "**/*.tfvars",
+    "**/*.tfvars.*",
+    "**/.terraform",
+    "**/.terraform/**",
+    "**/.aws",
+    "**/.aws/**",
+    "**/.config/gcloud",
+    "**/.config/gcloud/**",
+    "**/.ssh",
+    "**/.ssh/**",
+    "**/id_rsa",
+    "**/id_dsa",
+    "**/id_ecdsa",
+    "**/id_ed25519",
+    "**/ssh_host_*_key",
+    "**/.docker/config.json",
+    "**/.kube/config",
+)
+REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES = (
+    "**/.git",
+    "**/.git/**",
+    "**/.venv",
+    "**/.venv/**",
+    "**/.index",
+    "**/.index/**",
+    "**/.pytest_cache",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache",
+    "**/.ruff_cache/**",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "**/*.py[cod]",
+    "eval/results",
+    "eval/results/**",
+    "**/node_modules",
+    "**/node_modules/**",
+    "**/.next",
+    "**/.next/**",
+    "**/coverage",
+    "**/coverage/**",
+    "**/.coverage",
+    "**/htmlcov",
+    "**/htmlcov/**",
+)
+PUBLICATION_DOCKER_SENSITIVE_PROBES = (
+    ".env",
+    "agent/.env",
+    "content/private/.env.production",
+    "agent/src/generated/artifacts/result.json",
+    "content/artifacts/run.json",
+    "agent/src/private/server.pem",
+    "eval/src/private/client.key",
+    "content/private/client.p12",
+    "content/private/issuer.crt",
+    "content/private/credentials-production.json",
+    "content/private/service-account-eval.json",
+    "content/private/service_account_eval.json",
+    "agent/src/.npmrc",
+    "eval/src/.pypirc",
+    "content/private/.netrc",
+    "content/private/terraform.tfstate.backup",
+    "content/private/production.tfvars",
+    "content/private/.terraform/providers/index.json",
+    "agent/src/.aws/credentials",
+    "agent/src/.config/gcloud/application_default_credentials.json",
+    "content/private/.ssh/id_ed25519",
+    "content/private/id_rsa",
+    "agent/src/.docker/config.json",
+    "eval/src/.kube/config",
+)
+PUBLICATION_DOCKER_UNRELATED_PROBES = (
+    ".git/config",
+    "agent/.index/manifest.json",
+    "agent/src/agent/__pycache__/graph.cpython-312.pyc",
+    "content/node_modules/package/index.js",
+    "content/coverage/lcov.info",
+    "docs/rag-restack-plan.md",
+    "eval/results/run.json",
+    "scripts/verify_repository_governance.py",
+    "web/package.json",
+)
+ROOT_DOCKER_ARTIFACT_PROBES = (
+    ".git/config",
+    ".venv/bin/python",
+    "agent/.index/manifest.json",
+    "agent/src/agent/__pycache__/graph.cpython-312.pyc",
+    "agent/.pytest_cache/README.md",
+    "eval/.ruff_cache/CACHEDIR.TAG",
+    "eval/results/run.json",
+    "web/node_modules/next/package.json",
+    "web/.next/server/app.js",
+    "web/coverage/lcov.info",
+    "agent/.coverage",
+    "agent/htmlcov/index.html",
+)
 
 JsonObject = dict[str, Any]
 ApiGet = Callable[[str], Any]
@@ -664,6 +827,214 @@ def load_policy(path: Path = DEFAULT_POLICY) -> JsonObject:
     if not isinstance(payload, dict):
         raise GovernanceError(f"policy {path} must contain one JSON object")
     return payload
+
+
+def _dockerignore_rules(path: Path) -> tuple[str, ...]:
+    """Return effective non-comment rules from one Docker ignore file."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise GovernanceError(f"cannot read {path}: {exc}") from exc
+    rules: list[str] = []
+    for line_number, line in enumerate(lines, start=1):
+        rule = line.strip()
+        if not rule or rule.startswith("#"):
+            continue
+        if rule == "!":
+            raise GovernanceError(
+                f"{path}:{line_number}: empty Docker ignore exception is forbidden"
+            )
+        rules.append(rule)
+    return tuple(rules)
+
+
+def root_dockerignore_rules(root: Path) -> tuple[str, ...]:
+    """Return the common build-context deny rules."""
+    return _dockerignore_rules(root / ".dockerignore")
+
+
+def publication_dockerignore_rules(root: Path) -> tuple[str, ...]:
+    """Return the Dockerfile-specific evaluation publication rules."""
+    return _dockerignore_rules(root / PUBLICATION_DOCKERIGNORE)
+
+
+def _dockerignore_pattern_matches(path: str, pattern: str) -> bool:
+    """Match the intentionally small, reviewed Docker ignore glob subset."""
+    normalized_pattern = pattern.removeprefix("/").rstrip("/")
+    candidates = [normalized_pattern]
+    if normalized_pattern.startswith("**/"):
+        candidates.append(normalized_pattern.removeprefix("**/"))
+    return any(fnmatch.fnmatchcase(path, candidate) for candidate in candidates)
+
+
+def docker_context_includes(path: str, rules: tuple[str, ...]) -> bool:
+    """Evaluate one repository-relative path with last-match-wins semantics."""
+    candidate = path.removeprefix("./")
+    if (
+        not candidate
+        or candidate.startswith("/")
+        or candidate.startswith("../")
+        or "/../" in candidate
+    ):
+        raise GovernanceError(
+            f"Docker context probe must be repository-relative: {path!r}"
+        )
+    normalized = candidate.strip("/")
+    included = True
+    for rule in rules:
+        negated = rule.startswith("!")
+        pattern = rule[1:] if negated else rule
+        if _dockerignore_pattern_matches(normalized, pattern):
+            included = negated
+    return included
+
+
+def publication_docker_copy_sources(root: Path) -> tuple[str, ...]:
+    """Extract local build-context sources from the publication Dockerfile."""
+    path = root / PUBLICATION_DOCKERFILE
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise GovernanceError(f"cannot read {path}: {exc}") from exc
+    sources: list[str] = []
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        instruction, separator, payload = stripped.partition(" ")
+        if not separator or instruction.upper() != "COPY":
+            continue
+        if payload.rstrip().endswith("\\") or payload.lstrip().startswith("["):
+            raise GovernanceError(
+                f"{path}:{line_number}: publication COPY must remain one-line "
+                "shell form"
+            )
+        try:
+            words = shlex.split(payload)
+        except ValueError as exc:
+            raise GovernanceError(
+                f"{path}:{line_number}: invalid COPY syntax: {exc}"
+            ) from exc
+        local_copy = True
+        while words and words[0].startswith("--"):
+            option = words.pop(0)
+            if option == "--from":
+                if not words:
+                    raise GovernanceError(
+                        f"{path}:{line_number}: --from requires a stage"
+                    )
+                words.pop(0)
+                local_copy = False
+            elif option.startswith("--from="):
+                local_copy = False
+        if not local_copy:
+            continue
+        if len(words) < 2:
+            raise GovernanceError(
+                f"{path}:{line_number}: COPY requires a source and destination"
+            )
+        sources.extend(words[:-1])
+    return tuple(sources)
+
+
+def publication_docker_required_probes(source: str) -> tuple[str, ...]:
+    """Return paths proving a copied file or complete directory is included."""
+    if source in PUBLICATION_DOCKER_DIRECTORY_SOURCES:
+        return (
+            source,
+            f"{source}/__docker_context_contract_probe__",
+            f"{source}/nested/__docker_context_contract_probe__",
+        )
+    return (source,)
+
+
+def validate_publication_docker_context(root: Path) -> list[str]:
+    """Require a fail-closed Docker context for evaluation publication."""
+    errors: list[str] = []
+    try:
+        root_rules = root_dockerignore_rules(root)
+        rules = publication_dockerignore_rules(root)
+        sources = publication_docker_copy_sources(root)
+    except GovernanceError as exc:
+        return [str(exc)]
+
+    root_allow_rules = tuple(rule for rule in root_rules if rule.startswith("!"))
+    if root_allow_rules:
+        errors.append(
+            ".dockerignore is a common denylist and must not contain exceptions; "
+            f"actual={root_allow_rules!r}"
+        )
+    for rule in (
+        *REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES,
+        *REQUIRED_PUBLICATION_DOCKER_DENY_RULES,
+    ):
+        if rule not in root_rules:
+            errors.append(f".dockerignore required deny rule is missing: {rule!r}")
+    for probe in (
+        *PUBLICATION_DOCKER_SENSITIVE_PROBES,
+        *ROOT_DOCKER_ARTIFACT_PROBES,
+    ):
+        if docker_context_includes(probe, root_rules):
+            errors.append(f".dockerignore exposes common context path {probe!r}")
+
+    if not rules or rules[0] != "**":
+        errors.append(
+            f"{PUBLICATION_DOCKERIGNORE} must start by excluding the complete "
+            "context: '**'"
+        )
+
+    allow_rules = tuple(rule for rule in rules if rule.startswith("!"))
+    if allow_rules != EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES:
+        errors.append(
+            f"{PUBLICATION_DOCKERIGNORE} exceptions must remain the exact reviewed "
+            "publication allowlist; "
+            f"expected={EXPECTED_PUBLICATION_DOCKER_ALLOW_RULES!r}, "
+            f"actual={allow_rules!r}"
+        )
+
+    last_allow_index = max(
+        (index for index, rule in enumerate(rules) if rule.startswith("!")),
+        default=-1,
+    )
+    for rule in (
+        *REQUIRED_ROOT_DOCKER_ARTIFACT_DENY_RULES,
+        *REQUIRED_PUBLICATION_DOCKER_DENY_RULES,
+    ):
+        if rule not in rules:
+            errors.append(
+                f"{PUBLICATION_DOCKERIGNORE} required terminal deny rule is "
+                f"missing: {rule!r}"
+            )
+        elif rules.index(rule) <= last_allow_index:
+            errors.append(
+                f"{PUBLICATION_DOCKERIGNORE} terminal deny rules must follow "
+                f"every exception: {rule!r}"
+            )
+
+    if sources != EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES:
+        errors.append(
+            f"{PUBLICATION_DOCKERFILE} local COPY sources differ from the reviewed "
+            f"contract; expected={EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES!r}, "
+            f"actual={sources!r}"
+        )
+    for source in sources:
+        for probe in publication_docker_required_probes(source):
+            if not docker_context_includes(probe, rules):
+                errors.append(
+                    f"{PUBLICATION_DOCKERIGNORE} excludes publication COPY input "
+                    f"{probe!r}"
+                )
+    for probe in PUBLICATION_DOCKER_SENSITIVE_PROBES:
+        if docker_context_includes(probe, rules):
+            errors.append(
+                f"{PUBLICATION_DOCKERIGNORE} exposes sensitive publication "
+                f"context path {probe!r}"
+            )
+    for probe in PUBLICATION_DOCKER_UNRELATED_PROBES:
+        if docker_context_includes(probe, rules):
+            errors.append(
+                f"{PUBLICATION_DOCKERIGNORE} exposes unrelated publication "
+                f"context path {probe!r}"
+            )
+    return errors
 
 
 def workflow_files(root: Path) -> list[Path]:
@@ -2147,6 +2518,9 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         )
     except GovernanceError as exc:
         errors.append(f"local: invalid eval workflow contract: {exc}")
+    errors.extend(
+        f"local: {error}" for error in validate_publication_docker_context(root)
+    )
 
     required_files = (
         ".github/CODEOWNERS",

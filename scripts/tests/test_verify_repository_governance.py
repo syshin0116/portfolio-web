@@ -184,6 +184,15 @@ def desired_live_responses() -> dict[str, object]:
 def copy_local_governance_fixture(directory: str) -> Path:
     root = Path(directory)
     shutil.copytree(REPO_ROOT / ".github", root / ".github")
+    shutil.copy2(REPO_ROOT / ".dockerignore", root / ".dockerignore")
+    dockerfile = root / governance.PUBLICATION_DOCKERFILE
+    dockerfile.parent.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / governance.PUBLICATION_DOCKERFILE, dockerfile)
+    publication_ignore = root / governance.PUBLICATION_DOCKERIGNORE
+    shutil.copy2(
+        REPO_ROOT / governance.PUBLICATION_DOCKERIGNORE,
+        publication_ignore,
+    )
     return root
 
 
@@ -191,6 +200,98 @@ class LocalGovernanceTests(unittest.TestCase):
     def test_repository_policy_and_workflows_are_locally_valid(self) -> None:
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
+
+    def test_publication_docker_context_includes_every_copy_input(self) -> None:
+        rules = governance.publication_dockerignore_rules(REPO_ROOT)
+        sources = governance.publication_docker_copy_sources(REPO_ROOT)
+        self.assertEqual(
+            governance.EXPECTED_PUBLICATION_DOCKER_COPY_SOURCES,
+            sources,
+        )
+        for source in sources:
+            for probe in governance.publication_docker_required_probes(source):
+                with self.subTest(probe=probe):
+                    self.assertTrue(
+                        governance.docker_context_includes(probe, rules),
+                        probe,
+                    )
+
+    def test_publication_docker_context_excludes_sensitive_and_unrelated_paths(
+        self,
+    ) -> None:
+        rules = governance.publication_dockerignore_rules(REPO_ROOT)
+        probes = (
+            *governance.PUBLICATION_DOCKER_SENSITIVE_PROBES,
+            *governance.PUBLICATION_DOCKER_UNRELATED_PROBES,
+        )
+        for probe in probes:
+            with self.subTest(probe=probe):
+                self.assertFalse(
+                    governance.docker_context_includes(probe, rules),
+                    probe,
+                )
+
+    def test_root_docker_context_excludes_sensitive_and_build_artifact_paths(
+        self,
+    ) -> None:
+        rules = governance.root_dockerignore_rules(REPO_ROOT)
+        probes = (
+            *governance.PUBLICATION_DOCKER_SENSITIVE_PROBES,
+            *governance.ROOT_DOCKER_ARTIFACT_PROBES,
+        )
+        for probe in probes:
+            with self.subTest(probe=probe):
+                self.assertFalse(
+                    governance.docker_context_includes(probe, rules),
+                    probe,
+                )
+
+    def test_publication_docker_context_rejects_deleted_sensitive_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            dockerignore = root / governance.PUBLICATION_DOCKERIGNORE
+            original = dockerignore.read_text(encoding="utf-8")
+            mutated = original.replace("**/*.pem\n", "", 1)
+            self.assertNotEqual(original, mutated)
+            dockerignore.write_text(mutated, encoding="utf-8")
+
+            rules = governance.publication_dockerignore_rules(root)
+            self.assertTrue(
+                governance.docker_context_includes(
+                    "content/private/server.pem",
+                    rules,
+                )
+            )
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "required terminal deny rule is missing: '**/*.pem'" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_root_docker_context_rejects_deleted_environment_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            dockerignore = root / ".dockerignore"
+            original = dockerignore.read_text(encoding="utf-8")
+            mutated = original.replace("**/.env\n", "", 1)
+            self.assertNotEqual(original, mutated)
+            dockerignore.write_text(mutated, encoding="utf-8")
+
+            rules = governance.root_dockerignore_rules(root)
+            self.assertTrue(governance.docker_context_includes(".env", rules))
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                ".dockerignore required deny rule is missing: '**/.env'" in error
+                for error in errors
+            ),
+            errors,
+        )
 
     def assert_agent_ci_job_mutation_rejected(
         self,

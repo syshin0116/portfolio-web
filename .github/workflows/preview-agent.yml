@@ -52,6 +52,7 @@ jobs:
       - build
     if: needs.build.result == 'success'
     permissions:
+      checks: read
       contents: read
       id-token: write
       pull-requests: read

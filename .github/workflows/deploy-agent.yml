@@ -76,6 +76,7 @@ jobs:
       checks: read
       contents: read
       id-token: write
+      pull-requests: read
     uses: ./.github/workflows/agent-release.yml
     with:
       target: production

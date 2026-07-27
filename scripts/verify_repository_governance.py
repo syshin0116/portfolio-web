@@ -227,10 +227,10 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
         "e5d766231219d038bac360fbc7a4521f4635bf44228aa9938eaeb6cf58917f2a"
     ),
     ".github/workflows/preview-agent.yml": (
-        "00a0fbf026830fe40ed100f26480ccfa709583730952e47bdc84c1e17d286927"
+        "492d30bd53ba48a81882350e013ac26c27d65cbd34be23bbd9ae526d31fc7796"
     ),
     ".github/workflows/deploy-agent.yml": (
-        "161fab99414dce2574687eae0d620c62545ac3ba860737aedde08707c766d373"
+        "ccd93f95170586f6ab1cf8b2e20bdb3968f61cf31f655ac08a1b9752fd175307"
     ),
 }
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
@@ -1013,6 +1013,76 @@ def validate_agent_delivery_permission_chain(
                 f"expected_sha256={expected_sha256}, "
                 f"actual_sha256={actual_sha256}"
             )
+
+    permission_chains = (
+        (
+            ".github/workflows/preview-agent.yml",
+            "build",
+            ".github/workflows/agent-image-build.yml",
+            "build",
+        ),
+        (
+            ".github/workflows/preview-agent.yml",
+            "release",
+            ".github/workflows/agent-release.yml",
+            "release",
+        ),
+        (
+            ".github/workflows/deploy-agent.yml",
+            "build",
+            ".github/workflows/agent-image-build.yml",
+            "build",
+        ),
+        (
+            ".github/workflows/deploy-agent.yml",
+            "release",
+            ".github/workflows/agent-release.yml",
+            "release",
+        ),
+    )
+    permission_rank = {"none": 0, "read": 1, "write": 2}
+    for caller_path, caller_job_name, called_path, called_job_name in permission_chains:
+        caller_document = documents.get((repository_root / caller_path).resolve())
+        called_document = documents.get((repository_root / called_path).resolve())
+        if caller_document is None or called_document is None:
+            continue
+        try:
+            caller_job = _workflow_jobs(caller_document)[caller_job_name]
+            called_job = _workflow_jobs(called_document)[called_job_name]
+            caller_permissions = _job_permissions(
+                caller_job,
+                context=f"{caller_path}: job {caller_job_name!r}",
+            )
+            called_permissions = _job_permissions(
+                called_job,
+                context=f"{called_path}: job {called_job_name!r}",
+            )
+        except (GovernanceError, KeyError) as exc:
+            errors.append(f"agent delivery permission chain is invalid: {exc}")
+            continue
+
+        for permission, called_level in called_permissions.items():
+            caller_level = caller_permissions.get(permission, "none")
+            if (
+                not isinstance(called_level, str)
+                or called_level not in permission_rank
+                or not isinstance(caller_level, str)
+                or caller_level not in permission_rank
+            ):
+                errors.append(
+                    "agent delivery permission chain contains an invalid level: "
+                    f"{caller_path}:{caller_job_name} {permission}={caller_level!r}; "
+                    f"{called_path}:{called_job_name} {permission}={called_level!r}"
+                )
+                continue
+            if permission_rank[caller_level] < permission_rank[called_level]:
+                errors.append(
+                    "reusable workflow permissions cannot be elevated: "
+                    f"{caller_path}:{caller_job_name} grants "
+                    f"{permission}={caller_level}, but "
+                    f"{called_path}:{called_job_name} requests "
+                    f"{permission}={called_level}"
+                )
 
     identity_script_path = repository_root / AGENT_DELIVERY_IDENTITY_SCRIPT
     try:

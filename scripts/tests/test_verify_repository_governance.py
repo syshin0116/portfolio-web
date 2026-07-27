@@ -403,6 +403,42 @@ class LocalGovernanceTests(unittest.TestCase):
                 errors,
             )
 
+    def test_reusable_delivery_callers_cannot_request_fewer_permissions(self) -> None:
+        mutations = (
+            (
+                ".github/workflows/preview-agent.yml",
+                "      checks: read\n",
+                "checks=none",
+            ),
+            (
+                ".github/workflows/deploy-agent.yml",
+                "      pull-requests: read\n",
+                "pull-requests=none",
+            ),
+        )
+        for relative, removed_permission, expected in mutations:
+            with (
+                self.subTest(workflow=relative),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = copy_local_governance_fixture(directory)
+                workflow = root / relative
+                original = workflow.read_text(encoding="utf-8")
+                mutated = original.replace(removed_permission, "", 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(
+                    "reusable workflow permissions cannot be elevated" in error
+                    and expected in error
+                    for error in errors
+                ),
+                errors,
+            )
+
     def test_agent_delivery_rejects_identity_mapping_and_build_reuse_mutations(
         self,
     ) -> None:

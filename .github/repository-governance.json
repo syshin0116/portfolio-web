@@ -199,6 +199,19 @@
         ]
       },
       {
+        "package_ecosystem": "npm",
+        "directory": "/web",
+        "schedule": {
+          "interval": "weekly",
+          "day": "monday",
+          "time": "04:10",
+          "timezone": "Asia/Seoul"
+        },
+        "open_pull_requests_limit": 0,
+        "cooldown": {},
+        "groups": []
+      },
+      {
         "package_ecosystem": "uv",
         "directory": "/agent",
         "schedule": {

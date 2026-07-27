@@ -1059,9 +1059,9 @@ runs:
     def test_dependabot_update_removal_duplicate_and_extra_are_rejected(self) -> None:
         original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
         bun_start = original.index('  - package-ecosystem: "bun"')
-        uv_start = original.index('  - package-ecosystem: "uv"')
+        npm_start = original.index('  - package-ecosystem: "npm"')
         actions_start = original.index('  - package-ecosystem: "github-actions"')
-        bun_update = original[bun_start:uv_start].rstrip()
+        bun_update = original[bun_start:npm_start].rstrip()
         mutations = {
             "removal": original[:actions_start].rstrip() + "\n",
             "duplicate": original.rstrip() + "\n\n" + bun_update + "\n",
@@ -1107,20 +1107,20 @@ runs:
     def test_dependabot_group_removal_duplicate_and_extra_are_rejected(self) -> None:
         original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
         groups_start = original.index("    groups:\n      web-routine:")
-        uv_start = original.index('\n  - package-ecosystem: "uv"')
-        group_block = original[groups_start + len("    groups:\n") : uv_start].rstrip()
+        npm_start = original.index('\n  - package-ecosystem: "npm"')
+        group_block = original[groups_start + len("    groups:\n") : npm_start].rstrip()
         mutations = {
             "removal": (
-                original[:groups_start] + "    groups: {}\n" + original[uv_start + 1 :]
+                original[:groups_start] + "    groups: {}\n" + original[npm_start + 1 :]
             ),
             "duplicate": (
-                original[:uv_start] + "\n" + group_block + original[uv_start:]
+                original[:npm_start] + "\n" + group_block + original[npm_start:]
             ),
             "extra": (
-                original[:uv_start]
+                original[:npm_start]
                 + "\n"
                 + group_block.replace("web-routine:", "web-extra:", 1)
-                + original[uv_start:]
+                + original[npm_start:]
             ),
         }
         policy = governance.load_policy()

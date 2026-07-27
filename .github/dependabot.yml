@@ -33,6 +33,18 @@ updates:
           - "minor"
           - "patch"
 
+  # Bun version updates include bun.lock, but GitHub does not yet support
+  # Dependabot security updates for the Bun ecosystem. Keep npm as a
+  # security-only bridge; its PR must regenerate bun.lock before merge.
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:10"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 0
+
   - package-ecosystem: "uv"
     directory: "/agent"
     schedule:

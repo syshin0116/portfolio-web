@@ -217,16 +217,23 @@ production or spend-bearing preview.
 
 ## Dependabot and scheduled audit
 
-Dependabot version 2 has exactly three update identities: Bun at `/web`, uv at
-`/agent`, and GitHub Actions at `/`. The native ecosystems are required so
-Dependabot updates `web/bun.lock` and `agent/uv.lock` with their manifests
-instead of opening predictably red manifest-only PRs. They run weekly on Monday
-in `Asia/Seoul`, staggered at 04:00, 04:20, and 04:40, with three open PRs per
-ecosystem. Bun and uv use the reviewed 7-day default, 14-day major, 7-day
-minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day default
-cooldown. Routine minor/patch updates are grouped per ecosystem. Security
-updates are not grouped or cooled, so one vulnerable package is not held behind
-unrelated upgrades.
+Dependabot version 2 has exactly four update identities: Bun at `/web`, an npm
+security-only bridge at `/web`, uv at `/agent`, and GitHub Actions at `/`. The
+native Bun and uv ecosystems are required so version updates change
+`web/bun.lock` and `agent/uv.lock` with their manifests instead of opening
+predictably red manifest-only PRs. GitHub does not yet support Dependabot
+security updates for Bun, so the npm bridge sets
+`open-pull-requests-limit: 0`: npm version PRs are disabled while npm security
+PRs remain enabled. Such a security PR does not own `bun.lock`; regenerate and
+verify that lock in a dedicated worktree before merge.
+
+The identities run weekly on Monday in `Asia/Seoul`, staggered at 04:00, 04:10,
+04:20, and 04:40. Bun, uv, and Actions allow three version PRs; the npm bridge
+allows zero version PRs. Bun and uv use the reviewed 7-day default, 14-day
+major, 7-day minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day
+default cooldown. Routine minor/patch updates are grouped per ecosystem.
+Security updates are not grouped or cooled, so one vulnerable package is not
+held behind unrelated upgrades.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
 LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
 `@langchain/*`, Next.js, NextAuth, `@auth/*`, React/React DOM and their type

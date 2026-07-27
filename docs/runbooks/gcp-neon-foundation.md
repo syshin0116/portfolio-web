@@ -145,6 +145,7 @@ either copy into a tracked path or CI.
 Routine operator flow:
 
 ```sh
+scripts/verify_ops_foundation.sh --static
 terraform -chdir=infra/gcp init
 terraform -chdir=infra/gcp plan
 ```
@@ -301,13 +302,21 @@ The follow-up deployment PR must:
 Credential-free checks:
 
 ```sh
-terraform -chdir=infra/gcp fmt -check -recursive
-terraform -chdir=infra/gcp init -backend=false -input=false -lockfile=readonly
-terraform -chdir=infra/gcp validate
+scripts/verify_ops_foundation.sh --static
+scripts/verify_ops_foundation.sh --terraform-fmt
+scripts/verify_ops_foundation.sh --terraform-init
+scripts/verify_ops_foundation.sh --terraform-validate
 scripts/verify_ops_foundation.sh --terraform-test
 shellcheck scripts/verify_ops_foundation.sh
-scripts/verify_ops_foundation.sh --static
 ```
+
+Each `--terraform-*` wrapper performs an on-disk preflight before invoking Terraform.
+The preflight enumerates Terraform configuration, override, automatic variable, and test
+candidates below `infra/gcp` and requires the exact reviewed tracked allowlist of regular
+files. An extra tracked, untracked, or gitignored candidate, symlink, FIFO, socket, device,
+or directory fails closed. Rejected candidates are classified from directory metadata
+only; their contents are never opened. Terraform's internal `.terraform/` directory is
+excluded, and the preflight does not inspect state, plan, or secret contents.
 
 The static command runs `uv run --no-project --with python-hcl2==7.3.1` and uses that
 pinned parser, not regular expressions or source-string grep. It compares the complete

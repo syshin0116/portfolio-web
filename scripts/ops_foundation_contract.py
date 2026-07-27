@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
@@ -42,6 +43,9 @@ EXPECTED_TERRAFORM_TEST_SUMMARY = {
     "errored": 0,
     "skipped": 0,
 }
+EXPECTED_TERRAFORM_LOADABLE_FILES = EXPECTED_TERRAFORM_FILES | frozenset(
+    EXPECTED_TERRAFORM_TEST_FILES
+)
 HCL2_VERSION = "7.3.1"
 TERRAFORM_VERSION = "1.13.5"
 EXPECTED_TOP_LEVEL_KEYS = {
@@ -602,6 +606,108 @@ def _tracked_paths(repo_root: Path) -> list[str]:
         raise ContractError("tracked infra/gcp paths must be UTF-8") from exc
 
 
+def _is_terraform_loadable_name(name: str) -> bool:
+    return (
+        name.endswith((".tf", ".tf.json", ".tftest.hcl", ".tftest.json"))
+        or name in {"terraform.tfvars", "terraform.tfvars.json"}
+        or name.endswith((".auto.tfvars", ".auto.tfvars.json"))
+    )
+
+
+def _file_kind(mode: int) -> str:
+    if stat.S_ISREG(mode):
+        return "regular"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISFIFO(mode):
+        return "fifo"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISBLK(mode):
+        return "block-device"
+    if stat.S_ISCHR(mode):
+        return "character-device"
+    return "non-regular"
+
+
+def _on_disk_terraform_candidates(repo_root: Path) -> dict[str, str]:
+    terraform_dir = repo_root / "infra/gcp"
+    try:
+        root_mode = terraform_dir.lstat().st_mode
+    except OSError as exc:
+        raise ContractError(f"cannot inspect infra/gcp: {exc}") from exc
+    if not stat.S_ISDIR(root_mode):
+        _fail("infra/gcp must be a real directory, not a symlink or non-directory")
+
+    candidates: dict[str, str] = {}
+
+    def visit(directory: Path, relative_directory: Path) -> None:
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as exc:
+            relative = (Path("infra/gcp") / relative_directory).as_posix()
+            raise ContractError(
+                f"cannot enumerate Terraform candidate directory {relative}: {exc}"
+            ) from exc
+
+        for entry in entries:
+            if entry.name == ".terraform":
+                continue
+
+            relative = relative_directory / entry.name
+            repo_relative = (Path("infra/gcp") / relative).as_posix()
+            try:
+                mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError as exc:
+                raise ContractError(
+                    f"cannot inspect Terraform candidate path {repo_relative}: {exc}"
+                ) from exc
+
+            is_candidate = _is_terraform_loadable_name(entry.name)
+            if is_candidate:
+                candidates[repo_relative] = _file_kind(mode)
+
+            if stat.S_ISDIR(mode) and not is_candidate:
+                visit(Path(entry.path), relative)
+
+    visit(terraform_dir, Path())
+    return candidates
+
+
+def validate_disk_inventory(repo_root: Path) -> list[str]:
+    candidates = _on_disk_terraform_candidates(repo_root)
+    actual_files = frozenset(candidates)
+    expected_files = EXPECTED_TERRAFORM_LOADABLE_FILES
+    irregular = sorted(
+        f"{path} ({kind})" for path, kind in candidates.items() if kind != "regular"
+    )
+    missing = sorted(expected_files - actual_files)
+    unexpected = sorted(
+        f"{path} ({candidates[path]})" for path in actual_files - expected_files
+    )
+    if missing or unexpected or irregular:
+        _fail(
+            "on-disk Terraform loadable inventory mismatch; "
+            f"missing={missing}, unexpected={unexpected}, irregular={irregular}"
+        )
+
+    tracked_paths = _tracked_paths(repo_root)
+    tracked_loadable = frozenset(
+        path for path in tracked_paths if _is_terraform_loadable_name(Path(path).name)
+    )
+    if tracked_loadable != expected_files:
+        missing = sorted(expected_files - tracked_loadable)
+        unexpected = sorted(tracked_loadable - expected_files)
+        _fail(
+            "tracked Terraform loadable inventory mismatch; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    return tracked_paths
+
+
 def _load_hcl_documents(
     repo_root: Path,
     tracked_tf: Iterable[str],
@@ -788,7 +894,7 @@ def _validate_test_file_contract(
 
 
 def validate_static_contract(repo_root: Path) -> None:
-    tracked_paths = _tracked_paths(repo_root)
+    tracked_paths = validate_disk_inventory(repo_root)
     tracked_tf = frozenset(
         path for path in tracked_paths if path.endswith((".tf", ".tf.json"))
     )
@@ -1331,6 +1437,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     static = subparsers.add_parser("static")
     static.add_argument("--repo-root", type=Path, required=True)
 
+    disk_inventory = subparsers.add_parser("disk-inventory")
+    disk_inventory.add_argument("--repo-root", type=Path, required=True)
+
     subparsers.add_parser("terraform-test-result")
     subparsers.add_parser("wif-live")
 
@@ -1349,6 +1458,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "static":
             validate_static_contract(args.repo_root.resolve())
+        elif args.command == "disk-inventory":
+            validate_disk_inventory(args.repo_root.resolve())
         elif args.command == "terraform-test-result":
             records = _read_stdin_json_lines()
             for record in records:

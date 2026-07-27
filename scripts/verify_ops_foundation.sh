@@ -56,6 +56,11 @@ require_command() {
   command -v "$1" >/dev/null || fail "missing command: $1"
 }
 
+verify_disk_contract() {
+  require_command python3
+  python3 "$CONTRACT_SCRIPT" disk-inventory --repo-root "$REPO_ROOT"
+}
+
 verify_static_contract() {
   require_command uv
   uv run \
@@ -71,8 +76,29 @@ verify_static_contract() {
   printf 'OK: credential-free Terraform security contract verified.\n'
 }
 
+verify_terraform_format() {
+  verify_disk_contract
+  require_command terraform
+  terraform fmt -check -recursive "$TERRAFORM_DIR"
+}
+
+verify_terraform_init() {
+  verify_disk_contract
+  require_command terraform
+  terraform -chdir="$TERRAFORM_DIR" init \
+    -backend=false \
+    -input=false \
+    -lockfile=readonly
+}
+
+verify_terraform_validate() {
+  verify_disk_contract
+  require_command terraform
+  terraform -chdir="$TERRAFORM_DIR" validate
+}
+
 verify_terraform_tests() {
-  require_command python3
+  verify_disk_contract
   require_command terraform
   terraform -chdir="$TERRAFORM_DIR" test -json |
     python3 "$CONTRACT_SCRIPT" terraform-test-result
@@ -701,14 +727,24 @@ verify_live_contract() {
 }
 
 usage() {
-  printf 'Usage: %s [--static|--terraform-test|--live|--governance-live]\n' \
-    "${0##*/}"
+  printf '%s\n' \
+    "Usage: ${0##*/} [--static|--terraform-fmt|--terraform-init|" \
+    "  --terraform-validate|--terraform-test|--live|--governance-live]"
 }
 
 mode="${1:---live}"
 case "$mode" in
   --static)
     verify_static_contract
+    ;;
+  --terraform-fmt)
+    verify_terraform_format
+    ;;
+  --terraform-init)
+    verify_terraform_init
+    ;;
+  --terraform-validate)
+    verify_terraform_validate
     ;;
   --terraform-test)
     verify_terraform_tests

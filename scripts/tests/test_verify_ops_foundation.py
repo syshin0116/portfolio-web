@@ -100,6 +100,160 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_static_rejects_ignored_destructive_override_before_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            (root / ".gitignore").write_text("*_override.tf\n", encoding="utf-8")
+            override = root / "infra/gcp/local_override.tf"
+            override.write_text(
+                """
+resource "google_project_service" "required" {
+  for_each = toset([])
+
+  disable_on_destroy = true
+}
+""",
+                encoding="utf-8",
+            )
+            ignored = subprocess.run(
+                ["git", "check-ignore", "--quiet", str(override.relative_to(root))],
+                cwd=root,
+                check=False,
+            )
+            self.assertEqual(0, ignored.returncode)
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("on-disk Terraform loadable inventory mismatch", result.stderr)
+        self.assertIn("infra/gcp/local_override.tf", result.stderr)
+
+    def test_disk_inventory_rejects_every_loadable_filename_family(self) -> None:
+        candidates = (
+            "infra/gcp/unreviewed.tf",
+            "infra/gcp/unreviewed.tf.json",
+            "infra/gcp/override.tf",
+            "infra/gcp/override.tf.json",
+            "infra/gcp/local_override.tf",
+            "infra/gcp/local_override.tf.json",
+            "infra/gcp/terraform.tfvars",
+            "infra/gcp/terraform.tfvars.json",
+            "infra/gcp/unreviewed.auto.tfvars",
+            "infra/gcp/unreviewed.auto.tfvars.json",
+            "infra/gcp/unreviewed.tftest.hcl",
+            "infra/gcp/tests/unreviewed.tftest.json",
+        )
+        for relative_path in candidates:
+            with self.subTest(relative_path=relative_path):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self._fixture(directory)
+                    candidate = root / relative_path
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    candidate.write_text(
+                        "malformed and must not be read\n", encoding="utf-8"
+                    )
+
+                    result = self._run(root)
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(
+                        "on-disk Terraform loadable inventory mismatch",
+                        result.stderr,
+                    )
+                    self.assertIn(relative_path, result.stderr)
+
+    def test_disk_inventory_rejects_allowlisted_path_when_untracked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            subprocess.run(
+                ["git", "rm", "--cached", "--quiet", "infra/gcp/main.tf"],
+                cwd=root,
+                check=True,
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("tracked Terraform loadable inventory mismatch", result.stderr)
+        self.assertIn("infra/gcp/main.tf", result.stderr)
+
+    def test_disk_inventory_rejects_untracked_symlink_and_non_regular_candidates(
+        self,
+    ) -> None:
+        mutations = ("regular", "symlink", "fifo")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self._fixture(directory)
+                    candidate = root / f"infra/gcp/unreviewed-{mutation}.tf"
+                    if mutation == "regular":
+                        candidate.write_text("# must not be read\n", encoding="utf-8")
+                    elif mutation == "symlink":
+                        candidate.symlink_to(root / "does-not-exist")
+                    else:
+                        os.mkfifo(candidate)
+
+                    result = subprocess.run(
+                        ["bash", "scripts/verify_ops_foundation.sh", "--static"],
+                        cwd=root,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=20,
+                    )
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(
+                        "on-disk Terraform loadable inventory mismatch",
+                        result.stderr,
+                    )
+                    self.assertIn(str(candidate.relative_to(root)), result.stderr)
+                    self.assertIn(mutation, result.stderr)
+
+    def test_terraform_wrapper_modes_preflight_before_invoking_terraform(self) -> None:
+        modes = (
+            "--terraform-fmt",
+            "--terraform-init",
+            "--terraform-validate",
+            "--terraform-test",
+        )
+        for mode in modes:
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self._fixture(directory)
+                    (root / "infra/gcp/rogue.tf.json").write_text(
+                        "{}\n",
+                        encoding="utf-8",
+                    )
+                    fake_bin = root / "fake-bin"
+                    fake_bin.mkdir()
+                    marker = root / "terraform-was-invoked"
+                    fake_terraform = fake_bin / "terraform"
+                    fake_terraform.write_text(
+                        '#!/bin/bash\n: > "$TERRAFORM_MARKER"\nexit 0\n',
+                        encoding="utf-8",
+                    )
+                    fake_terraform.chmod(0o755)
+                    environment = os.environ.copy()
+                    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+                    environment["TERRAFORM_MARKER"] = str(marker)
+
+                    result = subprocess.run(
+                        ["bash", "scripts/verify_ops_foundation.sh", mode],
+                        cwd=root,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                    )
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(
+                        "on-disk Terraform loadable inventory mismatch",
+                        result.stderr,
+                    )
+                    self.assertFalse(marker.exists())
+
     def test_terraform_test_runner_rejects_zero_discovered_tests(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory)
@@ -168,7 +322,7 @@ printf '%s\n' \
 
             self.assertNotEqual(0, result.returncode)
             expected = (
-                "tracked Terraform test inventory mismatch"
+                "on-disk Terraform loadable inventory mismatch"
                 if mutation == "removed"
                 else "Terraform test content digest is not exact"
             )
@@ -350,7 +504,7 @@ output "unreviewed_sensitive_value" {
             result = self._run(root)
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("tracked Terraform test inventory mismatch", result.stderr)
+        self.assertIn("on-disk Terraform loadable inventory mismatch", result.stderr)
 
     def test_governance_delegation_uses_exact_pinned_uv_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -535,7 +689,7 @@ resource "google_project_iam_member" "rogue" {
             result = self._run(root)
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("tracked Terraform inventory mismatch", result.stderr)
+        self.assertIn("on-disk Terraform loadable inventory mismatch", result.stderr)
 
     def test_tracked_json_terraform_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -566,7 +720,7 @@ resource "google_project_iam_member" "rogue" {
             result = self._run(root)
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("tracked Terraform inventory mismatch", result.stderr)
+        self.assertIn("on-disk Terraform loadable inventory mismatch", result.stderr)
 
     def test_module_block_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

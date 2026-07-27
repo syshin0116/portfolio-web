@@ -71,11 +71,12 @@ backup. Preserve the gitignored worktree-local migration artifact until that ext
 is independently verified, then remove it only through a separate exact-target cleanup;
 never commit either copy.
 
-Routine operator commands:
+From the repository root, routine operator commands are:
 
 ```sh
-terraform init
-terraform plan
+scripts/verify_ops_foundation.sh --static
+terraform -chdir=infra/gcp init
+terraform -chdir=infra/gcp plan
 ```
 
 Terraform is pinned to `1.13.5` in both configuration and `.terraform-version`. Every
@@ -86,11 +87,13 @@ member removals; any resource replacement or persistent-resource destroy is a bl
 Use an ephemeral access token or Application Default Credentials. Never pass a service
 account JSON key to Terraform. Do not run `apply` from CI.
 
-Credential-free CI uses:
+From the repository root, credential-free CI uses:
 
 ```sh
-terraform init -backend=false -input=false -lockfile=readonly
-terraform validate
+scripts/verify_ops_foundation.sh --static
+scripts/verify_ops_foundation.sh --terraform-fmt
+scripts/verify_ops_foundation.sh --terraform-init
+scripts/verify_ops_foundation.sh --terraform-validate
 scripts/verify_ops_foundation.sh --terraform-test
 ```
 
@@ -106,10 +109,14 @@ variable, provider/data/backend block, and import target/live object ID. It reje
 unreviewed modules, `moved` and `removed` blocks, every provisioner, external
 provider/data, `terraform_remote_state`, and executable escape resources. The reviewed
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
-Terraform test expression. `--terraform-test` validates Terraform's JSON event stream and
-requires the exact single reviewed run and summary `1 passed, 0 failed, 0 errored,
-0 skipped`; a green zero-test command is rejected. Formatting, fresh initialization, and
-validation remain separate gates.
+Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
+uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or
+gitignored configuration, override, automatic variable, or test file and every symlink or
+non-regular candidate. It excludes Terraform's internal `.terraform/` directory and never
+opens state, plan, secret, or rejected-extra contents. `--terraform-test` validates
+Terraform's JSON event stream and requires the exact single reviewed run and summary
+`1 passed, 0 failed, 0 errored, 0 skipped`; a green zero-test command is rejected.
+Formatting, fresh initialization, and validation remain separate gates.
 
 Run `scripts/verify_ops_foundation.sh --static` before review and `--live` only after an
 explicitly approved apply. Live mode requires

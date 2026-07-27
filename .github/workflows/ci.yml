@@ -244,6 +244,11 @@ jobs:
       - name: Audit GitHub Actions security
         if: needs.changes.outputs.infra == 'true'
         run: uvx --from zizmor==1.28.0 zizmor .github/workflows
+      - name: Check the operations verifier
+        if: needs.changes.outputs.infra == 'true'
+        run: |
+          shellcheck scripts/verify_ops_foundation.sh
+          scripts/verify_ops_foundation.sh --static
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         if: needs.changes.outputs.infra == 'true'
         with:
@@ -251,21 +256,16 @@ jobs:
           terraform_wrapper: false
       - name: Check Terraform formatting
         if: needs.changes.outputs.infra == 'true'
-        run: terraform fmt -check -recursive infra/gcp
+        run: scripts/verify_ops_foundation.sh --terraform-fmt
       - name: Initialize Terraform without remote credentials
         if: needs.changes.outputs.infra == 'true'
-        run: terraform -chdir=infra/gcp init -backend=false -input=false -lockfile=readonly
+        run: scripts/verify_ops_foundation.sh --terraform-init
       - name: Validate Terraform configuration
         if: needs.changes.outputs.infra == 'true'
-        run: terraform -chdir=infra/gcp validate
+        run: scripts/verify_ops_foundation.sh --terraform-validate
       - name: Test exactly one Terraform security contract run
         if: needs.changes.outputs.infra == 'true'
         run: scripts/verify_ops_foundation.sh --terraform-test
-      - name: Check the operations verifier
-        if: needs.changes.outputs.infra == 'true'
-        run: |
-          shellcheck scripts/verify_ops_foundation.sh
-          scripts/verify_ops_foundation.sh --static
 
   check:
     name: ci/check

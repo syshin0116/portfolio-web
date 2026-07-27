@@ -10,3 +10,5 @@ os.environ.setdefault(
 )
 os.environ.setdefault("AEGRA_CONFIG", str(REPO_ROOT / "aegra.json"))
 os.environ.setdefault("FF_V2_EVENT_STREAMING", "true")
+os.environ.setdefault("REDIS_BROKER_ENABLED", "false")
+os.environ.setdefault("BG_JOB_MAX_RETRIES", "0")

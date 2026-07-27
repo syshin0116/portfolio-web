@@ -40,6 +40,8 @@ def _import_runtime(
         "FF_V2_EVENT_STREAMING": "true",
         "ENV_MODE": "PRODUCTION",
         "RUN_MIGRATIONS_ON_STARTUP": "false",
+        "REDIS_BROKER_ENABLED": "false",
+        "BG_JOB_MAX_RETRIES": "0",
         "PYTHONDONTWRITEBYTECODE": "1",
         **environment,
     }
@@ -158,6 +160,8 @@ def test_local_runtime_may_run_startup_migrations(tmp_path):
         ({"AGENT_AUTH_SECRET": "too-short"}, "at least 32"),
         ({"FF_V2_EVENT_STREAMING": "false"}, "FF_V2_EVENT_STREAMING"),
         ({"RUN_MIGRATIONS_ON_STARTUP": "true"}, "RUN_MIGRATIONS_ON_STARTUP"),
+        ({"REDIS_BROKER_ENABLED": "true"}, "REDIS_BROKER_ENABLED"),
+        ({"BG_JOB_MAX_RETRIES": "1"}, "BG_JOB_MAX_RETRIES"),
         (
             {
                 "DATABASE_URL": (
@@ -187,6 +191,8 @@ def test_local_runtime_may_run_startup_migrations(tmp_path):
         "short-secret",
         "v2-disabled",
         "startup-migrations",
+        "redis-budget-bypass",
+        "retry-budget-reset",
         "neon-pooler",
         "neon-pooler-query-host",
         "neon-pooler-component-host",

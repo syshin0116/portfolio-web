@@ -1,6 +1,7 @@
 """Offline compatibility checks for the pinned Aegra runtime."""
 
 import asyncio
+import inspect
 import json
 import runpy
 import socket
@@ -23,7 +24,6 @@ from aegra_api.settings import settings
 from langchain_core._api import LangChainBetaWarning
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
@@ -114,7 +114,7 @@ def test_aegra_config_registers_the_compiled_graph():
             "enable_custom_route_auth": False,
         },
     }
-    assert isinstance(graph, CompiledStateGraph)
+    assert tuple(inspect.signature(graph).parameters) == ("config", "runtime")
 
 
 def test_pinned_runtime_supports_aegra_v2_dialect(monkeypatch):

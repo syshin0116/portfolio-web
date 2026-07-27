@@ -122,6 +122,18 @@ jobs:
 
         self.assertIsNone(governance.FULL_SHA_ACTION.fullmatch(reference))
 
+    def test_dependency_audit_events_are_schedule_and_manual_only(self) -> None:
+        workflow = REPO_ROOT / ".github/workflows/dependency-audit.yml"
+
+        self.assertEqual(
+            {"schedule", "workflow_dispatch"},
+            governance.workflow_events(workflow),
+        )
+        self.assertNotIn(
+            "continue-on-error",
+            workflow.read_text(encoding="utf-8"),
+        )
+
     def test_duplicate_required_check_name_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

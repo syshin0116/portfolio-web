@@ -22,6 +22,7 @@ FULL_SHA_ACTION = re.compile(
 USES_LINE = re.compile(r"""^\s*(?:-\s*)?uses:\s*["']?([^"'#\s]+)["']?\s*(?:#.*)?$""")
 JOB_LINE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
 JOB_NAME_LINE = re.compile(r"""^    name:\s*["']?([^"'#]+?)["']?\s*(?:#.*)?$""")
+EVENT_LINE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
 
 JsonObject = dict[str, Any]
 ApiGet = Callable[[str], Any]
@@ -87,6 +88,24 @@ def workflow_job_names(path: Path) -> list[str]:
     return names
 
 
+def workflow_events(path: Path) -> set[str]:
+    """Extract top-level workflow events from the repository's YAML layout."""
+    events: set[str] = set()
+    in_events = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line == "on:":
+            in_events = True
+            continue
+        if not in_events:
+            continue
+        if line and not line.startswith((" ", "#")):
+            break
+        event_match = EVENT_LINE.match(line)
+        if event_match is not None:
+            events.add(event_match.group(1))
+    return events
+
+
 def validate_local(root: Path, policy: JsonObject) -> list[str]:
     """Validate contracts represented in the repository itself."""
     errors: list[str] = []
@@ -133,6 +152,21 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     for relative in required_files:
         if not (root / relative).is_file():
             errors.append(f"local: required governance file is missing: {relative}")
+
+    dependency_audit = root / ".github/workflows/dependency-audit.yml"
+    if dependency_audit.is_file():
+        events = workflow_events(dependency_audit)
+        expected_events = {"schedule", "workflow_dispatch"}
+        if events != expected_events:
+            errors.append(
+                "local: dependency audit events must be schedule and "
+                f"workflow_dispatch only, found {sorted(events)!r}"
+            )
+        if "continue-on-error" in dependency_audit.read_text(encoding="utf-8"):
+            errors.append(
+                "local: dependency audit must fail honestly; continue-on-error "
+                "is forbidden"
+            )
 
     return errors
 

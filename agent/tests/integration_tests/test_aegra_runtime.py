@@ -83,7 +83,7 @@ def test_runtime_dependencies_are_the_spike_versions():
         "langgraph": "1.2.9",
         "langgraph-checkpoint-postgres": "3.1.0",
         "langgraph-sdk": "0.4.2",
-        "langsmith": "0.10.2",
+        "langsmith": "0.10.10",
         "uvicorn": "0.51.0",
     }
 

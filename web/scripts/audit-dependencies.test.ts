@@ -129,8 +129,8 @@ describe("dependency audit exception policy", () => {
   test("rejects unrelated direct resolution drift outside the security allowlist", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
-      '"framer-motion": ["framer-motion@12.23.25"',
       '"framer-motion": ["framer-motion@12.42.2"',
+      '"framer-motion": ["framer-motion@12.99.0"',
     )
 
     expect(() => validateAuditPolicy(candidate)).toThrow(

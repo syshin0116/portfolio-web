@@ -3,7 +3,8 @@ updates:
   - package-ecosystem: "bun"
     directory: "/web"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+      day: "monday"
       time: "04:00"
       timezone: "Asia/Seoul"
     open-pull-requests-limit: 1
@@ -13,10 +14,16 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      web-monthly:
+      web-weekly:
         applies-to: "version-updates"
         patterns:
           - "*"
+    ignore:
+      # These majors fail the current lint/type contract and need an app migration.
+      - dependency-name: "lucide-react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Bun version updates include bun.lock, but GitHub does not yet support
   # Dependabot security updates for the Bun ecosystem. Keep npm as a
@@ -24,7 +31,8 @@ updates:
   - package-ecosystem: "npm"
     directory: "/web"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+      day: "monday"
       time: "04:10"
       timezone: "Asia/Seoul"
     open-pull-requests-limit: 0
@@ -32,7 +40,8 @@ updates:
   - package-ecosystem: "uv"
     directory: "/agent"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+      day: "monday"
       time: "04:20"
       timezone: "Asia/Seoul"
     open-pull-requests-limit: 1
@@ -42,7 +51,7 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      agent-monthly:
+      agent-weekly:
         applies-to: "version-updates"
         patterns:
           - "*"
@@ -50,14 +59,15 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+      day: "monday"
       time: "04:40"
       timezone: "Asia/Seoul"
     open-pull-requests-limit: 1
     cooldown:
       default-days: 7
     groups:
-      actions-monthly:
+      actions-weekly:
         applies-to: "version-updates"
         patterns:
           - "*"

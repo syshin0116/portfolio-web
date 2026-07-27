@@ -607,10 +607,16 @@ def _tracked_paths(repo_root: Path) -> list[str]:
 
 
 def _is_terraform_loadable_name(name: str) -> bool:
-    return (
-        name.endswith((".tf", ".tf.json", ".tftest.hcl", ".tftest.json"))
-        or name in {"terraform.tfvars", "terraform.tfvars.json"}
-        or name.endswith((".auto.tfvars", ".auto.tfvars.json"))
+    return name.endswith(
+        (
+            ".tf",
+            ".tf.json",
+            ".tfvars",
+            ".tfvars.json",
+            ".tftest.hcl",
+            ".tftest.json",
+            ".tfmock.hcl",
+        )
     )
 
 
@@ -632,16 +638,26 @@ def _file_kind(mode: int) -> str:
     return "non-regular"
 
 
-def _on_disk_terraform_candidates(repo_root: Path) -> dict[str, str]:
-    terraform_dir = repo_root / "infra/gcp"
+def _require_real_directory(path: Path, label: str) -> None:
     try:
-        root_mode = terraform_dir.lstat().st_mode
+        mode = path.lstat().st_mode
     except OSError as exc:
-        raise ContractError(f"cannot inspect infra/gcp: {exc}") from exc
-    if not stat.S_ISDIR(root_mode):
-        _fail("infra/gcp must be a real directory, not a symlink or non-directory")
+        raise ContractError(f"cannot inspect {label}: {exc}") from exc
+    kind = _file_kind(mode)
+    if kind != "directory":
+        _fail(f"{label} must be a real directory; got={kind}")
+
+
+def _on_disk_terraform_candidates(
+    repo_root: Path,
+) -> tuple[dict[str, str], frozenset[str]]:
+    infra_dir = repo_root / "infra"
+    _require_real_directory(infra_dir, "infra")
+    terraform_dir = infra_dir / "gcp"
+    _require_real_directory(terraform_dir, "infra/gcp")
 
     candidates: dict[str, str] = {}
+    terraform_internal_dirs: set[str] = set()
 
     def visit(directory: Path, relative_directory: Path) -> None:
         try:
@@ -654,9 +670,6 @@ def _on_disk_terraform_candidates(repo_root: Path) -> dict[str, str]:
             ) from exc
 
         for entry in entries:
-            if entry.name == ".terraform":
-                continue
-
             relative = relative_directory / entry.name
             repo_relative = (Path("infra/gcp") / relative).as_posix()
             try:
@@ -666,6 +679,13 @@ def _on_disk_terraform_candidates(repo_root: Path) -> dict[str, str]:
                     f"cannot inspect Terraform candidate path {repo_relative}: {exc}"
                 ) from exc
 
+            if entry.name == ".terraform":
+                kind = _file_kind(mode)
+                if kind != "directory":
+                    _fail(f"{repo_relative} must be a real directory; got={kind}")
+                terraform_internal_dirs.add(repo_relative)
+                continue
+
             is_candidate = _is_terraform_loadable_name(entry.name)
             if is_candidate:
                 candidates[repo_relative] = _file_kind(mode)
@@ -674,11 +694,26 @@ def _on_disk_terraform_candidates(repo_root: Path) -> dict[str, str]:
                 visit(Path(entry.path), relative)
 
     visit(terraform_dir, Path())
-    return candidates
+    return candidates, frozenset(terraform_internal_dirs)
+
+
+def _git_path_is_ignored(repo_root: Path, relative_path: str) -> bool:
+    result = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", relative_path],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    detail = result.stderr.decode(errors="replace").strip()
+    _fail(f"cannot check whether {relative_path} is gitignored: {detail}")
 
 
 def validate_disk_inventory(repo_root: Path) -> list[str]:
-    candidates = _on_disk_terraform_candidates(repo_root)
+    candidates, terraform_internal_dirs = _on_disk_terraform_candidates(repo_root)
     actual_files = frozenset(candidates)
     expected_files = EXPECTED_TERRAFORM_LOADABLE_FILES
     irregular = sorted(
@@ -695,6 +730,15 @@ def validate_disk_inventory(repo_root: Path) -> list[str]:
         )
 
     tracked_paths = _tracked_paths(repo_root)
+    tracked_internal = sorted(
+        path for path in tracked_paths if ".terraform" in Path(path).parts
+    )
+    if tracked_internal:
+        _fail(f"tracked .terraform paths are forbidden; paths={tracked_internal}")
+    for internal_dir in sorted(terraform_internal_dirs):
+        if not _git_path_is_ignored(repo_root, internal_dir):
+            _fail(f"{internal_dir} must be gitignored and untracked")
+
     tracked_loadable = frozenset(
         path for path in tracked_paths if _is_terraform_loadable_name(Path(path).name)
     )

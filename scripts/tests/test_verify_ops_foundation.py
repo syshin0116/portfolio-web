@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -138,10 +139,13 @@ resource "google_project_service" "required" {
             "infra/gcp/local_override.tf.json",
             "infra/gcp/terraform.tfvars",
             "infra/gcp/terraform.tfvars.json",
+            "infra/gcp/unreviewed.tfvars",
+            "infra/gcp/unreviewed.tfvars.json",
             "infra/gcp/unreviewed.auto.tfvars",
             "infra/gcp/unreviewed.auto.tfvars.json",
             "infra/gcp/unreviewed.tftest.hcl",
             "infra/gcp/tests/unreviewed.tftest.json",
+            "infra/gcp/unreviewed.tfmock.hcl",
         )
         for relative_path in candidates:
             with self.subTest(relative_path=relative_path):
@@ -177,6 +181,98 @@ resource "google_project_service" "required" {
         self.assertIn("tracked Terraform loadable inventory mismatch", result.stderr)
         self.assertIn("infra/gcp/main.tf", result.stderr)
 
+    def test_disk_inventory_allows_only_ignored_untracked_real_terraform_dir(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            (root / ".gitignore").write_text("**/.terraform/\n", encoding="utf-8")
+            internal = root / "infra/gcp/.terraform"
+            internal.mkdir()
+            os.mkfifo(internal / "must-not-be-inspected.tf")
+
+            result = self._run(root)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_disk_inventory_rejects_unignored_real_terraform_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            (root / "infra/gcp/.terraform").mkdir()
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("infra/gcp/.terraform must be gitignored", result.stderr)
+
+    def test_disk_inventory_rejects_invalid_terraform_entry_kinds(self) -> None:
+        mutations = ("regular", "symlink", "fifo")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self._fixture(directory)
+                    internal = root / "infra/gcp/.terraform"
+                    if mutation == "regular":
+                        internal.write_text("must not be read\n", encoding="utf-8")
+                    elif mutation == "symlink":
+                        internal.symlink_to(
+                            root / "does-not-exist",
+                            target_is_directory=True,
+                        )
+                        subprocess.run(
+                            ["git", "add", "--force", "infra/gcp/.terraform"],
+                            cwd=root,
+                            check=True,
+                        )
+                    else:
+                        os.mkfifo(internal)
+
+                    result = self._run(root)
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("infra/gcp/.terraform", result.stderr)
+                    self.assertIn(mutation, result.stderr)
+
+    def test_disk_inventory_rejects_tracked_terraform_subtree_without_reading(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            (root / ".gitignore").write_text("**/.terraform/\n", encoding="utf-8")
+            internal = root / "infra/gcp/.terraform"
+            internal.mkdir()
+            sentinel = internal / "must-not-be-read"
+            sentinel.write_text("opaque internal data\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "--force", str(sentinel.relative_to(root))],
+                cwd=root,
+                check=True,
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("tracked .terraform paths are forbidden", result.stderr)
+        self.assertIn(str(sentinel.relative_to(root)), result.stderr)
+
+    def test_disk_inventory_rejects_symlinked_infra_path_components(self) -> None:
+        for component in ("infra", "infra/gcp"):
+            with self.subTest(component=component):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self._fixture(directory)
+                    original = root / component
+                    relocated = root / f"{component.replace('/', '-')}-real"
+                    original.rename(relocated)
+                    original.symlink_to(relocated, target_is_directory=True)
+
+                    result = self._run(root)
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(
+                        f"{component} must be a real directory",
+                        result.stderr,
+                    )
+
     def test_disk_inventory_rejects_untracked_symlink_and_non_regular_candidates(
         self,
     ) -> None:
@@ -209,6 +305,56 @@ resource "google_project_service" "required" {
                     )
                     self.assertIn(str(candidate.relative_to(root)), result.stderr)
                     self.assertIn(mutation, result.stderr)
+
+    def test_new_fmt_candidate_kinds_preflight_before_invoking_terraform(self) -> None:
+        mutations = {
+            "regular": "infra/gcp/unreviewed-regular.tfvars",
+            "symlink": "infra/gcp/unreviewed-symlink.tfmock.hcl",
+            "fifo": "infra/gcp/unreviewed-fifo.tfvars",
+        }
+        for mutation, relative_path in mutations.items():
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = self._fixture(directory)
+                    candidate = root / relative_path
+                    if mutation == "regular":
+                        candidate.write_text("must not be read\n", encoding="utf-8")
+                    elif mutation == "symlink":
+                        candidate.symlink_to(root / "does-not-exist")
+                    else:
+                        os.mkfifo(candidate)
+
+                    fake_bin = root / "fake-bin"
+                    fake_bin.mkdir()
+                    marker = root / "terraform-was-invoked"
+                    fake_terraform = fake_bin / "terraform"
+                    fake_terraform.write_text(
+                        '#!/bin/bash\n: > "$TERRAFORM_MARKER"\nexit 0\n',
+                        encoding="utf-8",
+                    )
+                    fake_terraform.chmod(0o755)
+                    environment = os.environ.copy()
+                    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+                    environment["TERRAFORM_MARKER"] = str(marker)
+
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "scripts/verify_ops_foundation.sh",
+                            "--terraform-fmt",
+                        ],
+                        cwd=root,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        timeout=20,
+                    )
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(relative_path, result.stderr)
+                    self.assertIn(mutation, result.stderr)
+                    self.assertFalse(marker.exists())
 
     def test_terraform_wrapper_modes_preflight_before_invoking_terraform(self) -> None:
         modes = (
@@ -1024,6 +1170,41 @@ data "terraform_remote_state" "escape" # parser-bypass
             "variable github_repository_id body must exactly match",
             result.stderr,
         )
+
+
+class StateBucketMetadataTests(unittest.TestCase):
+    @staticmethod
+    def _metadata(location: str) -> dict[str, object]:
+        return {
+            "location": location,
+            "public_access_prevention": "enforced",
+            "uniform_bucket_level_access": True,
+            "versioning_enabled": True,
+            "soft_delete_policy": {
+                "retentionDurationSeconds": "2592000",
+            },
+        }
+
+    def _run(self, location: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "scripts/verify_ops_foundation.sh", "--state-bucket-metadata"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            input=json.dumps(self._metadata(location)),
+        )
+
+    def test_state_bucket_metadata_accepts_exact_us_east4_location(self) -> None:
+        result = self._run("us-east4")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_state_bucket_metadata_rejects_asia_location(self) -> None:
+        result = self._run("ASIA")
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("location must be exactly us-east4", result.stderr)
 
 
 if __name__ == "__main__":

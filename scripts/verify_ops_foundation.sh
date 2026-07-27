@@ -104,6 +104,30 @@ verify_terraform_tests() {
     python3 "$CONTRACT_SCRIPT" terraform-test-result
 }
 
+verify_state_bucket_metadata() {
+  local bucket_json
+
+  require_command jq
+  bucket_json="$(cat)"
+  jq -e \
+    --arg expected_location "$REGION" \
+    '
+      .location == $expected_location
+      and (.public_access_prevention // .iamConfiguration.publicAccessPrevention) == "enforced"
+      and (.uniform_bucket_level_access // .iamConfiguration.uniformBucketLevelAccess.enabled) == true
+      and (.versioning_enabled // .versioning.enabled) == true
+      and (
+        (
+          .soft_delete_policy.retentionDurationSeconds
+          // .soft_delete_policy.retention_duration_seconds
+          // .softDeletePolicy.retentionDurationSeconds
+          // 0
+        ) | tonumber
+      ) >= 2592000
+    ' >/dev/null <<<"$bucket_json" ||
+    fail "state bucket location must be exactly ${REGION} and must enforce public-access prevention, uniform access, versioning, and 30-day soft delete"
+}
+
 policy_has_member() {
   local policy_json="$1"
   local role="$2"
@@ -464,20 +488,7 @@ verify_live_contract() {
       "gs://${STATE_BUCKET}" \
       --format=json
   )"
-  jq -e '
-    (.public_access_prevention // .iamConfiguration.publicAccessPrevention) == "enforced"
-    and (.uniform_bucket_level_access // .iamConfiguration.uniformBucketLevelAccess.enabled) == true
-    and (.versioning_enabled // .versioning.enabled) == true
-    and (
-      (
-        .soft_delete_policy.retentionDurationSeconds
-        // .soft_delete_policy.retention_duration_seconds
-        // .softDeletePolicy.retentionDurationSeconds
-        // 0
-      ) | tonumber
-    ) >= 2592000
-  ' >/dev/null <<<"$bucket_json" ||
-    fail "state bucket must enforce public-access prevention, uniform access, versioning, and 30-day soft delete"
+  verify_state_bucket_metadata <<<"$bucket_json"
 
   state_object_json="$(
     gcloud storage objects describe \
@@ -729,7 +740,8 @@ verify_live_contract() {
 usage() {
   printf '%s\n' \
     "Usage: ${0##*/} [--static|--terraform-fmt|--terraform-init|" \
-    "  --terraform-validate|--terraform-test|--live|--governance-live]"
+    "  --terraform-validate|--terraform-test|--state-bucket-metadata|" \
+    "  --live|--governance-live]"
 }
 
 mode="${1:---live}"
@@ -748,6 +760,9 @@ case "$mode" in
     ;;
   --terraform-test)
     verify_terraform_tests
+    ;;
+  --state-bucket-metadata)
+    verify_state_bucket_metadata
     ;;
   --live)
     verify_static_contract

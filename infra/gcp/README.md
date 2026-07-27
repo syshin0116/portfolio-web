@@ -111,12 +111,14 @@ provider/data, `terraform_remote_state`, and executable escape resources. The re
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
 Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
 uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or
-gitignored configuration, override, automatic variable, or test file and every symlink or
-non-regular candidate. It excludes Terraform's internal `.terraform/` directory and never
-opens state, plan, secret, or rejected-extra contents. `--terraform-test` validates
-Terraform's JSON event stream and requires the exact single reviewed run and summary
-`1 passed, 0 failed, 0 errored, 0 skipped`; a green zero-test command is rejected.
-Formatting, fresh initialization, and validation remain separate gates.
+gitignored Terraform 1.13.5 `.tf`, `.tfvars`, `.tftest.hcl`, or `.tfmock.hcl` format
+candidate, each reviewed JSON/load variant, and every symlink or non-regular candidate.
+It permits `.terraform/` only as an ignored, untracked real directory, checks that
+boundary without traversing it, and never opens state, plan, secret, or rejected-extra
+contents. `--terraform-test` validates Terraform's JSON event stream and requires the
+exact single reviewed run and summary `1 passed, 0 failed, 0 errored, 0 skipped`; a green
+zero-test command is rejected. Formatting, fresh initialization, and validation remain
+separate gates.
 
 Run `scripts/verify_ops_foundation.sh --static` before review and `--live` only after an
 explicitly approved apply. Live mode requires

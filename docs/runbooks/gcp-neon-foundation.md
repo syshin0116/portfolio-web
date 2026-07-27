@@ -311,12 +311,14 @@ shellcheck scripts/verify_ops_foundation.sh
 ```
 
 Each `--terraform-*` wrapper performs an on-disk preflight before invoking Terraform.
-The preflight enumerates Terraform configuration, override, automatic variable, and test
-candidates below `infra/gcp` and requires the exact reviewed tracked allowlist of regular
-files. An extra tracked, untracked, or gitignored candidate, symlink, FIFO, socket, device,
-or directory fails closed. Rejected candidates are classified from directory metadata
-only; their contents are never opened. Terraform's internal `.terraform/` directory is
-excluded, and the preflight does not inspect state, plan, or secret contents.
+The preflight enumerates Terraform 1.13.5's native `.tf`, `.tfvars`, `.tftest.hcl`, and
+`.tfmock.hcl` format candidates plus the reviewed JSON/load variants below `infra/gcp`,
+then requires the exact reviewed tracked allowlist of regular files. An extra tracked,
+untracked, or gitignored candidate, symlink, FIFO, socket, device, or directory fails
+closed. Rejected candidates are classified from directory metadata only; their contents
+are never opened. Terraform's internal `.terraform/` path is allowed only as an ignored,
+untracked real directory; the preflight checks that boundary without traversing its
+contents and does not inspect state, plan, or secret contents.
 
 The static command runs `uv run --no-project --with python-hcl2==7.3.1` and uses that
 pinned parser, not regular expressions or source-string grep. It compares the complete

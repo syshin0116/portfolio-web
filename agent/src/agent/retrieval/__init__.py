@@ -3,6 +3,7 @@
 # Importing registers the built-in method. Heavy Kiwi/rank_bm25 imports remain lazy.
 from agent.retrieval.bm25 import Bm25Retriever  # noqa: E402
 from agent.retrieval.corpus import CorpusManifestError, PublishedCorpus
+from agent.retrieval.exact import ExactSubstringRetriever  # noqa: E402
 from agent.retrieval.fingerprint import retriever_fingerprint
 from agent.retrieval.protocol import (
     Corpus,
@@ -24,6 +25,7 @@ from agent.retrieval.registry import (
 __all__ = [
     "Corpus",
     "CorpusManifestError",
+    "ExactSubstringRetriever",
     "DocId",
     "Bm25Retriever",
     "Hit",

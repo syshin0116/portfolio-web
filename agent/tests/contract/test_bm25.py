@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -463,6 +464,39 @@ def test_raw_scores_match_rank_bm25_ties_use_doc_id_and_nonsense_has_no_hits(
     assert retriever.retrieve("도커").doc_ids() == result.doc_ids()
 
 
+def test_runtime_retains_one_verified_fitted_snapshot_after_file_replacement(
+    small_index: Path,
+) -> None:
+    retriever = Bm25Retriever(PublishedCorpus(small_index))
+    before = retriever.retrieve("도커")
+
+    (small_index / "bm25" / "fitted.sqlite3").write_bytes(b"replaced after load")
+
+    assert retriever.retrieve("도커") == before
+    with pytest.raises(
+        CorpusManifestError, match="fitted.sqlite3.*checksum|byte count"
+    ):
+        Bm25Retriever(PublishedCorpus(small_index))
+
+
+def test_runtime_serializes_concurrent_queries_and_has_explicit_lifecycle(
+    small_index: Path,
+) -> None:
+    retriever = Bm25Retriever(PublishedCorpus(small_index))
+    expected = retriever.retrieve("도커")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = tuple(executor.map(lambda _: retriever.retrieve("도커"), range(64)))
+
+    assert results == (expected,) * 64
+    retriever.close()
+    retriever.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        retriever.retrieve("도커")
+    with pytest.raises(RuntimeError, match="closed"):
+        retriever.retrieve("도커", limit=0)
+
+
 def test_outer_manifest_rejects_dictionary_tampering(
     small_index: Path,
 ) -> None:
@@ -634,21 +668,21 @@ def test_identity_is_manifest_only_and_registry_constructs_one_tokenizer(
     constructions = 0
 
     def counted_init(
-        self: object, dictionary_path: Path, *args: object, **kwargs: object
+        self: object, dictionary_payload: bytes, *args: object, **kwargs: object
     ) -> None:
         nonlocal constructions
         constructions += 1
-        original_init(self, dictionary_path, *args, **kwargs)
+        original_init(self, dictionary_payload, *args, **kwargs)
 
     monkeypatch.setattr(bm25_module._KiwiTokenizer, "__init__", counted_init)
-    original_readonly = bm25_module._readonly_connection
+    original_snapshot = bm25_module._snapshot_connection
     original_validate_fitted = bm25_module._validate_fitted
     original_import_numpy = bm25_module._import_numpy
 
     def bomb(*args: object, **kwargs: object) -> object:
         raise AssertionError("identity loaded fitted runtime state")
 
-    monkeypatch.setattr(bm25_module, "_readonly_connection", bomb)
+    monkeypatch.setattr(bm25_module, "_snapshot_connection", bomb)
     monkeypatch.setattr(bm25_module, "_validate_fitted", bomb)
     monkeypatch.setattr(bm25_module, "_import_numpy", bomb)
 
@@ -671,7 +705,7 @@ def test_identity_is_manifest_only_and_registry_constructs_one_tokenizer(
         "sqlite_version",
     }
     assert fingerprint.startswith("sha256:")
-    monkeypatch.setattr(bm25_module, "_readonly_connection", original_readonly)
+    monkeypatch.setattr(bm25_module, "_snapshot_connection", original_snapshot)
     monkeypatch.setattr(bm25_module, "_validate_fitted", original_validate_fitted)
     monkeypatch.setattr(bm25_module, "_import_numpy", original_import_numpy)
     registry.servable.create(BM25_METHOD_ID, corpus)
@@ -1184,14 +1218,17 @@ def test_real_fitted_sqlite_stays_below_cloud_run_memory_gate(
             import resource
             import subprocess
 
-            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            peak_mib = peak / 1024 / 1024
+            # Read current RSS first. Parsing the ``ps`` response can itself move
+            # the process high-water mark by one macOS page (16 KiB), so sampling
+            # ru_maxrss first creates an internally inconsistent pair.
             steady_mib = int(
                 subprocess.check_output(
                     ["ps", "-o", "rss=", "-p", str(os.getpid())],
                     text=True,
                 ).strip()
             ) / 1024
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            peak_mib = peak / 1024 / 1024
         else:
             raise RuntimeError(f"unsupported memory-metric platform: {{sys.platform}}")
         print(json.dumps(dict(peak_mib=peak_mib, steady_mib=steady_mib)))

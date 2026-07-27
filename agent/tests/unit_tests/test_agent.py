@@ -6,13 +6,21 @@ import warnings
 from types import SimpleNamespace
 
 import pytest
-from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
+from deepagents import FilesystemPermission
+from deepagents.backends import (
+    CompositeBackend,
+    FilesystemBackend,
+    StateBackend,
+    StoreBackend,
+)
+from deepagents.middleware.skills import SkillsMiddleware
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime, ServerInfo
 
 from agent.graph import (
     DEFAULT_MODEL,
     _build_backend,
+    _filesystem_permissions,
     _memory_namespace,
     _normalized_model_spec,
     _trusted_identity,
@@ -72,7 +80,33 @@ def test_backend_uses_instances_for_all_routes():
     assert not callable(backend)
     assert isinstance(backend.default, StateBackend)
     assert isinstance(backend.routes["/memories/"], StoreBackend)
-    assert set(backend.routes) == {"/blog/", "/memories/", "/skills/"}
+    assert isinstance(backend.routes["/skills/"], FilesystemBackend)
+    assert set(backend.routes) == {"/memories/", "/skills/"}
+
+
+def test_skills_are_the_only_host_filesystem_route_and_are_write_denied():
+    permissions = _filesystem_permissions()
+
+    assert permissions == [
+        FilesystemPermission(
+            operations=["write"],
+            paths=["/skills", "/skills/**"],
+            mode="deny",
+        )
+    ]
+
+
+def test_single_blog_workflow_skill_loads_without_warnings(caplog):
+    middleware = SkillsMiddleware(backend=_build_backend(), sources=["/skills/"])
+
+    update = middleware.before_agent({}, Runtime(), {})
+
+    assert update is not None
+    assert update.get("skills_load_errors", []) == []
+    assert [(skill["name"], skill["path"]) for skill in update["skills_metadata"]] == [
+        ("blog-retrieval", "/skills/blog-retrieval/SKILL.md")
+    ]
+    assert not caplog.records
 
 
 def test_expected_blog_tools_are_registered():

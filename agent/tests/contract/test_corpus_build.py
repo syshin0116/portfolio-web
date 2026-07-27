@@ -97,7 +97,11 @@ def test_build_uses_one_scan_and_identical_published_set_for_every_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     content = tmp_path / "content"
-    _write_post(content, "AI/public.md", "title: Public\ndraft: false")
+    _write_post(
+        content,
+        "AI/public.md",
+        "title: Public\ndate: 2025-01-02\ndraft: false",
+    )
     _write_post(
         content,
         "AI/legacy-date.md",
@@ -156,7 +160,11 @@ def test_build_uses_one_scan_and_identical_published_set_for_every_artifact(
         for entry in catalog["documents"]
         if entry["doc_id"] == "AI/legacy-date.md"
     )
+    public = next(
+        entry for entry in catalog["documents"] if entry["doc_id"] == "AI/public.md"
+    )
     assert legacy["metadata"]["published"] == "2024-04-09 22:44 +0900"
+    assert public["date"] == "2025-01-02"
 
 
 @pytest.mark.parametrize("field", ["draft", "private"])

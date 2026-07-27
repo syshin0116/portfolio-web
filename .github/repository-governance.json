@@ -158,7 +158,7 @@
     "version": 2,
     "updates": [
       {
-        "package_ecosystem": "npm",
+        "package_ecosystem": "bun",
         "directory": "/web",
         "schedule": {
           "interval": "weekly",
@@ -185,7 +185,11 @@
               "@auth/*",
               "@langchain/*",
               "next",
-              "next-auth"
+              "next-auth",
+              "react",
+              "react-dom",
+              "@types/react",
+              "@types/react-dom"
             ],
             "update_types": [
               "minor",
@@ -195,7 +199,20 @@
         ]
       },
       {
-        "package_ecosystem": "pip",
+        "package_ecosystem": "npm",
+        "directory": "/web",
+        "schedule": {
+          "interval": "weekly",
+          "day": "monday",
+          "time": "04:10",
+          "timezone": "Asia/Seoul"
+        },
+        "open_pull_requests_limit": 0,
+        "cooldown": {},
+        "groups": []
+      },
+      {
+        "package_ecosystem": "uv",
         "directory": "/agent",
         "schedule": {
           "interval": "weekly",
@@ -224,7 +241,8 @@
               "langchain-*",
               "langgraph",
               "langgraph-*",
-              "langsmith"
+              "langsmith",
+              "numpy"
             ],
             "update_types": [
               "minor",

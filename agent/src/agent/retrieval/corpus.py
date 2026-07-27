@@ -12,6 +12,8 @@ from pathlib import Path, PurePosixPath
 from agent.retrieval.protocol import DocId
 
 MANIFEST_SCHEMA = "published-corpus-manifest-v2"
+CATALOG_SCHEMA = "published-corpus-catalog-v1"
+WIKILINK_SCHEMA = "published-wikilinks-v2"
 _FINGERPRINT_SCHEMA = "published-corpus-fingerprint-v1"
 _SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 DERIVED_ARTIFACT_PATHS = ("catalog.json", "wikilinks.json")
@@ -383,6 +385,7 @@ class PublishedCorpus:
                 artifact,
                 index_root=resolved_index_root,
             )
+        self._artifacts_by_path = {artifact.path: artifact for artifact in artifacts}
 
         policy_schema_version = manifest.get("policy_schema_version")
         if type(policy_schema_version) is not int or policy_schema_version != 1:
@@ -539,6 +542,19 @@ class PublishedCorpus:
     def doc_ids(self) -> Sequence[DocId]:
         return self._doc_ids
 
+    def read_artifact(self, path: str) -> bytes:
+        """Read one manifested derived artifact and verify it again at access time."""
+
+        if not isinstance(path, str):
+            raise TypeError("artifact path must be a string")
+        artifact = self._artifacts_by_path.get(path)
+        if artifact is None:
+            raise KeyError(f"{path!r} is not a manifested corpus artifact")
+        return self._read_verified_artifact(
+            artifact,
+            index_root=self._index_root,
+        )
+
     def read(self, doc_id: DocId) -> str:
         requested = DocId(doc_id)
         document = self._by_doc_id.get(requested)
@@ -591,10 +607,12 @@ class PublishedCorpus:
 
 
 __all__ = [
+    "CATALOG_SCHEMA",
     "CorpusManifestError",
     "DERIVED_ARTIFACT_PATHS",
     "MANIFEST_SCHEMA",
     "PublishedCorpus",
+    "WIKILINK_SCHEMA",
     "content_checksum",
     "corpus_fingerprint",
 ]

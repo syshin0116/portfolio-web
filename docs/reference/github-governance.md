@@ -69,6 +69,26 @@ composite action and reusable workflow, including nested local calls.
 This keeps a required check from remaining permanently pending after an
 upstream failure or merge-queue run.
 
+The `ci/agent` job also has an immutable-resolution contract. It runs exactly
+one executable `uv lock --check` before its exact
+`uv sync --frozen --all-extras --dev` install, and every project-bound
+`uv run` places `--frozen` immediately after `uv run`. Without that flag,
+`uv run` may resolve a stale `pyproject.toml`/`uv.lock` pair after the frozen
+sync and silently replace the environment that CI was meant to verify. The
+local verifier binds this contract to the AST-selected `agent` job and its
+`agent` working directory, tokenizes executable `run` scalars with shell
+comments removed, and binds every run step—including the fail-closed and
+unaffected-component reports—to an exact name, condition, command-token, and
+order inventory. The four frozen commands and their complete scopes—Ruff
+check, Ruff format check, index build/audit, and pytest—are exact within that
+inventory, so variable executables, wrapper commands, deletions, renames, and
+extra direct or indirect runs require a deliberate contract change. Run-step
+execution metadata is limited to `name`, `if`, and `run`; step `shell`, `env`,
+or working-directory overrides fail, as do workflow-level inherited
+defaults/environment and changes to the job's exact environment or
+agent-only working directory. A comment, `echo`, or quoted command string
+therefore cannot stand in for an executable gate.
+
 No job in the required-check emitter or its transitive `needs` graph may use
 job-level `uses`, whether it calls a local or external reusable workflow.
 GitHub can report the caller job successful when every called-workflow job is

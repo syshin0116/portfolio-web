@@ -55,6 +55,8 @@ export function useAgentRuntimeUi(): AgentRuntimeUiState {
 
 interface AgentRuntimeProviderProps {
   identity: string
+  initialToken?: string
+  onAuthenticationExpired?: () => void
   children: React.ReactNode
 }
 
@@ -72,6 +74,8 @@ function resolveAgentConfig():
 
 function ConfiguredAgentRuntimeProvider({
   identity,
+  initialToken,
+  onAuthenticationExpired,
   apiUrl,
   assistantId,
   children,
@@ -87,6 +91,9 @@ function ConfiguredAgentRuntimeProvider({
   const [errorRouting, setErrorRouting] = useState<AgentErrorRoutingState>({
     connectionStatus: "connecting",
   })
+  const nativeLifecyclesRef = useRef(
+    new WeakMap<NativeAgentClient, { generation: number }>()
+  )
   const handleActivity = useCallback((
     activity: AgentActivity,
     source: RuntimeThreadSource
@@ -128,12 +135,22 @@ function ConfiguredAgentRuntimeProvider({
         apiUrl,
         assistantId,
         identity,
+        initialToken,
+        onAuthenticationExpired,
         getSourceGeneration: () =>
           activeThreadSourceRef.current.generation,
         onActivity: handleActivity,
         onError: handleRuntimeError,
       }),
-    [apiUrl, assistantId, handleActivity, handleRuntimeError, identity]
+    [
+      apiUrl,
+      assistantId,
+      handleActivity,
+      handleRuntimeError,
+      identity,
+      initialToken,
+      onAuthenticationExpired,
+    ]
   )
   const threadAdapter = useMemo<RemoteThreadListAdapter & AegraThreadAdapter>(
     () =>
@@ -232,12 +249,23 @@ function ConfiguredAgentRuntimeProvider({
     }
   }, [connectionAttempt, native])
 
-  useEffect(
-    () => () => {
-      void native.dispose()
-    },
-    [native]
-  )
+  useEffect(() => {
+    const lifecycles = nativeLifecyclesRef.current
+    const lifecycle = lifecycles.get(native) ?? { generation: 0 }
+    lifecycle.generation += 1
+    lifecycles.set(native, lifecycle)
+    const generation = lifecycle.generation
+    return () => {
+      queueMicrotask(() => {
+        // React Strict Mode immediately re-runs effects with the same memoized
+        // client. A real unmount or client replacement has no matching
+        // generation and is disposed after that replay opportunity.
+        if (lifecycle.generation === generation) {
+          void native.dispose()
+        }
+      })
+    }
+  }, [native])
 
   const context = useMemo<AgentRuntimeUiState>(
     () => ({
@@ -269,6 +297,8 @@ function ConfiguredAgentRuntimeProvider({
 
 export function AgentRuntimeProvider({
   identity,
+  initialToken,
+  onAuthenticationExpired,
   children,
 }: AgentRuntimeProviderProps) {
   const config = resolveAgentConfig()
@@ -289,6 +319,8 @@ export function AgentRuntimeProvider({
   return (
     <ConfiguredAgentRuntimeProvider
       identity={identity}
+      initialToken={initialToken}
+      onAuthenticationExpired={onAuthenticationExpired}
       apiUrl={config.apiUrl}
       assistantId={config.assistantId}
     >

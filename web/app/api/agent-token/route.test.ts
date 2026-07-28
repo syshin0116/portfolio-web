@@ -354,6 +354,28 @@ describe("POST /api/agent-token disabled and preflight behavior", () => {
 })
 
 describe("POST /api/agent-token anonymous bootstrap", () => {
+  test("requests a challenge without treating an empty cookie resume as an error", async () => {
+    let fetched = false
+    const handler = createAgentTokenPostHandler(
+      dependencies({
+        fetchImpl: async () => {
+          fetched = true
+          return successResponse()
+        },
+      })
+    )
+
+    const response = await handler(request())
+
+    expect(response.status).toBe(200)
+    expect(await responseBody(response)).toEqual({
+      challengeRequired: true,
+    })
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(fetched).toBe(false)
+    expect(setCookie(response)).toBeNull()
+  })
+
   test("mints a five-minute anon JWT and a fourteen-day protected cookie", async () => {
     let calledUrl: string | URL | Request | undefined
     let calledInit: RequestInit | undefined

@@ -51,6 +51,7 @@ const DISPOSE_WAIT_MS = TERMINAL_WAIT_MS + 500
 const RESUMED_RUN_ID_WAIT_MS = 2_000
 const RESUMED_RUN_ID_POLL_MS = 50
 const INTERRUPT_WATCHER_WAIT_MS = 1_000
+const INTERRUPT_STATE_FALLBACK_WAIT_MS = 1_000
 const INTERRUPT_WATCHER_POLL_MS = 10
 const INTERRUPT_WATCHER_STABLE_POLLS = 5
 const MAX_STATE_MESSAGES = 500
@@ -63,6 +64,7 @@ const MAX_INTERRUPT_NAMESPACE_PARTS = 32
 const MAX_INTERRUPT_NAMESPACE_PART_BYTES = 512
 const SAFE_INTERRUPT_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
 const SAFE_INTERRUPT_NAMESPACE_PART = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
+const SAFE_PUBLIC_ROOT_INTERRUPT_ID = /^[0-9a-f]{32}$/
 const SUBMIT_NONCE_METADATA_KEY = "syshin_ui_submit_nonce"
 const SAFE_SUBMIT_NONCE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -92,6 +94,8 @@ export interface NativeAgentClientOptions {
   apiUrl: string
   assistantId: string
   identity: string
+  initialToken?: string
+  onAuthenticationExpired?: () => void
   tokenBroker?: AgentTokenBroker
   client?: Client
   getSourceGeneration?: () => number
@@ -644,6 +648,75 @@ export function extractPendingInterrupt(
   }
 }
 
+function pendingFromPublicRootState(state: unknown): PendingInterrupt {
+  if (!isRecord(state) || !Array.isArray(state.interrupts)) {
+    throw new Error("승인 요청 상태를 안전하게 확인할 수 없습니다.")
+  }
+  if (state.interrupts.length !== 1) {
+    throw new Error(
+      "동시에 여러 승인 요청이 도착했거나 요청이 없습니다. 안전하게 재개할 수 없어 중단했습니다."
+    )
+  }
+
+  const candidate = state.interrupts[0]
+  if (
+    !isRecord(candidate) ||
+    typeof candidate.id !== "string" ||
+    !SAFE_PUBLIC_ROOT_INTERRUPT_ID.test(candidate.id) ||
+    !Array.isArray(candidate.ns) ||
+    candidate.ns.length !== 0 ||
+    candidate.resumable !== true ||
+    (candidate.when !== "before" && candidate.when !== "during")
+  ) {
+    throw new Error("승인 요청 상태를 안전하게 확인할 수 없습니다.")
+  }
+  const projection = projectInterruptForUi(candidate.value)
+  if (!projection.recognized) {
+    throw new Error("승인 요청 상태를 안전하게 확인할 수 없습니다.")
+  }
+
+  return {
+    interruptId: candidate.id,
+    namespace: [],
+    value: projection,
+    resumable: true,
+    when: candidate.when,
+  }
+}
+
+async function loadPublicRootInterrupt(
+  client: Client,
+  threadId: string,
+  signal: AbortSignal
+): Promise<PendingInterrupt> {
+  const bounded = timeoutController(
+    INTERRUPT_STATE_FALLBACK_WAIT_MS,
+    "Public interrupt state fallback timed out"
+  )
+  const stateSignal = AbortSignal.any([
+    signal,
+    bounded.controller.signal,
+  ])
+  try {
+    const request = client.threads.getState<Record<string, unknown>>(
+      threadId,
+      undefined,
+      { signal: stateSignal }
+    )
+    const state = await settleBeforeAbort(request, stateSignal)
+    stateSignal.throwIfAborted()
+    return pendingFromPublicRootState(state)
+  } catch (error) {
+    if (signal.aborted) throw signal.reason
+    if (bounded.controller.signal.aborted) {
+      throw new Error("승인 요청 상태를 안전하게 확인할 수 없습니다.")
+    }
+    throw error
+  } finally {
+    bounded.clear()
+  }
+}
+
 function safeLifecycleError(event: LifecycleEvent): string {
   void event
   return "에이전트 실행을 완료하지 못했습니다."
@@ -1158,7 +1231,10 @@ function runMatchesSubmitNonce(
   )
 }
 
-function timeoutController(milliseconds: number): {
+function timeoutController(
+  milliseconds: number,
+  message = "Terminal run wait timed out"
+): {
   controller: AbortController
   clear: () => void
 } {
@@ -1166,11 +1242,33 @@ function timeoutController(milliseconds: number): {
   const timer = setTimeout(
     () =>
       controller.abort(
-        new DOMException("Terminal run wait timed out", "TimeoutError")
+        new DOMException(message, "TimeoutError")
       ),
     milliseconds
   )
   return { controller, clear: () => clearTimeout(timer) }
+}
+
+async function settleBeforeAbort<T>(
+  operation: Promise<T>,
+  signal: AbortSignal
+): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener("abort", onAbort)
+      callback()
+    }
+    const onAbort = () => finish(() => reject(signal.reason))
+    signal.addEventListener("abort", onAbort, { once: true })
+    operation.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error))
+    )
+    if (signal.aborted) onAbort()
+  })
 }
 
 function createActiveStream(): ActiveNativeStream {
@@ -1348,7 +1446,8 @@ async function waitForInterruptedInput(
   thread: ThreadStream,
   pendingInterrupts: Map<string, PendingInterrupt>,
   threadId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  loadFallback: () => Promise<PendingInterrupt>
 ): Promise<PendingInterrupt> {
   const bounded = timeoutController(INTERRUPT_WATCHER_WAIT_MS)
   const waitSignal = AbortSignal.any([
@@ -1410,10 +1509,23 @@ async function waitForInterruptedInput(
     throw waitSignal.reason
   } catch (error) {
     if (bounded.controller.signal.aborted && !signal.aborted) {
-      pendingInterrupts.delete(threadId)
-      throw new Error(
-        "승인 요청을 확인하지 못했습니다. 안전하게 재개할 수 없어 중단했습니다."
-      )
+      try {
+        const fallback = await loadFallback()
+        const observed = pendingInterrupts.get(threadId)
+        if (
+          observed &&
+          pendingInterruptKey(observed) !== pendingInterruptKey(fallback)
+        ) {
+          throw new Error(
+            "동시에 여러 승인 요청이 도착했습니다. 안전하게 재개할 수 없어 중단했습니다."
+          )
+        }
+        pendingInterrupts.set(threadId, fallback)
+        return fallback
+      } catch (fallbackError) {
+        pendingInterrupts.delete(threadId)
+        throw fallbackError
+      }
     }
     throw error
   } finally {
@@ -1530,6 +1642,8 @@ export class NativeAgentClient {
       options.tokenBroker ??
       new AgentTokenBroker(options.identity, {
         agentOrigin: options.apiUrl,
+        initialToken: options.initialToken,
+        onAuthenticationExpired: options.onAuthenticationExpired,
       })
     this.client =
       options.client ??
@@ -2001,7 +2115,18 @@ export class NativeAgentClient {
               thread,
               this.#pendingInterrupts,
               boundThreadId,
-              signal
+              signal,
+              // The pinned Aegra/SDK pair can deliver a nested input first
+              // and globally dedupe the later root input. The authoritative
+              // guest state response is already server-projected; use the
+              // authenticated public SDK state API only after the bounded
+              // ThreadStream input barrier is exhausted.
+              () =>
+                loadPublicRootInterrupt(
+                  this.client,
+                  boundThreadId,
+                  signal
+                )
             )
             const key = pendingInterruptKey(pending)
             if (!presentedInterruptKeys.has(key)) {
@@ -2079,6 +2204,7 @@ export const nativeClientTesting = {
     return read()
   },
   pendingFromInputEvent,
+  pendingFromPublicRootState,
   resolveResumedRunIdOrThrow,
   safeLifecycleError,
 }

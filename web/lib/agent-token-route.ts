@@ -110,6 +110,14 @@ function requestCookieValues(
     .map((part) => part.slice(prefix.length))
 }
 
+function isBodylessCookieResume(request: NextRequest): boolean {
+  const contentLength = request.headers.get("content-length")
+  return (
+    request.headers.get("content-type") === null &&
+    (contentLength === null || contentLength === "0")
+  )
+}
+
 export function createAgentTokenPostHandler(
   dependencies: AgentTokenPostDependencies
 ): (request: NextRequest) => Promise<NextResponse> {
@@ -158,6 +166,10 @@ export function createAgentTokenPostHandler(
           503
         )
       )
+    }
+
+    if (isBodylessCookieResume(request)) {
+      return jsonResponse({ challengeRequired: true })
     }
 
     let turnstileToken: string

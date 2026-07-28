@@ -459,7 +459,7 @@ function InterruptResponseCard({
         </div>
       ) : null}
       <form
-        className="mt-3 flex gap-2"
+        className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row"
         onSubmit={(event) => {
           event.preventDefault()
           void respond(response)
@@ -481,13 +481,14 @@ function InterruptResponseCard({
             resumeError ? "interrupt-response-error" : undefined
           }
           aria-invalid={resumeError !== undefined}
-          className="min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 text-sm"
+          className="w-full min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 text-sm"
         />
         <Button
           type="submit"
           size="sm"
           variant="secondary"
           disabled={!response.trim() || sending}
+          className="w-full sm:w-auto"
         >
           수정 후 재개
         </Button>
@@ -794,7 +795,7 @@ function ThreadListItem() {
             {item.title || "제목을 만드는 중…"}
           </span>
           {item.lastMessageAt ? (
-            <span className="mt-0.5 block text-[11px] text-muted-foreground">
+            <span className="mt-0.5 block text-[11px] text-foreground">
               {item.lastMessageAt.toLocaleDateString("ko-KR")}
             </span>
           ) : null}
@@ -836,7 +837,7 @@ function ThreadRail() {
   return (
     <ThreadListPrimitive.Root className="flex h-full min-h-0 flex-col">
       <div className="border-b p-3">
-        <ThreadListPrimitive.New className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-medium shadow-sm transition-colors motion-reduce:transition-none hover:bg-muted data-[active=true]:bg-primary data-[active=true]:text-primary-foreground">
+        <ThreadListPrimitive.New className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-medium shadow-sm transition-none hover:bg-muted data-[active=true]:bg-primary data-[active=true]:text-primary-foreground">
           <Plus className="size-4" />
           새 대화
         </ThreadListPrimitive.New>
@@ -1219,8 +1220,8 @@ export function SignedOutChat() {
           AI 검색 실험실
         </h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          WEB-A 단계에서는 소유자 계정으로만 연결됩니다. 누구나 테스트하는
-          익명 Turnstile 경로는 격리·사용량 제한이 포함된 WEB-B에서 열립니다.
+          공개 체험은 현재 비활성 상태입니다. 소유자 계정으로 로그인하면
+          AI 검색 실험실을 계속 테스트할 수 있습니다.
         </p>
         <Button asChild className="mt-6">
           <Link href="/login">로그인해서 테스트</Link>

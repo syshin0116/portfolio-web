@@ -1,0 +1,4 @@
+@import "../../../../app/globals.css";
+
+@source "../../../../components/**/*.{ts,tsx}";
+@source "./**/*.{ts,tsx}";

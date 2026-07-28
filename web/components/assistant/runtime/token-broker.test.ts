@@ -27,6 +27,54 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("AgentTokenBroker", () => {
+  test("uses a validated initial credential without reminting it", async () => {
+    let mintCalls = 0
+    const initialToken = token(1_300, "user-1")
+    const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
+      initialToken,
+      nowSeconds: () => 1_000,
+      fetch: async () => {
+        mintCalls += 1
+        return jsonResponse({ token: token(2_000, "user-1") })
+      },
+    })
+
+    expect(
+      await broker.get(new AbortController().signal)
+    ).toBe(initialToken)
+    expect(mintCalls).toBe(0)
+    expect(tokenBrokerTesting.inspect(broker).cached).toBe(true)
+  })
+
+  test("rejects an initial credential for another identity", () => {
+    expect(
+      () =>
+        new AgentTokenBroker("user-1", {
+          agentOrigin: "https://agent.example",
+          initialToken: token(1_300, "user-2"),
+          nowSeconds: () => 1_000,
+        })
+    ).toThrow("invalid claims")
+  })
+
+  test("notifies anonymous recovery when remint authentication expires", async () => {
+    let expired = 0
+    const broker = new AgentTokenBroker("user-1", {
+      agentOrigin: "https://agent.example",
+      nowSeconds: () => 1_000,
+      onAuthenticationExpired: () => {
+        expired += 1
+      },
+      fetch: async () => jsonResponse({}, 400),
+    })
+
+    await expect(
+      broker.get(new AbortController().signal)
+    ).rejects.toMatchObject({ status: 400 })
+    expect(expired).toBe(1)
+  })
+
   test("coalesces refreshes and refreshes 60 seconds before JWT exp", async () => {
     let now = 1_000
     let mintCalls = 0

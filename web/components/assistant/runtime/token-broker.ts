@@ -34,7 +34,9 @@ interface RefreshFlight {
 interface AgentTokenBrokerOptions {
   agentOrigin: string
   fetch?: FetchLike
+  initialToken?: string
   nowSeconds?: () => number
+  onAuthenticationExpired?: () => void
   refreshMarginSeconds?: number
 }
 
@@ -523,6 +525,7 @@ export class AgentTokenBroker {
   readonly #nowSeconds: () => number
   readonly #refreshMarginSeconds: number
   readonly #agentOrigin: string
+  readonly #onAuthenticationExpired?: () => void
   #identity: string
   #cached?: CachedToken
   #flight?: RefreshFlight
@@ -560,6 +563,16 @@ export class AgentTokenBroker {
     this.#nowSeconds = options.nowSeconds ?? (() => Date.now() / 1_000)
     this.#refreshMarginSeconds =
       options.refreshMarginSeconds ?? TOKEN_REFRESH_MARGIN_SECONDS
+    this.#onAuthenticationExpired = options.onAuthenticationExpired
+    if (options.initialToken !== undefined) {
+      const token = options.initialToken
+      const expiresAt = validateAgentToken(
+        token,
+        identity,
+        this.#nowSeconds()
+      )
+      this.#cached = { token, expiresAt, identity }
+    }
     brokerInspectionReaders.set(this, () => ({
       cached: this.#cached !== undefined,
       refreshing: this.#flight !== undefined,
@@ -741,6 +754,17 @@ export class AgentTokenBroker {
       signal,
     })
     if (!response.ok) {
+      if (
+        response.status === 400 ||
+        response.status === 401 ||
+        response.status === 403
+      ) {
+        try {
+          this.#onAuthenticationExpired?.()
+        } catch {
+          // Recovery UI callbacks cannot weaken the credential boundary.
+        }
+      }
       throw new AgentAuthenticationError(
         response.status === 403
           ? "이 계정은 에이전트를 사용할 수 없습니다."
@@ -751,6 +775,11 @@ export class AgentTokenBroker {
 
     const body = (await response.json()) as { token?: unknown }
     if (typeof body.token !== "string" || body.token.trim() === "") {
+      try {
+        this.#onAuthenticationExpired?.()
+      } catch {
+        // Recovery UI callbacks cannot weaken the credential boundary.
+      }
       throw new AgentAuthenticationError("Agent token response is malformed")
     }
     const token = body.token.trim()

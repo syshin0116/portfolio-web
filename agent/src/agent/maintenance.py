@@ -20,7 +20,6 @@ from agent.recovery import (
     RECOVERED_GUEST_RUN_FENCE_VALUE,
 )
 from agent.run_liveness import (
-    GUEST_RUN_MAX_ELAPSED_SECONDS,
     STALE_GUEST_RUN_THRESHOLD_SECONDS,
     guest_execution_lock_key,
 )
@@ -28,13 +27,20 @@ from agent.run_liveness import (
 GUEST_RETENTION_POLICY = "anonymous-14d-v1"
 MAX_GC_BATCH_SIZE = 1_000
 MAX_RECONCILE_BATCH_SIZE = 1_000
-RECOVERED_GUEST_GC_GRACE_SECONDS = 15 * 60
 STALE_GUEST_RUN_ERROR = (
     "Anonymous run stopped after the local executor became unavailable"
 )
-if RECOVERED_GUEST_GC_GRACE_SECONDS <= GUEST_RUN_MAX_ELAPSED_SECONDS:
-    raise RuntimeError("recovered guest GC grace must exceed the graph run budget")
 _GC_LOCK_KEY = 6005912693769056306
+_UNRESOLVED_GUEST_QUARANTINE_PREDICATE = """
+    NOT EXISTS (
+        SELECT 1
+        FROM agent_guest_execution_quarantine AS quarantine
+        WHERE
+            quarantine.thread_id = thread.thread_id
+            AND quarantine.recovered_at IS NOT NULL
+            AND quarantine.drained_at IS NULL
+    )
+"""
 _EXPIRED_GUEST_THREAD_PREDICATE = r"""
     status <> 'busy'
     AND user_id ~
@@ -54,7 +60,9 @@ _EXPIRED_GUEST_THREADS_SQL = text(
     f"""
     SELECT thread_id
     FROM thread
-    WHERE {_EXPIRED_GUEST_THREAD_PREDICATE}
+    WHERE
+        {_EXPIRED_GUEST_THREAD_PREDICATE}
+        AND {_UNRESOLVED_GUEST_QUARANTINE_PREDICATE}
     ORDER BY metadata_json ->> 'guest_expires_at', thread_id
     LIMIT :batch_size
     """
@@ -66,17 +74,7 @@ _EXPIRED_GUEST_THREAD_FOR_UPDATE_SQL = text(
     WHERE
         thread_id = :thread_id
         AND {_EXPIRED_GUEST_THREAD_PREDICATE}
-        AND NOT EXISTS (
-            SELECT 1
-            FROM runs AS recovered
-            WHERE
-                recovered.thread_id = thread.thread_id
-                AND recovered.execution_params
-                    ->> :recovery_fence_key = :recovery_fence_value
-                AND recovered.updated_at >
-                    CURRENT_TIMESTAMP
-                    - make_interval(secs => :recovery_gc_grace_seconds)
-        )
+        AND {_UNRESOLVED_GUEST_QUARANTINE_PREDICATE}
     FOR UPDATE SKIP LOCKED
     """
 )
@@ -151,7 +149,7 @@ _LOCKED_STALE_LOCAL_GUEST_RUN_SQL = text(
                     OR active.lease_expires_at IS NOT NULL
                 )
         )
-    FOR UPDATE OF t, r
+    FOR UPDATE OF t, r SKIP LOCKED
     """
 )
 _FAIL_STALE_LOCAL_GUEST_RUNS_SQL = text(
@@ -168,7 +166,7 @@ _FAIL_STALE_LOCAL_GUEST_RUNS_SQL = text(
             ),
         claimed_by = NULL,
         lease_expires_at = NULL,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = clock_timestamp()
     WHERE
         run_id = ANY(:run_ids)
         AND status IN ('pending', 'running')
@@ -180,12 +178,39 @@ _FAIL_STALE_LOCAL_GUEST_RUNS_SQL = text(
     RETURNING run_id
     """
 )
+_UPSERT_RECOVERED_GUEST_QUARANTINES_SQL = text(
+    r"""
+    INSERT INTO agent_guest_execution_quarantine (
+        run_id,
+        thread_id,
+        identity,
+        recovered_at
+    )
+    SELECT
+        recovered.run_id,
+        recovered.thread_id,
+        recovered.identity,
+        clock_timestamp()
+    FROM unnest(
+        CAST(:run_ids AS text[]),
+        CAST(:thread_ids AS text[]),
+        CAST(:identities AS text[])
+    ) AS recovered(run_id, thread_id, identity)
+    ON CONFLICT (run_id, thread_id, identity)
+    DO UPDATE SET
+        recovered_at = COALESCE(
+            agent_guest_execution_quarantine.recovered_at,
+            EXCLUDED.recovered_at
+        )
+    RETURNING run_id, thread_id, identity
+    """
+)
 _RELEASE_RECONCILED_GUEST_THREADS_SQL = text(
     r"""
     UPDATE thread AS t
     SET
         status = 'error',
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = clock_timestamp()
     WHERE
         t.thread_id = ANY(:thread_ids)
         AND t.status = 'busy'
@@ -201,6 +226,12 @@ _RELEASE_RECONCILED_GUEST_THREADS_SQL = text(
                 AND active.status IN ('pending', 'running')
         )
     RETURNING thread_id
+    """
+)
+_DELETE_GUEST_QUARANTINES_SQL = text(
+    """
+    DELETE FROM agent_guest_execution_quarantine
+    WHERE thread_id = :thread_id
     """
 )
 
@@ -316,6 +347,16 @@ async def reconcile_stale_guest_runs(
                 continue
             if acquired is not True:
                 raise RuntimeError("guest liveness lock returned invalid data")
+            thread_lock = await session.execute(
+                _TRY_CANDIDATE_LIVENESS_LOCK_SQL,
+                {"lock_key": guest_thread_lock_key(thread_id)},
+            )
+            thread_acquired = thread_lock.scalar_one()
+            if thread_acquired is False:
+                liveness_skipped_runs += 1
+                continue
+            if thread_acquired is not True:
+                raise RuntimeError("guest thread lock returned invalid data")
             locked = await session.execute(
                 _LOCKED_STALE_LOCAL_GUEST_RUN_SQL,
                 {
@@ -359,6 +400,21 @@ async def reconcile_stale_guest_runs(
         failed_run_ids = tuple(failed.scalars())
         if len(failed_run_ids) != len(run_ids) or set(failed_run_ids) != set(run_ids):
             raise RuntimeError("stale guest run reconciliation count changed")
+
+        quarantined = await session.execute(
+            _UPSERT_RECOVERED_GUEST_QUARANTINES_SQL,
+            {
+                "identities": [
+                    identity for _run_id, _thread_id, identity in locked_candidates
+                ],
+                "run_ids": run_ids,
+                "thread_ids": thread_ids,
+            },
+        )
+        quarantined_keys = {tuple(row) for row in quarantined.all()}
+        expected_quarantine_keys = set(locked_candidates)
+        if quarantined_keys != expected_quarantine_keys:
+            raise RuntimeError("stale guest quarantine identity changed")
 
         unique_thread_ids = list(dict.fromkeys(thread_ids))
         released = await session.execute(
@@ -429,9 +485,6 @@ async def collect_expired_guest_threads(
             current = await session.execute(
                 _EXPIRED_GUEST_THREAD_FOR_UPDATE_SQL,
                 {
-                    "recovery_fence_key": RECOVERED_GUEST_RUN_FENCE_KEY,
-                    "recovery_fence_value": RECOVERED_GUEST_RUN_FENCE_VALUE,
-                    "recovery_gc_grace_seconds": RECOVERED_GUEST_GC_GRACE_SECONDS,
                     "retention_policy": GUEST_RETENTION_POLICY,
                     "thread_id": thread_id,
                 },
@@ -439,6 +492,10 @@ async def collect_expired_guest_threads(
             if current.scalar_one_or_none() is None:
                 continue
             await active_checkpointer.adelete_thread(thread_id)
+            await session.execute(
+                _DELETE_GUEST_QUARANTINES_SQL,
+                {"thread_id": thread_id},
+            )
             deleted = await session.execute(
                 text(
                     """
@@ -488,7 +545,6 @@ __all__ = [
     "GUEST_RETENTION_POLICY",
     "MAX_GC_BATCH_SIZE",
     "MAX_RECONCILE_BATCH_SIZE",
-    "RECOVERED_GUEST_GC_GRACE_SECONDS",
     "STALE_GUEST_RUN_ERROR",
     "STALE_GUEST_RUN_THRESHOLD_SECONDS",
     "GuestGCResult",

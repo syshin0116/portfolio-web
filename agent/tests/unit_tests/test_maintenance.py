@@ -18,7 +18,6 @@ from agent.maintenance import (
     GUEST_RETENTION_POLICY,
     MAX_GC_BATCH_SIZE,
     MAX_RECONCILE_BATCH_SIZE,
-    RECOVERED_GUEST_GC_GRACE_SECONDS,
     STALE_GUEST_RUN_ERROR,
     STALE_GUEST_RUN_THRESHOLD_SECONDS,
     GuestGCResult,
@@ -100,6 +99,7 @@ class _Session:
         liveness_lock_results=(),
         locked_rows=(),
         failed_run_ids=(),
+        quarantined_keys=None,
         released_thread_ids=(),
     ):
         self.events = events
@@ -110,7 +110,11 @@ class _Session:
         )
         self.contended_thread_ids = set(contended_thread_ids)
         self.thread_ids_by_lock_key = {
-            guest_thread_lock_key(thread_id): thread_id for thread_id in thread_ids
+            guest_thread_lock_key(thread_id): thread_id
+            for thread_id in {
+                *thread_ids,
+                *(row[1] for row in candidate_rows),
+            }
         }
         self.selection_parameters = None
         self.candidate_sql = None
@@ -120,10 +124,16 @@ class _Session:
         self.liveness_lock_results = iter(liveness_lock_results)
         self.locked_rows = iter(locked_rows or candidate_rows)
         self.failed_run_ids = failed_run_ids
+        self.quarantined_keys = (
+            tuple(candidate_rows)
+            if quarantined_keys is None
+            else tuple(quarantined_keys)
+        )
         self.released_thread_ids = released_thread_ids
         self.liveness_parameters = []
         self.locked_parameters = []
         self.failed_parameters = None
+        self.quarantine_parameters = None
         self.released_parameters = None
 
     def begin(self):
@@ -158,6 +168,10 @@ class _Session:
             self.events.append("fail-stale-runs")
             self.failed_parameters = parameters
             return _ScalarsResult(self.failed_run_ids)
+        if "INSERT INTO agent_guest_execution_quarantine" in sql:
+            self.events.append("quarantine-stale-runs")
+            self.quarantine_parameters = parameters
+            return _RowsResult(self.quarantined_keys)
         if "UPDATE thread AS t" in sql:
             self.events.append("release-threads")
             self.released_parameters = parameters
@@ -175,6 +189,10 @@ class _Session:
             return _OptionalScalarResult(
                 thread_id if thread_id in self.eligible_thread_ids else None
             )
+        if "DELETE FROM agent_guest_execution_quarantine" in sql:
+            thread_id = parameters["thread_id"]
+            self.events.append(f"delete-quarantine:{thread_id}")
+            return SimpleNamespace(rowcount=1)
         if "DELETE FROM thread" in sql:
             thread_id = parameters["thread_id"]
             self.events.append(f"delete-parent:{thread_id}")
@@ -222,10 +240,13 @@ async def test_reconcile_fails_only_selected_stale_local_guest_runs(monkeypatch)
         "lock",
         "select-stale-runs",
         "try-candidate-lock",
+        "thread-lock:guest-thread-a",
         "recheck-stale-run",
         "try-candidate-lock",
+        "thread-lock:guest-thread-b",
         "recheck-stale-run",
         "fail-stale-runs",
+        "quarantine-stale-runs",
         "release-threads",
     ]
     assert session.selection_parameters == {
@@ -268,6 +289,11 @@ async def test_reconcile_fails_only_selected_stale_local_guest_runs(monkeypatch)
         "recovery_fence_value": RECOVERED_GUEST_RUN_FENCE_VALUE,
         "run_ids": ["run-a", "run-b"],
         "stale_after_seconds": STALE_GUEST_RUN_THRESHOLD_SECONDS,
+    }
+    assert session.quarantine_parameters == {
+        "identities": [_IDENTITY_A, _IDENTITY_B],
+        "run_ids": ["run-a", "run-b"],
+        "thread_ids": ["guest-thread-a", "guest-thread-b"],
     }
     assert session.released_parameters == {
         "guest_subject_pattern": maintenance._CANONICAL_GUEST_SUBJECT_PATTERN,
@@ -343,6 +369,59 @@ async def test_reconcile_rejects_a_partial_candidate_update(monkeypatch):
         await reconcile_stale_guest_runs()
 
 
+async def test_reconcile_skips_one_locked_row_and_recovers_the_next_candidate(
+    monkeypatch,
+):
+    candidate_b = ("run-b", "guest-thread-b", _IDENTITY_B)
+    events = []
+    session = _Session(
+        events,
+        candidate_rows=(
+            ("run-a", "guest-thread-a", _IDENTITY_A),
+            candidate_b,
+        ),
+        liveness_lock_results=(True, True),
+        locked_rows=(None, candidate_b),
+        failed_run_ids=("run-b",),
+        quarantined_keys=(candidate_b,),
+        released_thread_ids=("guest-thread-b",),
+    )
+    monkeypatch.setattr(
+        maintenance,
+        "get_session_maker",
+        lambda: lambda: _AsyncContext(session),
+    )
+
+    result = await reconcile_stale_guest_runs(batch_size=2)
+
+    assert result == StaleGuestRunResult(
+        lock_acquired=True,
+        liveness_skipped_runs=0,
+        reconciled_runs=1,
+        released_threads=1,
+        batch_limit=2,
+        stale_after_seconds=STALE_GUEST_RUN_THRESHOLD_SECONDS,
+    )
+    assert events == [
+        "lock",
+        "select-stale-runs",
+        "try-candidate-lock",
+        "thread-lock:guest-thread-a",
+        "recheck-stale-run",
+        "try-candidate-lock",
+        "thread-lock:guest-thread-b",
+        "recheck-stale-run",
+        "fail-stale-runs",
+        "quarantine-stale-runs",
+        "release-threads",
+    ]
+    assert session.quarantine_parameters == {
+        "identities": [_IDENTITY_B],
+        "run_ids": ["run-b"],
+        "thread_ids": ["guest-thread-b"],
+    }
+
+
 def test_reconcile_sql_excludes_fresh_leased_and_non_guest_rows():
     selection_sql = str(maintenance._STALE_LOCAL_GUEST_RUNS_SQL)
     recheck_sql = str(maintenance._LOCKED_STALE_LOCAL_GUEST_RUN_SQL)
@@ -373,6 +452,30 @@ def test_reconcile_sql_excludes_fresh_leased_and_non_guest_rows():
     assert "active.status IN ('pending', 'running')" in release_sql
 
 
+def test_recovery_recheck_skips_locked_rows_and_records_statement_time_quarantine():
+    recheck_sql = str(maintenance._LOCKED_STALE_LOCAL_GUEST_RUN_SQL)
+    failure_sql = str(maintenance._FAIL_STALE_LOCAL_GUEST_RUNS_SQL)
+    quarantine_sql = str(maintenance._UPSERT_RECOVERED_GUEST_QUARANTINES_SQL)
+
+    assert "FOR UPDATE OF t, r SKIP LOCKED" in recheck_sql
+    assert "updated_at = clock_timestamp()" in failure_sql
+    assert "recovered_at" in quarantine_sql
+    assert "clock_timestamp()" in quarantine_sql
+    assert "ON CONFLICT (run_id, thread_id, identity)" in quarantine_sql
+    assert "drained_at" not in quarantine_sql.partition("DO UPDATE SET")[2]
+
+
+def test_gc_candidate_and_exact_recheck_both_exclude_unresolved_quarantine():
+    candidate_sql = str(maintenance._EXPIRED_GUEST_THREADS_SQL)
+    recheck_sql = str(maintenance._EXPIRED_GUEST_THREAD_FOR_UPDATE_SQL)
+
+    for sql in (candidate_sql, recheck_sql):
+        assert "agent_guest_execution_quarantine" in sql
+        assert "recovered_at IS NOT NULL" in sql
+        assert "drained_at IS NULL" in sql
+    assert "recovery_gc_grace_seconds" not in recheck_sql
+
+
 def test_stale_policy_uses_the_reviewed_900_second_boundary():
     assert STALE_GUEST_RUN_THRESHOLD_SECONDS == 900
     for statement in (
@@ -393,19 +496,6 @@ def test_maintenance_uses_the_pure_canonical_anonymous_identity_contract():
 
 def test_gc_sql_keeps_the_canonical_fractional_second_quantifier():
     assert "[0-9]{1,6}" in str(maintenance._EXPIRED_GUEST_THREADS_SQL)
-
-
-def test_gc_defers_recently_recovered_threads_beyond_the_run_budget():
-    candidate_sql = str(maintenance._EXPIRED_GUEST_THREADS_SQL)
-    recheck_sql = str(maintenance._EXPIRED_GUEST_THREAD_FOR_UPDATE_SQL)
-
-    assert RECOVERED_GUEST_GC_GRACE_SECONDS == 900
-    assert RECOVERED_GUEST_GC_GRACE_SECONDS > maintenance.GUEST_RUN_MAX_ELAPSED_SECONDS
-    assert "FROM runs AS recovered" not in candidate_sql
-    assert "FROM runs AS recovered" in recheck_sql
-    assert "recovered.execution_params" in recheck_sql
-    assert "recovered.updated_at >" in recheck_sql
-    assert ":recovery_gc_grace_seconds" in recheck_sql
 
 
 @pytest.mark.parametrize(
@@ -442,10 +532,12 @@ async def test_gc_deletes_checkpoint_children_before_thread_parents(monkeypatch)
         "thread-lock:guest-thread-a",
         "recheck:guest-thread-a",
         "delete-checkpoints:guest-thread-a",
+        "delete-quarantine:guest-thread-a",
         "delete-parent:guest-thread-a",
         "thread-lock:guest-thread-b",
         "recheck:guest-thread-b",
         "delete-checkpoints:guest-thread-b",
+        "delete-quarantine:guest-thread-b",
         "delete-parent:guest-thread-b",
     ]
     assert session.selection_parameters == {
@@ -457,9 +549,6 @@ async def test_gc_deletes_checkpoint_children_before_thread_parents(monkeypatch)
     assert all("FOR UPDATE" in sql for sql in session.recheck_sql)
     assert session.recheck_parameters == [
         {
-            "recovery_fence_key": RECOVERED_GUEST_RUN_FENCE_KEY,
-            "recovery_fence_value": RECOVERED_GUEST_RUN_FENCE_VALUE,
-            "recovery_gc_grace_seconds": RECOVERED_GUEST_GC_GRACE_SECONDS,
             "retention_policy": GUEST_RETENTION_POLICY,
             "thread_id": thread_id,
         }
@@ -516,6 +605,7 @@ async def test_gc_skips_contended_thread_and_rechecks_each_acquired_candidate(
         "thread-lock:guest-expired",
         "recheck:guest-expired",
         "delete-checkpoints:guest-expired",
+        "delete-quarantine:guest-expired",
         "delete-parent:guest-expired",
     ]
     assert all(

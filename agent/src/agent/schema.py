@@ -76,6 +76,103 @@ SELECT
             AND procedure.pronargs = 0
             AND procedure.prosrc = :recovery_fence_function_body
     )
+    AND
+    (
+        SELECT
+            count(*) = 1
+            AND bool_and(relation.relkind = 'r')
+            AND bool_and(relation.relpersistence = 'p')
+        FROM pg_class AS relation
+        JOIN pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+        WHERE
+            namespace.nspname = 'public'
+            AND relation.relname =
+                'agent_guest_execution_quarantine'
+    )
+    AND
+    (
+        SELECT
+            array_agg(attribute.attname ORDER BY attribute.attnum)
+                = ARRAY[
+                    'run_id',
+                    'thread_id',
+                    'identity',
+                    'recovered_at',
+                    'drained_at'
+                ]::name[]
+            AND array_agg(
+                pg_catalog.format_type(
+                    attribute.atttypid,
+                    attribute.atttypmod
+                )
+                ORDER BY attribute.attnum
+            ) = ARRAY[
+                'text',
+                'text',
+                'text',
+                'timestamp with time zone',
+                'timestamp with time zone'
+            ]::text[]
+            AND array_agg(attribute.attnotnull ORDER BY attribute.attnum)
+                = ARRAY[TRUE, TRUE, TRUE, FALSE, FALSE]::boolean[]
+            AND bool_and(attribute.atthasdef IS FALSE)
+        FROM pg_attribute AS attribute
+        JOIN pg_class AS relation
+            ON relation.oid = attribute.attrelid
+        JOIN pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+        WHERE
+            namespace.nspname = 'public'
+            AND relation.relname =
+                'agent_guest_execution_quarantine'
+            AND attribute.attnum > 0
+            AND attribute.attisdropped IS FALSE
+    )
+    AND
+    (
+        SELECT count(*) = 1
+        FROM pg_constraint AS table_constraint
+        JOIN pg_class AS relation
+            ON relation.oid = table_constraint.conrelid
+        JOIN pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+        WHERE
+            namespace.nspname = 'public'
+            AND relation.relname =
+                'agent_guest_execution_quarantine'
+            AND table_constraint.conname =
+                'agent_guest_execution_quarantine_pkey'
+            AND table_constraint.contype = 'p'
+            AND table_constraint.conkey = ARRAY[1, 2, 3]::smallint[]
+    )
+    AND
+    (
+        SELECT count(*) = 1
+        FROM pg_index AS table_index
+        JOIN pg_class AS index_relation
+            ON index_relation.oid = table_index.indexrelid
+        JOIN pg_class AS table_relation
+            ON table_relation.oid = table_index.indrelid
+        JOIN pg_namespace AS namespace
+            ON namespace.oid = table_relation.relnamespace
+        JOIN pg_am AS access_method
+            ON access_method.oid = index_relation.relam
+        WHERE
+            namespace.nspname = 'public'
+            AND table_relation.relname =
+                'agent_guest_execution_quarantine'
+            AND index_relation.relname =
+                'agent_guest_execution_quarantine_unresolved_idx'
+            AND access_method.amname = 'btree'
+            AND table_index.indisunique IS FALSE
+            AND table_index.indisvalid IS TRUE
+            AND table_index.indisready IS TRUE
+            AND table_index.indnkeyatts = 1
+            AND table_index.indkey = '2'::int2vector
+            AND pg_get_expr(table_index.indpred, table_index.indrelid)
+                = '((recovered_at IS NOT NULL) AND (drained_at IS NULL))'
+    )
 """
 _MIGRATIONS: Sequence[tuple[str, Sequence[str]]] = (
     (
@@ -113,6 +210,28 @@ _MIGRATIONS: Sequence[tuple[str, Sequence[str]]] = (
             BEFORE UPDATE ON runs
             FOR EACH ROW
             EXECUTE FUNCTION agent_reject_recovered_guest_run_update()
+            """,
+        ),
+    ),
+    (
+        "0003_guest_execution_quarantine",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS agent_guest_execution_quarantine (
+                run_id text NOT NULL,
+                thread_id text NOT NULL,
+                identity text NOT NULL,
+                recovered_at timestamptz,
+                drained_at timestamptz,
+                CONSTRAINT agent_guest_execution_quarantine_pkey
+                    PRIMARY KEY (run_id, thread_id, identity)
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS
+                agent_guest_execution_quarantine_unresolved_idx
+            ON agent_guest_execution_quarantine (thread_id)
+            WHERE recovered_at IS NOT NULL AND drained_at IS NULL
             """,
         ),
     ),

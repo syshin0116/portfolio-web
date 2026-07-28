@@ -8,7 +8,7 @@ when_to_read: >
   workflows or image, rotating agent database credentials, or rolling back a revision.
 tags: [operations, gcp, cloud-run, aegra, github-actions, neon, rollback]
 status: stable
-updated: "2026-07-28"
+updated: "2026-07-29"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
@@ -389,6 +389,66 @@ roll back. The temporary `smoke` revision tag is removed before every deploy or 
 removed again after checks, and verified absent. A tag-cleanup failure is itself a failed
 delivery; required traffic restoration is still attempted and cleanup errors are not
 swallowed.
+
+## Guest execution quarantine
+
+The maintenance job may recover a stale Redis-off guest run after its PostgreSQL fence
+session disappears. That recovery creates an unresolved durable quarantine; neither the
+15-minute scheduler interval nor the age of the row clears it. While unresolved:
+
+- guest `run.start` on that exact owner/thread returns 409 before capacity, spend, or
+  downstream scheduling;
+- retention GC excludes the row from both its initial bounded candidate set and exact
+  locked recheck;
+- `input.respond` remains governed by its existing interrupt-state boundary, since a
+  recovered thread is no longer interrupted.
+
+Inspect counts first, without placing guest identities in logs:
+
+```sql
+SELECT
+    count(*) AS unresolved_count,
+    min(recovered_at) AS oldest_recovery,
+    max(recovered_at) AS newest_recovery
+FROM agent_guest_execution_quarantine
+WHERE recovered_at IS NOT NULL AND drained_at IS NULL;
+```
+
+For an interactive investigation, select the exact `run_id`, `thread_id`, `identity`, and
+timestamps only in an access-controlled console. A row with `drained_at` already present
+is resolved even when the drain proof was written before recovery. Never delete the row,
+set `drained_at`, or infer safety from `recovered_at` age alone.
+
+The normal resolution is automatic: the surviving owner monitor cancels and awaits its
+owner plus any pending database operation, then writes `drained_at` through a fresh
+bounded connection. If the process hard-crashed before that proof, leave the quarantine
+in place unless an operator can establish an equivalent external drain proof:
+
+1. Disable anonymous traffic and replace or stop every Cloud Run revision that could have
+   owned the execution. Confirm the old revision has zero active instances and requests.
+2. Confirm no executor or finalizer from that revision remains and no matching checkpoint
+   writer or database operation can still commit. If any part is uncertain, stop and
+   retain the quarantine.
+3. In one reviewed, audited transaction, update only the fully inspected exact key:
+
+   ```sql
+   UPDATE agent_guest_execution_quarantine
+   SET drained_at = clock_timestamp()
+   WHERE
+       run_id = :exact_run_id
+       AND thread_id = :exact_thread_id
+       AND identity = :exact_identity
+       AND recovered_at IS NOT NULL
+       AND drained_at IS NULL
+   RETURNING run_id, thread_id, recovered_at, drained_at;
+   ```
+
+4. Re-enable traffic only after the exact row is resolved. Let the ordinary maintenance
+   job perform checkpoint-first deletion if the thread is also expired.
+
+Do not mass-update quarantines. A hard-crash row that cannot be externally proven drained
+is intentionally retained indefinitely; replacement identity issuance is safer than
+guessing that an old writer is gone.
 
 ## Secret rotation
 

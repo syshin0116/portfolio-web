@@ -15,6 +15,7 @@ from agent.run_liveness import (
     GuestExecutionFenceRejectedError,
     GuestExecutionFenceReleaseError,
     GuestExecutionFenceUnavailableError,
+    GuestExecutionSlotUnavailableError,
     acquire_guest_execution_fence,
     guest_execution_lock_key,
     validate_guest_execution_fencing_factory,
@@ -24,6 +25,20 @@ from agent.run_liveness import (
 _IDENTITY = "anon:123e4567-e89b-42d3-a456-426614174000"
 _RUN_ID = "run-liveness-proof"
 _THREAD_ID = "thread-liveness-proof"
+
+
+@pytest.fixture(autouse=True)
+def _durable_drain_proof(monkeypatch):
+    async def mark_drained(*, run_id, thread_id, identity):
+        assert run_id == _RUN_ID
+        assert thread_id == _THREAD_ID
+        assert identity == _IDENTITY
+
+    monkeypatch.setattr(
+        run_liveness,
+        "mark_guest_execution_drained",
+        mark_drained,
+    )
 
 
 class _ScalarResult:
@@ -41,12 +56,14 @@ class _Connection:
         active_values=(True,),
         active_gate: asyncio.Event | None = None,
         lock_acquired=True,
+        slot_values=(),
         unlock_result=True,
         unlock_error: BaseException | None = None,
     ):
         self.active_values = iter(active_values)
         self.active_gate = active_gate
         self.lock_acquired = lock_acquired
+        self.slot_values = iter(slot_values)
         self.unlock_result = unlock_result
         self.unlock_error = unlock_error
         self.events = []
@@ -67,6 +84,8 @@ class _Connection:
             return _ScalarResult(self.unlock_result)
         if "pg_try_advisory_lock" in sql:
             self.events.append("try-lock")
+            if parameters["lock_key"] in run_liveness._GUEST_EXECUTION_SLOT_KEYS:
+                return _ScalarResult(next(self.slot_values, True))
             return _ScalarResult(self.lock_acquired)
         if "SELECT EXISTS" in sql:
             self.events.append("active")
@@ -140,6 +159,23 @@ def test_liveness_policy_uses_literal_reviewed_boundaries():
     assert 900 >= 45 * 10
 
 
+def test_execution_slots_and_heartbeat_have_static_global_bounds():
+    assert run_liveness.GUEST_EXECUTION_SLOT_LIMIT == 4
+    assert run_liveness.FENCE_CONNECT_ATTEMPT_LIMIT == 4
+    assert run_liveness.OWNER_HEARTBEAT_MIN_SECONDS == 1.0
+    assert run_liveness.OWNER_HEARTBEAT_MAX_SECONDS == 5.0
+    assert run_liveness.MAX_GUEST_LIVENESS_QUERY_QPS == 4.0
+    assert run_liveness.MAX_GUEST_FENCE_CONNECTIONS_PER_PROCESS == 8
+
+    intervals = {
+        run_liveness.guest_owner_heartbeat_seconds(lock_key)
+        for lock_key in range(-32, 33)
+    }
+    assert min(intervals) >= 1.0
+    assert max(intervals) <= 5.0
+    assert len(intervals) > 1
+
+
 def test_liveness_policy_rejects_an_unsafe_stale_multiplier(monkeypatch):
     monkeypatch.setattr(run_liveness, "STALE_GUEST_RUN_THRESHOLD_SECONDS", 449)
 
@@ -184,12 +220,22 @@ async def test_acquire_holds_a_separate_connection_after_exact_state_recheck(
     assert created == {
         "url": "postgresql+asyncpg://db.example/agent",
         "kwargs": {
-            "connect_args": {"prepared_statement_cache_size": 0},
+            "connect_args": {
+                "command_timeout": 2.0,
+                "prepared_statement_cache_size": 0,
+                "timeout": 2.0,
+            },
             "pool_pre_ping": True,
             "poolclass": NullPool,
         },
     }
-    assert connection.events == ["try-lock", "active", "commit"]
+    assert connection.events == [
+        "try-lock",
+        "active",
+        "commit",
+        "try-lock",
+        "commit",
+    ]
     assert connection.parameters[1] == {
         "identity": _IDENTITY,
         "run_id": _RUN_ID,
@@ -199,7 +245,7 @@ async def test_acquire_holds_a_separate_connection_after_exact_state_recheck(
 
     await fence.aclose()
 
-    assert connection.events[-3:] == ["unlock", "commit", "close"]
+    assert connection.events[-4:] == ["unlock", "unlock", "commit", "close"]
     assert connection.closed
     assert engine.disposed
 
@@ -261,6 +307,36 @@ async def test_acquire_fails_closed_when_maintenance_owns_the_fence(monkeypatch)
     assert engine.disposed
 
 
+async def test_acquire_releases_execution_fence_when_all_global_slots_are_busy(
+    monkeypatch,
+):
+    connection = _Connection(slot_values=(False, False, False, False))
+    engine, _created = _install_engine(monkeypatch, connection)
+
+    with pytest.raises(GuestExecutionSlotUnavailableError, match="at capacity"):
+        await acquire_guest_execution_fence(
+            run_id=_RUN_ID,
+            thread_id=_THREAD_ID,
+            identity=_IDENTITY,
+        )
+
+    assert connection.events == [
+        "try-lock",
+        "active",
+        "commit",
+        "try-lock",
+        "try-lock",
+        "try-lock",
+        "try-lock",
+        "commit",
+        "unlock",
+        "commit",
+        "close",
+    ]
+    assert connection.invalidated is False
+    assert engine.disposed
+
+
 async def test_unlock_failure_invalidates_before_pool_return(monkeypatch):
     connection = _Connection(unlock_result=False)
     engine, _created = _install_engine(monkeypatch, connection)
@@ -279,7 +355,7 @@ async def test_unlock_failure_invalidates_before_pool_return(monkeypatch):
     assert engine.disposed
 
 
-async def test_cancelled_owner_monitor_invalidates_when_unlock_raises(
+async def test_cancelled_owner_monitor_invalidates_after_drain_proof(
     monkeypatch,
 ):
     release_poll = asyncio.Event()
@@ -289,11 +365,6 @@ async def test_cancelled_owner_monitor_invalidates_when_unlock_raises(
         unlock_error=RuntimeError("connection lost before unlock"),
     )
     engine, _created = _install_engine(monkeypatch, connection)
-    monkeypatch.setattr(
-        run_liveness,
-        "OWNER_POLL_INTERVAL_SECONDS",
-        60,
-    )
     owner_cancelled = asyncio.Event()
     release_owner = asyncio.Event()
     monitor_ready = asyncio.get_running_loop().create_future()
@@ -320,7 +391,7 @@ async def test_cancelled_owner_monitor_invalidates_when_unlock_raises(
     assert not owner_task.done()
     assert "unlock" not in connection.events
     assert not connection.closed
-    assert not connection.active_cancelled.is_set()
+    assert connection.active_cancelled.is_set()
 
     release_owner.set()
     await owner_task
@@ -330,7 +401,7 @@ async def test_cancelled_owner_monitor_invalidates_when_unlock_raises(
     assert connection.active_cancelled.is_set()
     assert connection.invalidated
     assert connection.closed
-    assert connection.events[-3:] == ["unlock", "invalidate", "close"]
+    assert connection.events[-2:] == ["invalidate", "close"]
     assert engine.disposed
 
 
@@ -345,6 +416,24 @@ async def test_lost_fence_session_cancels_and_drains_owner_before_cleanup(
     owner_cancelled = asyncio.Event()
     release_owner = asyncio.Event()
     monitor_ready = asyncio.get_running_loop().create_future()
+    proof_written = asyncio.Event()
+    owner_task: asyncio.Task[None]
+
+    async def mark_drained(*, run_id, thread_id, identity):
+        assert (run_id, thread_id, identity) == (
+            _RUN_ID,
+            _THREAD_ID,
+            _IDENTITY,
+        )
+        assert owner_task.done()
+        connection.events.append("drain-proof")
+        proof_written.set()
+
+    monkeypatch.setattr(
+        run_liveness,
+        "mark_guest_execution_drained",
+        mark_drained,
+    )
 
     async def owner():
         fence = await acquire_guest_execution_fence(
@@ -373,9 +462,71 @@ async def test_lost_fence_session_cancels_and_drains_owner_before_cleanup(
     with pytest.raises(RuntimeError, match="fence session lost"):
         await monitor
 
+    assert proof_written.is_set()
+    assert connection.events.index("drain-proof") < connection.events.index(
+        "invalidate"
+    )
     assert connection.invalidated
     assert connection.closed
-    assert connection.events[-3:] == ["unlock", "invalidate", "close"]
+    assert connection.events[-2:] == ["invalidate", "close"]
+    assert engine.disposed
+
+
+async def test_hung_poll_times_out_then_proves_owner_and_query_are_drained(
+    monkeypatch,
+):
+    never_release_poll = asyncio.Event()
+    connection = _Connection(
+        active_values=(True, True),
+        active_gate=never_release_poll,
+    )
+    engine, _created = _install_engine(monkeypatch, connection)
+    monkeypatch.setattr(run_liveness, "FENCE_QUERY_TIMEOUT_SECONDS", 0.01)
+    owner_cancelled = asyncio.Event()
+    proof_written = asyncio.Event()
+    monitor_ready = asyncio.get_running_loop().create_future()
+    owner_task: asyncio.Task[None]
+
+    async def mark_drained(*, run_id, thread_id, identity):
+        assert (run_id, thread_id, identity) == (
+            _RUN_ID,
+            _THREAD_ID,
+            _IDENTITY,
+        )
+        assert owner_task.done()
+        assert connection.active_cancelled.is_set()
+        proof_written.set()
+
+    monkeypatch.setattr(
+        run_liveness,
+        "mark_guest_execution_drained",
+        mark_drained,
+    )
+
+    async def owner():
+        fence = await acquire_guest_execution_fence(
+            run_id=_RUN_ID,
+            thread_id=_THREAD_ID,
+            identity=_IDENTITY,
+        )
+        monitor_ready.set_result(fence.start_owner_monitor())
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            owner_cancelled.set()
+            raise
+
+    owner_task = asyncio.create_task(owner())
+    monitor = await monitor_ready
+
+    await asyncio.wait_for(owner_cancelled.wait(), timeout=1)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(monitor, timeout=1)
+
+    assert owner_task.cancelled()
+    assert proof_written.is_set()
+    assert connection.active_cancelled.is_set()
+    assert connection.events[-2:] == ["invalidate", "close"]
     assert engine.disposed
 
 
@@ -408,7 +559,42 @@ async def test_owner_monitor_keeps_lock_while_owner_and_db_are_active(
     await owner_task
     await monitor
 
-    assert connection.events[-3:] == ["unlock", "commit", "close"]
+    assert connection.events[-4:] == ["unlock", "unlock", "commit", "close"]
+    assert engine.disposed
+
+
+async def test_owner_completion_cancels_and_drains_a_hung_liveness_poll(
+    monkeypatch,
+):
+    never_release_poll = asyncio.Event()
+    connection = _Connection(
+        active_values=(True, True),
+        active_gate=never_release_poll,
+    )
+    engine, _created = _install_engine(monkeypatch, connection)
+    release_owner = asyncio.Event()
+    monitor_ready = asyncio.get_running_loop().create_future()
+
+    async def owner():
+        fence = await acquire_guest_execution_fence(
+            run_id=_RUN_ID,
+            thread_id=_THREAD_ID,
+            identity=_IDENTITY,
+        )
+        monitor_ready.set_result(fence.start_owner_monitor())
+        await release_owner.wait()
+
+    owner_task = asyncio.create_task(owner())
+    monitor = await monitor_ready
+    await connection.monitor_active.wait()
+    release_owner.set()
+
+    await asyncio.wait_for(owner_task, timeout=1)
+    await asyncio.wait_for(monitor, timeout=1)
+
+    assert connection.active_cancelled.is_set()
+    assert connection.invalidated is True
+    assert connection.events[-2:] == ["invalidate", "close"]
     assert engine.disposed
 
 
@@ -434,7 +620,7 @@ async def test_owner_monitor_releases_active_db_lock_when_owner_task_ends(
         await owner_task
     await monitor
 
-    assert connection.events[-3:] == ["unlock", "commit", "close"]
+    assert connection.events[-4:] == ["unlock", "unlock", "commit", "close"]
     assert engine.disposed
 
 

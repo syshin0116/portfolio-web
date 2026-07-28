@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,7 @@ from sqlalchemy.exc import OperationalError
 
 from agent.neon_grant_probe import (
     GrantBoundaryError,
+    _exercise_guest_quarantine_dml,
     _expect_insufficient_privilege,
     _require_non_admin_role,
 )
@@ -39,6 +41,50 @@ class _Engine:
 
     def connect(self):
         return _ConnectionContext(self.connection)
+
+
+class _BeginEngine(_Engine):
+    def begin(self):
+        return _ConnectionContext(self.connection)
+
+
+class _OneResult:
+    def __init__(self, row) -> None:
+        self.row = row
+
+    def one(self):
+        return self.row
+
+
+@pytest.mark.asyncio
+async def test_runtime_grant_probe_exercises_quarantine_crud() -> None:
+    now = datetime.now(UTC)
+
+    async def execute(statement, parameters):
+        sql = str(statement)
+        key = (
+            parameters["run_id"],
+            parameters["thread_id"],
+            parameters["identity"],
+        )
+        if "INSERT INTO" in sql or "DELETE FROM" in sql:
+            return _OneResult(key)
+        if "SELECT recovered_at" in sql:
+            return _OneResult((None, now))
+        if "UPDATE agent_guest" in sql:
+            return _OneResult((now, now))
+        raise AssertionError(f"unexpected quarantine probe SQL: {sql}")
+
+    connection = SimpleNamespace(execute=AsyncMock(side_effect=execute))
+
+    await _exercise_guest_quarantine_dml(_BeginEngine(connection))
+
+    assert connection.execute.await_count == 4
+    statements = [str(call.args[0]) for call in connection.execute.await_args_list]
+    assert "INSERT INTO agent_guest_execution_quarantine" in statements[0]
+    assert "SELECT recovered_at, drained_at" in statements[1]
+    assert "UPDATE agent_guest_execution_quarantine" in statements[2]
+    assert "DELETE FROM agent_guest_execution_quarantine" in statements[3]
 
 
 @pytest.mark.asyncio

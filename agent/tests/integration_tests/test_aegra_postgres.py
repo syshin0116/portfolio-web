@@ -664,31 +664,47 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
 
 
 @pytest.mark.parametrize(
-    "tamper_statements",
+    ("tamper_statements", "repair_version"),
     [
         (
-            """
-            DROP TRIGGER agent_recovered_guest_run_update_guard
-            ON runs
-            """,
+            (
+                """
+                DROP TRIGGER agent_recovered_guest_run_update_guard
+                ON runs
+                """,
+            ),
+            "0002_recovered_guest_run_fence",
         ),
         (
-            """
-            DROP TRIGGER agent_recovered_guest_run_update_guard
-            ON runs
-            """,
-            """
-            CREATE TRIGGER agent_recovered_guest_run_update_guard
-            BEFORE UPDATE OF claimed_by ON runs
-            FOR EACH ROW
-            EXECUTE FUNCTION agent_reject_recovered_guest_run_update()
-            """,
+            (
+                """
+                DROP TRIGGER agent_recovered_guest_run_update_guard
+                ON runs
+                """,
+                """
+                CREATE TRIGGER agent_recovered_guest_run_update_guard
+                BEFORE UPDATE OF claimed_by ON runs
+                FOR EACH ROW
+                EXECUTE FUNCTION agent_reject_recovered_guest_run_update()
+                """,
+            ),
+            "0002_recovered_guest_run_fence",
+        ),
+        (
+            (
+                """
+                DROP INDEX
+                    agent_guest_execution_quarantine_unresolved_idx
+                """,
+            ),
+            "0003_guest_execution_quarantine",
         ),
     ],
-    ids=["missing", "column-scoped"],
+    ids=["missing-trigger", "column-scoped-trigger", "missing-quarantine-index"],
 )
-async def test_project_migration_rejects_an_altered_recovery_trigger(
+async def test_project_migration_rejects_an_altered_recovery_boundary(
     tamper_statements,
+    repair_version,
 ):
     assert POSTGRES_URL is not None
     previous_url = settings.db.DATABASE_URL
@@ -715,8 +731,9 @@ async def test_project_migration_rejects_an_altered_recovery_trigger(
             await connection.execute(
                 """
                 DELETE FROM agent_schema_migrations
-                WHERE version = '0002_recovered_guest_run_fence'
-                """
+                WHERE version = %s
+                """,
+                (repair_version,),
             )
         await migrate_agent_schema(db_manager.get_engine())
         await db_manager.close()
@@ -830,6 +847,7 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
             "store_migrations",
             "agent_schema_migrations",
             "agent_guest_daily_budget",
+            "agent_guest_execution_quarantine",
         } <= tables
         assert len(versions) == 1
 
@@ -2383,7 +2401,7 @@ async def test_live_guest_execution_fence_blocks_reconciliation_until_release():
         db_manager._database_url = previous_manager_url
 
 
-async def test_killed_factory_fence_defers_gc_until_owner_cancel_and_grace(
+async def test_killed_factory_fence_quarantines_until_durable_owner_drain(
     monkeypatch,
 ):
     assert POSTGRES_URL is not None
@@ -2605,6 +2623,32 @@ async def test_killed_factory_fence_defers_gc_until_owner_cancel_and_grace(
             )
             checkpoint_count_before_cancel = (await cursor.fetchone())[0]
             assert checkpoint_count_before_cancel >= 1
+            await cursor.execute(
+                """
+                SELECT recovered_at IS NOT NULL, drained_at
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            assert await cursor.fetchone() == (True, None)
+            await cursor.execute(
+                """
+                UPDATE agent_guest_execution_quarantine
+                SET recovered_at = '2000-01-01T00:00:00Z'
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+
+        after_arbitrary_age = await collect_expired_guest_threads(batch_size=10)
+        assert after_arbitrary_age.deleted_threads == 0
 
         allow_second_poll.set()
         async with asyncio.timeout(5):
@@ -2627,13 +2671,23 @@ async def test_killed_factory_fence_defers_gc_until_owner_cancel_and_grace(
                 (thread_id,),
             )
             assert (await cursor.fetchone())[0] == checkpoint_count_before_cancel
+            await cursor.execute(
+                """
+                SELECT recovered_at, drained_at
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            recovered_at, drained_at = await cursor.fetchone()
+            assert recovered_at is not None
+            assert drained_at is not None
 
-        monkeypatch.setattr(
-            "agent.maintenance.RECOVERED_GUEST_GC_GRACE_SECONDS",
-            0,
-        )
-        after_grace = await collect_expired_guest_threads(batch_size=10)
-        assert after_grace.deleted_threads == 1
+        after_drain_proof = await collect_expired_guest_threads(batch_size=10)
+        assert after_drain_proof.deleted_threads == 1
 
         async with (
             await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
@@ -2931,7 +2985,7 @@ async def test_killed_fence_backend_blocks_each_late_aegra_execute_run_finalizer
         db_manager._database_url = previous_manager_url
 
 
-async def test_cancelled_monitor_drains_live_owner_before_releasing_fence():
+async def test_cancelled_monitor_quarantines_until_live_owner_is_drained():
     assert POSTGRES_URL is not None
     previous_url = settings.db.DATABASE_URL
     previous_manager_url = db_manager._database_url
@@ -3018,14 +3072,32 @@ async def test_cancelled_monitor_drains_live_owner_before_releasing_fence():
             await owner_cancelled.wait()
 
         while_draining = await reconcile_stale_guest_runs(batch_size=10)
-        assert while_draining.liveness_skipped_runs == 1
-        assert while_draining.reconciled_runs == 0
-        assert while_draining.released_threads == 0
+        assert while_draining.liveness_skipped_runs == 0
+        assert while_draining.reconciled_runs == 1
+        assert while_draining.released_threads == 1
         assert not owner_task.done()
         assert not monitor.done()
 
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT recovered_at IS NOT NULL, drained_at
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            assert await cursor.fetchone() == (True, None)
+
         allow_owner_finalize.set()
-        await owner_task
+        with pytest.raises(DBAPIError, match="recovered guest run is immutable"):
+            await owner_task
         with pytest.raises(asyncio.CancelledError):
             await monitor
         monitor = None
@@ -3036,14 +3108,26 @@ async def test_cancelled_monitor_drains_live_owner_before_releasing_fence():
         ):
             await cursor.execute(
                 """
-                SELECT t.status, r.status, r.error_message
+                SELECT
+                    t.status,
+                    r.status,
+                    r.error_message,
+                    quarantine.recovered_at IS NOT NULL,
+                    quarantine.drained_at IS NOT NULL
                 FROM thread AS t
                 JOIN runs AS r ON r.thread_id = t.thread_id
+                JOIN agent_guest_execution_quarantine AS quarantine
+                    ON quarantine.run_id = r.run_id
+                    AND quarantine.thread_id = r.thread_id
+                    AND quarantine.identity = r.user_id
                 WHERE t.thread_id = %s AND r.run_id = %s
                 """,
                 (thread_id, run_id),
             )
-            assert await cursor.fetchone() == ("idle", "interrupted", None)
+            status_row = await cursor.fetchone()
+            assert status_row[:2] == ("error", "error")
+            assert status_row[2] == STALE_GUEST_RUN_ERROR
+            assert status_row[3:] == (True, True)
             await cursor.execute(
                 "SELECT pg_try_advisory_lock(%s)",
                 (
@@ -3101,8 +3185,32 @@ async def test_dedicated_fences_leave_size_two_orm_pool_for_finalizers():
         )
         for index in range(2)
     )
-    fences = []
+    begin_finalization = asyncio.Event()
+    owner_tasks: list[asyncio.Task[None]] = []
+    monitors: list[asyncio.Task[None]] = []
     owner_monitors_active = False
+
+    async def fenced_finalizer(
+        run_id: str,
+        thread_id: str,
+        identity: str,
+        monitor_ready: asyncio.Future[asyncio.Task[None]],
+    ) -> None:
+        fence = await acquire_guest_execution_fence(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+        monitor_ready.set_result(fence.start_owner_monitor())
+        await begin_finalization.wait()
+        await finalize_run(
+            run_id,
+            thread_id,
+            status="success",
+            thread_status="idle",
+            output={"completed": True},
+        )
+
     try:
         await migrate_database()
         await db_manager.initialize()
@@ -3162,35 +3270,30 @@ async def test_dedicated_fences_leave_size_two_orm_pool_for_finalizers():
                 ],
             )
 
-        fences = list(
-            await asyncio.gather(
-                *(
-                    acquire_guest_execution_fence(
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        identity=identity,
-                    )
-                    for run_id, thread_id, identity in executions
+        monitor_futures = [
+            asyncio.get_running_loop().create_future() for _execution in executions
+        ]
+        owner_tasks = [
+            asyncio.create_task(
+                fenced_finalizer(
+                    run_id,
+                    thread_id,
+                    identity,
+                    monitor_ready,
                 )
             )
-        )
-        monitors = [fence.start_owner_monitor() for fence in fences]
-        fences = []
+            for (run_id, thread_id, identity), monitor_ready in zip(
+                executions,
+                monitor_futures,
+                strict=True,
+            )
+        ]
+        monitors = list(await asyncio.gather(*monitor_futures))
         owner_monitors_active = True
+        begin_finalization.set()
 
         async with asyncio.timeout(2):
-            await asyncio.gather(
-                *(
-                    finalize_run(
-                        run_id,
-                        thread_id,
-                        status="success",
-                        thread_status="idle",
-                        output={"completed": True},
-                    )
-                    for run_id, thread_id, _identity in executions
-                )
-            )
+            await asyncio.gather(*owner_tasks)
             await asyncio.gather(*monitors)
         owner_monitors_active = False
 
@@ -3228,8 +3331,12 @@ async def test_dedicated_fences_leave_size_two_orm_pool_for_finalizers():
                 )
                 assert (await cursor.fetchone())[0] is True
     finally:
-        for fence in fences:
-            await fence.aclose()
+        begin_finalization.set()
+        for owner_task in owner_tasks:
+            if not owner_task.done():
+                owner_task.cancel()
+        if owner_tasks:
+            await asyncio.gather(*owner_tasks, return_exceptions=True)
         if owner_monitors_active:
             async with await psycopg.AsyncConnection.connect(
                 POSTGRES_URL
@@ -3427,6 +3534,9 @@ async def test_aegra_factory_keeps_the_guest_fence_until_terminal_commit(
             "guest_retention_policy": GUEST_RETENTION_POLICY,
         }
     )
+    graph_factory_returned = asyncio.Event()
+    allow_terminal_commit = asyncio.Event()
+    owner_task: asyncio.Task[None] | None = None
     owner_monitor_active = False
     try:
         await migrate_database()
@@ -3479,12 +3589,39 @@ async def test_aegra_factory_keeps_the_guest_fence_until_terminal_commit(
             thread_id=thread_id,
             identity=identity,
         )
-        async with service.get_graph(
-            graph_id,
-            config=config,
-            user=guest,
-        ) as guest_graph:
-            assert guest_graph is not None
+
+        async def aegra_owner() -> None:
+            async with service.get_graph(
+                graph_id,
+                config=config,
+                user=guest,
+            ) as guest_graph:
+                assert guest_graph is not None
+            graph_factory_returned.set()
+            await allow_terminal_commit.wait()
+            async with await psycopg.AsyncConnection.connect(
+                POSTGRES_URL
+            ) as connection:
+                await connection.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'success', updated_at = CURRENT_TIMESTAMP
+                    WHERE run_id = %s AND thread_id = %s AND user_id = %s
+                    """,
+                    (run_id, thread_id, identity),
+                )
+                await connection.execute(
+                    """
+                    UPDATE thread
+                    SET status = 'idle', updated_at = CURRENT_TIMESTAMP
+                    WHERE thread_id = %s AND user_id = %s
+                    """,
+                    (thread_id, identity),
+                )
+
+        owner_task = asyncio.create_task(aegra_owner())
+        async with asyncio.timeout(5):
+            await graph_factory_returned.wait()
         owner_monitor_active = True
 
         during_finalization = await reconcile_stale_guest_runs(batch_size=10)
@@ -3492,25 +3629,9 @@ async def test_aegra_factory_keeps_the_guest_fence_until_terminal_commit(
         assert during_finalization.reconciled_runs == 0
         assert during_finalization.released_threads == 0
 
-        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
-            await connection.execute(
-                """
-                UPDATE runs
-                SET status = 'success', updated_at = CURRENT_TIMESTAMP
-                WHERE run_id = %s AND thread_id = %s AND user_id = %s
-                """,
-                (run_id, thread_id, identity),
-            )
-            await connection.execute(
-                """
-                UPDATE thread
-                SET status = 'idle', updated_at = CURRENT_TIMESTAMP
-                WHERE thread_id = %s AND user_id = %s
-                """,
-                (thread_id, identity),
-            )
-
+        allow_terminal_commit.set()
         async with asyncio.timeout(5):
+            await owner_task
             await wait_for_guest_execution_fence_monitors()
         owner_monitor_active = False
 
@@ -3534,6 +3655,11 @@ async def test_aegra_factory_keeps_the_guest_fence_until_terminal_commit(
             await cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
             assert (await cursor.fetchone())[0] is True
     finally:
+        allow_terminal_commit.set()
+        if owner_task is not None and not owner_task.done():
+            owner_task.cancel()
+            with suppress(BaseException):
+                await owner_task
         if owner_monitor_active:
             async with await psycopg.AsyncConnection.connect(
                 POSTGRES_URL

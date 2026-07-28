@@ -20,6 +20,7 @@ case "$DELIVERY_TARGET" in
     readonly cloud_run_service="agent-preview"
     readonly migration_job="agent-preview-migrate"
     readonly grant_probe_job="agent-preview-grants"
+    readonly maintenance_job="agent-preview-maintenance"
     ;;
   production)
     readonly expected_environment="Agent Production"
@@ -29,6 +30,7 @@ case "$DELIVERY_TARGET" in
     readonly cloud_run_service="agent"
     readonly migration_job="agent-migrate"
     readonly grant_probe_job="agent-grants"
+    readonly maintenance_job="agent-maintenance"
     ;;
   *)
     printf 'unexpected agent delivery target\n' >&2
@@ -56,6 +58,7 @@ case "$DELIVERY_ROLE" in
     printf 'cloud_run_service=%s\n' "$cloud_run_service"
     printf 'migration_job=%s\n' "$migration_job"
     printf 'grant_probe_job=%s\n' "$grant_probe_job"
+    printf 'maintenance_job=%s\n' "$maintenance_job"
     ;;
   *)
     printf 'unexpected agent delivery role\n' >&2

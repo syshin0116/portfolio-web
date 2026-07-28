@@ -41,9 +41,9 @@ cloud_run_api_request() (
   local token
 
   if [[ "$method" == "GET" ]]; then
-    [[ "$resource_path" =~ ^(services/agent(-preview)?|services/agent(-preview)?/revisions/agent(-preview)?-[a-z0-9-]+|jobs/agent(-preview)?-(migrate|grants)|operations/[A-Za-z0-9._~-]+)$ ]]
+    [[ "$resource_path" =~ ^(services/agent(-preview)?|services/agent(-preview)?/revisions/agent(-preview)?-[a-z0-9-]+|jobs/agent(-preview)?-(migrate|grants|maintenance)|operations/[A-Za-z0-9._~-]+)$ ]]
   elif [[ "$method" == "POST" ]]; then
-    [[ "$resource_path" =~ ^jobs/agent(-preview)?-(migrate|grants):run$ ]]
+    [[ "$resource_path" =~ ^jobs/agent(-preview)?-(migrate|grants|maintenance):run$ ]]
   else
     false
   fi || {
@@ -209,6 +209,7 @@ runtime_expectations() {
       readonly EXPECTED_MIGRATION_SECRET="agent-preview-migration-database-url"
       readonly EXPECTED_MIGRATION_JOB="agent-preview-migrate"
       readonly EXPECTED_GRANT_JOB="agent-preview-grants"
+      readonly EXPECTED_MAINTENANCE_JOB="agent-preview-maintenance"
       ;;
     agent)
       readonly EXPECTED_IMAGE_PREFIX="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
@@ -223,6 +224,7 @@ runtime_expectations() {
       readonly EXPECTED_MIGRATION_SECRET="agent-migration-database-url"
       readonly EXPECTED_MIGRATION_JOB="agent-migrate"
       readonly EXPECTED_GRANT_JOB="agent-grants"
+      readonly EXPECTED_MAINTENANCE_JOB="agent-maintenance"
       ;;
   esac
   readonly EXPECTED_PLAIN_ENV='{
@@ -503,6 +505,16 @@ verify_job_contract() {
       expected_service_account="$EXPECTED_RUNTIME_SERVICE_ACCOUNT"
       expected_timeout="600s"
       ;;
+    "$EXPECTED_MAINTENANCE_JOB")
+      expected_args='["-m","agent.maintenance"]'
+      expected_container_name="maintenance"
+      expected_secret="$(
+        jq -r '.[] | select(.name == "DATABASE_URL") | .secret' \
+          <<<"$EXPECTED_RUNTIME_SECRETS"
+      )"
+      expected_service_account="$EXPECTED_RUNTIME_SERVICE_ACCOUNT"
+      expected_timeout="600s"
+      ;;
     *)
       printf 'unexpected job contract selector\n' >&2
       return 1
@@ -673,7 +685,7 @@ wait_for_job_operation() {
     "$EXPECTED_MIGRATION_JOB")
       max_attempts=204
       ;;
-    "$EXPECTED_GRANT_JOB")
+    "$EXPECTED_GRANT_JOB" | "$EXPECTED_MAINTENANCE_JOB")
       max_attempts=144
       ;;
     *)
@@ -970,6 +982,7 @@ validate_deploy_inputs() {
     DELIVERY_RUN_ID \
     GRANT_PROBE_JOB \
     IMAGE_DIGEST \
+    MAINTENANCE_JOB \
     MIGRATION_JOB \
     SOURCE_SHA; do
     require_value "$variable_name"
@@ -993,6 +1006,11 @@ validate_deploy_inputs() {
   }
   [[ "$GRANT_PROBE_JOB" == "$EXPECTED_GRANT_JOB" ]] || {
     printf '%s service must use only its exact grant-probe job\n' \
+      "$CLOUD_RUN_SERVICE" >&2
+    exit 1
+  }
+  [[ "$MAINTENANCE_JOB" == "$EXPECTED_MAINTENANCE_JOB" ]] || {
+    printf '%s service must use only its exact maintenance job\n' \
       "$CLOUD_RUN_SERVICE" >&2
     exit 1
   }
@@ -1048,6 +1066,7 @@ deploy() {
 
   run_job_with_digest "$MIGRATION_JOB"
   run_job_with_digest "$GRANT_PROBE_JOB"
+  run_job_with_digest "$MAINTENANCE_JOB"
 
   gcloud run services update "$CLOUD_RUN_SERVICE" \
     --project "$GCP_PROJECT_ID" \

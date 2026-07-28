@@ -32,10 +32,10 @@ half-configured deployment.
 
 ## Reviewed topology
 
-| Environment | Service | Migration job | Runtime-grant job | Runtime identity | Migration identity |
-|---|---|---|---|---|---|
-| Agent Preview | `agent-preview` | `agent-preview-migrate` | `agent-preview-grants` | `agent-preview-runtime` | `agent-preview-migrator` |
-| Agent Production | `agent` | `agent-migrate` | `agent-grants` | `agent-runtime` | `agent-prod-migrator` |
+| Environment | Service | Migration job | Runtime-grant job | Maintenance job | Runtime identity | Migration identity |
+|---|---|---|---|---|---|---|
+| Agent Preview | `agent-preview` | `agent-preview-migrate` | `agent-preview-grants` | `agent-preview-maintenance` | `agent-preview-runtime` | `agent-preview-migrator` |
+| Agent Production | `agent` | `agent-migrate` | `agent-grants` | `agent-maintenance` | `agent-runtime` | `agent-prod-migrator` |
 
 | Environment | Repository | Builder | Retention floor |
 |---|---|---|---|
@@ -47,13 +47,20 @@ repository. Each deployer and the Google-managed Cloud Run service agent have
 `roles/artifactregistry.reader` only on the matching repository; Cloud Run requires the
 deploying principal to read selected image metadata, while only the service agent pulls
 it at runtime. Each deployer receives the project custom role
-`cloudRunAgentDelivery` only on its own service and two jobs. That role contains exactly
+`cloudRunAgentDelivery` only on its own service and three jobs. That role contains exactly
 `run.services.get`, `run.services.update`, `run.revisions.get`, `run.jobs.get`,
 `run.jobs.update`, `run.jobs.run`, and `run.operations.get`. It intentionally excludes
 create, delete, IAM-policy mutation, and `run.jobs.runWithOverrides`. Each deployer also
 has `actAs` only on that environment's runtime and migration identities. No deployer can
 read Secret Manager payloads or write images, and preview code cannot write or select a
 production image.
+
+The dedicated `agent-maintenance-scheduler` identity has no database secret and no
+project-wide role. It receives `roles/run.invoker` only on `agent-maintenance`. The
+production-only `agent-guest-maintenance` Cloud Scheduler job uses OAuth to call the
+Cloud Run Jobs v2 `:run` API every 15 minutes; preview maintenance runs only as part
+of a reviewed preview release. The Google-managed Cloud Scheduler service agent must
+retain `roles/cloudscheduler.serviceAgent` or authenticated schedules fail with 403.
 
 The `github` workload-identity pool has one canonical active provider,
 `github-production`. It explicitly maps the immutable numeric repository and owner claims,
@@ -76,11 +83,11 @@ request timeout, `max_instances=1`, concurrency 8, and one Uvicorn worker. The i
 and worker limits are correctness constraints, not cost optimizations: Aegra 0.9.24's
 same-thread mutation guard is process-local.
 
-Each service revision has exactly 18 environment entries: 13 reviewed plain values and
-five numeric-version secret references. The plain set includes
+Each service revision has exactly 17 environment entries: 13 reviewed plain values and
+four numeric-version secret references. The plain set includes
 `REDIS_BROKER_ENABLED=false` and `BG_JOB_MAX_RETRIES=0`, reserving the runtime boundary
 required by the bounded background-work preflight. The one-shot modules
-`agent.migrate` and `agent.neon_grant_probe` load through the side-effect-free
+`agent.migrate`, `agent.neon_grant_probe`, and `agent.maintenance` load through the side-effect-free
 `agent` package and do not import `agent.graph` or its runtime preflight, so their
 separate three-entry environment contract does not carry these service-only values.
 
@@ -155,8 +162,9 @@ agent-preview-migration-database-url
 agent-migration-database-url
 ```
 
-Runtime services and the grant-probe jobs receive only the least-privileged direct Neon
-runtime URL. Migration jobs receive only their elevated direct migration URL. Neither URL
+Runtime services, grant-probe jobs, and maintenance jobs receive only the
+least-privileged direct Neon runtime URL. Migration jobs receive only their elevated
+direct migration URL. Neither URL
 may contain a Neon `-pooler` hostname. Add values out of band as described in the
 [foundation runbook](gcp-neon-foundation.md). Terraform never owns payloads or creates
 versions, but it does own the reviewed **numeric version ID** selected by every service
@@ -222,16 +230,17 @@ remote state and advance the explicit `agent_delivery_stage` in order:
      -var-file=/absolute/private/path/agent-secret-versions.tfvars
    ```
 
-   This plan must add exactly the two migration jobs, two grant-probe jobs, and their
-   resource IAM; it must still contain zero services. Apply the saved reviewed plan, then
-   execute each environment's migration followed by its grant probe with `--wait`.
-   Require each pair of jobs to use its environment's reviewed digest and pinned numeric
-   secret versions.
+   This plan must add exactly the two migration jobs, two grant-probe jobs, two
+   maintenance jobs, and their resource IAM; it must still contain zero services or
+   schedules. Apply the saved reviewed plan, then execute each environment's migration,
+   grant probe, and maintenance job with `--wait`. Require all six jobs to use their
+   environment's reviewed digest and pinned numeric secret versions.
 
 4. **Services.** Re-plan with `agent_delivery_stage=services`, the same two digests, and
    the same external version file. The only delivery-surface additions are the two
-   services and their resource IAM. Apply only after both environments' migration and
-   grant probe passed. Run `scripts/verify_ops_foundation.sh --live`, configure and verify
+   services, their resource IAM, and the production-only maintenance schedule. Apply only
+   after both environments' migration, grant probe, and maintenance job passed. Run
+   `scripts/verify_ops_foundation.sh --live`, configure and verify
    both GitHub environments, then set `AGENT_CLOUD_RUN_ENABLED=true` and immediately run
    the first reviewed preview and production deliveries. If either fails, set the
    variable back to `false` while investigating.
@@ -354,7 +363,7 @@ After owner approval, `agent-release.yml` passes that digest to
 2. reads the exact Cloud Run v2 Job resource back, verifies its full runtime contract and
    `etag`, and only then calls REST v2 `jobs.run` with that same `etag`;
 3. repeats update → v2 read-back verification → execution for the real-Neon grant/denial
-   job;
+   job and then the bounded guest-retention maintenance job;
 4. polls each returned operation and accepts only one immutable successful Execution
    whose exact template matches the verified digest/job and whose failed, cancelled,
    running, and retried counts are zero;
@@ -395,8 +404,8 @@ Rotate payloads without mutating a serving revision in place:
 4. Apply the saved plan. Immediately verify that the previously recorded revision still
    receives 100% traffic; if it does not, restore that exact revision before continuing.
 5. Re-enable delivery and run the matching environment workflow. It updates and executes
-   migration then grant probe, creates a unique no-traffic revision, smokes it, and only
-   then promotes it.
+   migration, grant probe, and maintenance in order, creates a unique no-traffic
+   revision, smokes it, and only then promotes it.
 6. Verify the new revision and live foundation contract. Retain the previous secret
    version through the rollback window; disabling it is a separate approved action.
 

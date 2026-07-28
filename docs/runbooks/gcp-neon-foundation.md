@@ -73,6 +73,8 @@ After this foundation is reviewed and applied, the target is:
 - the exact seven-permission `cloudRunAgentDelivery` custom role bound only to each
   matching deployer's Service and Jobs, with no delete, create, IAM-policy mutation, or
   job-override permission;
+- a dedicated keyless scheduler identity with `roles/run.invoker` only on production
+  maintenance, and no database-secret access or project-wide role;
 - no user-managed service-account keys.
 
 The live verifier reads direct policies at the project, every reported folder and
@@ -85,12 +87,12 @@ operator-supplied JSON records by exact `scope` + `role` + `member`. Custom role
 the SHA-256 of their complete included-permission inventory; conditional bindings pin the
 condition digest. Group, domain, and unrelated principal-set members therefore fail unless
 that exact binding was reviewed; public members always fail. A project, containing folder,
-or containing organization `ServiceAccount` principal set includes the eight workload
+or containing organization `ServiceAccount` principal set includes the nine workload
 identities and is forbidden at the project and ancestor scopes even when
 listed as reviewed. An unreadable ancestor, role, or policy is a blocker.
 
 Terraform uses additive IAM member resources so an unreviewed apply cannot erase unrelated
-or Google-managed members. The verifier additionally rejects any direct role on the eight
+or Google-managed members. The verifier additionally rejects any direct role on the nine
 user-managed workload identities at the project or ancestor scopes, whether granted to
 their exact addresses or through an encompassing Resource Manager service-account
 principal set, project-level
@@ -306,13 +308,13 @@ The target agent project starts empty. Do not copy test threads or legacy checkp
 tables. The repository migration entrypoint is `python -m agent.migrate`; it upgrades
 Aegra metadata and initializes the LangGraph checkpointer and store schema. The checked-in
 Cloud Run migration jobs execute that entrypoint before service delivery, followed by
-separate least-privileged grant-probe jobs. Runtime startup Alembic migration must be
+separate least-privileged grant-probe and guest-retention maintenance jobs. Runtime startup Alembic migration must be
 disabled with the non-secret setting
 `RUN_MIGRATIONS_ON_STARTUP=false`; a service revision is never the migration runner.
 The serving template also fixes `REDIS_BROKER_ENABLED=false` and
-`BG_JOB_MAX_RETRIES=0`; together with the other reviewed values and five numeric secret
-references, each service has exactly 18 environment entries. The migration and
-grant-probe entrypoints do not import `agent.graph` or its runtime preflight and retain
+`BG_JOB_MAX_RETRIES=0`; together with the other reviewed values and four numeric secret
+references, each service has exactly 17 environment entries. The migration, grant-probe,
+and maintenance entrypoints do not import `agent.graph` or its runtime preflight and retain
 their separate exact three-entry Job environment.
 
 The migration job uses the same immutable image digest as the service, receives an
@@ -340,7 +342,7 @@ offers a supported startup path that skips saver/store schema setup.
 1. Confirm or create `syshin0116-agent-prod`.
 2. Create an isolated preview branch and credentials that cannot access the `production`
    branch.
-3. Provision the checked-in one-shot migration and grant-probe jobs at the explicit
+3. Provision the checked-in one-shot migration, grant-probe, and maintenance jobs at the explicit
    `jobs` Terraform stage, using the exact image digest selected for deployment and
    positive numeric secret versions.
 4. Give the preview migration job its separately held direct `DATABASE_URL`, run it, and
@@ -370,7 +372,8 @@ Database migrations must remain compatible with one previous application revisio
 The repository-side follow-up is implemented. It declares preview/production services,
 separate runtime/migration identities and URLs, isolated image builders and registries, one
 active four-role WIF provider with a disabled legacy provider, split secretless build and
-reviewer-gated release workflows, same-digest migration and grant-probe jobs, exact
+reviewer-gated release workflows, same-digest migration, grant-probe, and maintenance
+jobs, a production-only 15-minute OAuth-authenticated Cloud Scheduler trigger, exact
 Cloud Run REST v2 read-back plus etag-bound Job execution before traffic movement,
 owner-auth APv2 smoke on the tagged no-traffic revision before promotion, and
 revision-traffic rollback. Production deploy rechecks current `main` and all three exact
@@ -427,9 +430,9 @@ parsed bodies of the foundation resources, all locals, every root check, every o
 the provider/data/backend blocks, and every import target and live object ID. It rejects
 unreviewed modules, `moved` and `removed` blocks, provisioners, `local-exec`,
 `remote-exec`, external providers/data, `terraform_remote_state`, and other executable
-resource types after HCL comments and line breaks are parsed. The seven deeply nested
-Cloud Run service/job resources are additionally covered by a byte-exact SHA-256 pin over
-`cloud_run.tf`; the total reviewed inventory is 39 resources.
+resource types after HCL comments and line breaks are parsed. The eleven deeply nested
+Cloud Run and Scheduler resources are additionally covered by a byte-exact SHA-256 pin
+over `cloud_run.tf`; the total reviewed inventory is 44 resources.
 
 The only reviewed Terraform test file is
 `infra/gcp/tests/foundation.tftest.hcl`; static verification pins its exact SHA-256.

@@ -14,7 +14,9 @@ readonly BUILDER_SA="agent-image-builder@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PREVIEW_BUILDER_SA="agent-preview-image-builder@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PREVIEW_MIGRATOR_SA="agent-preview-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly PRODUCTION_MIGRATOR_SA="agent-prod-migrator@${PROJECT_ID}.iam.gserviceaccount.com"
+readonly MAINTENANCE_SCHEDULER_SA="agent-maintenance-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly CLOUD_RUN_SERVICE_AGENT="service-${EXPECTED_PROJECT_NUMBER}@serverless-robot-prod.iam.gserviceaccount.com"
+readonly CLOUD_SCHEDULER_SERVICE_AGENT="service-${EXPECTED_PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
 readonly CLOUD_RUN_DELIVERY_ROLE="projects/${PROJECT_ID}/roles/cloudRunAgentDelivery"
 readonly -a WORKLOAD_SERVICE_ACCOUNTS=(
   "$PRODUCTION_RUNTIME_SA"
@@ -25,6 +27,7 @@ readonly -a WORKLOAD_SERVICE_ACCOUNTS=(
   "$PREVIEW_BUILDER_SA"
   "$PREVIEW_MIGRATOR_SA"
   "$PRODUCTION_MIGRATOR_SA"
+  "$MAINTENANCE_SCHEDULER_SA"
 )
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
@@ -37,6 +40,7 @@ readonly GOVERNANCE_VERIFIER="${REPO_ROOT}/scripts/verify_repository_governance.
 
 readonly REQUIRED_APIS=(
   artifactregistry.googleapis.com
+  cloudscheduler.googleapis.com
   cloudresourcemanager.googleapis.com
   iam.googleapis.com
   iamcredentials.googleapis.com
@@ -718,6 +722,7 @@ verify_cloud_run_job() {
   local container_name="$4"
   local module_name="$5"
   local expected_secret_name="$6"
+  local scheduler_service_account="${7:-}"
   local job_json
   local policy_json
   local expected_pairs
@@ -795,15 +800,80 @@ verify_cloud_run_job() {
     jq -cn \
       --arg deployer "serviceAccount:${deployer_service_account}" \
       --arg delivery_role "$CLOUD_RUN_DELIVERY_ROLE" \
-      '[{role: $delivery_role, member: $deployer}]'
+      --arg scheduler_service_account "$scheduler_service_account" \
+      '
+        [{role: $delivery_role, member: $deployer}]
+        + if ($scheduler_service_account | length) > 0 then
+            [{
+              role: "roles/run.invoker",
+              member: ("serviceAccount:" + $scheduler_service_account)
+            }]
+          else
+            []
+          end
+      '
   )"
   assert_policy_binding_pairs_exactly \
     "$policy_json" \
     "$expected_pairs" \
-    "Cloud Run job ${job_name} IAM must contain only its environment deployer"
+    "Cloud Run job ${job_name} IAM must contain only its reviewed invokers"
   assert_policy_has_no_public_members \
     "$policy_json" \
     "Cloud Run job ${job_name} must not be publicly invokable"
+}
+
+verify_guest_maintenance_schedule() {
+  local job_json
+  local scheduler_policy
+
+  job_json="$(
+    gcloud scheduler jobs describe \
+      agent-guest-maintenance \
+      --project "$PROJECT_ID" \
+      --location "$REGION" \
+      --format=json
+  )"
+  jq -e \
+    --arg expected_name "projects/${PROJECT_ID}/locations/${REGION}/jobs/agent-guest-maintenance" \
+    --arg expected_scheduler "$MAINTENANCE_SCHEDULER_SA" \
+    --arg expected_uri "https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/agent-maintenance:run" \
+    '
+      .name == $expected_name
+      and .schedule == "*/15 * * * *"
+      and .timeZone == "Etc/UTC"
+      and .attemptDeadline == "60s"
+      and .state == "ENABLED"
+      and (.retryConfig.retryCount // 0) == 0
+      and .httpTarget.httpMethod == "POST"
+      and .httpTarget.uri == $expected_uri
+      and .httpTarget.body == "e30="
+      and .httpTarget.headers["Content-Type"] == "application/json"
+      and (
+        [
+          .httpTarget.headers
+          | keys[]
+          | select(. != "Content-Type" and . != "User-Agent")
+        ] | length
+      ) == 0
+      and .httpTarget.oauthToken.serviceAccountEmail == $expected_scheduler
+      and .httpTarget.oauthToken.scope == "https://www.googleapis.com/auth/cloud-platform"
+      and (.httpTarget | has("oidcToken") | not)
+    ' >/dev/null <<<"$job_json" ||
+    fail "Cloud Scheduler guest maintenance trigger drifted from its exact OAuth contract"
+
+  scheduler_policy="$(
+    gcloud iam service-accounts get-iam-policy \
+      "$MAINTENANCE_SCHEDULER_SA" \
+      --project "$PROJECT_ID" \
+      --format=json
+  )"
+  assert_policy_binding_pairs_exactly \
+    "$scheduler_policy" \
+    "[]" \
+    "maintenance scheduler identity must not expose impersonation bindings"
+  assert_policy_has_no_public_members \
+    "$scheduler_policy" \
+    "maintenance scheduler identity must not trust public principals"
 }
 
 verify_live_contract() {
@@ -951,6 +1021,11 @@ verify_live_contract() {
     "projects/${PROJECT_ID}" \
     "$ancestors_json"
   verify_ancestor_policies "$ancestors_json"
+  assert_exact_role_member \
+    "$project_policy" \
+    "roles/cloudscheduler.serviceAgent" \
+    "serviceAccount:${CLOUD_SCHEDULER_SERVICE_AGENT}" \
+    "Cloud Scheduler service agent must keep its exact Google-managed role"
   for inherited_role in \
     "roles/iam.serviceAccountUser" \
     "roles/iam.serviceAccountTokenCreator" \
@@ -1235,6 +1310,13 @@ verify_live_contract() {
     "grant-probe" \
     "agent.neon_grant_probe" \
     "agent-preview-database-url"
+  verify_cloud_run_job \
+    "agent-preview-maintenance" \
+    "$PREVIEW_RUNTIME_SA" \
+    "$PREVIEW_DEPLOYER_SA" \
+    "maintenance" \
+    "agent.maintenance" \
+    "agent-preview-database-url"
   verify_cloud_run_service \
     "agent" \
     "$PRODUCTION_RUNTIME_SA" \
@@ -1253,6 +1335,15 @@ verify_live_contract() {
     "grant-probe" \
     "agent.neon_grant_probe" \
     "agent-database-url"
+  verify_cloud_run_job \
+    "agent-maintenance" \
+    "$PRODUCTION_RUNTIME_SA" \
+    "$PRODUCTION_DEPLOYER_SA" \
+    "maintenance" \
+    "agent.maintenance" \
+    "agent-database-url" \
+    "$MAINTENANCE_SCHEDULER_SA"
+  verify_guest_maintenance_schedule
 
   verify_canonical_repository_governance
 

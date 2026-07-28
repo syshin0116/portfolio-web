@@ -361,6 +361,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
 
                 def job_document(job):
                     migration = job.endswith("-migrate")
+                    maintenance = job.endswith("-maintenance")
                     expected_secret = (
                         "agent-migration-database-url"
                         if migration else "agent-database-url"
@@ -372,8 +373,20 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         "agent-runtime@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
-                    module = "agent.migrate" if migration else "agent.neon_grant_probe"
-                    container_name = "migration" if migration else "grant-probe"
+                    module = (
+                        "agent.migrate"
+                        if migration
+                        else (
+                            "agent.maintenance"
+                            if maintenance
+                            else "agent.neon_grant_probe"
+                        )
+                    )
+                    container_name = (
+                        "migration"
+                        if migration
+                        else ("maintenance" if maintenance else "grant-probe")
+                    )
                     timeout = "900s" if migration else "600s"
                     document = {
                         "name": (
@@ -492,7 +505,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
                             f"operations/op-{job}"
                         ),
                     )
-                    if os.environ.get("FAKE_OPERATION_ERROR") == "true":
+                    if (
+                        os.environ.get("FAKE_OPERATION_ERROR") == "true"
+                        or os.environ.get("FAKE_OPERATION_ERROR_JOB") == job
+                    ):
                         return {
                             "name": operation_name,
                             "done": True,
@@ -633,6 +649,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 "GCP_REGION": "us-east4",
                 "GRANT_PROBE_JOB": "agent-grants",
                 "IMAGE_DIGEST": IMAGE_DIGEST,
+                "MAINTENANCE_JOB": "agent-maintenance",
                 "MIGRATION_JOB": "agent-migrate",
                 "PATH": f"{binary}:{environment['PATH']}",
                 "RUNNER_TEMP": str(root),
@@ -676,6 +693,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "gcloud run jobs update agent-grants",
             "/jobs/agent-grants",
             "/jobs/agent-grants:run",
+            "gcloud run jobs update agent-maintenance",
+            "/jobs/agent-maintenance",
+            "/jobs/agent-maintenance:run",
             "gcloud run services update agent",
             "/revisions/agent-g",
             "gcloud run services update-traffic agent",
@@ -708,6 +728,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 {
                     "job": "agent-grants",
                     "body": {"etag": "etag-agent-grants-9"},
+                },
+                {
+                    "job": "agent-maintenance",
+                    "body": {"etag": "etag-agent-maintenance-9"},
                 },
             ],
             state["run_requests"],
@@ -1067,6 +1091,34 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("exact migration job", result.stderr)
         self.assertFalse(log.exists())
+
+    def test_cross_environment_maintenance_job_fails_before_any_external_command(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["MAINTENANCE_JOB"] = "agent-preview-maintenance"
+            result = self._run(directory, environment, "deploy")
+            log = Path(directory) / "operations.log"
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("exact maintenance job", result.stderr)
+        self.assertFalse(log.exists())
+
+    def test_maintenance_failure_stops_before_service_update(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAKE_OPERATION_ERROR_JOB"] = "agent-maintenance"
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("/jobs/agent-migrate:run", operations)
+        self.assertIn("/jobs/agent-grants:run", operations)
+        self.assertIn("/jobs/agent-maintenance:run", operations)
+        self.assertNotIn("gcloud run services update agent", operations)
 
     def test_invalid_delivery_run_id_fails_before_any_external_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

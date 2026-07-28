@@ -36,9 +36,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.types import Command, StateSnapshot
 from pydantic import Field
+from starlette.responses import JSONResponse
 
+from agent import http as http_extension
 from agent.auth import (
     AGENT_AUTH_SECRET,
+    ANONYMOUS_PERMISSION,
     TOKEN_AUDIENCE,
     TOKEN_ISSUER,
 )
@@ -49,6 +52,8 @@ from agent.guest_budget import (
     GuestDailyBudgetExhaustedError,
     PostgresGuestSpendLedger,
 )
+from agent.guest_thread_lock import guest_thread_advisory_lock
+from agent.http import GuestRunGuard, NativeThreadGuard
 from agent.inspection import INSPECTION_EVENT_NAME
 from agent.maintenance import (
     GUEST_RETENTION_POLICY,
@@ -66,6 +71,8 @@ INSPECTION_FIXTURE = (
     / "fixtures"
     / "inspection-events-v1.json"
 )
+_GUEST_INTERRUPT_ID = "0123456789abcdef0123456789abcdef"
+_GUEST_SUBMIT_NONCE = "123e4567-e89b-42d3-a456-426614174000"
 
 
 def _canonical_inspection_payload() -> dict[str, object]:
@@ -145,6 +152,59 @@ def _authorization(subject: str) -> dict[str, str]:
         algorithm="HS256",
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+def _guest_authorization(subject: str) -> dict[str, str]:
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": subject,
+            "iss": TOKEN_ISSUER,
+            "aud": TOKEN_AUDIENCE,
+            "iat": now,
+            "exp": now + 300,
+            "scope": ANONYMOUS_PERMISSION,
+        },
+        AGENT_AUTH_SECRET,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _guest_paid_command(kind: str) -> dict[str, Any]:
+    metadata = {"syshin_ui_submit_nonce": _GUEST_SUBMIT_NONCE}
+    if kind == "run-start":
+        return {
+            "id": 7,
+            "method": "run.start",
+            "params": {
+                "assistant_id": "agent",
+                "config": {"metadata": metadata.copy()},
+                "input": {
+                    "messages": [
+                        {
+                            "content": "race proof",
+                            "id": "guest-message-1",
+                            "role": "user",
+                        }
+                    ]
+                },
+                "metadata": metadata,
+            },
+        }
+    if kind == "input-respond":
+        return {
+            "id": 8,
+            "method": "input.respond",
+            "params": {
+                "config": {"metadata": metadata.copy()},
+                "interrupt_id": _GUEST_INTERRUPT_ID,
+                "metadata": metadata,
+                "namespace": [],
+                "response": "approve",
+            },
+        }
+    raise AssertionError(f"unknown guest command kind: {kind}")
 
 
 async def _run_official_js_sdk_e2e(
@@ -1122,6 +1182,119 @@ Stop after one verdict.
         db_manager._database_url = previous_manager_url
 
 
+async def test_guest_interrupt_validation_reads_latest_postgres_root_state(
+    monkeypatch,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    thread_id = f"guest-interrupt-cas-{uuid4().hex}"
+    guest = User(
+        identity=f"anon:{uuid4()}",
+        permissions=["anon"],
+    )
+    run_configs = [
+        create_run_config(
+            f"guest-interrupt-cas-run-{uuid4().hex}",
+            thread_id,
+            guest,
+        )
+        for _index in range(3)
+    ]
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        fixture_module = runpy.run_path(FIXTURE_GRAPH)
+        service = _service(fixture_module["graph"])
+        monkeypatch.setattr(
+            http_extension,
+            "get_langgraph_service",
+            lambda: service,
+        )
+
+        async with service.get_graph(
+            "fixture",
+            config=run_configs[0],
+            user=guest,
+        ) as fixture_graph:
+            first = await fixture_graph.ainvoke(
+                {"messages": [HumanMessage(content="first guest turn")]},
+                run_configs[0],
+            )
+        stale_id = first["__interrupt__"][0].id
+
+        async with service.get_graph(
+            "fixture",
+            config=run_configs[1],
+            user=guest,
+        ) as fixture_graph:
+            await fixture_graph.ainvoke(
+                Command(resume={stale_id: "approved-first"}),
+                run_configs[1],
+            )
+
+        async with service.get_graph(
+            "fixture",
+            config=run_configs[2],
+            user=guest,
+        ) as fixture_graph:
+            second = await fixture_graph.ainvoke(
+                {"messages": [HumanMessage(content="second guest turn")]},
+                run_configs[2],
+            )
+            current_id = second["__interrupt__"][0].id
+            root_state = await fixture_graph.aget_state(
+                run_configs[2],
+                subgraphs=False,
+            )
+
+        assert stale_id != current_id
+        assert isinstance(root_state.interrupts, tuple)
+        assert len(root_state.interrupts) == 1
+        assert root_state.interrupts[0].id == current_id
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id
+                )
+                VALUES (%s, 'interrupted', %s::jsonb, %s)
+                """,
+                (
+                    thread_id,
+                    json.dumps({"graph_id": "fixture"}),
+                    guest.identity,
+                ),
+            )
+
+        observed = await http_extension._current_guest_root_interrupt_id(
+            thread_id,
+            guest.model_dump(),
+        )
+        assert observed == current_id
+        assert observed != stale_id
+    finally:
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        await db_manager.get_checkpointer().adelete_thread(thread_id)
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
 async def test_guest_daily_budget_and_checkpoint_first_gc_are_durable():
     assert POSTGRES_URL is not None
     previous_url = settings.db.DATABASE_URL
@@ -1299,6 +1472,438 @@ async def test_guest_daily_budget_and_checkpoint_first_gc_are_durable():
             await connection.execute(
                 "DELETE FROM agent_guest_daily_budget "
                 "WHERE budget_date = (timezone('UTC', now()))::date"
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+@pytest.mark.parametrize("command_kind", ["run-start", "input-respond"])
+async def test_guest_command_lock_prevents_gc_until_busy_commit(
+    monkeypatch,
+    command_kind,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+    monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "true")
+
+    thread_id = f"guest-command-wins-{command_kind}-{uuid4().hex}"
+    guest_id = f"anon:{uuid4()}"
+    checkpoint_config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "checkpoint_ns": "",
+        }
+    }
+    downstream_entered = asyncio.Event()
+    release_downstream = asyncio.Event()
+    command_task: asyncio.Task[Any] | None = None
+
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    ledger = Ledger()
+    downstream_calls = 0
+
+    async def current_interrupt(_thread_id, _user):
+        return _GUEST_INTERRUPT_ID
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        downstream_calls += 1
+        await receive()
+        downstream_entered.set()
+        await release_downstream.wait()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            updated = await connection.execute(
+                """
+                UPDATE thread
+                SET status = 'busy', updated_at = now()
+                WHERE thread_id = %s
+                """,
+                (thread_id,),
+            )
+            assert updated.rowcount == 1
+        await JSONResponse(
+            {
+                "id": 7 if command_kind == "run-start" else 8,
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "race-run"},
+                "type": "success",
+            }
+        )(scope, receive, send)
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        await db_manager.get_checkpointer().aput(
+            checkpoint_config,
+            empty_checkpoint(),
+            {"source": "input", "step": -1, "parents": {}},
+            {},
+        )
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id
+                )
+                VALUES (%s, %s, %s::jsonb, %s)
+                """,
+                (
+                    thread_id,
+                    "idle" if command_kind == "run-start" else "interrupted",
+                    json.dumps(
+                        {
+                            "graph_id": "agent",
+                            "guest_expires_at": "2000-01-01T00:00:00Z",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    guest_id,
+                ),
+            )
+        monkeypatch.setattr(
+            http_extension,
+            "_current_guest_root_interrupt_id",
+            current_interrupt,
+        )
+        guarded = NativeThreadGuard(
+            GuestRunGuard(
+                downstream,
+                spend_ledger=ledger,
+            )
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=guarded),
+            base_url="http://test",
+        ) as client:
+            command_task = asyncio.create_task(
+                client.post(
+                    f"/threads/{thread_id}/commands",
+                    headers=_guest_authorization(guest_id),
+                    json=_guest_paid_command(command_kind),
+                )
+            )
+            await asyncio.wait_for(downstream_entered.wait(), timeout=5)
+            while_command_holds_lock = await collect_expired_guest_threads(
+                batch_size=10
+            )
+            assert while_command_holds_lock.lock_acquired is True
+            assert while_command_holds_lock.deleted_threads == 0
+            async with await psycopg.AsyncConnection.connect(
+                POSTGRES_URL
+            ) as connection:
+                row = await connection.execute(
+                    "SELECT status FROM thread WHERE thread_id = %s",
+                    (thread_id,),
+                )
+                assert await row.fetchone() == (
+                    "idle" if command_kind == "run-start" else "interrupted",
+                )
+
+            release_downstream.set()
+            response = await asyncio.wait_for(command_task, timeout=5)
+
+        assert response.status_code == 200
+        assert ledger.calls == 1
+        assert downstream_calls == 1
+        after_busy_commit = await collect_expired_guest_threads(batch_size=10)
+        assert after_busy_commit.deleted_threads == 0
+        assert (
+            await db_manager.get_checkpointer().aget_tuple(checkpoint_config)
+            is not None
+        )
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            row = await connection.execute(
+                "SELECT status FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+            assert await row.fetchone() == ("busy",)
+    finally:
+        release_downstream.set()
+        if command_task is not None:
+            if not command_task.done():
+                command_task.cancel()
+            await asyncio.gather(command_task, return_exceptions=True)
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        await db_manager.get_checkpointer().adelete_thread(thread_id)
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+@pytest.mark.parametrize("command_kind", ["run-start", "input-respond"])
+async def test_gc_commit_wins_before_guest_command_can_reacquire_thread(
+    monkeypatch,
+    command_kind,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+    monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "true")
+
+    thread_id = f"guest-gc-wins-{command_kind}-{uuid4().hex}"
+    guest_id = f"anon:{uuid4()}"
+    checkpoint_config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "checkpoint_ns": "",
+        }
+    }
+    gc_holds_thread_lock = asyncio.Event()
+    release_gc = asyncio.Event()
+    downstream_calls = 0
+    ownership_observations = []
+    command_task: asyncio.Task[Any] | None = None
+    gc_task: asyncio.Task[Any] | None = None
+
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    class BlockingCheckpointer:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+
+        async def adelete_thread(self, selected_thread_id):
+            assert selected_thread_id == thread_id
+            gc_holds_thread_lock.set()
+            await release_gc.wait()
+            await self.wrapped.adelete_thread(selected_thread_id)
+
+    ledger = Ledger()
+
+    async def forbidden_interrupt(_thread_id, _user):
+        raise AssertionError("a GC-deleted thread must fail before state lookup")
+
+    native_thread_status = http_extension._owned_or_new_thread_status
+
+    async def observed_thread_status(selected_thread_id, selected_user_id):
+        result = await native_thread_status(
+            selected_thread_id,
+            selected_user_id,
+        )
+        ownership_observations.append(result)
+        return result
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        del scope, receive, send
+        downstream_calls += 1
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        checkpointer = db_manager.get_checkpointer()
+        await checkpointer.aput(
+            checkpoint_config,
+            empty_checkpoint(),
+            {"source": "input", "step": -1, "parents": {}},
+            {},
+        )
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id
+                )
+                VALUES (%s, %s, %s::jsonb, %s)
+                """,
+                (
+                    thread_id,
+                    "idle" if command_kind == "run-start" else "interrupted",
+                    json.dumps(
+                        {
+                            "graph_id": "agent",
+                            "guest_expires_at": "2000-01-01T00:00:00Z",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    guest_id,
+                ),
+            )
+        monkeypatch.setattr(
+            http_extension,
+            "_current_guest_root_interrupt_id",
+            forbidden_interrupt,
+        )
+        monkeypatch.setattr(
+            http_extension,
+            "_owned_or_new_thread_status",
+            observed_thread_status,
+        )
+        guarded = NativeThreadGuard(
+            GuestRunGuard(
+                downstream,
+                spend_ledger=ledger,
+            )
+        )
+        gc_task = asyncio.create_task(
+            collect_expired_guest_threads(
+                batch_size=10,
+                checkpointer=BlockingCheckpointer(checkpointer),
+            )
+        )
+        await asyncio.wait_for(gc_holds_thread_lock.wait(), timeout=5)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=guarded),
+            base_url="http://test",
+        ) as client:
+            command_task = asyncio.create_task(
+                client.post(
+                    f"/threads/{thread_id}/commands",
+                    headers=_guest_authorization(guest_id),
+                    json=_guest_paid_command(command_kind),
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not command_task.done()
+            release_gc.set()
+            gc_result = await asyncio.wait_for(gc_task, timeout=5)
+            response = await asyncio.wait_for(command_task, timeout=5)
+
+        assert gc_result.deleted_threads == 1
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Not Found"}
+        # The command crosses the advisory boundary only after the GC transaction
+        # commits its parent DELETE, so its first ownership read sees no old row.
+        assert ownership_observations == [(True, None)]
+        assert ledger.calls == 0
+        assert downstream_calls == 0
+        assert await checkpointer.aget_tuple(checkpoint_config) is None
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            row = await connection.execute(
+                "SELECT thread_id FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+            assert await row.fetchone() is None
+    finally:
+        release_gc.set()
+        pending_tasks = [task for task in (command_task, gc_task) if task is not None]
+        for task in pending_tasks:
+            if not task.done():
+                task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        await db_manager.get_checkpointer().adelete_thread(thread_id)
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_cancelled_guest_command_releases_real_postgres_thread_lock(
+    monkeypatch,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+    monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "true")
+
+    thread_id = f"guest-cancel-lock-{uuid4().hex}"
+    guest_id = f"anon:{uuid4()}"
+    downstream_entered = asyncio.Event()
+
+    async def downstream(_scope, _receive, _send):
+        downstream_entered.set()
+        await asyncio.Event().wait()
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id
+                )
+                VALUES (%s, 'idle', %s::jsonb, %s)
+                """,
+                (
+                    thread_id,
+                    json.dumps(
+                        {
+                            "graph_id": "agent",
+                            "guest_expires_at": "2999-01-01T00:00:00Z",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    guest_id,
+                ),
+            )
+        guarded = NativeThreadGuard(GuestRunGuard(downstream))
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=guarded),
+            base_url="http://test",
+        ) as client:
+            command_task = asyncio.create_task(
+                client.post(
+                    f"/threads/{thread_id}/commands",
+                    headers=_guest_authorization(guest_id),
+                    json=_guest_paid_command("run-start"),
+                )
+            )
+            await asyncio.wait_for(downstream_entered.wait(), timeout=5)
+            command_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await command_task
+
+        reacquired = False
+        async with guest_thread_advisory_lock(
+            thread_id,
+            timeout_seconds=1,
+        ):
+            reacquired = True
+        assert reacquired is True
+    finally:
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
             )
         await db_manager.close()
         aegra_orm.async_session_maker = None

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -40,6 +44,17 @@ def _enable_guest_agent(monkeypatch):
     monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
     monkeypatch.setenv("GUEST_DAILY_BUDGET_MICRO_USD", "500000")
     monkeypatch.setenv("GUEST_RUN_RESERVATION_MICRO_USD", "25000")
+
+    @asynccontextmanager
+    async def no_database_lock(_thread_id, *, timeout_seconds):
+        assert timeout_seconds > 0
+        yield
+
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_advisory_lock",
+        no_database_lock,
+    )
 
 
 def _token_headers(
@@ -189,6 +204,7 @@ def _run_command(
 def _input_respond_command(
     *,
     nonce: str = _NONCE,
+    interrupt_id: str = _INTERRUPT_ID,
 ) -> dict[str, Any]:
     metadata = {"syshin_ui_submit_nonce": nonce}
     return {
@@ -196,7 +212,7 @@ def _input_respond_command(
         "method": "input.respond",
         "params": {
             "config": {"metadata": metadata.copy()},
-            "interrupt_id": _INTERRUPT_ID,
+            "interrupt_id": interrupt_id,
             "metadata": metadata,
             "namespace": [],
             "response": "approve",
@@ -1608,6 +1624,221 @@ async def test_invalid_guest_interrupt_identity_never_reserves_or_dispatches():
     assert not called
 
 
+@pytest.mark.parametrize("thread_status", ["idle", "interrupted"])
+@pytest.mark.parametrize("invalid_kind", ["interrupt-id", "body"])
+async def test_invalid_guest_resume_reaches_inner_400_before_status_or_capacity(
+    monkeypatch,
+    thread_status,
+    invalid_kind,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    async def owned_thread(_thread_id, _user_id):
+        return True, thread_status
+
+    async def forbidden_lookup(_thread_id, _user):
+        raise AssertionError("invalid guest input must stop at the wire validator")
+
+    downstream_calls = 0
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        downstream_calls += 1
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        owned_thread,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_current_guest_root_interrupt_id",
+        forbidden_lookup,
+    )
+    ledger = Ledger()
+    app = NativeThreadGuard(
+        GuestRunGuard(downstream, spend_ledger=ledger),
+        max_active_threads=0,
+    )
+    command = _input_respond_command()
+    if invalid_kind == "interrupt-id":
+        command["params"]["interrupt_id"] = "stale-not-hex"
+    else:
+        del command["params"]["metadata"]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=command,
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_argument",
+        "message": "Guest request is invalid",
+    }
+    assert ledger.calls == 0
+    assert downstream_calls == 0
+    assert app._active == set()
+
+
+async def test_deep_guest_resume_json_is_canonical_400_before_any_claim_or_spend(
+    monkeypatch,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    async def forbidden_status(_thread_id, _user_id):
+        raise AssertionError("invalid JSON must not inspect thread ownership or status")
+
+    downstream_calls = 0
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        downstream_calls += 1
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        forbidden_status,
+    )
+
+    @asynccontextmanager
+    async def forbidden_lock(_thread_id, *, timeout_seconds):
+        del timeout_seconds
+        raise AssertionError("invalid JSON must not claim the guest thread")
+        yield
+
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_advisory_lock",
+        forbidden_lock,
+    )
+    ledger = Ledger()
+    app = NativeThreadGuard(
+        GuestRunGuard(downstream, spend_ledger=ledger),
+        max_active_threads=0,
+    )
+    depth = 10_000
+    body = (
+        b'{"id":8,"method":"input.respond","params":'
+        + b"[" * depth
+        + b"0"
+        + b"]" * depth
+        + b"}"
+    )
+    assert len(body) < 32 * 1024
+    with pytest.raises(RecursionError):
+        json.loads(body)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers={
+                **_guest_headers(),
+                "Content-Type": "application/json",
+            },
+            content=body,
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_argument",
+        "message": "Guest request is invalid",
+    }
+    assert ledger.calls == 0
+    assert downstream_calls == 0
+    assert app._active == set()
+
+
+async def test_invalid_guest_run_start_is_400_before_claim_capacity_or_spend(
+    monkeypatch,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    ownership_checks = 0
+
+    async def owned_idle_thread(_thread_id, _user_id):
+        nonlocal ownership_checks
+        ownership_checks += 1
+        return True, "idle"
+
+    downstream_calls = 0
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        downstream_calls += 1
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        owned_idle_thread,
+    )
+
+    @asynccontextmanager
+    async def forbidden_lock(_thread_id, *, timeout_seconds):
+        del timeout_seconds
+        raise AssertionError("invalid run.start must not claim the guest thread")
+        yield
+
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_advisory_lock",
+        forbidden_lock,
+    )
+    ledger = Ledger()
+    app = NativeThreadGuard(
+        GuestRunGuard(downstream, spend_ledger=ledger),
+        max_active_threads=0,
+    )
+    command = _run_command()
+    command["params"]["quickjs_enabled"] = True
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=command,
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_argument",
+        "message": "Guest request is invalid",
+    }
+    assert ownership_checks == 1
+    assert ledger.calls == 0
+    assert downstream_calls == 0
+    assert app._active == set()
+
+
 async def test_guest_resume_status_is_checked_before_reservation_and_schedule(
     monkeypatch,
 ):
@@ -1620,6 +1851,9 @@ async def test_guest_resume_status_is_checked_before_reservation_and_schedule(
 
     async def thread_status(_thread_id, _user_id):
         return True, status[0]
+
+    async def current_interrupt(_thread_id, _user):
+        return _INTERRUPT_ID
 
     async def downstream(scope, receive, send):
         command = json.loads(await _request_body(receive))
@@ -1637,6 +1871,11 @@ async def test_guest_resume_status_is_checked_before_reservation_and_schedule(
         http_extension,
         "_owned_or_new_thread_status",
         thread_status,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_current_guest_root_interrupt_id",
+        current_interrupt,
     )
     app = NativeThreadGuard(
         GuestRunGuard(
@@ -1667,6 +1906,340 @@ async def test_guest_resume_status_is_checked_before_reservation_and_schedule(
     }
     assert accepted.status_code == 200
     assert timeline == ["reserve", "schedule"]
+
+
+async def test_guest_resume_rejects_mismatched_and_stale_interrupt_before_spend(
+    monkeypatch,
+):
+    current_id = [_INTERRUPT_ID]
+    validations: list[str] = []
+    timeline: list[str] = []
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("reserve")
+
+    async def interrupted(_thread_id, _user_id):
+        return True, "interrupted"
+
+    async def current_interrupt(_thread_id, _user):
+        validations.append(current_id[0])
+        return current_id[0]
+
+    async def downstream(scope, receive, send):
+        command = json.loads(await _request_body(receive))
+        timeline.append(f"schedule:{command['params']['interrupt_id']}")
+        await JSONResponse(
+            {
+                "id": command["id"],
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "run-resumed"},
+                "type": "success",
+            }
+        )(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        interrupted,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_current_guest_root_interrupt_id",
+        current_interrupt,
+    )
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+            identity_capacity=1,
+            global_capacity=1,
+        )
+    )
+    next_id = "11111111111111111111111111111111"
+    headers = _guest_headers()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        mismatched = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_input_respond_command(interrupt_id="f" * 32),
+        )
+        current_id[0] = next_id
+        stale = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_input_respond_command(interrupt_id=_INTERRUPT_ID),
+        )
+        accepted = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_input_respond_command(interrupt_id=next_id),
+        )
+
+    assert [mismatched.status_code, stale.status_code, accepted.status_code] == [
+        409,
+        409,
+        200,
+    ]
+    assert (
+        mismatched.json()
+        == stale.json()
+        == {
+            "error": "conflict",
+            "message": "The guest interrupt is no longer current",
+        }
+    )
+    assert validations == [_INTERRUPT_ID, next_id, next_id]
+    assert timeline == ["reserve", f"schedule:{next_id}"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code", "body"),
+    [
+        (
+            http_extension._GuestThreadNotFoundError(),
+            404,
+            {"detail": "Not Found"},
+        ),
+        (
+            RuntimeError("checkpoint is unavailable"),
+            503,
+            {
+                "error": "service_unavailable",
+                "message": "Guest interrupt validation is unavailable",
+            },
+        ),
+    ],
+    ids=["ownership-changed", "state-unavailable"],
+)
+async def test_guest_resume_validation_failure_never_spends_or_dispatches(
+    monkeypatch,
+    failure,
+    status_code,
+    body,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    async def interrupted(_thread_id, _user_id):
+        return True, "interrupted"
+
+    async def fail_validation(_thread_id, _user):
+        raise failure
+
+    downstream_calls = 0
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        downstream_calls += 1
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        interrupted,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_current_guest_root_interrupt_id",
+        fail_validation,
+    )
+    ledger = Ledger()
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=ledger,
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_input_respond_command(),
+        )
+
+    assert response.status_code == status_code
+    assert response.json() == body
+    assert ledger.calls == 0
+    assert downstream_calls == 0
+
+
+async def test_guest_resume_state_timeout_releases_claim_without_spend(
+    monkeypatch,
+):
+    timeline: list[str] = []
+    lookups = 0
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("reserve")
+
+    async def interrupted(_thread_id, _user_id):
+        return True, "interrupted"
+
+    async def current_interrupt(_thread_id, _user):
+        nonlocal lookups
+        lookups += 1
+        if lookups == 1:
+            await asyncio.Event().wait()
+        return _INTERRUPT_ID
+
+    async def downstream(scope, receive, send):
+        command = json.loads(await _request_body(receive))
+        timeline.append("schedule")
+        await JSONResponse(
+            {
+                "id": command["id"],
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "run-resumed"},
+                "type": "success",
+            }
+        )(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        interrupted,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_current_guest_root_interrupt_id",
+        current_interrupt,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_GUEST_INTERRUPT_VALIDATION_TIMEOUT_SECONDS",
+        0.01,
+    )
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+        )
+    )
+    headers = _guest_headers()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        timed_out = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_input_respond_command(),
+        )
+        assert app._active == set()
+        recovered = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_input_respond_command(),
+        )
+
+    assert timed_out.status_code == 503
+    assert timed_out.json() == {
+        "error": "service_unavailable",
+        "message": "Guest interrupt validation is unavailable",
+    }
+    assert timed_out.headers["retry-after"] == "1"
+    assert recovered.status_code == 200
+    assert lookups == 2
+    assert timeline == ["reserve", "schedule"]
+
+
+@pytest.mark.parametrize(
+    "changed_field",
+    ["owner", "status", "timestamp", "graph"],
+)
+async def test_guest_root_interrupt_lookup_fails_closed_when_thread_fence_changes(
+    monkeypatch,
+    changed_field,
+):
+    stamp = datetime(2026, 7, 28, tzinfo=UTC)
+    before = http_extension._OwnedGuestThread(
+        status="interrupted",
+        graph_id="agent",
+        updated_at=stamp,
+    )
+    if changed_field == "owner":
+        after = None
+    else:
+        after = http_extension._OwnedGuestThread(
+            status="busy" if changed_field == "status" else "interrupted",
+            graph_id="other" if changed_field == "graph" else "agent",
+            updated_at=(
+                stamp + timedelta(microseconds=1)
+                if changed_field == "timestamp"
+                else stamp
+            ),
+        )
+    records = iter((before, after))
+
+    async def owned_thread(_thread_id, _identity):
+        return next(records)
+
+    class Graph:
+        def with_config(self, _config):
+            return self
+
+        async def aget_state(self, _config, *, subgraphs):
+            assert subgraphs is False
+            return SimpleNamespace(
+                interrupts=(SimpleNamespace(id=_INTERRUPT_ID),),
+            )
+
+    class GraphContext:
+        async def __aenter__(self):
+            return Graph()
+
+        async def __aexit__(self, _error_type, _error, _traceback):
+            return False
+
+    class Service:
+        def get_graph(self, *_args, **_kwargs):
+            return GraphContext()
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_guest_thread",
+        owned_thread,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "get_langgraph_service",
+        Service,
+    )
+    user = {
+        "identity": f"anon:{uuid4()}",
+        "is_authenticated": True,
+        "permissions": [ANONYMOUS_PERMISSION],
+    }
+
+    if changed_field == "owner":
+        with pytest.raises(http_extension._GuestThreadNotFoundError):
+            await http_extension._current_guest_root_interrupt_id(
+                "guest-thread",
+                user,
+            )
+    else:
+        assert (
+            await http_extension._current_guest_root_interrupt_id(
+                "guest-thread",
+                user,
+            )
+            is None
+        )
 
 
 async def test_foreign_guest_thread_is_hidden_before_reservation_and_dispatch(
@@ -1931,8 +2504,126 @@ async def test_accepted_native_thread_reserves_immediately_before_schedule(
     }
 
 
-async def test_unsupported_native_input_resume_is_rejected_before_reservation(
+async def test_guest_thread_lock_brackets_ownership_reservation_and_schedule(
     monkeypatch,
+):
+    timeline: list[str] = []
+
+    @asynccontextmanager
+    async def thread_lock(thread_id, *, timeout_seconds):
+        assert thread_id == "guest-thread"
+        assert timeout_seconds > 0
+        timeline.append("lock")
+        try:
+            yield
+        finally:
+            timeline.append("unlock")
+
+    async def idle(_thread_id, _user_id):
+        timeline.append("ownership")
+        return True, "idle"
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("reserve")
+
+    async def downstream(scope, receive, send):
+        await _request_body(receive)
+        timeline.append("schedule")
+        await JSONResponse(
+            {
+                "id": 7,
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "run-1"},
+                "type": "success",
+            }
+        )(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_advisory_lock",
+        thread_lock,
+    )
+    monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", idle)
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 200
+    assert timeline == ["lock", "ownership", "reserve", "schedule", "unlock"]
+
+
+async def test_guest_run_start_cannot_resurrect_a_missing_thread_after_gc(
+    monkeypatch,
+):
+    timeline: list[str] = []
+
+    @asynccontextmanager
+    async def thread_lock(_thread_id, *, timeout_seconds):
+        assert timeout_seconds > 0
+        timeline.append("lock")
+        try:
+            yield
+        finally:
+            timeline.append("unlock")
+
+    async def missing(_thread_id, _user_id):
+        timeline.append("ownership")
+        return True, None
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("reserve")
+
+    async def downstream(scope, receive, send):
+        del scope, receive, send
+        timeline.append("schedule")
+
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_advisory_lock",
+        thread_lock,
+    )
+    monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", missing)
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+    assert timeline == ["lock", "ownership", "unlock"]
+
+
+@pytest.mark.parametrize("unsupported", ["update", "goto"])
+async def test_guest_unsupported_resume_form_uses_canonical_wire_400(
+    monkeypatch,
+    unsupported,
 ):
     class Ledger:
         def __init__(self):
@@ -1954,7 +2645,7 @@ async def test_unsupported_native_input_resume_is_rejected_before_reservation(
     monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", idle)
     ledger = Ledger()
     command = _input_respond_command()
-    command["params"]["update"] = {"private": "must-not-dispatch"}
+    command["params"][unsupported] = {"private": "must-not-dispatch"}
     app = NativeThreadGuard(
         GuestRunGuard(
             downstream,
@@ -1971,9 +2662,11 @@ async def test_unsupported_native_input_resume_is_rejected_before_reservation(
             json=command,
         )
 
-    assert response.status_code == 200
-    assert response.json()["type"] == "error"
-    assert response.json()["error"] == "invalid_argument"
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_argument",
+        "message": "Guest request is invalid",
+    }
     assert ledger.calls == 0
     assert not called
 

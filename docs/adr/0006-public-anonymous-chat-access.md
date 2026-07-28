@@ -78,15 +78,53 @@ Capabilities are tiered:
 | Dynamic subagents | off by default; bounded tier only after P4.5/P5 gates | owner/eval experiment first | bounded |
 | Thread retention | ~14 days, GC'd | persistent | persistent |
 
-Paid guest commands cross the in-process same-thread acceptance guard before the guest
-spend guard. Ownership, an existing busy run, guard capacity, and Aegra 0.9.24's
-unsupported `input.respond` mutation forms are therefore rejected before the
-non-refundable daily reservation. Guest resumes additionally require an interrupted
-thread, the root namespace, and Aegra's exact 32-character lowercase-hex interrupt ID;
-ordinary `run.start` is rejected while that guest thread is waiting for input. Once
-accepted, the guest guard canonicalizes the request, consumes the process-local rate
-token, reserves the durable worst-case amount, and calls Aegra immediately; post-dispatch
-failures remain intentionally charged.
+Both paid guest methods pass the strict guest wire validator before taking a mutation
+claim. Native-valid but guest-invalid `run.start` and `input.respond` bodies therefore
+reach the canonical guest 400 after the foreign-thread hiding check, without consuming
+capacity, rate, or budget and without reading graph state or dispatching. Valid guest
+commands require an already-created owned thread; a command waiting behind retention GC
+cannot resurrect the deleted identifier as a new thread. Owner commands keep Aegra's
+native behavior and do not take the guest lock.
+
+Each valid guest command opens a dedicated, unpooled PostgreSQL transaction and takes a
+deterministic per-thread transaction-scoped advisory lock before ownership, status, and
+graph-state validation. The lock remains held through the local capacity claim, the
+inner rate/budget guard, and Aegra's downstream scheduling response. Cancellation drains
+rollback and connection cleanup even after another cancellation request. Guest resumes
+additionally require an interrupted thread and root namespace. Their exact 32-character
+lowercase-hex ID must equal the sole pending interrupt returned by LangGraph's latest
+official root `aget_state(..., subgraphs=False)` snapshot; checking only the ID format or
+only `Thread.status == "interrupted"` is insufficient because a client can retain an ID
+from an earlier interrupted run.
+
+The state read is bracketed by fresh owner-scoped thread reads and is accepted only when
+status, graph ID, and `updated_at` are unchanged. A row that disappears or changes owner
+during validation returns the same hidden 404; a changed or ambiguous state is a 409,
+and a failed or five-second timed-out state read is a 503. None reaches rate consumption,
+durable reservation, or dispatch. A PostgreSQL row lock is deliberately not held across
+command scheduling because Aegra must update that same row before returning.
+
+Retention GC first performs a plain bounded candidate read. For each candidate it tries
+the same per-thread advisory key in the GC session's outer transaction, then performs an
+exact owner/policy/expiry/status recheck with `FOR UPDATE SKIP LOCKED`, deletes checkpoint
+children, and deletes the thread parent. The transaction-scoped lock is released only
+when that outer transaction commits the parent deletion; an advisory- or row-contended
+candidate is skipped for a later sweep. This order prevents GC from row-locking a
+command's thread while that command is trying to commit Aegra's busy state, and prevents
+a command from observing the MVCC-visible old parent between deletion and commit.
+
+This is cross-process coordination, not a claim that command scheduling and retention
+are one atomic transaction. PostgreSQL releases the command advisory lock if its
+dedicated backend connection is lost; the downstream request could theoretically
+continue without that lock because there is not yet a durable command claim or shared
+transactional scheduling queue. Production therefore keeps the existing single-instance
+deployment and process-local limiter, and multi-instance rollout remains gated on that
+stronger boundary. Owner resumes remain under Aegra's native behavior unchanged.
+Ordinary guest `run.start` is rejected while its thread is waiting for input.
+
+Once accepted, the guest guard canonicalizes the request, consumes the process-local
+rate token, reserves the durable worst-case amount, and calls Aegra immediately;
+post-dispatch failures remain intentionally charged.
 
 **Rollout is gated on plan phase P3.** Nothing in that phase is optional.
 
@@ -145,6 +183,10 @@ failures remain intentionally charged.
 - 2026-07-28: fixed the middleware acceptance seam so native same-thread rejection
   precedes the non-refundable guest reservation and accepted commands reserve
   immediately before Aegra scheduling.
-- 2026-07-28: required root, pinned-format guest interrupt identities and an interrupted
-  thread before a resume can reserve budget, preventing rejected protocol mutations from
-  consuming the shared daily ceiling.
+- 2026-07-28: required each guest resume ID to match the sole pending interrupt from the
+  latest official LangGraph root state, with fresh owner/status/graph/update-stamp reads
+  before and after that lookup while a deterministic PostgreSQL per-thread lock stays
+  held through scheduling. Retention GC now takes the same key before its exact locked
+  recheck and retains it through parent-delete commit; stale, ambiguous, changed,
+  unavailable, timed-out, GC-deleted, and contended states fail before reservation or
+  conflicting deletion.

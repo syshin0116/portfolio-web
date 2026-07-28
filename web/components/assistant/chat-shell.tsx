@@ -10,9 +10,8 @@ import {
   type ReasoningMessagePartProps,
   type TextMessagePartProps,
   type ToolCallMessagePartProps,
-  useMessage,
-  useThreadListItem,
-  useThreadListItemRuntime,
+  useAui,
+  useAuiState,
 } from "@assistant-ui/react"
 import {
   useLangGraphInterruptState,
@@ -294,9 +293,9 @@ function AnswerSources({ sources }: { sources: readonly InspectionSource[] }) {
 }
 
 function ChatMessage() {
-  const role = useMessage((message) => message.role)
-  const rawSources = useMessage(
-    (message) => message.metadata.custom.sources
+  const role = useAuiState((state) => state.message.role)
+  const rawSources = useAuiState(
+    (state) => state.message.metadata.custom.sources
   )
   const sources = useMemo(
     () => inspectionSourcesFromUnknown(rawSources),
@@ -716,20 +715,29 @@ function Conversation() {
 }
 
 function ThreadListItem() {
-  const item = useThreadListItem()
-  const runtime = useThreadListItemRuntime()
+  const aui = useAui()
+  const itemId = useAuiState((state) => state.threadListItem.id)
+  const itemTitle = useAuiState(
+    (state) => state.threadListItem.title
+  )
+  const itemStatus = useAuiState(
+    (state) => state.threadListItem.status
+  )
+  const itemLastMessageAt = useAuiState(
+    (state) => state.threadListItem.lastMessageAt
+  )
   const [editing, setEditing] = useState(false)
-  const [title, setTitle] = useState(item.title ?? "")
+  const [title, setTitle] = useState(itemTitle ?? "")
   const [renameError, setRenameError] = useState<string>()
   const [renaming, setRenaming] = useState(false)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!editing) {
-      setTitle(item.title ?? "")
+      setTitle(itemTitle ?? "")
       setRenameError(undefined)
     }
-  }, [editing, item.title])
+  }, [editing, itemTitle])
 
   const submitRename = async (event: FormEvent) => {
     event.preventDefault()
@@ -738,7 +746,14 @@ function ThreadListItem() {
     setRenameError(undefined)
     setRenaming(true)
     try {
-      await runtime.rename(normalized)
+      // assistant-ui 0.15 types AssistantClient commands as fire-and-forget,
+      // while the pinned remote runtime still returns the adapter Promise.
+      // Keep that reviewed compatibility assertion at this one UX boundary so
+      // a rejected remote rename remains visible and retryable.
+      const rename = aui.threadListItem().rename as unknown as (
+        newTitle: string
+      ) => Promise<void>
+      await rename(normalized)
     } catch {
       setRenaming(false)
       setRenameError(
@@ -755,12 +770,12 @@ function ThreadListItem() {
     <ThreadListItemPrimitive.Root className="group flex items-center gap-1 rounded-lg data-[active=true]:bg-accent">
       {editing ? (
         <form className="min-w-0 flex-1 p-1" onSubmit={submitRename}>
-          <label className="sr-only" htmlFor={`title-${item.id}`}>
+          <label className="sr-only" htmlFor={`title-${itemId}`}>
             대화 제목
           </label>
           <input
             ref={renameInputRef}
-            id={`title-${item.id}`}
+            id={`title-${itemId}`}
             autoFocus
             value={title}
             onChange={(event) => {
@@ -774,14 +789,14 @@ function ThreadListItem() {
             }}
             disabled={renaming}
             aria-describedby={
-              renameError ? `title-error-${item.id}` : undefined
+              renameError ? `title-error-${itemId}` : undefined
             }
             aria-invalid={renameError !== undefined}
             className="w-full rounded border bg-background px-2 py-1.5 text-sm"
           />
           {renameError ? (
             <p
-              id={`title-error-${item.id}`}
+              id={`title-error-${itemId}`}
               role="alert"
               className="px-1 pt-1 text-xs text-destructive"
             >
@@ -792,11 +807,11 @@ function ThreadListItem() {
       ) : (
         <ThreadListItemPrimitive.Trigger className="min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm">
           <span className="block truncate">
-            {item.title || "제목을 만드는 중…"}
+            {itemTitle || "제목을 만드는 중…"}
           </span>
-          {item.lastMessageAt ? (
+          {itemLastMessageAt ? (
             <span className="mt-0.5 block text-[11px] text-foreground">
-              {item.lastMessageAt.toLocaleDateString("ko-KR")}
+              {itemLastMessageAt.toLocaleDateString("ko-KR")}
             </span>
           ) : null}
         </ThreadListItemPrimitive.Trigger>
@@ -814,7 +829,7 @@ function ThreadListItem() {
           <Pencil className="size-3.5" />
         </button>
       ) : null}
-      {item.status === "archived" ? (
+      {itemStatus === "archived" ? (
         <ThreadListItemPrimitive.Unarchive
           aria-label="대화 복원"
           className="mr-1 flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"

@@ -11,8 +11,8 @@ describe("native assistant-ui architecture contract", () => {
       dependencies: Record<string, string>
     }
     expect(packageJson.dependencies).toMatchObject({
-      "@assistant-ui/react": "0.14.28",
-      "@assistant-ui/react-langgraph": "0.14.13",
+      "@assistant-ui/react": "0.15.0",
+      "@assistant-ui/react-langgraph": "0.14.15",
       "@langchain/core": "1.2.3",
       "@langchain/langgraph-sdk": "1.9.28",
       "@langchain/protocol": "0.0.18",
@@ -37,6 +37,12 @@ describe("native assistant-ui architecture contract", () => {
     expect(provider).toContain("useLangGraphRuntime({")
     expect(provider).toContain("<AssistantRuntimeProvider runtime={runtime}>")
     expect(provider).toContain("unstable_threadListAdapter: threadAdapter")
+    const chatShell = await read("../chat-shell.tsx")
+    expect(chatShell).toContain("useAuiState(")
+    expect(chatShell).toContain("aui.threadListItem().rename")
+    expect(chatShell).not.toMatch(
+      /\buse(?:Message|ThreadListItem|ThreadListItemRuntime)\b/
+    )
     expect(nativeClient).toContain(
       "this.client.threads.stream(boundThreadId"
     )

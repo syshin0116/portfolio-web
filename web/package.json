@@ -18,8 +18,8 @@
     "test:browser": "env -u NO_COLOR playwright test --config=playwright.config.ts"
   },
   "dependencies": {
-    "@assistant-ui/react": "0.14.28",
-    "@assistant-ui/react-langgraph": "0.14.13",
+    "@assistant-ui/react": "0.15.0",
+    "@assistant-ui/react-langgraph": "0.14.15",
     "@auth/pg-adapter": "^1.11.3",
     "@giscus/react": "^3.1.0",
     "@langchain/core": "1.2.3",

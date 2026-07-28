@@ -83,8 +83,8 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `langchain` | `==1.3.14` | |
 | `langchain-quickjs` | `==0.3.4` | async execution only; owner/eval tier first |
 | `pyjwt` | `==2.13.0` | replaces 130 LOC of hand-rolled base64url + HMAC |
-| `@assistant-ui/react` | `0.14.28` | |
-| `@assistant-ui/react-langgraph` | `0.14.13` | native `useLangGraphRuntime`; **not** `react-langchain` |
+| `@assistant-ui/react` | `0.15.0` | |
+| `@assistant-ui/react-langgraph` | `0.14.15` | native `useLangGraphRuntime`; **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
 
 **Already dropped:** `chromadb` (zero call sites).

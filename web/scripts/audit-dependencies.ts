@@ -40,10 +40,10 @@ const EXPECTED_ESLINT_PLUGIN_RECORDS = new Map([
 ])
 
 const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
-  ["@assistant-ui/react", "@assistant-ui/react@0.14.28"],
+  ["@assistant-ui/react", "@assistant-ui/react@0.15.0"],
   [
     "@assistant-ui/react-langgraph",
-    "@assistant-ui/react-langgraph@0.14.13",
+    "@assistant-ui/react-langgraph@0.14.15",
   ],
   ["@auth/pg-adapter", "@auth/pg-adapter@1.11.3"],
   ["@langchain/core", "@langchain/core@1.2.3"],
@@ -57,8 +57,8 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
 ])
 
 const EXPECTED_NATIVE_AGENT_PINS = new Map([
-  ["@assistant-ui/react", "0.14.28"],
-  ["@assistant-ui/react-langgraph", "0.14.13"],
+  ["@assistant-ui/react", "0.15.0"],
+  ["@assistant-ui/react-langgraph", "0.14.15"],
   ["@langchain/langgraph-sdk", "1.9.28"],
   ["@langchain/protocol", "0.0.18"],
 ])

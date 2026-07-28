@@ -166,8 +166,8 @@ describe("dependency audit exception policy", () => {
   })
 
   test.each([
-    ["@assistant-ui/react", "0.14.28", "0.14.27"],
-    ["@assistant-ui/react-langgraph", "0.14.13", "0.14.12"],
+    ["@assistant-ui/react", "0.15.0", "0.14.28"],
+    ["@assistant-ui/react-langgraph", "0.14.15", "0.14.13"],
     ["@langchain/langgraph-sdk", "1.9.28", "1.9.27"],
     ["@langchain/protocol", "0.0.18", "0.0.17"],
   ])(

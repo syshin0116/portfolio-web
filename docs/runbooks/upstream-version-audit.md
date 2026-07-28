@@ -89,7 +89,7 @@ makes a network request. Release checks are allowlisted only to
 At implementation time, the official stable versions were Aegra API/CLI `0.9.24`, Agent
 Protocol `langchain-protocol==0.0.18`, Deep Agents `0.6.12`, LangGraph `1.2.9`, Python
 LangGraph SDK `0.4.2`, LangChain QuickJS `0.3.4`, QuickJS Rust binding `0.2.5`,
-assistant-ui React `0.14.28`, its LangGraph adapter `0.14.13`, and JavaScript LangGraph
+assistant-ui React `0.15.0`, its LangGraph adapter `0.14.15`, and JavaScript LangGraph
 SDK `1.9.28`. This dated snapshot is evidence, not the audit input; each run reads the
 official endpoint again and exposes normalized `installed`, `latest`, `source`, and
 `releaseUrl` fields for every active target.

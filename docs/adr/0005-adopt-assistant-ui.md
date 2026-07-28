@@ -65,8 +65,8 @@ Three findings de-risked this substantially:
 
 ## Decision
 
-Adopt `@assistant-ui/react` 0.14.28 and
-`@assistant-ui/react-langgraph` 0.14.13 through native `useLangGraphRuntime`.
+Adopt `@assistant-ui/react` 0.15.0 and
+`@assistant-ui/react-langgraph` 0.14.15 through native `useLangGraphRuntime`.
 The runtime callback uses the official `@langchain/langgraph-sdk` 1.9.28
 `Client.threads.stream` / `ThreadStream` / `MessageAssembler` surface with
 `streamProtocol: "v2"`. `submitRun` and `respondInput` still send Aegra's supported

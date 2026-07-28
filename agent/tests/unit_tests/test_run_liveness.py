@@ -598,12 +598,30 @@ async def test_owner_completion_cancels_and_drains_a_hung_liveness_poll(
     assert engine.disposed
 
 
-async def test_owner_monitor_releases_active_db_lock_when_owner_task_ends(
+async def test_owner_monitor_persists_proof_before_releasing_active_db_lock(
     monkeypatch,
 ):
     connection = _Connection(active_values=(True, True))
     engine, _created = _install_engine(monkeypatch, connection)
     monitor_ready = asyncio.get_running_loop().create_future()
+    proof_written = asyncio.Event()
+    owner_task: asyncio.Task[None]
+
+    async def mark_drained(*, run_id, thread_id, identity):
+        assert (run_id, thread_id, identity) == (
+            _RUN_ID,
+            _THREAD_ID,
+            _IDENTITY,
+        )
+        assert owner_task.done()
+        connection.events.append("drain-proof")
+        proof_written.set()
+
+    monkeypatch.setattr(
+        run_liveness,
+        "mark_guest_execution_drained",
+        mark_drained,
+    )
 
     async def failed_owner():
         fence = await acquire_guest_execution_fence(
@@ -620,7 +638,14 @@ async def test_owner_monitor_releases_active_db_lock_when_owner_task_ends(
         await owner_task
     await monitor
 
-    assert connection.events[-4:] == ["unlock", "unlock", "commit", "close"]
+    assert proof_written.is_set()
+    assert connection.events[-5:] == [
+        "drain-proof",
+        "unlock",
+        "unlock",
+        "commit",
+        "close",
+    ]
     assert engine.disposed
 
 

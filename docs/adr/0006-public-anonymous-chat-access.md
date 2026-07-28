@@ -167,8 +167,13 @@ post-dispatch failures remain intentionally charged.
   candidate whose same-key transactional liveness lock and the shared guest-thread lock
   are both acquired. Its exact `thread`/`runs` recheck uses
   `FOR UPDATE OF t, r SKIP LOCKED`, so one row-locked candidate cannot stop the rest of a
-  bounded sweep. If session loss makes the liveness lock acquirable while its owner still
-  exists, the atomic marker and trigger below fence every late owner write.
+  bounded sweep. The recovery and GC `batch_size` values cap successful mutations rather
+  than initial candidates: each reads at most 1,000 ordered candidates, skips contended or
+  changed rows in advisory-lock-before-row-lock order, and stops at the requested success
+  count. This bounded overfetch prevents a locked head row from starving an eligible
+  successor without creating an unbounded scan. If session loss makes the liveness lock
+  acquirable while its owner still exists, the atomic marker and trigger below fence
+  every late owner write.
 - A terminated PostgreSQL backend necessarily destroys its session lock before the
   monitor can drain its owner. Recovery therefore writes a namespaced marker into that
   run's `execution_params` in the same active-to-error UPDATE. Project schema migration
@@ -185,17 +190,21 @@ post-dispatch failures remain intentionally charged.
   holding the same guest-thread advisory lock and rejects it before ownership, capacity,
   spend reservation, or dispatch. Both the initial GC candidate read and its exact
   locked recheck exclude unresolved rows, preventing both deletion and batch starvation.
-- On fence loss or abnormal monitor termination, the monitor boundedly cancels and
-  awaits both the Aegra owner and its pending database operation. Only after both are
-  terminal does a new bounded, unpooled database connection record
-  `drained_at = clock_timestamp()`. The proof is persisted before any still-live fence
-  connection is released. If that proof arrived before recovery, the recovery upsert
-  fills only `recovered_at` and preserves `drained_at`. If a hard process crash leaves no
-  monitor to write the proof, elapsed time never resolves the quarantine: later
-  maintenance sweeps and replacement starts remain blocked until an operator establishes
-  equivalent external drain proof. Once both timestamps exist, a normal follow-up may
-  use a new unmarked `run_id`, and expired-thread GC may again delete checkpoint children
-  before the parent.
+- The owner monitor has the same durable ordering invariant on normal and abnormal
+  exits. On a normal owner exit, it first observes the owner task terminal, cancels and
+  awaits any pending database poll, commits `drained_at = clock_timestamp()` through a
+  new bounded unpooled connection, and only then unlocks or invalidates the still-live
+  fence. On fence loss or abnormal monitor termination, it first boundedly cancels and
+  awaits both the Aegra owner and pending poll, then commits the same proof before
+  invalidating any surviving fence. A poll that cannot drain may require fence-session
+  invalidation first; recovery is then fail-closed by an unresolved quarantine until the
+  subsequent proof commits, and a proof-write failure never fabricates resolution. If a
+  proof arrived before recovery, the recovery upsert fills only `recovered_at` and
+  preserves `drained_at`. If a hard process crash leaves no monitor to write the proof,
+  elapsed time never resolves the quarantine: later maintenance sweeps and replacement
+  starts remain blocked until an operator establishes equivalent external drain proof.
+  Once both timestamps exist, a normal follow-up may use a new unmarked `run_id`, and
+  expired-thread GC may again delete checkpoint children before the parent.
   Maintenance imports both identity and recovery-marker contracts from side-effect-free
   modules and does not require the runtime authentication secret.
 - LLM spend becomes a function of traffic rather than of one person's usage. The only

@@ -250,7 +250,7 @@ async def test_reconcile_fails_only_selected_stale_local_guest_runs(monkeypatch)
         "release-threads",
     ]
     assert session.selection_parameters == {
-        "batch_size": 7,
+        "candidate_limit": MAX_RECONCILE_BATCH_SIZE,
         "guest_subject_pattern": maintenance._CANONICAL_GUEST_SUBJECT_PATTERN,
         "retention_policy": GUEST_RETENTION_POLICY,
         "stale_after_seconds": STALE_GUEST_RUN_THRESHOLD_SECONDS,
@@ -392,14 +392,14 @@ async def test_reconcile_skips_one_locked_row_and_recovers_the_next_candidate(
         lambda: lambda: _AsyncContext(session),
     )
 
-    result = await reconcile_stale_guest_runs(batch_size=2)
+    result = await reconcile_stale_guest_runs(batch_size=1)
 
     assert result == StaleGuestRunResult(
         lock_acquired=True,
         liveness_skipped_runs=0,
         reconciled_runs=1,
         released_threads=1,
-        batch_limit=2,
+        batch_limit=1,
         stale_after_seconds=STALE_GUEST_RUN_THRESHOLD_SECONDS,
     )
     assert events == [
@@ -422,6 +422,35 @@ async def test_reconcile_skips_one_locked_row_and_recovers_the_next_candidate(
     }
 
 
+async def test_reconcile_batch_size_caps_successes_after_bounded_overfetch(
+    monkeypatch,
+):
+    candidate_a = ("run-a", "guest-thread-a", _IDENTITY_A)
+    candidate_b = ("run-b", "guest-thread-b", _IDENTITY_B)
+    events = []
+    session = _Session(
+        events,
+        candidate_rows=(candidate_a, candidate_b),
+        liveness_lock_results=(True,),
+        locked_rows=(candidate_a,),
+        failed_run_ids=("run-a",),
+        quarantined_keys=(candidate_a,),
+        released_thread_ids=("guest-thread-a",),
+    )
+    monkeypatch.setattr(
+        maintenance,
+        "get_session_maker",
+        lambda: lambda: _AsyncContext(session),
+    )
+
+    result = await reconcile_stale_guest_runs(batch_size=1)
+
+    assert result.reconciled_runs == 1
+    assert result.batch_limit == 1
+    assert session.failed_parameters["run_ids"] == ["run-a"]
+    assert "thread-lock:guest-thread-b" not in events
+
+
 def test_reconcile_sql_excludes_fresh_leased_and_non_guest_rows():
     selection_sql = str(maintenance._STALE_LOCAL_GUEST_RUNS_SQL)
     recheck_sql = str(maintenance._LOCKED_STALE_LOCAL_GUEST_RUN_SQL)
@@ -437,7 +466,7 @@ def test_reconcile_sql_excludes_fresh_leased_and_non_guest_rows():
     assert "r.claimed_by IS NULL" in selection_sql
     assert "r.lease_expires_at IS NULL" in selection_sql
     assert "FOR UPDATE" not in selection_sql
-    assert "LIMIT :batch_size" in selection_sql
+    assert "LIMIT :candidate_limit" in selection_sql
     assert "r.run_id = :run_id" in recheck_sql
     assert "r.thread_id = :thread_id" in recheck_sql
     assert "r.user_id = :identity" in recheck_sql
@@ -541,7 +570,7 @@ async def test_gc_deletes_checkpoint_children_before_thread_parents(monkeypatch)
         "delete-parent:guest-thread-b",
     ]
     assert session.selection_parameters == {
-        "batch_size": 7,
+        "candidate_limit": MAX_GC_BATCH_SIZE,
         "retention_policy": GUEST_RETENTION_POLICY,
     }
     assert "FOR UPDATE" not in session.candidate_sql
@@ -618,6 +647,28 @@ async def test_gc_skips_contended_thread_and_rechecks_each_acquired_candidate(
             "FOR UPDATE SKIP LOCKED",
         )
     )
+
+
+async def test_gc_batch_size_caps_successes_after_bounded_overfetch(monkeypatch):
+    events = []
+    session = _Session(
+        events,
+        thread_ids=("guest-thread-a", "guest-thread-b"),
+    )
+    monkeypatch.setattr(
+        maintenance,
+        "get_session_maker",
+        lambda: lambda: _AsyncContext(session),
+    )
+
+    result = await collect_expired_guest_threads(
+        batch_size=1,
+        checkpointer=_Checkpointer(events),
+    )
+
+    assert result.deleted_threads == 1
+    assert result.batch_limit == 1
+    assert "thread-lock:guest-thread-b" not in events
 
 
 @pytest.mark.parametrize("batch_size", [0, -1, True, MAX_GC_BATCH_SIZE + 1])

@@ -384,7 +384,7 @@ async def _finish_abnormal_monitor(
     owner_task: asyncio.Task[Any],
     pending_operation: asyncio.Task[Any] | None,
 ) -> None:
-    """Cancel and fully drain both tasks before writing the durable proof."""
+    """Drain both tasks, commit proof, then invalidate any surviving fence."""
     pending_drained, owner_drained = await asyncio.gather(
         _cancel_and_drain_task(
             pending_operation,
@@ -429,16 +429,23 @@ async def _finish_abnormal_monitor(
 async def _finish_normal_monitor(
     fence: GuestExecutionFence,
     *,
+    owner_task: asyncio.Task[Any],
     pending_operation: asyncio.Task[Any] | None,
-    needs_drain_proof: bool,
     force_invalidate_after_proof: bool,
 ) -> None:
+    """Commit proof after owner/query drain and before voluntary fence release."""
     operation_was_pending = (
         pending_operation is not None and not pending_operation.done()
     )
-    pending_drained = await _cancel_and_drain_task(
-        pending_operation,
-        timeout_seconds=PENDING_QUERY_DRAIN_TIMEOUT_SECONDS,
+    pending_drained, owner_drained = await asyncio.gather(
+        _cancel_and_drain_task(
+            pending_operation,
+            timeout_seconds=PENDING_QUERY_DRAIN_TIMEOUT_SECONDS,
+        ),
+        _cancel_and_drain_task(
+            owner_task,
+            timeout_seconds=OWNER_TASK_DRAIN_TIMEOUT_SECONDS,
+        ),
     )
     if not pending_drained:
         await _close_fence_bounded(fence, force_invalidate=True)
@@ -446,15 +453,20 @@ async def _finish_normal_monitor(
             pending_operation,
             timeout_seconds=PENDING_QUERY_DRAIN_TIMEOUT_SECONDS,
         )
-        needs_drain_proof = True
-    if not pending_drained:
+    if not owner_drained:
+        if not fence._closed:
+            await _close_fence_bounded(fence, force_invalidate=True)
+        owner_drained = await _cancel_and_drain_task(
+            owner_task,
+            timeout_seconds=OWNER_TASK_DRAIN_TIMEOUT_SECONDS,
+        )
+    if not pending_drained or not owner_drained:
         raise GuestExecutionDrainError(
-            "guest execution database operation did not drain"
+            "guest execution owner or database operation did not drain"
         )
     force_invalidate_after_proof = force_invalidate_after_proof or operation_was_pending
     try:
-        if needs_drain_proof:
-            await _persist_drain_proof(fence)
+        await _persist_drain_proof(fence)
     finally:
         if not fence._closed:
             await _close_fence_bounded(
@@ -577,7 +589,6 @@ async def _hold_for_owner_lifetime(
     active_error: BaseException | None = None
     poll_task: asyncio.Task[bool] | None = None
     owner_wait_task = asyncio.create_task(owner_done.wait())
-    needs_drain_proof = False
     force_invalidate_after_proof = False
     try:
         while True:
@@ -591,9 +602,8 @@ async def _hold_for_owner_lifetime(
             if owner_wait_task in done:
                 if poll_task.done():
                     try:
-                        needs_drain_proof = poll_task.result() is not True
+                        poll_task.result()
                     except BaseException:
-                        needs_drain_proof = True
                         force_invalidate_after_proof = True
                 break
 
@@ -607,7 +617,6 @@ async def _hold_for_owner_lifetime(
                     raise GuestExecutionFenceRejectedError(
                         "guest execution became inactive before its owner drained"
                     ) from None
-                needs_drain_proof = True
                 break
             try:
                 async with asyncio.timeout(
@@ -632,8 +641,8 @@ async def _hold_for_owner_lifetime(
             if active_error is not None
             else _finish_normal_monitor(
                 fence,
+                owner_task=owner_task,
                 pending_operation=poll_task,
-                needs_drain_proof=needs_drain_proof,
                 force_invalidate_after_proof=force_invalidate_after_proof,
             )
         )

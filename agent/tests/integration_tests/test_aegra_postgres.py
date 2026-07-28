@@ -3488,6 +3488,18 @@ async def test_owner_failure_releases_active_fence_for_stale_recovery():
                 "error",
                 STALE_GUEST_RUN_ERROR,
             )
+            await cursor.execute(
+                """
+                SELECT recovered_at IS NOT NULL, drained_at IS NOT NULL
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            assert await cursor.fetchone() == (True, True)
             await cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
             assert (await cursor.fetchone())[0] is True
             await cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))

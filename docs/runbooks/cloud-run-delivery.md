@@ -419,10 +419,13 @@ timestamps only in an access-controlled console. A row with `drained_at` already
 is resolved even when the drain proof was written before recovery. Never delete the row,
 set `drained_at`, or infer safety from `recovered_at` age alone.
 
-The normal resolution is automatic: the surviving owner monitor cancels and awaits its
-owner plus any pending database operation, then writes `drained_at` through a fresh
-bounded connection. If the process hard-crashed before that proof, leave the quarantine
-in place unless an operator can establish an equivalent external drain proof:
+The normal resolution is automatic: after the owner task is terminal, the surviving
+monitor cancels and awaits any pending database operation, commits `drained_at` through a
+fresh bounded connection, and only then releases its fence. On an abnormal monitor path,
+it first cancels and awaits both owner and pending operation, then commits the same proof
+before releasing a surviving fence. If the process hard-crashed before that proof, leave
+the quarantine in place unless an operator can establish an equivalent external drain
+proof:
 
 1. Disable anonymous traffic and replace or stop every Cloud Run revision that could have
    owned the execution. Confirm the old revision has zero active instances and requests.

@@ -27,6 +27,8 @@ from agent.run_liveness import (
 GUEST_RETENTION_POLICY = "anonymous-14d-v1"
 MAX_GC_BATCH_SIZE = 1_000
 MAX_RECONCILE_BATCH_SIZE = 1_000
+_GC_CANDIDATE_SCAN_LIMIT = MAX_GC_BATCH_SIZE
+_RECONCILE_CANDIDATE_SCAN_LIMIT = MAX_RECONCILE_BATCH_SIZE
 STALE_GUEST_RUN_ERROR = (
     "Anonymous run stopped after the local executor became unavailable"
 )
@@ -64,7 +66,7 @@ _EXPIRED_GUEST_THREADS_SQL = text(
         {_EXPIRED_GUEST_THREAD_PREDICATE}
         AND {_UNRESOLVED_GUEST_QUARANTINE_PREDICATE}
     ORDER BY metadata_json ->> 'guest_expires_at', thread_id
-    LIMIT :batch_size
+    LIMIT :candidate_limit
     """
 )
 _EXPIRED_GUEST_THREAD_FOR_UPDATE_SQL = text(
@@ -111,7 +113,7 @@ _STALE_LOCAL_GUEST_RUNS_SQL = text(
                 )
         )
     ORDER BY r.updated_at, r.run_id
-    LIMIT :batch_size
+    LIMIT :candidate_limit
     """
 )
 _LOCKED_STALE_LOCAL_GUEST_RUN_SQL = text(
@@ -285,7 +287,9 @@ async def reconcile_stale_guest_runs(
     Aegra 0.9.24's local executor has no crash reaper. A hard process exit can
     therefore leave ``pending``/``running`` runs and ``busy`` threads forever.
     Redis worker rows carry lease state and are deliberately outside this
-    project-owned recovery path.
+    project-owned recovery path. ``batch_size`` caps successful reconciliations;
+    one bounded overfetch lets locked or contended candidates yield their place
+    to eligible rows later in the same ordered scan.
     """
     _validate_batch_size(batch_size, maximum=MAX_RECONCILE_BATCH_SIZE)
     result_kwargs = {
@@ -309,7 +313,7 @@ async def reconcile_stale_guest_runs(
             )
 
         parameters = {
-            "batch_size": batch_size,
+            "candidate_limit": _RECONCILE_CANDIDATE_SCAN_LIMIT,
             "guest_subject_pattern": _CANONICAL_GUEST_SUBJECT_PATTERN,
             "retention_policy": GUEST_RETENTION_POLICY,
             "stale_after_seconds": STALE_GUEST_RUN_THRESHOLD_SECONDS,
@@ -319,11 +323,13 @@ async def reconcile_stale_guest_runs(
             parameters,
         )
         candidate_rows = tuple(candidates.all())
-        if len(candidate_rows) > batch_size:
-            raise RuntimeError("stale guest recovery exceeded its batch limit")
+        if len(candidate_rows) > _RECONCILE_CANDIDATE_SCAN_LIMIT:
+            raise RuntimeError("stale guest recovery exceeded its candidate scan limit")
         locked_candidates: list[tuple[str, str, str]] = []
         liveness_skipped_runs = 0
         for row in candidate_rows:
+            if len(locked_candidates) >= batch_size:
+                break
             run_id, thread_id, identity = row
             if not isinstance(run_id, str) or not run_id:
                 raise RuntimeError("stale guest recovery selected an invalid run id")
@@ -446,7 +452,11 @@ async def collect_expired_guest_threads(
     batch_size: int = MAX_GC_BATCH_SIZE,
     checkpointer: Any | None = None,
 ) -> GuestGCResult:
-    """Serialize, recheck, then delete expired guest checkpoint/parent pairs."""
+    """Delete up to ``batch_size`` eligible checkpoint/parent pairs.
+
+    The ordered candidate scan is independently bounded so lock contention or
+    an exact-recheck miss does not consume the successful-deletion budget.
+    """
     _validate_batch_size(batch_size, maximum=MAX_GC_BATCH_SIZE)
     active_checkpointer = checkpointer or db_manager.get_checkpointer()
     if not callable(getattr(active_checkpointer, "adelete_thread", None)):
@@ -467,13 +477,17 @@ async def collect_expired_guest_threads(
         candidates = await session.execute(
             _EXPIRED_GUEST_THREADS_SQL,
             {
-                "batch_size": batch_size,
+                "candidate_limit": _GC_CANDIDATE_SCAN_LIMIT,
                 "retention_policy": GUEST_RETENTION_POLICY,
             },
         )
         thread_ids = tuple(candidates.scalars())
+        if len(thread_ids) > _GC_CANDIDATE_SCAN_LIMIT:
+            raise RuntimeError("guest GC exceeded its candidate scan limit")
         deleted_threads = 0
         for thread_id in thread_ids:
+            if deleted_threads >= batch_size:
+                break
             if not isinstance(thread_id, str) or not thread_id:
                 raise RuntimeError("guest GC selected an invalid thread id")
             thread_lock = await session.execute(

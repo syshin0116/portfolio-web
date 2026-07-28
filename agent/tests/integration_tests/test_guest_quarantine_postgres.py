@@ -29,6 +29,7 @@ from agent.auth import (
     TOKEN_AUDIENCE,
     TOKEN_ISSUER,
 )
+from agent.guest_thread_lock import guest_thread_lock_key
 from agent.http import GuestRunGuard, NativeThreadGuard
 from agent.maintenance import (
     GUEST_RETENTION_POLICY,
@@ -334,7 +335,7 @@ async def test_initial_gc_candidates_skip_unresolved_rows_without_starvation(
         assert await cursor.fetchall() == [(blocked_thread,)]
 
 
-async def test_locked_recovery_candidate_does_not_stop_the_sweep(
+async def test_locked_recovery_candidate_does_not_consume_batch_size_one(
     postgres_case,
 ):
     unique = uuid4().hex
@@ -436,7 +437,7 @@ async def test_locked_recovery_candidate_does_not_stop_the_sweep(
             """,
             (first_thread, first_run),
         )
-        first_sweep = await reconcile_stale_guest_runs(batch_size=10)
+        first_sweep = await reconcile_stale_guest_runs(batch_size=1)
         assert first_sweep.reconciled_runs == 1
         assert first_sweep.released_threads == 1
         assert first_sweep.liveness_skipped_runs == 0
@@ -462,6 +463,179 @@ async def test_locked_recovery_candidate_does_not_stop_the_sweep(
     second_sweep = await reconcile_stale_guest_runs(batch_size=10)
     assert second_sweep.reconciled_runs == 1
     assert second_sweep.released_threads == 1
+
+
+async def test_contended_liveness_candidate_does_not_consume_batch_size_one(
+    postgres_case,
+):
+    unique = uuid4().hex
+    first_thread = f"live-first-thread-{unique}"
+    second_thread = f"live-second-thread-{unique}"
+    first_run = f"000-live-run-{unique}"
+    second_run = f"999-free-run-{unique}"
+    first_identity = f"anon:{uuid4()}"
+    second_identity = f"anon:{uuid4()}"
+    postgres_case.track(first_thread, second_thread)
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+
+    async with (
+        await psycopg.AsyncConnection.connect(postgres_case.url) as connection,
+        connection.cursor() as cursor,
+    ):
+        await cursor.executemany(
+            """
+            INSERT INTO thread (
+                thread_id,
+                status,
+                metadata_json,
+                user_id,
+                created_at,
+                updated_at
+            )
+            VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+            """,
+            [
+                (
+                    first_thread,
+                    _retention(expired=False),
+                    first_identity,
+                    stale,
+                    stale,
+                ),
+                (
+                    second_thread,
+                    _retention(expired=False),
+                    second_identity,
+                    stale,
+                    stale,
+                ),
+            ],
+        )
+        await cursor.executemany(
+            """
+            INSERT INTO runs (
+                run_id,
+                thread_id,
+                status,
+                user_id,
+                created_at,
+                updated_at,
+                execution_params,
+                claimed_by,
+                lease_expires_at
+            )
+            VALUES (
+                %s,
+                %s,
+                'running',
+                %s,
+                %s,
+                %s,
+                '{}'::jsonb,
+                NULL,
+                NULL
+            )
+            """,
+            [
+                (
+                    first_run,
+                    first_thread,
+                    first_identity,
+                    stale - timedelta(minutes=1),
+                    stale - timedelta(minutes=1),
+                ),
+                (
+                    second_run,
+                    second_thread,
+                    second_identity,
+                    stale,
+                    stale,
+                ),
+            ],
+        )
+
+    fence = await acquire_guest_execution_fence(
+        run_id=first_run,
+        thread_id=first_thread,
+        identity=first_identity,
+    )
+    try:
+        result = await reconcile_stale_guest_runs(batch_size=1)
+    finally:
+        await fence.aclose()
+
+    assert result.reconciled_runs == 1
+    assert result.released_threads == 1
+    assert result.liveness_skipped_runs == 1
+    async with (
+        await psycopg.AsyncConnection.connect(postgres_case.url) as connection,
+        connection.cursor() as cursor,
+    ):
+        await cursor.execute(
+            """
+            SELECT run_id, status
+            FROM runs
+            WHERE run_id = ANY(%s)
+            ORDER BY run_id
+            """,
+            ([first_run, second_run],),
+        )
+        assert await cursor.fetchall() == [
+            (first_run, "running"),
+            (second_run, "error"),
+        ]
+
+
+async def test_contended_gc_candidate_does_not_consume_batch_size_one(
+    postgres_case,
+):
+    unique = uuid4().hex
+    first_thread = f"000-live-thread-{unique}"
+    second_thread = f"999-free-thread-{unique}"
+    first_identity = f"anon:{uuid4()}"
+    second_identity = f"anon:{uuid4()}"
+    postgres_case.track(first_thread, second_thread)
+
+    async with (
+        await psycopg.AsyncConnection.connect(postgres_case.url) as connection,
+        connection.cursor() as cursor,
+    ):
+        await cursor.executemany(
+            """
+            INSERT INTO thread (
+                thread_id,
+                status,
+                metadata_json,
+                user_id
+            )
+            VALUES (%s, 'idle', %s::jsonb, %s)
+            """,
+            [
+                (first_thread, _retention(expired=True), first_identity),
+                (second_thread, _retention(expired=True), second_identity),
+            ],
+        )
+
+    async with await psycopg.AsyncConnection.connect(
+        postgres_case.url
+    ) as locked_connection:
+        lock_key = guest_thread_lock_key(first_thread)
+        await locked_connection.execute(
+            "SELECT pg_advisory_lock(%s)",
+            (lock_key,),
+        )
+        result = await collect_expired_guest_threads(batch_size=1)
+
+        assert result.deleted_threads == 1
+        async with (
+            await psycopg.AsyncConnection.connect(postgres_case.url) as observation,
+            observation.cursor() as cursor,
+        ):
+            await cursor.execute(
+                "SELECT thread_id FROM thread WHERE thread_id = ANY(%s)",
+                ([first_thread, second_thread],),
+            )
+            assert await cursor.fetchall() == [(first_thread,)]
 
 
 async def test_recovery_uses_statement_clock_and_preserves_prior_drain_proof(

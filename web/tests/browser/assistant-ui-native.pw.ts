@@ -22,6 +22,11 @@ interface FixtureState {
     response?: unknown
   }>
   revision: string
+  stateRequests: Array<{
+    authorization: boolean
+    interrupted: boolean
+    threadId: string
+  }>
   staleSourceDeliveries: number
   streamSubscriptions: Array<{
     authorization: boolean
@@ -36,6 +41,8 @@ interface BrowserDiagnostics {
 }
 
 const fixtureOrigin = "http://127.0.0.1:3130"
+const fixtureWebOrigin = "http://127.0.0.1:3128"
+const fixtureOwnerCookie = "fixture-owner-session"
 const revision =
   process.env.GITHUB_SHA?.trim() ||
   process.env.TEST_REVISION?.trim() ||
@@ -48,9 +55,21 @@ async function resetFixture(
     | "default"
     | "delayed-replay"
     | "load-error"
+    | "public-root-state-fallback"
     | "reconnect"
-    | "stale-source" = "default"
+    | "stale-source" = "default",
+  access: "anonymous" | "owner" = "owner"
 ): Promise<void> {
+  await page.context().clearCookies()
+  if (access === "owner") {
+    await page.context().addCookies([
+      {
+        name: fixtureOwnerCookie,
+        value: "1",
+        url: fixtureWebOrigin,
+      },
+    ])
+  }
   const response = await page.request.post(
     `${fixtureOrigin}/__fixture/reset`,
     { data: { scenario } }
@@ -114,7 +133,11 @@ async function expectA11yClean(page: Page): Promise<void> {
     result.violations.map((violation) => ({
       id: violation.id,
       impact: violation.impact,
-      nodes: violation.nodes.map((node) => node.target),
+      nodes: violation.nodes.map((node) => ({
+        failureSummary: node.failureSummary,
+        html: node.html,
+        target: node.target,
+      })),
     }))
   ).toEqual([])
 }
@@ -529,9 +552,220 @@ test.describe.serial("native assistant-ui production journey", () => {
   })
 })
 
+test("bootstraps and resumes the public Turnstile journey with the native runtime", async ({
+  page,
+}, testInfo) => {
+  const diagnostics = collectDiagnostics(page)
+  const tokenRequests: Array<string | null> = []
+  await page.setViewportSize({ width: 390, height: 820 })
+  await resetFixture(
+    page,
+    "public-root-state-fallback",
+    "anonymous"
+  )
+  await page.route(
+    "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
+    async (route) => {
+      await route.fulfill({
+        contentType: "application/javascript",
+        body: `
+          window.turnstile = (() => {
+            const widgets = new Map();
+            let sequence = 0;
+            return {
+              render(_container, options) {
+                const id = "fixture-turnstile-" + (++sequence);
+                widgets.set(id, options);
+                const count = Number(
+                  sessionStorage.getItem("fixture-turnstile-renders") || "0"
+                ) + 1;
+                sessionStorage.setItem(
+                  "fixture-turnstile-renders",
+                  String(count)
+                );
+                setTimeout(
+                  () => options.callback("fixture-turnstile-token"),
+                  0
+                );
+                return id;
+              },
+              reset(id) {
+                const options = widgets.get(id);
+                if (options) {
+                  setTimeout(
+                    () => options.callback("fixture-turnstile-token"),
+                    0
+                  );
+                }
+              },
+              remove(id) {
+                widgets.delete(id);
+              }
+            };
+          })();
+        `,
+      })
+    }
+  )
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/agent-token") {
+      tokenRequests.push(request.postData())
+    }
+  })
+
+  await page.goto("/anonymous")
+  await expect(
+    page.getByTestId("public-anonymous-runtime-fixture")
+  ).toBeVisible()
+  await expect(
+    page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
+  ).toBeVisible({ timeout: 12_000 })
+  expect(tokenRequests).toEqual([
+    null,
+    JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
+  ])
+  expect(
+    await page.evaluate(() =>
+      sessionStorage.getItem("fixture-turnstile-renders")
+    )
+  ).toBe("1")
+
+  await page.getByRole("button", { name: "대화 목록 열기" }).click()
+  await page
+    .getByRole("button", { name: /브라우저 테스트 대화/ })
+    .click()
+  await page.getByRole("button", { name: "Close" }).click()
+  const composer = page.getByRole("textbox", {
+    name: "AI에게 보낼 메시지",
+  })
+  await composer.fill("공개 익명 경로에서 한글 질문")
+  await composer.press("Enter")
+  await expect(
+    page.getByText("공개 fixture 검색을 계속할까요?")
+  ).toBeVisible({ timeout: 12_000 })
+  const interruptedState = await fixtureState(page)
+  expect(interruptedState.stateRequests).toEqual(
+    expect.arrayContaining([
+      {
+        authorization: true,
+        interrupted: true,
+        threadId: "browser-thread-1",
+      },
+    ])
+  )
+
+  await page.getByRole("button", { name: "승인", exact: true }).click()
+  await expect(
+    page.getByText("브라우저 fixture 응답이 완료되었습니다.")
+  ).toBeVisible({ timeout: 12_000 })
+  const resumedState = await fixtureState(page)
+  expect(resumedState.errors).toEqual([])
+  expect(resumedState.responses).toEqual([
+    expect.objectContaining({
+      namespace: [],
+      interrupt_id: "0123456789abcdef0123456789abcdef",
+      response: "approve",
+      metadata: expect.objectContaining({
+        syshin_ui_submit_nonce: expect.any(String),
+      }),
+    }),
+  ])
+
+  await page.reload()
+  await expect(
+    page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
+  ).toBeVisible({ timeout: 12_000 })
+  expect(tokenRequests).toEqual([
+    null,
+    JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
+    null,
+  ])
+  expect(
+    await page.evaluate(() =>
+      sessionStorage.getItem("fixture-turnstile-renders")
+    )
+  ).toBe("1")
+  await expectA11yClean(page)
+  await expectNoBrowserErrors(page, diagnostics)
+  await attachEvidence(page, testInfo, "public-anonymous-turnstile")
+})
+
+test("keeps the public Turnstile challenge accessible at mobile widths", async ({
+  browser,
+}, testInfo) => {
+  for (const width of [320, 390]) {
+    const context = await browser.newContext({
+      reducedMotion: "reduce",
+      viewport: { width, height: 820 },
+    })
+    const page = await context.newPage()
+    const diagnostics = collectDiagnostics(page)
+    const tokenRequests: Array<string | null> = []
+    await resetFixture(page, "default", "anonymous")
+    await page.route(
+      "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
+      async (route) => {
+        await route.fulfill({
+          contentType: "application/javascript",
+          body: `
+            window.turnstile = {
+              render(container) {
+                const control = document.createElement("button");
+                control.type = "button";
+                control.textContent = "로봇이 아닙니다";
+                container.appendChild(control);
+                return "fixture-pending-turnstile";
+              },
+              reset() {},
+              remove() {}
+            };
+          `,
+        })
+      }
+    )
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/agent-token") {
+        tokenRequests.push(request.postData())
+      }
+    })
+
+    await page.goto("/anonymous")
+    await expect(
+      page.getByRole("heading", { name: "누구나 테스트할 수 있어요" })
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "로봇이 아닙니다" })
+    ).toBeVisible()
+    await expect(
+      page.getByText("대화는 이 브라우저에서 이어지며 최대 14일 뒤 삭제됩니다.")
+    ).toBeVisible()
+    await expect(
+      page.getByRole("link", { name: "소유자 계정으로 로그인" })
+    ).toBeVisible()
+    expect(tokenRequests).toEqual([null])
+
+    const dimensions = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }))
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(
+      dimensions.clientWidth
+    )
+    await expectA11yClean(page)
+    await expectNoBrowserErrors(page, diagnostics)
+    await attachEvidence(
+      page,
+      testInfo,
+      `public-anonymous-challenge-${width}px`
+    )
+    await context.close()
+  }
+})
+
 test("has no horizontal overflow at supported widths and honors reduced motion", async ({
   browser,
 }, testInfo) => {
+  test.setTimeout(60_000)
   for (const width of [320, 390, 768, 1440]) {
     const context = await browser.newContext({
       reducedMotion: "reduce",
@@ -544,9 +778,17 @@ test("has no horizontal overflow at supported widths and honors reduced motion",
     await expect(
       page.getByTestId("production-native-runtime-fixture")
     ).toBeVisible()
+    if (width < 768) {
+      await page
+        .getByRole("button", { name: "대화 목록 열기" })
+        .click()
+    }
     await page
       .getByRole("button", { name: /브라우저 테스트 대화/ })
       .click()
+    if (width < 768) {
+      await page.getByRole("button", { name: "Close" }).click()
+    }
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
     })
@@ -562,12 +804,15 @@ test("has no horizontal overflow at supported widths and honors reduced motion",
     expect(dimensions.scrollWidth).toBeLessThanOrEqual(
       dimensions.clientWidth
     )
-    const newThread = page.getByRole("button", { name: "새 대화" })
+    const reducedMotionControl =
+      width < 768
+        ? page.getByRole("button", { name: "대화 목록 열기" })
+        : page.getByRole("button", { name: "새 대화" })
     expect(
-      await newThread.evaluate(
-        (element) => getComputedStyle(element).transitionDuration
+      await reducedMotionControl.evaluate(
+        (element) => getComputedStyle(element).transitionProperty
       )
-    ).toBe("0s")
+    ).toBe("none")
     await expectA11yClean(page)
     await expectNoBrowserErrors(page, diagnostics)
     await testInfo.attach(`responsive-${width}-${revision}.png`, {

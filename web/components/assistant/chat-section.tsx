@@ -3,10 +3,10 @@
 import { useAuth } from "@/contexts/AuthContext"
 
 import { AgentRuntimeProvider } from "./agent-runtime-provider"
+import { AnonymousChatGate } from "./anonymous-chat-gate"
 import {
   ChatLoading,
   ChatShell,
-  SignedOutChat,
 } from "./chat-shell"
 
 export default function ChatSection() {
@@ -14,7 +14,7 @@ export default function ChatSection() {
   const identity = user?.id ?? user?.email
 
   if (loading) return <ChatLoading />
-  if (!identity) return <SignedOutChat />
+  if (!identity) return <AnonymousChatGate />
 
   // The key is intentional: an auth-subject transition destroys the complete
   // assistant runtime, thread list, token cache, and active APv2 stream.

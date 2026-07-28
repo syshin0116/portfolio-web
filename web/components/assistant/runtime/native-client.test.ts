@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import type { Client, ThreadState, ThreadStream } from "@langchain/langgraph-sdk"
-import type { Event } from "@langchain/protocol"
+import {
+  Client,
+  type AgentServerAdapter,
+  type ThreadState,
+  type ThreadStream,
+} from "@langchain/langgraph-sdk"
+import type { Command, Event, Message } from "@langchain/protocol"
 import type {
   LangChainMessage,
   LangGraphMessagesEvent,
@@ -34,6 +39,81 @@ const protocolEvents = (fixture: {
       ? [record.payload as Event]
       : []
   )
+
+describe("@langchain/langgraph-sdk 1.9.28 public ThreadStream contract", () => {
+  test("retains a server-projected root input payload when payload and value aliases are identical", async () => {
+    const interruptId = "0123456789abcdef0123456789abcdef"
+    const payload = {
+      schema: "syshin.rag.interrupt.v1",
+      kind: "approval",
+      prompt: "공개 검색을 계속할까요?",
+    }
+    const inputEvent = {
+      type: "event",
+      method: "input.requested",
+      event_id: "sdk-contract-run_event_1:0",
+      seq: 1,
+      params: {
+        namespace: [],
+        timestamp: 1,
+        data: {
+          interrupt_id: interruptId,
+          payload,
+          value: payload,
+        },
+      },
+    } as Event
+    const adapter: AgentServerAdapter = {
+      threadId: "sdk-contract-thread",
+      open: async () => undefined,
+      send: async (command: Command) => ({
+        type: "success",
+        id: command.id,
+        result: { run_id: "sdk-contract-run" },
+        meta: { applied_through_seq: 0 },
+      }),
+      async *events(): AsyncGenerator<Message> {
+        return
+      },
+      openEventStream: () => {
+        let closed = false
+        return {
+          ready: Promise.resolve(),
+          events: {
+            async *[Symbol.asyncIterator](): AsyncGenerator<Message> {
+              if (!closed) yield inputEvent
+            },
+          },
+          close: () => {
+            closed = true
+          },
+        }
+      },
+      close: async () => undefined,
+    }
+    const client = new Client({
+      apiUrl: "https://unused-sdk-contract.example",
+      apiKey: null,
+      streamProtocol: "v2",
+    })
+    const thread = client.threads.stream("sdk-contract-thread", {
+      assistantId: "agent",
+      transport: adapter,
+    })
+
+    await thread.submitRun({ input: { messages: [] } })
+    await waitUntil(() => thread.interrupts.length === 1)
+
+    expect(thread.interrupts).toEqual([
+      {
+        interruptId,
+        namespace: [],
+        payload,
+      },
+    ])
+    await thread.close()
+  })
+})
 
 describe("NativeMessageProjection", () => {
   test("assembles real APv2 tool partial JSON and text content blocks", () => {
@@ -605,6 +685,62 @@ describe("APv2 state and HITL normalization", () => {
     )
   })
 
+  test.each([
+    {
+      label: "a nested namespace",
+      interrupts: [
+        {
+          id: "0123456789abcdef0123456789abcdef",
+          ns: ["nested_worker:unsafe"],
+          resumable: true,
+          when: "during",
+        },
+      ],
+    },
+    {
+      label: "a non-public interrupt identifier",
+      interrupts: [
+        {
+          id: "interrupt-legacy-1",
+          ns: [],
+          resumable: true,
+          when: "during",
+        },
+      ],
+    },
+    {
+      label: "an omitted root namespace",
+      interrupts: [
+        {
+          id: "0123456789abcdef0123456789abcdef",
+          resumable: true,
+          when: "during",
+        },
+      ],
+    },
+    {
+      label: "multiple otherwise valid interrupts",
+      interrupts: [
+        {
+          id: "0123456789abcdef0123456789abcdef",
+          ns: [],
+          resumable: true,
+          when: "during",
+        },
+        {
+          id: "fedcba9876543210fedcba9876543210",
+          ns: [],
+          resumable: true,
+          when: "during",
+        },
+      ],
+    },
+  ])("rejects $label in the public state fallback", ({ interrupts }) => {
+    expect(() =>
+      nativeClientTesting.pendingFromPublicRootState({ interrupts })
+    ).toThrow("안전하게")
+  })
+
   test("does not misclassify resumed-run resolver exhaustion as user cancellation", async () => {
     const controller = new AbortController()
     controller.abort(
@@ -815,6 +951,401 @@ describe("native stream lifecycle", () => {
       },
     ])
     expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(1)
+  })
+
+  test("recovers one exact public root interrupt from state when lifecycle arrives without input", async () => {
+    const interruptId = "0123456789abcdef0123456789abcdef"
+    const responded: unknown[] = []
+    const fakeClient = makeClient(
+      [
+        {
+          events: [lifecycle("running"), lifecycle("interrupted")],
+        },
+        {
+          events: [lifecycle("running"), lifecycle("completed")],
+          onRespond: (params) => responded.push(params),
+        },
+      ],
+      {
+        onGetState: () => ({
+          values: { messages: [] },
+          next: [],
+          checkpoint: {
+            checkpoint_id: "checkpoint-public-root",
+            checkpoint_ns: "",
+          },
+          metadata: {},
+          created_at: "2026-07-28T00:00:00Z",
+          parent_checkpoint: null,
+          tasks: [],
+          interrupts: [
+            {
+              id: interruptId,
+              ns: [],
+              resumable: true,
+              when: "during",
+              value: {
+                schema: "syshin.rag.interrupt.v1",
+                kind: "approval",
+                title: "공개 검색 승인",
+                prompt: "공개 검색을 계속할까요?",
+                input_hint: "응답을 입력해 재개",
+              },
+            },
+          ],
+        }),
+      }
+    )
+    const native = makeNative(fakeClient)
+
+    const interrupted = await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "공개 승인" }],
+        streamConfig()
+      )
+    )
+
+    expect(interrupted).toMatchObject([
+      {
+        event: "updates",
+        data: {
+          __interrupt__: [
+            {
+              ns: [],
+              value: {
+                recognized: true,
+                kind: "approval",
+                title: "공개 검색 승인",
+                prompt: "공개 검색을 계속할까요?",
+              },
+            },
+          ],
+        },
+      },
+    ])
+    expect(fakeClient.testing.stateReads).toBe(1)
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(1)
+
+    await collect(
+      native.stream([], {
+        ...streamConfig(),
+        command: { resume: "approve" } as never,
+      })
+    )
+    expect(responded).toEqual([
+      expect.objectContaining({
+        namespace: [],
+        interrupt_id: interruptId,
+        response: "approve",
+      }),
+    ])
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+  })
+
+  test.each([
+    {
+      label: "a missing projected value",
+      interrupt: {
+        id: "0123456789abcdef0123456789abcdef",
+        ns: [],
+        resumable: true,
+        when: "during",
+      },
+    },
+    {
+      label: "a value with the wrong schema",
+      interrupt: {
+        id: "0123456789abcdef0123456789abcdef",
+        ns: [],
+        resumable: true,
+        when: "during",
+        value: {
+          schema: "future.private.interrupt",
+          kind: "approval",
+          prompt: "PRIVATE_WRONG_SCHEMA",
+        },
+      },
+    },
+    {
+      label: "a malformed projected value",
+      interrupt: {
+        id: "0123456789abcdef0123456789abcdef",
+        ns: [],
+        resumable: true,
+        when: "during",
+        value: {
+          schema: "syshin.rag.interrupt.v1",
+          kind: "approval",
+          prompt: { private: "PRIVATE_MALFORMED_PROMPT" },
+        },
+      },
+    },
+    {
+      label: "an oversized projected value",
+      interrupt: {
+        id: "0123456789abcdef0123456789abcdef",
+        ns: [],
+        resumable: true,
+        when: "during",
+        value: {
+          schema: "syshin.rag.interrupt.v1",
+          kind: "approval",
+          prompt: `PRIVATE_OVERSIZED_${"가".repeat(481)}`,
+        },
+      },
+    },
+  ])(
+    "fails closed without caching $label from public state",
+    async ({ interrupt }) => {
+      const observedErrors: Error[] = []
+      const fakeClient = makeClient(
+        [
+          {
+            events: [lifecycle("running"), lifecycle("interrupted")],
+          },
+        ],
+        {
+          onGetState: () => ({
+            interrupts: [interrupt],
+          }),
+        }
+      )
+      const native = makeNative(fakeClient, {
+        onError: (error) => observedErrors.push(error),
+      })
+
+      await expect(
+        collect(
+          native.stream(
+            [{ id: "human-invalid", type: "human", content: "공개 승인" }],
+            streamConfig()
+          )
+        )
+      ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+      expect(fakeClient.testing.stateReads).toBe(1)
+      expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+      expect(observedErrors).toHaveLength(1)
+      expect(JSON.stringify(observedErrors)).not.toContain("PRIVATE_")
+    }
+  )
+
+  test("bounds a hung public state fallback and retains no pending interrupt", async () => {
+    let stateSignal: AbortSignal | undefined
+    const observedErrors: Error[] = []
+    const fakeClient = makeClient(
+      [
+        {
+          events: [lifecycle("running"), lifecycle("interrupted")],
+        },
+      ],
+      {
+        onGetState: (signal) => {
+          stateSignal = signal
+          return new Promise<never>(() => undefined)
+        },
+      }
+    )
+    const native = makeNative(fakeClient, {
+      onError: (error) => observedErrors.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-hung", type: "human", content: "상태 타임아웃" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+
+    expect(fakeClient.testing.stateReads).toBe(1)
+    expect(stateSignal?.aborted).toBe(true)
+    expect((stateSignal?.reason as DOMException).name).toBe(
+      "TimeoutError"
+    )
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+    expect(observedErrors).toHaveLength(1)
+  })
+
+  test("preserves caller cancellation while aborting a hung public state fallback", async () => {
+    let stateSignal: AbortSignal | undefined
+    const observedErrors: Error[] = []
+    const fakeClient = makeClient(
+      [
+        {
+          events: [lifecycle("running"), lifecycle("interrupted")],
+        },
+      ],
+      {
+        onGetState: (signal) => {
+          stateSignal = signal
+          return new Promise<never>(() => undefined)
+        },
+      }
+    )
+    const native = makeNative(fakeClient, {
+      onError: (error) => observedErrors.push(error),
+    })
+    const controller = new AbortController()
+    const output = collect(
+      native.stream(
+        [{ id: "human-stop", type: "human", content: "사용자 중지" }],
+        {
+          ...streamConfig(),
+          abortSignal: controller.signal,
+        }
+      )
+    )
+
+    await waitUntil(() => fakeClient.testing.stateReads === 1, 1_500)
+    controller.abort(new DOMException("user stopped", "AbortError"))
+
+    await expect(output).resolves.toEqual([])
+    expect(stateSignal?.aborted).toBe(true)
+    expect((stateSignal?.reason as DOMException).name).toBe("AbortError")
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+    expect(observedErrors).toEqual([])
+  })
+
+  test("preserves dispose cancellation while aborting a hung public state fallback", async () => {
+    let stateSignal: AbortSignal | undefined
+    const observedErrors: Error[] = []
+    const fakeClient = makeClient(
+      [
+        {
+          events: [lifecycle("running"), lifecycle("interrupted")],
+        },
+      ],
+      {
+        onGetState: (signal) => {
+          stateSignal = signal
+          return new Promise<never>(() => undefined)
+        },
+      }
+    )
+    const native = makeNative(fakeClient, {
+      onError: (error) => observedErrors.push(error),
+    })
+    const output = collect(
+      native.stream(
+        [{ id: "human-dispose", type: "human", content: "런타임 폐기" }],
+        streamConfig()
+      )
+    )
+
+    await waitUntil(() => fakeClient.testing.stateReads === 1, 1_500)
+    const disposing = native.dispose()
+
+    await expect(output).resolves.toEqual([])
+    await disposing
+    expect(stateSignal?.aborted).toBe(true)
+    expect((stateSignal?.reason as DOMException).name).toBe("AbortError")
+    expect(nativeClientTesting.inspect(native)).toEqual({
+      activeStreams: 0,
+      disposed: true,
+      pendingInterrupts: 0,
+    })
+    expect(observedErrors).toEqual([])
+  })
+
+  test("ignores a public state fallback that resolves after its deadline", async () => {
+    let resolveState: ((state: unknown) => void) | undefined
+    let stateSignal: AbortSignal | undefined
+    const observedErrors: Error[] = []
+    const fakeClient = makeClient(
+      [
+        {
+          events: [lifecycle("running"), lifecycle("interrupted")],
+        },
+      ],
+      {
+        onGetState: (signal) => {
+          stateSignal = signal
+          return new Promise<unknown>((resolve) => {
+            resolveState = resolve
+          })
+        },
+      }
+    )
+    const native = makeNative(fakeClient, {
+      onError: (error) => observedErrors.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-late", type: "human", content: "늦은 상태" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(stateSignal?.aborted).toBe(true)
+    expect((stateSignal?.reason as DOMException).name).toBe(
+      "TimeoutError"
+    )
+    expect(resolveState).toBeDefined()
+
+    resolveState?.({
+      interrupts: [
+        {
+          id: "0123456789abcdef0123456789abcdef",
+          ns: [],
+          resumable: true,
+          when: "during",
+          value: {
+            schema: "syshin.rag.interrupt.v1",
+            kind: "approval",
+            prompt: "이 늦은 값은 캐시되면 안 됩니다.",
+          },
+        },
+      ],
+    })
+    await Bun.sleep(10)
+
+    expect(fakeClient.testing.stateReads).toBe(1)
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+    expect(observedErrors).toHaveLength(1)
+  })
+
+  test("ignores a public state fallback that rejects after its deadline", async () => {
+    let rejectState: ((error: Error) => void) | undefined
+    const observedErrors: Error[] = []
+    const fakeClient = makeClient(
+      [
+        {
+          events: [lifecycle("running"), lifecycle("interrupted")],
+        },
+      ],
+      {
+        onGetState: () =>
+          new Promise<unknown>((_resolve, reject) => {
+            rejectState = reject
+          }),
+      }
+    )
+    const native = makeNative(fakeClient, {
+      onError: (error) => observedErrors.push(error),
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-late-reject", type: "human", content: "늦은 오류" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("에이전트 실행을 완료하지 못했습니다.")
+    expect(rejectState).toBeDefined()
+
+    rejectState?.(new Error("PRIVATE_LATE_STATE_REJECTION"))
+    await Bun.sleep(10)
+
+    expect(fakeClient.testing.stateReads).toBe(1)
+    expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
+    expect(observedErrors).toHaveLength(1)
+    expect(JSON.stringify(observedErrors)).not.toContain(
+      "PRIVATE_LATE_STATE_REJECTION"
+    )
   })
 
   test("fails closed and retains no pending value when distinct nested interrupts race", async () => {
@@ -2114,6 +2645,9 @@ function isTestRecord(value: unknown): value is Record<string, unknown> {
 function makeClient(
   plans: FakeStreamPlan[],
   options: {
+    onGetState?: (
+      signal: AbortSignal | undefined
+    ) => unknown | Promise<unknown>
     onListRuns?: () => unknown[]
   } = {}
 ): Client & {
@@ -2122,6 +2656,7 @@ function makeClient(
     runStarts: number
     lastMetadata?: Record<string, unknown>
     responds: unknown[]
+    stateReads: number
     submissions: unknown[]
     subscriptions: Array<{ channels: unknown; options: unknown }>
   }
@@ -2131,12 +2666,24 @@ function makeClient(
     runStarts: 0,
     lastMetadata: undefined as Record<string, unknown> | undefined,
     responds: [] as unknown[],
+    stateReads: 0,
     submissions: [] as unknown[],
     subscriptions: [] as Array<{ channels: unknown; options: unknown }>,
   }
   const client = {
     testing,
     threads: {
+      getState: async (
+        _threadId: string,
+        _checkpoint: unknown,
+        stateOptions: { signal?: AbortSignal } | undefined
+      ) => {
+        testing.stateReads += 1
+        if (!options.onGetState) {
+          throw new Error("Unexpected state fallback in fake client")
+        }
+        return await options.onGetState(stateOptions?.signal)
+      },
       stream: () => {
         const plan = plans.shift()
         if (!plan) throw new Error("Missing fake stream plan")
@@ -2337,6 +2884,7 @@ function makeClient(
       runStarts: number
       lastMetadata?: Record<string, unknown>
       responds: unknown[]
+      stateReads: number
       submissions: unknown[]
       subscriptions: Array<{ channels: unknown; options: unknown }>
     }
@@ -2553,8 +3101,11 @@ async function collect(
   return output
 }
 
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function waitUntil(
+  predicate: () => boolean,
+  maxAttempts = 100
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (predicate()) return
     await new Promise((resolve) => setTimeout(resolve, 1))
   }

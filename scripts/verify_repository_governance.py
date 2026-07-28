@@ -224,7 +224,7 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
         "379244ec5d1185963d4cd2c5d4f20b7833b155f44b400c3ab5ae70058f4e6e55"
     ),
     ".github/workflows/agent-release.yml": (
-        "e5d766231219d038bac360fbc7a4521f4635bf44228aa9938eaeb6cf58917f2a"
+        "afe9383f95105da107da1559531b0877149f2e17da4ab4b3a89934dcc337c8e3"
     ),
     ".github/workflows/preview-agent.yml": (
         "492d30bd53ba48a81882350e013ac26c27d65cbd34be23bbd9ae526d31fc7796"
@@ -235,7 +235,7 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
 }
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
 AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
-    "5769654d9b37a91cdc71a5d6d55a34b94f330d766ee02f998489d5057f4cdeaa"
+    "4b243cf809882216a179343dd1f11b5805eb34f48275f0bec4c4256a95f461eb"
 )
 AGENT_RELEASE_CANDIDATE_SCRIPT = "scripts/validate_agent_release_candidate.py"
 AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (

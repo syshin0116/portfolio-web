@@ -120,6 +120,7 @@ jobs:
           GCP_REGION: us-east4
           GRANT_PROBE_JOB: ${{ steps.delivery_identity.outputs.grant_probe_job }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
+          MAINTENANCE_JOB: ${{ steps.delivery_identity.outputs.maintenance_job }}
           MIGRATION_JOB: ${{ steps.delivery_identity.outputs.migration_job }}
           SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
           SOURCE_SHA: ${{ inputs.source_sha }}

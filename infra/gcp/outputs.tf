@@ -67,6 +67,22 @@ output "production_grant_probe_job" {
   value = try(google_cloud_run_v2_job.grant_probe["production"].name, null)
 }
 
+output "preview_maintenance_job" {
+  value = try(google_cloud_run_v2_job.maintenance["preview"].name, null)
+}
+
+output "production_maintenance_job" {
+  value = try(google_cloud_run_v2_job.maintenance["production"].name, null)
+}
+
+output "maintenance_scheduler_service_account" {
+  value = google_service_account.maintenance_scheduler.email
+}
+
+output "production_guest_maintenance_schedule" {
+  value = try(google_cloud_scheduler_job.guest_maintenance["production"].name, null)
+}
+
 output "preview_workload_identity_provider" {
   description = "Retained legacy provider; managed disabled and not trusted by any service account."
   value       = google_iam_workload_identity_pool_provider.preview.name

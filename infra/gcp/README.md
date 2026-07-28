@@ -13,7 +13,7 @@ mutable aliases such as `latest` are forbidden.
 - isolated regional Docker Artifact Registry repositories for production and preview,
   with active 90-day/30-version and 14-day/20-version cleanup floors respectively;
 - distinct production/preview runtime, migrator, deployer, and image-builder service
-  accounts;
+  accounts, plus a dedicated production maintenance-scheduler identity;
 - one canonical active GitHub OIDC provider that maps exact caller/reusable-workflow
   claims to four disjoint builder/deployer roles, plus the managed but disabled legacy
   preview provider;
@@ -21,14 +21,15 @@ mutable aliases such as `latest` are forbidden.
 - five disjoint empty runtime Secret Manager resources plus one separately scoped
   migration URL resource per environment;
 - production and preview Cloud Run services fixed to one instance/one Uvicorn worker;
-- same-image migration and real-Neon runtime-grant jobs for each service;
+- same-image migration, real-Neon runtime-grant, and guest-retention maintenance jobs
+  for each service, with production maintenance invoked every 15 minutes by Cloud Scheduler;
 - each repository writable only by its matching builder and readable only by its matching
   deployer plus the Cloud Run service agent.
 
 The existing `agent-runtime` resource remains the production runtime. Deployers have no
 project-wide Cloud Run role, Artifact Registry write, or Secret Manager payload access.
 They receive repository-scoped Artifact Registry read plus the project custom role
-`cloudRunAgentDelivery` only on the exact service and two jobs they operate. Its complete
+`cloudRunAgentDelivery` only on the exact service and three jobs they operate. Its complete
 permission set is `run.services.get`, `run.services.update`, `run.revisions.get`,
 `run.jobs.get`, `run.jobs.update`, `run.jobs.run`, and `run.operations.get`; it excludes
 delete, create, IAM-policy mutation, and job overrides.
@@ -137,9 +138,10 @@ Initial setup is an explicit complete-root progression:
 1. `foundation` with null image/version inputs creates the registries, identities, WIF,
    IAM, state bucket, and ten empty secrets, but no Cloud Run resources;
 2. `jobs` with isolated production and preview digests plus the exact ten-key numeric
-   version map creates only the two migration jobs and two grant-probe jobs plus resource
-   IAM;
-3. after all four jobs pass, `services` adds the two serving surfaces and service IAM.
+   version map creates only the two migration, two grant-probe, and two maintenance jobs
+   plus resource IAM;
+3. after all six jobs pass, `services` adds the two serving surfaces, service IAM, and
+   the production-only 15-minute maintenance schedule.
 
 Never use `-target` to emulate a stage. After bootstrap, retain `services`, both current
 exact digests, and the complete external version file on every plan; omission proposes
@@ -173,9 +175,9 @@ uv run --frozen --package syshin0116-dev-agent \
 It exact-compares the parsed bodies of the foundation resources, every local, check, output,
 variable, provider/data/backend block, and import target/live object ID. It rejects
 unreviewed modules, `moved` and `removed` blocks, every provisioner, external
-provider/data, `terraform_remote_state`, and executable escape resources. The seven
-deeply nested Cloud Run resources are protected by a byte-exact hash of `cloud_run.tf`;
-the reviewed inventory totals 39 resources. The reviewed
+provider/data, `terraform_remote_state`, and executable escape resources. The eleven
+deeply nested Cloud Run and Scheduler resources are protected by a byte-exact hash of
+`cloud_run.tf`; the reviewed inventory totals 44 resources. The reviewed
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
 Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
 uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or

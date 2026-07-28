@@ -5,6 +5,7 @@ locals {
 
   required_services = toset([
     "artifactregistry.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
@@ -165,6 +166,16 @@ resource "google_service_account" "preview_runtime" {
   project      = var.project_id
   account_id   = "agent-preview-runtime"
   display_name = "Cloud Run preview agent runtime"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_service_account" "maintenance_scheduler" {
+  project      = var.project_id
+  account_id   = "agent-maintenance-scheduler"
+  display_name = "Cloud Scheduler production maintenance invoker"
 
   lifecycle {
     prevent_destroy = true

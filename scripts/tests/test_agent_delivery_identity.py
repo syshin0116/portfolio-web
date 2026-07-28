@@ -23,6 +23,7 @@ TARGETS = {
         "service": "agent-preview",
         "migration": "agent-preview-migrate",
         "grant": "agent-preview-grants",
+        "maintenance": "agent-preview-maintenance",
     },
     "production": {
         "environment": "Agent Production",
@@ -36,6 +37,7 @@ TARGETS = {
         "service": "agent",
         "migration": "agent-migrate",
         "grant": "agent-grants",
+        "maintenance": "agent-maintenance",
     },
 }
 PROVIDER = (
@@ -81,6 +83,10 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
         self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", builder)
         self.assertIn("ref: ${{ inputs.source_sha }}", release)
         self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", release)
+        self.assertIn(
+            "MAINTENANCE_JOB: ${{ steps.delivery_identity.outputs.maintenance_job }}",
+            release,
+        )
 
     def test_caller_only_concurrency_never_cancels_an_approved_release(self) -> None:
         preview = (REPO_ROOT / ".github/workflows/preview-agent.yml").read_text(
@@ -158,6 +164,9 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
                 self.assertIn(f"cloud_run_service={values['service']}\n", result.stdout)
                 self.assertIn(f"migration_job={values['migration']}\n", result.stdout)
                 self.assertIn(f"grant_probe_job={values['grant']}\n", result.stdout)
+                self.assertIn(
+                    f"maintenance_job={values['maintenance']}\n", result.stdout
+                )
                 self.assertNotIn("image_repository=", result.stdout)
 
     def test_builder_rejects_any_release_environment(self) -> None:

@@ -1451,6 +1451,76 @@ class LiveShellGuardTests(unittest.TestCase):
                     result.stderr,
                 )
 
+    def test_guest_maintenance_schedule_requires_exact_oauth_contract(self) -> None:
+        scheduler = {
+            "name": (
+                "projects/festive-ally-503605-v7/locations/us-east4/"
+                "jobs/agent-guest-maintenance"
+            ),
+            "schedule": "*/15 * * * *",
+            "timeZone": "Etc/UTC",
+            "attemptDeadline": "60s",
+            "state": "ENABLED",
+            "retryConfig": {"retryCount": 0},
+            "httpTarget": {
+                "httpMethod": "POST",
+                "uri": (
+                    "https://run.googleapis.com/v2/projects/"
+                    "festive-ally-503605-v7/locations/us-east4/"
+                    "jobs/agent-maintenance:run"
+                ),
+                "body": "e30=",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "User-Agent": "Google-Cloud-Scheduler",
+                },
+                "oauthToken": {
+                    "serviceAccountEmail": (
+                        "agent-maintenance-scheduler@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    ),
+                    "scope": "https://www.googleapis.com/auth/cloud-platform",
+                },
+            },
+        }
+
+        def run(payload: dict[str, object]) -> subprocess.CompletedProcess[str]:
+            schedule_json = shlex.quote(json.dumps(payload, separators=(",", ":")))
+            return self._run_helper(
+                f"""
+gcloud() {{
+  case "$*" in
+    "scheduler jobs describe agent-guest-maintenance --project $PROJECT_ID --location $REGION --format=json")
+      printf '%s\\n' {schedule_json}
+      ;;
+    "iam service-accounts get-iam-policy $MAINTENANCE_SCHEDULER_SA --project $PROJECT_ID --format=json")
+      printf '%s\\n' '{{"bindings":[]}}'
+      ;;
+    *)
+      printf 'unexpected gcloud call: %s\\n' "$*" >&2
+      return 99
+      ;;
+  esac
+}}
+verify_guest_maintenance_schedule
+"""
+            )
+
+        accepted = run(scheduler)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+
+        for field, value in (
+            ("schedule", "*/5 * * * *"),
+            ("attemptDeadline", "600s"),
+            ("state", "PAUSED"),
+        ):
+            with self.subTest(field=field):
+                mutated = json.loads(json.dumps(scheduler))
+                mutated[field] = value
+                rejected = run(mutated)
+                self.assertNotEqual(0, rejected.returncode)
+                self.assertIn("trigger drifted", rejected.stderr)
+
     def test_every_workload_account_is_forbidden_on_ancestor_policies(self) -> None:
         accounts = (
             "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
@@ -1461,6 +1531,7 @@ class LiveShellGuardTests(unittest.TestCase):
             "agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
             "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
+            "agent-maintenance-scheduler@festive-ally-503605-v7.iam.gserviceaccount.com",
         )
         ancestors = json.dumps(
             [
@@ -1589,7 +1660,7 @@ class LiveShellGuardTests(unittest.TestCase):
             verifier,
         )
 
-    def test_project_key_scan_checks_accounts_outside_the_managed_eight(self) -> None:
+    def test_project_key_scan_checks_accounts_outside_the_managed_nine(self) -> None:
         legacy_account = "legacy@festive-ally-503605-v7.iam.gserviceaccount.com"
         inventory = json.dumps(
             [
@@ -1635,6 +1706,12 @@ class LiveShellGuardTests(unittest.TestCase):
                 {
                     "email": (
                         "agent-prod-migrator@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-maintenance-scheduler@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },
@@ -1741,6 +1818,12 @@ verify_project_has_no_user_managed_service_account_keys
                 {
                     "email": (
                         "agent-prod-migrator@festive-ally-503605-v7."
+                        "iam.gserviceaccount.com"
+                    )
+                },
+                {
+                    "email": (
+                        "agent-maintenance-scheduler@festive-ally-503605-v7."
                         "iam.gserviceaccount.com"
                     )
                 },

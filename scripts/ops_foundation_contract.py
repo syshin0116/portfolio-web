@@ -31,7 +31,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "21b13a596eca620da23de74d68015bcccf290afa08aaba0122ebc4e15e688e4e"
+        "227d26c2dcf7b7f3837cce9aa9199ccf6a41ca52862d8200f32ae2211290379f"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -39,18 +39,22 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "60f08e5bbb325acf8cf0e9289078bdad3f6e5b0ff799d78b479b0a7d914aee2c"
+        "9ac2f9769c3d5c77ae30241fe6db3faaae1aa8f5f43238af72b7ba46e7682487"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
     {
         ("google_cloud_run_v2_job", "grant_probe"),
+        ("google_cloud_run_v2_job", "maintenance"),
         ("google_cloud_run_v2_job", "migration"),
         ("google_cloud_run_v2_job_iam_member", "deployer_grant_probe_job"),
+        ("google_cloud_run_v2_job_iam_member", "deployer_maintenance_job"),
         ("google_cloud_run_v2_job_iam_member", "deployer_migration_job"),
+        ("google_cloud_run_v2_job_iam_member", "scheduler_maintenance_job"),
         ("google_cloud_run_v2_service", "agent"),
         ("google_cloud_run_v2_service_iam_member", "deployer_service_update"),
         ("google_cloud_run_v2_service_iam_member", "public_invoker"),
+        ("google_cloud_scheduler_job", "guest_maintenance"),
     }
 )
 EXPECTED_TERRAFORM_TEST_ABSTRACT = {
@@ -549,6 +553,12 @@ EXPECTED_RESOURCE_CONFIGS = {
         "display_name": "Cloud Run preview agent runtime",
         "lifecycle": [{"prevent_destroy": True}],
     },
+    ("google_service_account", "maintenance_scheduler"): {
+        "project": "${var.project_id}",
+        "account_id": "agent-maintenance-scheduler",
+        "display_name": "Cloud Scheduler production maintenance invoker",
+        "lifecycle": [{"prevent_destroy": True}],
+    },
     ("google_service_account", "deployer"): {
         "for_each": "${local.deployers}",
         "project": "${var.project_id}",
@@ -782,6 +792,7 @@ EXPECTED_LOCALS_BY_FILE = {
             "delivery_wif_attribute_condition": EXPECTED_SOURCE_CONDITIONS["delivery"],
             "required_services": (
                 "${toset([artifactregistry.googleapis.com, "
+                "cloudscheduler.googleapis.com, "
                 "cloudresourcemanager.googleapis.com, iam.googleapis.com, "
                 "iamcredentials.googleapis.com, run.googleapis.com, "
                 "secretmanager.googleapis.com, storage.googleapis.com, "
@@ -1002,6 +1013,21 @@ EXPECTED_OUTPUTS = {
     },
     "production_grant_probe_job": {
         "value": '${try(google_cloud_run_v2_job.grant_probe["production"].name, null)}',
+    },
+    "preview_maintenance_job": {
+        "value": '${try(google_cloud_run_v2_job.maintenance["preview"].name, null)}',
+    },
+    "production_maintenance_job": {
+        "value": '${try(google_cloud_run_v2_job.maintenance["production"].name, null)}',
+    },
+    "maintenance_scheduler_service_account": {
+        "value": "${google_service_account.maintenance_scheduler.email}",
+    },
+    "production_guest_maintenance_schedule": {
+        "value": (
+            '${try(google_cloud_scheduler_job.guest_maintenance["production"].name, '
+            "null)}"
+        ),
     },
     "preview_workload_identity_provider": {
         "description": (

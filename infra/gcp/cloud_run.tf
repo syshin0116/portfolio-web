@@ -4,6 +4,7 @@ locals {
       service_name             = "agent-preview"
       migration_job_name       = "agent-preview-migrate"
       grant_probe_job_name     = "agent-preview-grants"
+      maintenance_job_name     = "agent-preview-maintenance"
       runtime_service_account  = google_service_account.preview_runtime.email
       migrator_service_account = google_service_account.migrator["preview"].email
       deployer_service_account = google_service_account.deployer["preview"].email
@@ -34,6 +35,7 @@ locals {
       service_name             = "agent"
       migration_job_name       = "agent-migrate"
       grant_probe_job_name     = "agent-grants"
+      maintenance_job_name     = "agent-maintenance"
       runtime_service_account  = google_service_account.runtime.email
       migrator_service_account = google_service_account.migrator["production"].email
       deployer_service_account = google_service_account.deployer["production"].email
@@ -326,6 +328,72 @@ resource "google_cloud_run_v2_job" "grant_probe" {
   }
 }
 
+resource "google_cloud_run_v2_job" "maintenance" {
+  for_each = var.agent_delivery_stage == "foundation" ? {} : local.cloud_run_environments
+
+  project             = var.project_id
+  name                = each.value.maintenance_job_name
+  location            = var.region
+  deletion_protection = true
+
+  template {
+    template {
+      service_account       = each.value.runtime_service_account
+      max_retries           = 0
+      timeout               = "600s"
+      execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
+
+      containers {
+        name    = "maintenance"
+        image   = each.value.bootstrap_image
+        command = ["python"]
+        args    = ["-m", "agent.maintenance"]
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "1Gi"
+          }
+        }
+
+        env {
+          name  = "ENV_MODE"
+          value = "PRODUCTION"
+        }
+
+        env {
+          name  = "RUN_MIGRATIONS_ON_STARTUP"
+          value = "false"
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = each.value.runtime_secrets.DATABASE_URL.secret
+              version = each.value.runtime_secrets.DATABASE_URL.version
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
+    google_secret_manager_secret_iam_member.preview_runtime_accessor,
+    google_secret_manager_secret_iam_member.runtime_accessor,
+  ]
+
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+    ]
+  }
+}
+
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   for_each = google_cloud_run_v2_service.agent
 
@@ -364,4 +432,68 @@ resource "google_cloud_run_v2_job_iam_member" "deployer_grant_probe_job" {
   name     = each.value.name
   role     = google_project_iam_custom_role.cloud_run_delivery.name
   member   = "serviceAccount:${local.cloud_run_environments[each.key].deployer_service_account}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "deployer_maintenance_job" {
+  for_each = google_cloud_run_v2_job.maintenance
+
+  project  = var.project_id
+  location = each.value.location
+  name     = each.value.name
+  role     = google_project_iam_custom_role.cloud_run_delivery.name
+  member   = "serviceAccount:${local.cloud_run_environments[each.key].deployer_service_account}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "scheduler_maintenance_job" {
+  for_each = var.agent_delivery_stage == "services" ? {
+    production = google_cloud_run_v2_job.maintenance["production"]
+  } : {}
+
+  project  = var.project_id
+  location = each.value.location
+  name     = each.value.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.maintenance_scheduler.email}"
+}
+
+resource "google_cloud_scheduler_job" "guest_maintenance" {
+  for_each = var.agent_delivery_stage == "services" ? {
+    production = local.cloud_run_environments.production
+  } : {}
+
+  project          = var.project_id
+  region           = var.region
+  name             = "agent-guest-maintenance"
+  description      = "Delete expired anonymous agent threads and checkpoints"
+  schedule         = "*/15 * * * *"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "60s"
+  paused           = false
+
+  retry_config {
+    retry_count = 0
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${each.value.maintenance_job_name}:run"
+    body        = base64encode("{}")
+    headers = {
+      "Content-Type" = "application/json"
+    }
+
+    oauth_token {
+      service_account_email = google_service_account.maintenance_scheduler.email
+      scope                 = "https://www.googleapis.com/auth/cloud-platform"
+    }
+  }
+
+  depends_on = [
+    google_cloud_run_v2_job_iam_member.scheduler_maintenance_job,
+    google_project_service.required,
+  ]
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

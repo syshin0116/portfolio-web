@@ -27,8 +27,8 @@ from agent.run_liveness import (
 GUEST_RETENTION_POLICY = "anonymous-14d-v1"
 MAX_GC_BATCH_SIZE = 1_000
 MAX_RECONCILE_BATCH_SIZE = 1_000
-_GC_CANDIDATE_SCAN_LIMIT = MAX_GC_BATCH_SIZE
-_RECONCILE_CANDIDATE_SCAN_LIMIT = MAX_RECONCILE_BATCH_SIZE
+MAX_GC_CANDIDATE_MATERIALIZATION = 2_000
+MAX_RECONCILE_CANDIDATE_MATERIALIZATION = 2_000
 STALE_GUEST_RUN_ERROR = (
     "Anonymous run stopped after the local executor became unavailable"
 )
@@ -288,8 +288,8 @@ async def reconcile_stale_guest_runs(
     therefore leave ``pending``/``running`` runs and ``busy`` threads forever.
     Redis worker rows carry lease state and are deliberately outside this
     project-owned recovery path. ``batch_size`` caps successful reconciliations;
-    one bounded overfetch lets locked or contended candidates yield their place
-    to eligible rows later in the same ordered scan.
+    one independently bounded candidate materialization lets locked or contended
+    candidates yield their place to eligible rows later in the same ordered set.
     """
     _validate_batch_size(batch_size, maximum=MAX_RECONCILE_BATCH_SIZE)
     result_kwargs = {
@@ -313,7 +313,7 @@ async def reconcile_stale_guest_runs(
             )
 
         parameters = {
-            "candidate_limit": _RECONCILE_CANDIDATE_SCAN_LIMIT,
+            "candidate_limit": MAX_RECONCILE_CANDIDATE_MATERIALIZATION,
             "guest_subject_pattern": _CANONICAL_GUEST_SUBJECT_PATTERN,
             "retention_policy": GUEST_RETENTION_POLICY,
             "stale_after_seconds": STALE_GUEST_RUN_THRESHOLD_SECONDS,
@@ -323,8 +323,10 @@ async def reconcile_stale_guest_runs(
             parameters,
         )
         candidate_rows = tuple(candidates.all())
-        if len(candidate_rows) > _RECONCILE_CANDIDATE_SCAN_LIMIT:
-            raise RuntimeError("stale guest recovery exceeded its candidate scan limit")
+        if len(candidate_rows) > MAX_RECONCILE_CANDIDATE_MATERIALIZATION:
+            raise RuntimeError(
+                "stale guest recovery exceeded its candidate materialization limit"
+            )
         locked_candidates: list[tuple[str, str, str]] = []
         liveness_skipped_runs = 0
         for row in candidate_rows:
@@ -454,8 +456,9 @@ async def collect_expired_guest_threads(
 ) -> GuestGCResult:
     """Delete up to ``batch_size`` eligible checkpoint/parent pairs.
 
-    The ordered candidate scan is independently bounded so lock contention or
-    an exact-recheck miss does not consume the successful-deletion budget.
+    The ordered candidate materialization is independently bounded above the
+    success limit so contention or an exact-recheck miss does not consume the
+    successful-deletion budget.
     """
     _validate_batch_size(batch_size, maximum=MAX_GC_BATCH_SIZE)
     active_checkpointer = checkpointer or db_manager.get_checkpointer()
@@ -477,13 +480,13 @@ async def collect_expired_guest_threads(
         candidates = await session.execute(
             _EXPIRED_GUEST_THREADS_SQL,
             {
-                "candidate_limit": _GC_CANDIDATE_SCAN_LIMIT,
+                "candidate_limit": MAX_GC_CANDIDATE_MATERIALIZATION,
                 "retention_policy": GUEST_RETENTION_POLICY,
             },
         )
         thread_ids = tuple(candidates.scalars())
-        if len(thread_ids) > _GC_CANDIDATE_SCAN_LIMIT:
-            raise RuntimeError("guest GC exceeded its candidate scan limit")
+        if len(thread_ids) > MAX_GC_CANDIDATE_MATERIALIZATION:
+            raise RuntimeError("guest GC exceeded its candidate materialization limit")
         deleted_threads = 0
         for thread_id in thread_ids:
             if deleted_threads >= batch_size:
@@ -558,7 +561,9 @@ if __name__ == "__main__":
 __all__ = [
     "GUEST_RETENTION_POLICY",
     "MAX_GC_BATCH_SIZE",
+    "MAX_GC_CANDIDATE_MATERIALIZATION",
     "MAX_RECONCILE_BATCH_SIZE",
+    "MAX_RECONCILE_CANDIDATE_MATERIALIZATION",
     "STALE_GUEST_RUN_ERROR",
     "STALE_GUEST_RUN_THRESHOLD_SECONDS",
     "GuestGCResult",

@@ -17,7 +17,9 @@ from agent.identity import CANONICAL_ANONYMOUS_SUBJECT_PATTERN
 from agent.maintenance import (
     GUEST_RETENTION_POLICY,
     MAX_GC_BATCH_SIZE,
+    MAX_GC_CANDIDATE_MATERIALIZATION,
     MAX_RECONCILE_BATCH_SIZE,
+    MAX_RECONCILE_CANDIDATE_MATERIALIZATION,
     STALE_GUEST_RUN_ERROR,
     STALE_GUEST_RUN_THRESHOLD_SECONDS,
     GuestGCResult,
@@ -250,7 +252,7 @@ async def test_reconcile_fails_only_selected_stale_local_guest_runs(monkeypatch)
         "release-threads",
     ]
     assert session.selection_parameters == {
-        "candidate_limit": MAX_RECONCILE_BATCH_SIZE,
+        "candidate_limit": MAX_RECONCILE_CANDIDATE_MATERIALIZATION,
         "guest_subject_pattern": maintenance._CANONICAL_GUEST_SUBJECT_PATTERN,
         "retention_policy": GUEST_RETENTION_POLICY,
         "stale_after_seconds": STALE_GUEST_RUN_THRESHOLD_SECONDS,
@@ -494,6 +496,13 @@ def test_recovery_recheck_skips_locked_rows_and_records_statement_time_quarantin
     assert "drained_at" not in quarantine_sql.partition("DO UPDATE SET")[2]
 
 
+def test_candidate_materialization_caps_exceed_maximum_success_batches():
+    assert MAX_RECONCILE_CANDIDATE_MATERIALIZATION == 2_000
+    assert MAX_RECONCILE_CANDIDATE_MATERIALIZATION > MAX_RECONCILE_BATCH_SIZE
+    assert MAX_GC_CANDIDATE_MATERIALIZATION == 2_000
+    assert MAX_GC_CANDIDATE_MATERIALIZATION > MAX_GC_BATCH_SIZE
+
+
 def test_gc_candidate_and_exact_recheck_both_exclude_unresolved_quarantine():
     candidate_sql = str(maintenance._EXPIRED_GUEST_THREADS_SQL)
     recheck_sql = str(maintenance._EXPIRED_GUEST_THREAD_FOR_UPDATE_SQL)
@@ -570,7 +579,7 @@ async def test_gc_deletes_checkpoint_children_before_thread_parents(monkeypatch)
         "delete-parent:guest-thread-b",
     ]
     assert session.selection_parameters == {
-        "candidate_limit": MAX_GC_BATCH_SIZE,
+        "candidate_limit": MAX_GC_CANDIDATE_MATERIALIZATION,
         "retention_policy": GUEST_RETENTION_POLICY,
     }
     assert "FOR UPDATE" not in session.candidate_sql

@@ -168,12 +168,12 @@ post-dispatch failures remain intentionally charged.
   are both acquired. Its exact `thread`/`runs` recheck uses
   `FOR UPDATE OF t, r SKIP LOCKED`, so one row-locked candidate cannot stop the rest of a
   bounded sweep. The recovery and GC `batch_size` values cap successful mutations rather
-  than initial candidates: each reads at most 1,000 ordered candidates, skips contended or
-  changed rows in advisory-lock-before-row-lock order, and stops at the requested success
-  count. This bounded overfetch prevents a locked head row from starving an eligible
-  successor without creating an unbounded scan. If session loss makes the liveness lock
-  acquirable while its owner still exists, the atomic marker and trigger below fence
-  every late owner write.
+  than initial candidates: each materializes at most 2,000 ordered candidates, skips
+  contended or changed rows in advisory-lock-before-row-lock order, and stops at the
+  requested success count of at most 1,000. The independent materialization cap remains
+  finite while leaving room to replace locked head rows even at the maximum success
+  batch. If session loss makes the liveness lock acquirable while its owner still exists,
+  the atomic marker and trigger below fence every late owner write.
 - A terminated PostgreSQL backend necessarily destroys its session lock before the
   monitor can drain its owner. Recovery therefore writes a namespaced marker into that
   run's `execution_params` in the same active-to-error UPDATE. Project schema migration

@@ -33,6 +33,8 @@ from agent.guest_thread_lock import guest_thread_lock_key
 from agent.http import GuestRunGuard, NativeThreadGuard
 from agent.maintenance import (
     GUEST_RETENTION_POLICY,
+    MAX_GC_BATCH_SIZE,
+    MAX_RECONCILE_BATCH_SIZE,
     collect_expired_guest_threads,
     reconcile_stale_guest_runs,
 )
@@ -43,6 +45,7 @@ from agent.run_liveness import (
     GuestExecutionFence,
     GuestExecutionSlotUnavailableError,
     acquire_guest_execution_fence,
+    guest_execution_lock_key,
 )
 
 POSTGRES_URL = os.environ.get("AEGRA_POSTGRES_TEST_URL")
@@ -66,6 +69,29 @@ class _PostgresCase:
 
     def track(self, *thread_ids: str) -> None:
         self.thread_ids.extend(thread_ids)
+
+
+@dataclass
+class _RecordingCheckpointer:
+    deleted_thread_ids: list[str] = field(default_factory=list)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        self.deleted_thread_ids.append(thread_id)
+
+
+async def _delete_test_threads(url: str, thread_ids: list[str]) -> None:
+    async with await psycopg.AsyncConnection.connect(url) as connection:
+        await connection.execute(
+            """
+            DELETE FROM agent_guest_execution_quarantine
+            WHERE thread_id = ANY(%s)
+            """,
+            (thread_ids,),
+        )
+        await connection.execute(
+            "DELETE FROM thread WHERE thread_id = ANY(%s)",
+            (thread_ids,),
+        )
 
 
 @pytest.fixture
@@ -636,6 +662,220 @@ async def test_contended_gc_candidate_does_not_consume_batch_size_one(
                 ([first_thread, second_thread],),
             )
             assert await cursor.fetchall() == [(first_thread,)]
+
+
+async def test_max_recovery_batch_replaces_one_contended_head_candidate(
+    postgres_case,
+):
+    unique = uuid4().hex
+    identity = f"anon:{uuid4()}"
+    head_run = f"000-head-run-{unique}"
+    head_thread = f"000-head-thread-{unique}"
+    successors = [
+        (
+            f"successor-run-{index:04d}-{unique}",
+            f"successor-thread-{index:04d}-{unique}",
+        )
+        for index in range(MAX_RECONCILE_BATCH_SIZE)
+    ]
+    thread_ids = [head_thread, *(thread_id for _run_id, thread_id in successors)]
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+
+    try:
+        async with (
+            await psycopg.AsyncConnection.connect(postgres_case.url) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.executemany(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                [
+                    (
+                        thread_id,
+                        _retention(expired=False),
+                        identity,
+                        stale,
+                        stale,
+                    )
+                    for thread_id in thread_ids
+                ],
+            )
+            await cursor.executemany(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    execution_params,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    'running',
+                    %s,
+                    %s,
+                    %s,
+                    '{}'::jsonb,
+                    NULL,
+                    NULL
+                )
+                """,
+                [
+                    (
+                        head_run,
+                        head_thread,
+                        identity,
+                        stale - timedelta(minutes=1),
+                        stale - timedelta(minutes=1),
+                    ),
+                    *[
+                        (run_id, thread_id, identity, stale, stale)
+                        for run_id, thread_id in successors
+                    ],
+                ],
+            )
+
+        async with await psycopg.AsyncConnection.connect(
+            postgres_case.url
+        ) as locked_connection:
+            await locked_connection.execute(
+                "SELECT pg_advisory_lock(%s)",
+                (
+                    guest_execution_lock_key(
+                        run_id=head_run,
+                        thread_id=head_thread,
+                        identity=identity,
+                    ),
+                ),
+            )
+
+            result = await reconcile_stale_guest_runs(
+                batch_size=MAX_RECONCILE_BATCH_SIZE
+            )
+
+            assert result.liveness_skipped_runs == 1
+            assert result.reconciled_runs == MAX_RECONCILE_BATCH_SIZE
+            assert result.released_threads == MAX_RECONCILE_BATCH_SIZE
+            async with (
+                await psycopg.AsyncConnection.connect(postgres_case.url) as observation,
+                observation.cursor() as cursor,
+            ):
+                await cursor.execute(
+                    """
+                    SELECT status, count(*)
+                    FROM runs
+                    WHERE thread_id = ANY(%s)
+                    GROUP BY status
+                    ORDER BY status
+                    """,
+                    (thread_ids,),
+                )
+                assert await cursor.fetchall() == [
+                    ("error", MAX_RECONCILE_BATCH_SIZE),
+                    ("running", 1),
+                ]
+                await cursor.execute(
+                    """
+                    SELECT count(*)
+                    FROM agent_guest_execution_quarantine
+                    WHERE
+                        thread_id = ANY(%s)
+                        AND recovered_at IS NOT NULL
+                        AND drained_at IS NULL
+                    """,
+                    (thread_ids,),
+                )
+                assert (await cursor.fetchone())[0] == MAX_RECONCILE_BATCH_SIZE
+    finally:
+        await _delete_test_threads(postgres_case.url, thread_ids)
+
+
+async def test_max_gc_batch_replaces_one_contended_head_candidate(
+    postgres_case,
+):
+    unique = uuid4().hex
+    identity = f"anon:{uuid4()}"
+    head_thread = f"000-head-gc-thread-{unique}"
+    successor_threads = [
+        f"successor-gc-thread-{index:04d}-{unique}"
+        for index in range(MAX_GC_BATCH_SIZE)
+    ]
+    thread_ids = [head_thread, *successor_threads]
+    checkpointer = _RecordingCheckpointer()
+    head_retention = _retention(expired=True).replace(
+        "2000-01-01T00:00:00Z",
+        "1999-01-01T00:00:00Z",
+    )
+
+    try:
+        async with (
+            await psycopg.AsyncConnection.connect(postgres_case.url) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.executemany(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id
+                )
+                VALUES (%s, 'idle', %s::jsonb, %s)
+                """,
+                [
+                    (head_thread, head_retention, identity),
+                    *[
+                        (thread_id, _retention(expired=True), identity)
+                        for thread_id in successor_threads
+                    ],
+                ],
+            )
+
+        async with await psycopg.AsyncConnection.connect(
+            postgres_case.url
+        ) as locked_connection:
+            await locked_connection.execute(
+                "SELECT pg_advisory_lock(%s)",
+                (guest_thread_lock_key(head_thread),),
+            )
+
+            result = await collect_expired_guest_threads(
+                batch_size=MAX_GC_BATCH_SIZE,
+                checkpointer=checkpointer,
+            )
+
+            assert result.deleted_threads == MAX_GC_BATCH_SIZE
+            assert len(checkpointer.deleted_thread_ids) == MAX_GC_BATCH_SIZE
+            assert head_thread not in checkpointer.deleted_thread_ids
+            async with (
+                await psycopg.AsyncConnection.connect(postgres_case.url) as observation,
+                observation.cursor() as cursor,
+            ):
+                await cursor.execute(
+                    """
+                    SELECT thread_id
+                    FROM thread
+                    WHERE thread_id = ANY(%s)
+                    """,
+                    (thread_ids,),
+                )
+                assert await cursor.fetchall() == [(head_thread,)]
+    finally:
+        await _delete_test_threads(postgres_case.url, thread_ids)
 
 
 async def test_recovery_uses_statement_clock_and_preserves_prior_drain_proof(

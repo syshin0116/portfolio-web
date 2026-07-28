@@ -145,6 +145,34 @@ post-dispatch failures remain intentionally charged.
 - Anonymous threads accumulate in a capped free-tier Postgres and need a GC that deletes
   checkpoints explicitly - `runs` cascade from `threads`, **checkpoints do not**, and the
   checkpoint tables are what actually consume the cap.
+- Redis-off local execution has no native crash reaper. Each guest graph execution
+  therefore owns a dedicated unpooled PostgreSQL physical connection and deterministic
+  session advisory lock until Aegra commits terminal run/thread state or its owning
+  execution task ends. The owner monitor starts immediately after lock acquisition,
+  before graph compilation or yield, and spans both compiled-graph execution and the
+  Aegra finalizer. This cannot consume the bounded ORM pool needed by concurrent
+  finalizers, and an owner-task failure cannot leave a permanent polling lock. Monitor
+  cancellation is isolated from the PostgreSQL poll; an abnormal monitor first cancels
+  and drains its live owner and any in-flight poll before voluntarily closing the fence.
+  The 15-minute recovery threshold selects candidates, but recovery may mutate only a
+  candidate whose same-key transactional lock excludes every healthy fence. If session
+  loss makes that lock acquirable while its owner still exists, the atomic marker and
+  trigger below fence every late owner write.
+- A terminated PostgreSQL backend necessarily destroys its session lock before the
+  monitor can drain its owner. Recovery therefore writes a namespaced marker into that
+  run's `execution_params` in the same active-to-error UPDATE. Project schema migration
+  `0002_recovered_guest_run_fence` installs a `BEFORE UPDATE` trigger that makes a marked
+  run monotonically terminal. Aegra 0.9.24 updates the run before the thread in one
+  `finalize_run` transaction, so a late success, error, interrupt, worker, or API writer
+  fails before it can overwrite either recovered status. DELETE remains allowed, and a
+  normal follow-up uses a new unmarked `run_id`, so the same thread can run again.
+  Recovery's immutable `updated_at` also starts a 15-minute GC grace: the recovery sweep
+  and any concurrent GC sweep must retain the parent and checkpoints, including a
+  checkpoint written after backend loss but before monitor detection. After the monitor
+  cancels and drains the owner, a later sweep may delete checkpoint children and then
+  the expired thread parent once that grace has elapsed.
+  Maintenance imports both identity and recovery-marker contracts from side-effect-free
+  modules and does not require the runtime authentication secret.
 - LLM spend becomes a function of traffic rather than of one person's usage. The only
   provider-enforced hard stop is the Anthropic org-level spend limit; everything else
   slows the burn.
@@ -163,8 +191,11 @@ post-dispatch failures remain intentionally charged.
 - [ ] `anon` scope route allowlist; strip `configurable.model`; force
       `multitask_strategy="reject"`; fix the seeded default model (P3.4).
 - [ ] Rate limiting registered at or before `main.py:102`, plus provider spend caps (P3.5).
-- [ ] `expires_at` + GC that calls `checkpointer.adelete_thread` first (P3.6).
-- [ ] Prompt hardening, `read_post` truncation, AI-generated disclaimer, privacy note (P3.7).
+- [x] `expires_at` + bounded GC that calls `checkpointer.adelete_thread` first,
+      including session-fenced stale Redis-off guest-run reconciliation (P3.6).
+- [x] Deterministic 16 KiB UTF-8 `read_post` truncation with an explicit marker
+      (P3.7 partial).
+- [ ] Prompt hardening, AI-generated disclaimer, and privacy note (remaining P3.7).
 - [ ] Amend the 2026-07-11 `DECISIONS.md` entry and rewrite the `README.md` paragraph
       claiming an allowed Auth.js session is required.
 
@@ -190,3 +221,8 @@ post-dispatch failures remain intentionally charged.
   recheck and retains it through parent-delete commit; stale, ambiguous, changed,
   unavailable, timed-out, GC-deleted, and contended states fail before reservation or
   conflicting deletion.
+- 2026-07-28: recorded durable guest spend/retention delivery, dedicated session-fenced
+  Redis-off stale-run reconciliation with an immediate whole-owner monitor,
+  cancellation-safe polling, monotonic database-triggered recovery fencing, a 15-minute
+  post-recovery GC grace, secret-free maintenance identity validation, and bounded
+  `read_post` output; P3.7 remains open for user-facing prompt, AI, and privacy copy.

@@ -57,6 +57,11 @@ from agent.capabilities.token_counting import (
 )
 from agent.inspection import InspectionEventTransformer
 from agent.prompts import SYSTEM_PROMPT
+from agent.run_liveness import (
+    GUEST_RUN_MAX_ELAPSED_SECONDS,
+    acquire_guest_execution_fence,
+    validate_guest_execution_fencing_factory,
+)
 from agent.tools import TOOLS
 
 DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
@@ -86,7 +91,7 @@ GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     max_depth=1,
     max_output_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
     max_total_tokens=12_000,
-    max_elapsed_seconds=45,
+    max_elapsed_seconds=GUEST_RUN_MAX_ELAPSED_SECONDS,
 )
 
 AGENT_DIR = Path(__file__).resolve().parent.parent.parent  # agent/
@@ -336,7 +341,41 @@ async def graph(
     quickjs_middleware = BoundedQuickJSMiddleware(
         enabled=not is_guest and quickjs_allowed(runtime)
     )
-    active_error: BaseException | None = None
+    if is_guest and runtime.access_context == "threads.create_run":
+        configurable = config.get("configurable")
+        if not isinstance(configurable, Mapping):
+            raise RuntimeError(
+                "guest execution requires server-owned configurable identity"
+            )
+        run_id = configurable.get("run_id")
+        thread_id = configurable.get("thread_id")
+        identity = getattr(runtime.user, "identity", None)
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or not isinstance(thread_id, str)
+            or not thread_id
+            or not isinstance(identity, str)
+        ):
+            raise RuntimeError(
+                "guest execution requires run, thread, and user identity"
+            )
+        fence = await acquire_guest_execution_fence(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+        try:
+            fence.start_owner_monitor()
+        except BaseException:
+            try:
+                await fence.aclose()
+            except BaseException:
+                logger.exception(
+                    "guest execution fence cleanup failed after monitor start"
+                )
+            raise
+    execution_error: BaseException | None = None
     try:
         compiled = create_graph(
             runtime=runtime,
@@ -346,13 +385,13 @@ async def graph(
         )
         yield compiled
     except BaseException as error:
-        active_error = error
+        execution_error = error
         raise
     finally:
         try:
             await _await_quickjs_cleanup(quickjs_middleware)
         except BaseException:
-            if active_error is None:
+            if execution_error is None:
                 raise
             logger.exception(
                 "QuickJS cleanup failed; preserving the active graph exception"
@@ -377,6 +416,7 @@ def _validate_aegra_registration() -> None:
     from agent.preflight import validate_runtime_preflight
 
     validate_runtime_preflight()
+    validate_guest_execution_fencing_factory(graph)
     if os.environ.get("AGENT_ANONYMOUS_ACCESS_ENABLED", "false") == "true":
         _normalized_guest_model_spec()
 

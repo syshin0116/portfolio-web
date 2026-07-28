@@ -19,6 +19,11 @@ from agent.retrieval.serving import (
 
 _MAX_RESULTS = 50
 _CANONICAL_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+READ_POST_MAX_OUTPUT_BYTES = 16 * 1024
+READ_POST_TRUNCATION_MARKER = (
+    f"\n\n[read_post truncated at the {READ_POST_MAX_OUTPUT_BYTES} "
+    "UTF-8 byte output limit]"
+)
 
 
 def _limit(value: int, *, field: str) -> int:
@@ -46,6 +51,17 @@ def _snippet(runtime: ServingRuntime, entry: CatalogEntry) -> str:
     body = runtime.body(entry.doc_id).strip()
     paragraph = body.split("\n\n", 1)[0].replace("\n", " ").strip()
     return paragraph[:297] + "..." if len(paragraph) > 300 else paragraph
+
+
+def _cap_read_post_output(output: str) -> str:
+    encoded = output.encode("utf-8")
+    if len(encoded) <= READ_POST_MAX_OUTPUT_BYTES:
+        return output
+    marker_bytes = READ_POST_TRUNCATION_MARKER.encode("utf-8")
+    prefix = encoded[: READ_POST_MAX_OUTPUT_BYTES - len(marker_bytes)].decode(
+        "utf-8", errors="ignore"
+    )
+    return f"{prefix}{READ_POST_TRUNCATION_MARKER}"
 
 
 def _format_retrieval(
@@ -226,7 +242,7 @@ def list_posts(category: str | None = None, limit: int = 20) -> str:
 
 @tool
 def read_post(path: str) -> str:
-    """Read one verified published Markdown document by content-relative path.
+    """Read one verified published Markdown document with a 16 KiB output cap.
 
     Args:
         path: Canonical content-relative Markdown path returned by another tool.
@@ -237,8 +253,8 @@ def read_post(path: str) -> str:
         entry = runtime.entry(path)
         body = runtime.body(entry.doc_id)
     except (KeyError, TypeError, ValueError):
-        return f"[read_post] Published file not found: {path!r}"
-    return (
+        return _cap_read_post_output(f"[read_post] Published file not found: {path!r}")
+    output = (
         f"# {entry.title}\n"
         f"Date: {entry.published_label or 'unknown'}\n"
         f"Category: {entry.category}\n"
@@ -246,6 +262,7 @@ def read_post(path: str) -> str:
         "---\n"
         f"{body}"
     )
+    return _cap_read_post_output(output)
 
 
 TOOLS = [
@@ -258,6 +275,8 @@ TOOLS = [
 ]
 
 __all__ = [
+    "READ_POST_MAX_OUTPUT_BYTES",
+    "READ_POST_TRUNCATION_MARKER",
     "TOOLS",
     "graph_traverse",
     "keyword_search",

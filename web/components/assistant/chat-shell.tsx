@@ -459,7 +459,7 @@ function InterruptResponseCard({
         </div>
       ) : null}
       <form
-        className="mt-3 flex gap-2"
+        className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row"
         onSubmit={(event) => {
           event.preventDefault()
           void respond(response)
@@ -481,13 +481,14 @@ function InterruptResponseCard({
             resumeError ? "interrupt-response-error" : undefined
           }
           aria-invalid={resumeError !== undefined}
-          className="min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 text-sm"
+          className="w-full min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 text-sm"
         />
         <Button
           type="submit"
           size="sm"
           variant="secondary"
           disabled={!response.trim() || sending}
+          className="w-full sm:w-auto"
         >
           수정 후 재개
         </Button>

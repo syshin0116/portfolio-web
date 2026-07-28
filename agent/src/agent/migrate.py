@@ -9,6 +9,7 @@ from aegra_api.core.migrations import run_migrations_async
 from aegra_api.settings import settings
 
 from agent.database_url import require_direct_neon_database_url
+from agent.schema import migrate_agent_schema
 
 
 def _require_direct_database_url() -> None:
@@ -23,11 +24,12 @@ def _require_direct_database_url() -> None:
 
 
 async def migrate_database() -> None:
-    """Upgrade Aegra, then idempotently create LangGraph persistence schemas."""
+    """Upgrade Aegra, LangGraph persistence, then the project-owned schema."""
     _require_direct_database_url()
     await run_migrations_async()
     try:
         await db_manager.initialize()
+        await migrate_agent_schema(db_manager.get_engine())
     finally:
         await db_manager.close()
 

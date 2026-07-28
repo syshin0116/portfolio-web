@@ -10,18 +10,22 @@ from uuid import UUID, uuid4
 import httpx
 import jwt
 import pytest
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from agent import http as http_extension
 from agent.auth import (
     AGENT_AUTH_SECRET,
     ANONYMOUS_PERMISSION,
     TOKEN_AUDIENCE,
     TOKEN_ISSUER,
 )
+from agent.guest_budget import GuestDailyBudgetExhaustedError
 from agent.http import (
     GuestRunGuard,
     GuestStreamLimitError,
 )
+from agent.maintenance import GUEST_RETENTION_POLICY
 
 _NONCE = "123e4567-e89b-42d3-a456-426614174000"
 
@@ -30,6 +34,8 @@ _NONCE = "123e4567-e89b-42d3-a456-426614174000"
 def _enable_guest_agent(monkeypatch):
     monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "true")
     monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("GUEST_DAILY_BUDGET_MICRO_USD", "500000")
+    monkeypatch.setenv("GUEST_RUN_RESERVATION_MICRO_USD", "25000")
 
 
 def _token_headers(
@@ -261,6 +267,7 @@ async def test_thread_create_is_canonicalized_and_receives_server_expiry():
             "archived": False,
             "graph_id": "agent",
             "guest_expires_at": "1970-01-15T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
             "title": "새 대화",
             "title_status": "pending",
         },
@@ -642,6 +649,139 @@ async def test_input_respond_consumes_the_same_paid_run_rate_limit():
     assert resumed.status_code == 200
     assert bypass_attempt.status_code == 429
     assert len(records) == 1
+
+
+async def test_paid_commands_reserve_the_durable_daily_budget():
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    records: list[dict[str, Any]] = []
+    ledger = Ledger()
+    app = GuestRunGuard(
+        _capturing_app(records),
+        spend_ledger=ledger,
+        global_capacity=10,
+    )
+    headers = _guest_headers()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        started = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_run_command(),
+        )
+        resumed = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_input_respond_command(),
+        )
+        read = await client.get(
+            "/threads/guest-thread",
+            headers=headers,
+        )
+
+    assert [started.status_code, resumed.status_code, read.status_code] == [
+        200,
+        200,
+        200,
+    ]
+    assert ledger.calls == 2
+    assert len(records) == 3
+
+
+async def test_exhausted_or_unavailable_daily_budget_fails_closed():
+    class ExhaustedLedger:
+        async def reserve_run(self):
+            raise GuestDailyBudgetExhaustedError
+
+    class BrokenLedger:
+        async def reserve_run(self):
+            raise RuntimeError("database details must not cross the boundary")
+
+    async def request(ledger):
+        app = GuestRunGuard(
+            _capturing_app([]),
+            spend_ledger=ledger,
+            wall_clock=lambda: 0.0,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            return await client.post(
+                "/threads/guest-thread/commands",
+                headers=_guest_headers(),
+                json=_run_command(),
+            )
+
+    exhausted = await request(ExhaustedLedger())
+    unavailable = await request(BrokenLedger())
+
+    assert exhausted.status_code == 429
+    assert exhausted.json() == {
+        "error": "daily_budget_exhausted",
+        "message": "Guest daily run budget is exhausted",
+    }
+    assert exhausted.headers["retry-after"] == "86400"
+    assert exhausted.headers["cache-control"] == "no-store"
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {
+        "error": "service_unavailable",
+        "message": "Guest run budget is unavailable",
+    }
+    assert unavailable.headers["retry-after"] == "60"
+    assert unavailable.headers["cache-control"] == "no-store"
+
+
+async def test_admin_gc_route_requires_owner_admin_and_returns_bounded_counts(
+    monkeypatch,
+):
+    async def collect():
+        return type(
+            "Result",
+            (),
+            {
+                "lock_acquired": True,
+                "deleted_threads": 3,
+                "batch_limit": 1000,
+            },
+        )()
+
+    monkeypatch.setattr(http_extension, "collect_expired_guest_threads", collect)
+
+    def request(headers):
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/admin/gc",
+                "headers": [
+                    (key.lower().encode("latin-1"), value.encode("latin-1"))
+                    for key, value in headers.items()
+                ],
+            }
+        )
+
+    missing = await http_extension.collect_guest_threads(request({}))
+    guest = await http_extension.collect_guest_threads(request(_guest_headers()))
+    owner = await http_extension.collect_guest_threads(request(_owner_headers()))
+
+    assert missing.status_code == 401
+    assert guest.status_code == 403
+    assert owner.status_code == 200
+    assert json.loads(owner.body) == {
+        "lock_acquired": True,
+        "deleted_threads": 3,
+        "batch_limit": 1000,
+    }
+    assert owner.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize(

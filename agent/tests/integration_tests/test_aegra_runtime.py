@@ -178,6 +178,12 @@ async def test_custom_http_app_guard_wraps_native_v2_command_route(monkeypatch):
         for middleware in app.user_middleware
         if middleware.cls in {GuestRunGuard, NativeThreadGuard}
     ] == [GuestRunGuard, NativeThreadGuard]
+    guest_middleware = next(
+        middleware
+        for middleware in app.user_middleware
+        if middleware.cls is GuestRunGuard
+    )
+    assert guest_middleware.kwargs == {"enforce_daily_budget": True}
     assert response.status_code == 409
     assert response.json() == {
         "error": "conflict",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import time
@@ -18,7 +19,7 @@ from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import get_session_maker
 from aegra_api.models.event_streaming import ThreadCommand
 from aegra_api.services.event_streaming.protocol import build_error
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -28,8 +29,18 @@ from agent.auth import (
     ANONYMOUS_PERMISSION,
     authenticate,
     is_anonymous_identity,
+    server_anonymous_access_enabled,
 )
+from agent.guest_budget import (
+    GuestDailyBudgetExhaustedError,
+    GuestSpendLedger,
+    PostgresGuestSpendLedger,
+    guest_budget_config,
+)
+from agent.maintenance import GUEST_RETENTION_POLICY, collect_expired_guest_threads
 from agent.preflight import validate_runtime_preflight
+
+logger = logging.getLogger(__name__)
 
 _COMMAND_PATH = re.compile(r"^/threads/([^/]+)/commands$")
 _THREAD_LEGACY_MUTATION_PATH = re.compile(
@@ -478,6 +489,7 @@ def _guest_thread_metadata(
         normalized["custom"] = custom
     if expires_at is not None:
         normalized["guest_expires_at"] = expires_at
+        normalized["guest_retention_policy"] = GUEST_RETENTION_POLICY
     return normalized
 
 
@@ -762,6 +774,8 @@ class GuestRunGuard:
         identity_window_seconds: float = _GUEST_RATE_WINDOW_SECONDS,
         global_capacity: int = _GUEST_GLOBAL_RATE_CAPACITY,
         global_window_seconds: float = _GUEST_GLOBAL_RATE_WINDOW_SECONDS,
+        spend_ledger: GuestSpendLedger | None = None,
+        enforce_daily_budget: bool = False,
     ) -> None:
         integer_values = (
             max_identities,
@@ -777,6 +791,17 @@ class GuestRunGuard:
             for value in numeric_values
         ):
             raise ValueError("guest guard limits must be positive")
+        if not isinstance(enforce_daily_budget, bool):
+            raise TypeError("enforce_daily_budget must be a boolean")
+        if (
+            enforce_daily_budget
+            and spend_ledger is None
+            and server_anonymous_access_enabled()
+        ):
+            config = guest_budget_config(required=True)
+            if config is None:
+                raise RuntimeError("guest daily budget configuration is missing")
+            spend_ledger = PostgresGuestSpendLedger(config)
         self.app = app
         self._clock = clock
         self._wall_clock = wall_clock
@@ -789,6 +814,7 @@ class GuestRunGuard:
         self._global_bucket = _Bucket(float(global_capacity), now)
         self._identity_buckets: dict[str, _Bucket] = {}
         self._lock = Lock()
+        self._spend_ledger = spend_ledger
 
     @staticmethod
     def _identity_key(identity: str) -> str:
@@ -934,6 +960,53 @@ class GuestRunGuard:
                     headers={"Retry-After": str(retry_after)},
                 )
                 return
+            if self._spend_ledger is not None:
+                try:
+                    await self._spend_ledger.reserve_run()
+                except GuestDailyBudgetExhaustedError:
+                    now = datetime.fromtimestamp(
+                        float(self._wall_clock()),
+                        tz=UTC,
+                    )
+                    next_day = (now + timedelta(days=1)).replace(
+                        hour=0,
+                        minute=0,
+                        second=0,
+                        microsecond=0,
+                    )
+                    retry_after = max(
+                        1,
+                        math.ceil((next_day - now).total_seconds()),
+                    )
+                    await _json_response(
+                        scope,
+                        receive,
+                        send,
+                        status_code=429,
+                        content={
+                            "error": "daily_budget_exhausted",
+                            "message": "Guest daily run budget is exhausted",
+                        },
+                        headers={"Retry-After": str(retry_after)},
+                    )
+                    return
+                except Exception as error:
+                    logger.error(
+                        "guest spend ledger reservation failed error_type=%s",
+                        type(error).__name__,
+                    )
+                    await _json_response(
+                        scope,
+                        receive,
+                        send,
+                        status_code=503,
+                        content={
+                            "error": "service_unavailable",
+                            "message": "Guest run budget is unavailable",
+                        },
+                        headers={"Retry-After": "60"},
+                    )
+                    return
 
         bounded_send: Send = _BoundedSSESend(send) if kind == "stream" else send
         await self.app(scope, receive, bounded_send)
@@ -1097,8 +1170,52 @@ class NativeThreadGuard:
 validate_runtime_preflight()
 
 app = FastAPI(title="syshin0116.dev Aegra extensions")
+
+
+@app.post("/admin/gc", include_in_schema=False)
+async def collect_guest_threads(request: Request) -> JSONResponse:
+    """Run one owner-authorized, bounded checkpoint-first retention sweep."""
+    user = await _authenticated_user(request.scope)
+    if user is None:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized"},
+            headers={"Cache-Control": "no-store"},
+        )
+    permissions = user.get("permissions")
+    if not isinstance(permissions, list) or "admin" not in permissions:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Forbidden"},
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        result = await collect_expired_guest_threads()
+    except Exception as error:
+        logger.error(
+            "guest retention sweep failed error_type=%s",
+            type(error).__name__,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "service_unavailable",
+                "message": "Guest retention sweep is unavailable",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        content={
+            "lock_acquired": result.lock_acquired,
+            "deleted_threads": result.deleted_threads,
+            "batch_limit": result.batch_limit,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 app.add_middleware(NativeThreadGuard)
-app.add_middleware(GuestRunGuard)
+app.add_middleware(GuestRunGuard, enforce_daily_budget=True)
 
 __all__ = [
     "GuestRequestError",

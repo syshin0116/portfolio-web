@@ -33,6 +33,7 @@ from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.types import Command, StateSnapshot
 from pydantic import Field
 
@@ -42,7 +43,17 @@ from agent.auth import (
     TOKEN_ISSUER,
 )
 from agent.graph import graph as production_graph
+from agent.guest_budget import (
+    GuestBudgetConfig,
+    GuestBudgetReservation,
+    GuestDailyBudgetExhaustedError,
+    PostgresGuestSpendLedger,
+)
 from agent.inspection import INSPECTION_EVENT_NAME
+from agent.maintenance import (
+    GUEST_RETENTION_POLICY,
+    collect_expired_guest_threads,
+)
 from agent.migrate import migrate_database
 
 POSTGRES_URL = os.environ.get("AEGRA_POSTGRES_TEST_URL")
@@ -673,6 +684,8 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
             "checkpoint_writes",
             "store",
             "store_migrations",
+            "agent_schema_migrations",
+            "agent_guest_daily_budget",
         } <= tables
         assert len(versions) == 1
 
@@ -1103,6 +1116,190 @@ Stop after one verdict.
     finally:
         graph_factory.clear_factory_registry(budget_graph_id)
         graph_factory.clear_factory_registry(isolation_graph_id)
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_guest_daily_budget_and_checkpoint_first_gc_are_durable():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    expired_thread = f"guest-expired-{unique}"
+    future_thread = f"guest-future-{unique}"
+    busy_thread = f"guest-busy-{unique}"
+    malformed_thread = f"guest-malformed-{unique}"
+    owner_thread = f"owner-expired-{unique}"
+    thread_ids = (
+        expired_thread,
+        future_thread,
+        busy_thread,
+        malformed_thread,
+        owner_thread,
+    )
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM agent_guest_daily_budget "
+                "WHERE budget_date = (timezone('UTC', now()))::date"
+            )
+            rows = [
+                (
+                    expired_thread,
+                    "idle",
+                    json.dumps(
+                        {
+                            "guest_expires_at": "2000-01-01T00:00:00Z",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    f"anon:{uuid4()}",
+                ),
+                (
+                    future_thread,
+                    "idle",
+                    json.dumps(
+                        {
+                            "guest_expires_at": "2999-01-01T00:00:00Z",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    f"anon:{uuid4()}",
+                ),
+                (
+                    busy_thread,
+                    "busy",
+                    json.dumps(
+                        {
+                            "guest_expires_at": "2000-01-01T00:00:00Z",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    f"anon:{uuid4()}",
+                ),
+                (
+                    malformed_thread,
+                    "idle",
+                    json.dumps(
+                        {
+                            "guest_expires_at": "not-a-date",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    f"anon:{uuid4()}",
+                ),
+                (
+                    owner_thread,
+                    "idle",
+                    json.dumps(
+                        {
+                            "guest_expires_at": "2000-01-01T00:00:00Z",
+                            "guest_retention_policy": GUEST_RETENTION_POLICY,
+                        }
+                    ),
+                    "owner",
+                ),
+            ]
+            async with connection.cursor() as cursor:
+                await cursor.executemany(
+                    """
+                    INSERT INTO thread (
+                        thread_id,
+                        status,
+                        metadata_json,
+                        user_id
+                    )
+                    VALUES (%s, %s, %s::jsonb, %s)
+                    """,
+                    rows,
+                )
+
+        await db_manager.get_checkpointer().aput(
+            {
+                "configurable": {
+                    "thread_id": expired_thread,
+                    "checkpoint_ns": "",
+                }
+            },
+            empty_checkpoint(),
+            {"source": "input", "step": -1, "parents": {}},
+            {},
+        )
+
+        ledger = PostgresGuestSpendLedger(
+            GuestBudgetConfig(
+                daily_limit_micro_usd=75_000,
+                run_reservation_micro_usd=25_000,
+            )
+        )
+        reservations = await asyncio.gather(
+            *(ledger.reserve_run() for _index in range(4)),
+            return_exceptions=True,
+        )
+        committed = [
+            value for value in reservations if isinstance(value, GuestBudgetReservation)
+        ]
+        exhausted = [
+            value
+            for value in reservations
+            if isinstance(value, GuestDailyBudgetExhaustedError)
+        ]
+        assert len(committed) == 3
+        assert len(exhausted) == 1
+        assert max(value.reserved_micro_usd for value in committed) == 75_000
+        assert max(value.run_count for value in committed) == 3
+
+        result = await collect_expired_guest_threads(batch_size=10)
+        assert result.lock_acquired is True
+        assert result.deleted_threads == 1
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                "SELECT thread_id FROM thread WHERE thread_id = ANY(%s)",
+                (list(thread_ids),),
+            )
+            remaining_threads = {row[0] for row in await cursor.fetchall()}
+            assert remaining_threads == {
+                future_thread,
+                busy_thread,
+                malformed_thread,
+                owner_thread,
+            }
+            for table in (
+                "checkpoints",
+                "checkpoint_blobs",
+                "checkpoint_writes",
+            ):
+                await cursor.execute(
+                    f"SELECT count(*) FROM {table} WHERE thread_id = %s",
+                    (expired_thread,),
+                )
+                assert (await cursor.fetchone())[0] == 0
+    finally:
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        for thread_id in thread_ids:
+            await db_manager.get_checkpointer().adelete_thread(thread_id)
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = ANY(%s)",
+                (list(thread_ids),),
+            )
+            await connection.execute(
+                "DELETE FROM agent_guest_daily_budget "
+                "WHERE budget_date = (timezone('UTC', now()))::date"
+            )
         await db_manager.close()
         aegra_orm.async_session_maker = None
         settings.db.DATABASE_URL = previous_url

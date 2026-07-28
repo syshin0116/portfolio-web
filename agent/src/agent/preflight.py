@@ -16,6 +16,7 @@ from langgraph_sdk import Auth
 from agent.auth import auth, authenticate, server_anonymous_access_enabled
 from agent.capabilities.quickjs import server_quickjs_enabled
 from agent.database_url import require_direct_neon_database_url
+from agent.guest_budget import guest_budget_config
 
 EXPECTED_DEPENDENCIES = ["./agent/src"]
 EXPECTED_GRAPHS = {"agent": "./agent/src/agent/graph.py:graph"}
@@ -70,10 +71,12 @@ def _require_auth_handler() -> None:
 def validate_runtime_preflight() -> None:
     """Abort application construction if auth/runtime registration is unsafe."""
     server_quickjs_enabled()
-    if server_anonymous_access_enabled() and not os.environ.get("GUEST_MODEL"):
+    anonymous_enabled = server_anonymous_access_enabled()
+    if anonymous_enabled and not os.environ.get("GUEST_MODEL"):
         raise RuntimeError(
             "GUEST_MODEL is required when anonymous agent access is enabled"
         )
+    guest_budget_config(required=anonymous_enabled)
     config = load_config()
     if not isinstance(config, dict):
         raise RuntimeError("Aegra configuration is missing or invalid")

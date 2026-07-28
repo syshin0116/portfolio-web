@@ -8,6 +8,7 @@ import socket
 import time
 from importlib.metadata import version
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import jwt
@@ -30,7 +31,7 @@ from langgraph.types import Command
 from agent import http as http_extension
 from agent.auth import AGENT_AUTH_SECRET, TOKEN_AUDIENCE, TOKEN_ISSUER
 from agent.graph import graph
-from agent.http import NativeThreadGuard
+from agent.http import GuestRunGuard, NativeThreadGuard
 from agent.inspection import INSPECTION_EVENT_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -52,6 +53,23 @@ def _authorization(subject: str = "owner") -> dict[str, str]:
             "aud": TOKEN_AUDIENCE,
             "iat": now,
             "exp": now + 900,
+        },
+        AGENT_AUTH_SECRET,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _anonymous_authorization() -> dict[str, str]:
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": f"anon:{uuid4()}",
+            "iss": TOKEN_ISSUER,
+            "aud": TOKEN_AUDIENCE,
+            "iat": now,
+            "exp": now + 300,
+            "scope": "anon",
         },
         AGENT_AUTH_SECRET,
         algorithm="HS256",
@@ -154,6 +172,12 @@ async def test_custom_http_app_guard_wraps_native_v2_command_route(monkeypatch):
     assert any(
         middleware.cls is NativeThreadGuard for middleware in app.user_middleware
     )
+    assert any(middleware.cls is GuestRunGuard for middleware in app.user_middleware)
+    assert [
+        middleware.cls
+        for middleware in app.user_middleware
+        if middleware.cls in {GuestRunGuard, NativeThreadGuard}
+    ] == [GuestRunGuard, NativeThreadGuard]
     assert response.status_code == 409
     assert response.json() == {
         "error": "conflict",
@@ -184,6 +208,37 @@ async def test_v2_stream_and_commands_deny_missing_or_forged_auth():
 
             assert stream.status_code == 401
             assert command.status_code == 401
+
+
+async def test_anonymous_agent_gate_is_independent_and_hides_nonpublic_routes(
+    monkeypatch,
+):
+    headers = _anonymous_authorization()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "false")
+        disabled = await client.post(
+            "/threads/thread-1/commands",
+            headers=headers,
+            json={
+                "id": 1,
+                "method": "run.start",
+                "params": {"assistant_id": "agent"},
+            },
+        )
+
+        monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "true")
+        hidden = await client.post(
+            "/assistants/search",
+            headers=headers,
+            json={},
+        )
+
+    assert disabled.status_code == 401
+    assert hidden.status_code == 404
+    assert hidden.json() == {"detail": "Not Found"}
 
 
 async def test_native_thread_delete_is_denied_and_checkpoint_is_preserved():

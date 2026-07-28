@@ -43,6 +43,8 @@ def _import_runtime(
         "REDIS_BROKER_ENABLED": "false",
         "BG_JOB_MAX_RETRIES": "0",
         "QUICKJS_ENABLED": "false",
+        "AGENT_ANONYMOUS_ACCESS_ENABLED": "false",
+        "GUEST_MODEL": "",
         "PYTHONDONTWRITEBYTECODE": "1",
         **environment,
     }
@@ -165,6 +167,17 @@ def test_runtime_accepts_exact_quickjs_opt_in(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_path):
+    result = _import_runtime(
+        tmp_path,
+        VALID_CONFIG,
+        AGENT_ANONYMOUS_ACCESS_ENABLED="true",
+        GUEST_MODEL="anthropic:claude-haiku-4-5",
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("environment", "message"),
     [
@@ -174,6 +187,24 @@ def test_runtime_accepts_exact_quickjs_opt_in(tmp_path):
         ({"REDIS_BROKER_ENABLED": "true"}, "REDIS_BROKER_ENABLED"),
         ({"BG_JOB_MAX_RETRIES": "1"}, "BG_JOB_MAX_RETRIES"),
         ({"QUICKJS_ENABLED": "TRUE"}, "QUICKJS_ENABLED"),
+        (
+            {"AGENT_ANONYMOUS_ACCESS_ENABLED": "TRUE"},
+            "AGENT_ANONYMOUS_ACCESS_ENABLED",
+        ),
+        (
+            {
+                "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
+                "GUEST_MODEL": "",
+            },
+            "GUEST_MODEL",
+        ),
+        (
+            {
+                "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
+                "GUEST_MODEL": "openai:gpt-5",
+            },
+            "GUEST_MODEL",
+        ),
         (
             {
                 "DATABASE_URL": (
@@ -206,6 +237,9 @@ def test_runtime_accepts_exact_quickjs_opt_in(tmp_path):
         "redis-budget-bypass",
         "retry-budget-reset",
         "invalid-quickjs-opt-in",
+        "invalid-anonymous-opt-in",
+        "missing-guest-model",
+        "unsupported-guest-model",
         "neon-pooler",
         "neon-pooler-query-host",
         "neon-pooler-component-host",

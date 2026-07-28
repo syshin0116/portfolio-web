@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import Any
+from urllib.parse import parse_qsl
+from uuid import UUID
 
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import get_session_maker
@@ -16,7 +24,11 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from agent.auth import authenticate
+from agent.auth import (
+    ANONYMOUS_PERMISSION,
+    authenticate,
+    is_anonymous_identity,
+)
 from agent.preflight import validate_runtime_preflight
 
 _COMMAND_PATH = re.compile(r"^/threads/([^/]+)/commands$")
@@ -34,6 +46,590 @@ _STATELESS_LEGACY_MUTATION_PATHS = frozenset(
 )
 _MAX_COMMAND_BODY_BYTES = 64 * 1024
 _RUN_METHODS = frozenset({"run.start", "input.respond"})
+_GUEST_MAX_BODY_BYTES = 32 * 1024
+_GUEST_MAX_STREAM_BODY_BYTES = 2 * 1024
+_GUEST_MAX_SSE_CHUNK_BYTES = 64 * 1024
+_GUEST_MAX_SSE_TOTAL_BYTES = 512 * 1024
+_GUEST_MAX_IDENTITIES = 1_024
+_GUEST_RATE_CAPACITY = 4
+_GUEST_RATE_WINDOW_SECONDS = 60.0
+_GUEST_GLOBAL_RATE_CAPACITY = 24
+_GUEST_GLOBAL_RATE_WINDOW_SECONDS = 60.0
+_GUEST_SESSION_RETENTION_DAYS = 14
+_GUEST_SUBMIT_NONCE_KEY = "syshin_ui_submit_nonce"
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SAFE_NONCE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_GUEST_THREAD_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$")
+_GUEST_STATE_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/state$")
+_GUEST_HISTORY_PATH = re.compile(
+    r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/history$"
+)
+_GUEST_RUNS_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/runs$")
+_GUEST_RUN_PATH = re.compile(
+    r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/"
+    r"runs/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$"
+)
+_GUEST_CANCEL_PATH = re.compile(
+    r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/"
+    r"runs/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/cancel$"
+)
+_GUEST_STREAM_PATH = re.compile(
+    r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/stream/events$"
+)
+_GUEST_COMMAND_PATH = re.compile(
+    r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/commands$"
+)
+_FORBIDDEN_GUEST_KEYS = frozenset(
+    {
+        "assistant",
+        "budget",
+        "checkpoint",
+        "checkpoint_id",
+        "configurable",
+        "dynamic_subagents",
+        "dynamic_subagents_enabled",
+        "model",
+        "multitask_strategy",
+        "multitaskStrategy",
+        "quickjs",
+        "quickjs_enabled",
+        "response_format",
+        "subagents",
+        "user_id",
+    }
+)
+
+
+class GuestRequestError(ValueError):
+    """Raised when a guest request crosses the public wire contract."""
+
+
+class GuestStreamLimitError(RuntimeError):
+    """Terminate a guest SSE connection that crosses its response byte budget."""
+
+
+@dataclass(slots=True)
+class _Bucket:
+    tokens: float
+    updated_at: float
+
+
+def _headers(scope: Scope) -> dict[str, str]:
+    return {
+        key.decode("latin-1").lower(): value.decode("latin-1")
+        for key, value in scope.get("headers", [])
+    }
+
+
+def _content_length(scope: Scope) -> int | None:
+    value = _headers(scope).get("content-length")
+    if value is None:
+        return None
+    if not value.isascii() or not value.isdecimal():
+        raise GuestRequestError("invalid content length")
+    parsed = int(value)
+    if parsed < 0:
+        raise GuestRequestError("invalid content length")
+    return parsed
+
+
+def _require_json_content_type(scope: Scope) -> None:
+    content_type = _headers(scope).get("content-type", "")
+    media_type, _separator, parameters = content_type.partition(";")
+    if media_type.strip().lower() != "application/json":
+        raise GuestRequestError("JSON content type is required")
+    if parameters and parameters.strip().lower() != "charset=utf-8":
+        raise GuestRequestError("unsupported JSON content type")
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise GuestRequestError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _json_object(body: bytes) -> dict[str, Any]:
+    try:
+        decoded = body.decode("utf-8")
+        value = json.loads(decoded, object_pairs_hook=_unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GuestRequestError("invalid JSON body") from exc
+    if not isinstance(value, dict):
+        raise GuestRequestError("JSON body must be an object")
+    return value
+
+
+def _canonical_json(value: dict[str, Any]) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _bounded_string(
+    value: object,
+    *,
+    max_bytes: int,
+    field: str,
+    allow_newlines: bool = False,
+) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode("utf-8")) > max_bytes
+        or any(
+            ord(character) < 32
+            and (not allow_newlines or character not in {"\n", "\r", "\t"})
+            for character in value
+        )
+    ):
+        raise GuestRequestError(f"{field} is invalid")
+    return value
+
+
+def _bounded_json_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    containers: list[int] | None = None,
+) -> Any:
+    if containers is None:
+        containers = [0]
+    if depth > 6:
+        raise GuestRequestError("JSON nesting is too deep")
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        if abs(value) > 2**53 - 1:
+            raise GuestRequestError("JSON integer is out of range")
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise GuestRequestError("JSON number is invalid")
+        return value
+    if isinstance(value, str):
+        if len(value.encode("utf-8")) > 16 * 1024:
+            raise GuestRequestError("JSON string is too large")
+        return value
+    if isinstance(value, list):
+        containers[0] += 1
+        if containers[0] > 256 or len(value) > 128:
+            raise GuestRequestError("JSON collection is too large")
+        return [
+            _bounded_json_value(item, depth=depth + 1, containers=containers)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        containers[0] += 1
+        if containers[0] > 256 or len(value) > 64:
+            raise GuestRequestError("JSON object is too large")
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if (
+                not isinstance(key, str)
+                or not key
+                or len(key.encode("utf-8")) > 128
+                or key in _FORBIDDEN_GUEST_KEYS
+            ):
+                raise GuestRequestError("JSON object key is invalid")
+            normalized[key] = _bounded_json_value(
+                item,
+                depth=depth + 1,
+                containers=containers,
+            )
+        return normalized
+    raise GuestRequestError("JSON value type is unsupported")
+
+
+def _safe_nonce(value: object) -> str:
+    if not isinstance(value, str) or _SAFE_NONCE.fullmatch(value) is None:
+        raise GuestRequestError("run nonce is invalid")
+    try:
+        parsed = UUID(value)
+    except ValueError as exc:
+        raise GuestRequestError("run nonce is invalid") from exc
+    if parsed.version != 4 or str(parsed) != value:
+        raise GuestRequestError("run nonce is invalid")
+    return value
+
+
+def _run_nonce(
+    params: dict[str, Any],
+) -> tuple[str, dict[str, str], dict[str, dict[str, str]]]:
+    metadata = params.get("metadata")
+    config = params.get("config")
+    if not isinstance(metadata, dict) or not isinstance(config, dict):
+        raise GuestRequestError("run correlation metadata is required")
+    config_metadata = config.get("metadata")
+    if not isinstance(config_metadata, dict):
+        raise GuestRequestError("run correlation metadata is required")
+    if set(metadata) != {_GUEST_SUBMIT_NONCE_KEY} or set(config) != {"metadata"}:
+        raise GuestRequestError("run metadata is not allowed")
+    if set(config_metadata) != {_GUEST_SUBMIT_NONCE_KEY}:
+        raise GuestRequestError("run config metadata is not allowed")
+    nonce = _safe_nonce(metadata[_GUEST_SUBMIT_NONCE_KEY])
+    if config_metadata[_GUEST_SUBMIT_NONCE_KEY] != nonce:
+        raise GuestRequestError("run correlation metadata does not match")
+    normalized_metadata = {_GUEST_SUBMIT_NONCE_KEY: nonce}
+    return nonce, normalized_metadata, {"metadata": normalized_metadata.copy()}
+
+
+def _guest_messages(value: object) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict) or set(value) != {"messages"}:
+        raise GuestRequestError("run input must contain only messages")
+    messages = value["messages"]
+    if not isinstance(messages, list) or not messages or len(messages) > 64:
+        raise GuestRequestError("run messages are invalid")
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            raise GuestRequestError("run message is invalid")
+        allowed = {"role", "content", "id", "name", "tool_call_id"}
+        if not set(message) <= allowed or not {"role", "content", "id"} <= set(message):
+            raise GuestRequestError("run message fields are invalid")
+        role = message["role"]
+        if role not in {"user", "assistant", "tool"}:
+            raise GuestRequestError("run message role is invalid")
+        message_id = _bounded_string(
+            message["id"],
+            max_bytes=128,
+            field="message id",
+        )
+        normalized_message: dict[str, Any] = {
+            "content": _bounded_json_value(message["content"]),
+            "id": message_id,
+            "role": role,
+        }
+        if role == "tool":
+            normalized_message["name"] = _bounded_string(
+                message.get("name"),
+                max_bytes=128,
+                field="tool name",
+            )
+            normalized_message["tool_call_id"] = _bounded_string(
+                message.get("tool_call_id"),
+                max_bytes=128,
+                field="tool call id",
+            )
+        elif "name" in message or "tool_call_id" in message:
+            raise GuestRequestError("tool fields are not allowed for this role")
+        normalized.append(normalized_message)
+    if normalized[-1]["role"] != "user":
+        raise GuestRequestError("the final run message must be from the user")
+    return {"messages": normalized}
+
+
+def _guest_command(body: bytes) -> tuple[bytes, bool]:
+    command = _json_object(body)
+    if set(command) != {"id", "method", "params"}:
+        raise GuestRequestError("command fields are invalid")
+    command_id = command["id"]
+    if (
+        not isinstance(command_id, int)
+        or isinstance(command_id, bool)
+        or not 0 <= command_id <= 2**31 - 1
+    ):
+        raise GuestRequestError("command id is invalid")
+    method = command["method"]
+    params = command["params"]
+    if method not in _RUN_METHODS or not isinstance(params, dict):
+        raise GuestRequestError("command method is not allowed")
+    if method == "run.start":
+        allowed = {
+            "assistant_id",
+            "config",
+            "input",
+            "metadata",
+            "multitaskStrategy",
+            "multitask_strategy",
+        }
+        if not set(params) <= allowed or not {"input", "config", "metadata"} <= set(
+            params
+        ):
+            raise GuestRequestError("run.start fields are invalid")
+        assistant_id = params.get("assistant_id", "agent")
+        if assistant_id != "agent":
+            raise GuestRequestError("assistant id is invalid")
+        _nonce, metadata, config = _run_nonce(params)
+        normalized = {
+            "id": command_id,
+            "method": method,
+            "params": {
+                "assistant_id": "agent",
+                "config": config,
+                "input": _guest_messages(params["input"]),
+                "metadata": metadata,
+                "multitask_strategy": "reject",
+            },
+        }
+        return _canonical_json(normalized), True
+
+    allowed = {
+        "config",
+        "interrupt_id",
+        "metadata",
+        "namespace",
+        "response",
+    }
+    if set(params) != allowed:
+        raise GuestRequestError("input.respond fields are invalid")
+    _nonce, metadata, config = _run_nonce(params)
+    namespace = params["namespace"]
+    if (
+        not isinstance(namespace, list)
+        or len(namespace) > 4
+        or any(
+            not isinstance(item, str) or not item or len(item.encode("utf-8")) > 128
+            for item in namespace
+        )
+    ):
+        raise GuestRequestError("interrupt namespace is invalid")
+    normalized = {
+        "id": command_id,
+        "method": method,
+        "params": {
+            "config": config,
+            "interrupt_id": _bounded_string(
+                params["interrupt_id"],
+                max_bytes=128,
+                field="interrupt id",
+            ),
+            "metadata": metadata,
+            "namespace": namespace,
+            "response": _bounded_json_value(params["response"]),
+        },
+    }
+    return _canonical_json(normalized), True
+
+
+def _guest_stream_subscription(body: bytes) -> bytes:
+    value = _json_object(body)
+    if not set(value) <= {"channels", "depth", "namespaces"}:
+        raise GuestRequestError("stream fields are invalid")
+    channels = value.get("channels")
+    if (
+        not isinstance(channels, list)
+        or not channels
+        or len(channels) > 5
+        or len(set(channels)) != len(channels)
+        or any(
+            channel not in {"messages", "lifecycle", "input", "tools", "custom"}
+            for channel in channels
+        )
+    ):
+        raise GuestRequestError("stream channels are invalid")
+    normalized: dict[str, Any] = {"channels": channels}
+    if "depth" in value:
+        if type(value["depth"]) is not int or value["depth"] != 0:
+            raise GuestRequestError("stream depth is invalid")
+        normalized["depth"] = 0
+    if "namespaces" in value:
+        if value["namespaces"] != [[]]:
+            raise GuestRequestError("stream namespaces are invalid")
+        normalized["namespaces"] = [[]]
+    return _canonical_json(normalized)
+
+
+def _guest_thread_metadata(
+    value: object,
+    *,
+    expires_at: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise GuestRequestError("thread metadata is invalid")
+    if not set(value) <= {
+        "archived",
+        "custom",
+        "graph_id",
+        "title",
+        "title_status",
+    }:
+        raise GuestRequestError("thread metadata fields are invalid")
+    normalized: dict[str, Any] = {}
+    if "graph_id" in value:
+        if value["graph_id"] != "agent":
+            raise GuestRequestError("thread graph id is invalid")
+        normalized["graph_id"] = "agent"
+    if "title" in value:
+        normalized["title"] = _bounded_string(
+            value["title"],
+            max_bytes=512,
+            field="thread title",
+        )
+    if "title_status" in value:
+        if value["title_status"] not in {"pending", "manual", "generated"}:
+            raise GuestRequestError("thread title status is invalid")
+        normalized["title_status"] = value["title_status"]
+    if "archived" in value:
+        if type(value["archived"]) is not bool:
+            raise GuestRequestError("thread archived flag is invalid")
+        normalized["archived"] = value["archived"]
+    if "custom" in value:
+        custom = _bounded_json_value(value["custom"])
+        if not isinstance(custom, dict) or len(_canonical_json(custom)) > 2_048:
+            raise GuestRequestError("thread custom metadata is invalid")
+        normalized["custom"] = custom
+    if expires_at is not None:
+        normalized["guest_expires_at"] = expires_at
+    return normalized
+
+
+def _guest_route_body(
+    kind: str,
+    body: bytes,
+    *,
+    expires_at: str,
+) -> tuple[bytes, bool]:
+    if kind == "command":
+        return _guest_command(body)
+    if kind == "stream":
+        return _guest_stream_subscription(body), False
+    value = _json_object(body)
+    if kind == "thread-create":
+        if not set(value) <= {"if_exists", "metadata", "thread_id"}:
+            raise GuestRequestError("thread creation fields are invalid")
+        thread_id = value.get("thread_id")
+        if not isinstance(thread_id, str) or _SAFE_ID.fullmatch(thread_id) is None:
+            raise GuestRequestError("thread id is invalid")
+        if value.get("if_exists") != "do_nothing":
+            raise GuestRequestError("thread creation policy is invalid")
+        normalized = {
+            "if_exists": "do_nothing",
+            "metadata": _guest_thread_metadata(
+                value.get("metadata"),
+                expires_at=expires_at,
+            ),
+            "thread_id": thread_id,
+        }
+        return _canonical_json(normalized), False
+    if kind == "thread-update":
+        if set(value) != {"metadata"}:
+            raise GuestRequestError("thread update fields are invalid")
+        return (
+            _canonical_json({"metadata": _guest_thread_metadata(value["metadata"])}),
+            False,
+        )
+    if kind == "thread-search":
+        if not set(value) <= {"limit", "offset", "sort_by", "sort_order"}:
+            raise GuestRequestError("thread search fields are invalid")
+        limit = value.get("limit", 10)
+        offset = value.get("offset", 0)
+        if (
+            type(limit) is not int
+            or not 1 <= limit <= 50
+            or type(offset) is not int
+            or not 0 <= offset <= 1_000
+            or value.get("sort_by", "updated_at") != "updated_at"
+            or value.get("sort_order", "desc") != "desc"
+        ):
+            raise GuestRequestError("thread search bounds are invalid")
+        return (
+            _canonical_json(
+                {
+                    "limit": limit,
+                    "offset": offset,
+                    "sort_by": "updated_at",
+                    "sort_order": "desc",
+                }
+            ),
+            False,
+        )
+    if kind == "history":
+        if not set(value) <= {"limit"}:
+            raise GuestRequestError("history fields are invalid")
+        limit = value.get("limit", 10)
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise GuestRequestError("history limit is invalid")
+        return _canonical_json({"limit": limit}), False
+    raise GuestRequestError("request body is not allowed")
+
+
+def _query(scope: Scope) -> dict[str, str]:
+    raw = scope.get("query_string", b"")
+    try:
+        decoded = raw.decode("ascii")
+        pairs = parse_qsl(
+            decoded,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=8,
+        )
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise GuestRequestError("query string is invalid") from exc
+    if len({key for key, _value in pairs}) != len(pairs):
+        raise GuestRequestError("duplicate query field")
+    return dict(pairs)
+
+
+def _guest_route_kind(scope: Scope) -> str | None:
+    method = scope.get("method", "")
+    path = scope.get("path", "")
+    query = _query(scope)
+    if method == "POST" and path == "/threads" and not query:
+        return "thread-create"
+    if method == "POST" and path == "/threads/search" and not query:
+        return "thread-search"
+    if _GUEST_THREAD_PATH.fullmatch(path):
+        if method == "GET" and not query:
+            return "thread-read"
+        if method == "PATCH" and not query:
+            return "thread-update"
+        return None
+    if method == "GET" and _GUEST_STATE_PATH.fullmatch(path) and not query:
+        return "state"
+    if method == "POST" and _GUEST_HISTORY_PATH.fullmatch(path) and not query:
+        return "history"
+    if method == "GET" and _GUEST_RUNS_PATH.fullmatch(path):
+        if query in ({}, {"limit": "10", "offset": "0"}):
+            return "runs"
+        return None
+    if method == "GET" and _GUEST_RUN_PATH.fullmatch(path) and not query:
+        return "run"
+    if method == "POST" and _GUEST_CANCEL_PATH.fullmatch(path):
+        if query == {"action": "interrupt", "wait": "0"}:
+            return "cancel"
+        return None
+    if method == "POST" and _GUEST_STREAM_PATH.fullmatch(path) and not query:
+        return "stream"
+    if method == "POST" and _GUEST_COMMAND_PATH.fullmatch(path) and not query:
+        return "command"
+    return None
+
+
+def _is_guest_user(user: object) -> bool:
+    if not isinstance(user, dict):
+        return False
+    return (
+        user.get("is_authenticated") is True
+        and is_anonymous_identity(user.get("identity"))
+        and user.get("permissions") == [ANONYMOUS_PERMISSION]
+    )
+
+
+class _BoundedSSESend:
+    def __init__(self, send: Send) -> None:
+        self._send = send
+        self._total = 0
+
+    async def __call__(self, message: Message) -> None:
+        if message["type"] == "http.response.body":
+            body = message.get("body", b"")
+            self._total += len(body)
+            if (
+                len(body) > _GUEST_MAX_SSE_CHUNK_BYTES
+                or self._total > _GUEST_MAX_SSE_TOTAL_BYTES
+            ):
+                raise GuestStreamLimitError(
+                    "guest SSE response exceeded its byte budget"
+                )
+        await self._send(message)
 
 
 async def _owned_or_new_thread_status(
@@ -57,14 +653,17 @@ async def _owned_or_new_thread_status(
     return True, row.status
 
 
-async def _authenticated_identity(scope: Scope) -> str | None:
-    headers = {
-        key.decode("latin-1"): value.decode("latin-1")
-        for key, value in scope.get("headers", [])
-    }
+async def _authenticated_user(scope: Scope) -> dict[str, Any] | None:
     try:
-        user = await authenticate(headers)
+        user = await authenticate(_headers(scope))
     except Exception:
+        return None
+    return user if isinstance(user, dict) else None
+
+
+async def _authenticated_identity(scope: Scope) -> str | None:
+    user = await _authenticated_user(scope)
+    if user is None:
         return None
     identity = user.get("identity")
     return identity if isinstance(identity, str) and identity else None
@@ -90,7 +689,9 @@ def _is_hidden_legacy_mutation(method: str, path: str) -> bool:
     return method == "PATCH" and _CRON_UPDATE_PATH.fullmatch(path) is not None
 
 
-async def _read_body(receive: Receive) -> bytes:
+async def _read_body(
+    receive: Receive, *, max_bytes: int = _MAX_COMMAND_BODY_BYTES
+) -> bytes:
     parts: list[bytes] = []
     size = 0
     more = True
@@ -100,7 +701,7 @@ async def _read_body(receive: Receive) -> bytes:
             return b""
         body = message.get("body", b"")
         size += len(body)
-        if size > _MAX_COMMAND_BODY_BYTES:
+        if size > max_bytes:
             raise ValueError("command body is too large")
         parts.append(body)
         more = bool(message.get("more_body", False))
@@ -127,12 +728,215 @@ async def _json_response(
     *,
     status_code: int,
     content: dict[str, Any],
+    headers: dict[str, str] | None = None,
 ) -> None:
-    await JSONResponse(status_code=status_code, content=content)(
+    response_headers = {"Cache-Control": "no-store"}
+    if headers is not None:
+        response_headers.update(headers)
+    await JSONResponse(
+        status_code=status_code,
+        content=content,
+        headers=response_headers,
+    )(
         scope,
         receive,
         send,
     )
+
+
+class GuestRunGuard:
+    """Pure-ASGI public guest boundary outside every Aegra route.
+
+    The limiter is deliberately process-local. Cloud Run remains fixed to one instance
+    until the durable P5 spend ledger and a distributed serialization primitive land.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        clock: Any = time.monotonic,
+        wall_clock: Any = time.time,
+        max_identities: int = _GUEST_MAX_IDENTITIES,
+        identity_capacity: int = _GUEST_RATE_CAPACITY,
+        identity_window_seconds: float = _GUEST_RATE_WINDOW_SECONDS,
+        global_capacity: int = _GUEST_GLOBAL_RATE_CAPACITY,
+        global_window_seconds: float = _GUEST_GLOBAL_RATE_WINDOW_SECONDS,
+    ) -> None:
+        integer_values = (
+            max_identities,
+            identity_capacity,
+            global_capacity,
+        )
+        numeric_values = (identity_window_seconds, global_window_seconds)
+        if any(type(value) is not int or value < 1 for value in integer_values) or any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+            for value in numeric_values
+        ):
+            raise ValueError("guest guard limits must be positive")
+        self.app = app
+        self._clock = clock
+        self._wall_clock = wall_clock
+        self._max_identities = max_identities
+        self._identity_capacity = identity_capacity
+        self._identity_refill_per_second = identity_capacity / identity_window_seconds
+        self._global_capacity = global_capacity
+        self._global_refill_per_second = global_capacity / global_window_seconds
+        now = float(clock())
+        self._global_bucket = _Bucket(float(global_capacity), now)
+        self._identity_buckets: dict[str, _Bucket] = {}
+        self._lock = Lock()
+
+    @staticmethod
+    def _identity_key(identity: str) -> str:
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _refill(
+        bucket: _Bucket,
+        *,
+        now: float,
+        capacity: int,
+        rate: float,
+    ) -> float:
+        elapsed = max(0.0, now - bucket.updated_at)
+        bucket.tokens = min(float(capacity), bucket.tokens + elapsed * rate)
+        bucket.updated_at = now
+        return bucket.tokens
+
+    def _consume_run(self, identity: str) -> tuple[bool, int]:
+        now = float(self._clock())
+        if not math.isfinite(now):
+            return False, 1
+        identity_key = self._identity_key(identity)
+        with self._lock:
+            bucket = self._identity_buckets.get(identity_key)
+            if bucket is None:
+                if len(self._identity_buckets) >= self._max_identities:
+                    return False, 60
+                bucket = _Bucket(float(self._identity_capacity), now)
+                self._identity_buckets[identity_key] = bucket
+            identity_tokens = self._refill(
+                bucket,
+                now=now,
+                capacity=self._identity_capacity,
+                rate=self._identity_refill_per_second,
+            )
+            global_tokens = self._refill(
+                self._global_bucket,
+                now=now,
+                capacity=self._global_capacity,
+                rate=self._global_refill_per_second,
+            )
+            if identity_tokens >= 1.0 and global_tokens >= 1.0:
+                bucket.tokens -= 1.0
+                self._global_bucket.tokens -= 1.0
+                return True, 0
+            identity_wait = (
+                0.0
+                if identity_tokens >= 1.0
+                else (1.0 - identity_tokens) / self._identity_refill_per_second
+            )
+            global_wait = (
+                0.0
+                if global_tokens >= 1.0
+                else (1.0 - global_tokens) / self._global_refill_per_second
+            )
+        return False, max(1, min(60, math.ceil(max(identity_wait, global_wait))))
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+        user = await _authenticated_user(scope)
+        if user is None:
+            # Aegra owns the canonical authentication error and public health routes.
+            await self.app(scope, receive, send)
+            return
+        if not _is_guest_user(user):
+            await self.app(scope, receive, send)
+            return
+
+        try:
+            kind = _guest_route_kind(scope)
+        except GuestRequestError:
+            kind = None
+        if kind is None:
+            await _json_response(
+                scope,
+                receive,
+                send,
+                status_code=404,
+                content={"detail": "Not Found"},
+            )
+            return
+
+        body_kinds = {
+            "command",
+            "history",
+            "stream",
+            "thread-create",
+            "thread-search",
+            "thread-update",
+        }
+        spends = False
+        if kind in body_kinds:
+            max_bytes = (
+                _GUEST_MAX_STREAM_BODY_BYTES
+                if kind == "stream"
+                else _GUEST_MAX_BODY_BYTES
+            )
+            try:
+                _require_json_content_type(scope)
+                length = _content_length(scope)
+                if length is not None and length > max_bytes:
+                    raise GuestRequestError("request body is too large")
+                body = await _read_body(receive, max_bytes=max_bytes)
+                expires_at = datetime.fromtimestamp(
+                    float(self._wall_clock()),
+                    tz=UTC,
+                ) + timedelta(days=_GUEST_SESSION_RETENTION_DAYS)
+                body, spends = _guest_route_body(
+                    kind,
+                    body,
+                    expires_at=expires_at.isoformat().replace("+00:00", "Z"),
+                )
+            except (GuestRequestError, ValueError, OverflowError, OSError):
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=400,
+                    content={
+                        "error": "invalid_argument",
+                        "message": "Guest request is invalid",
+                    },
+                )
+                return
+            receive = _replay(body)
+
+        identity = user["identity"]
+        if spends:
+            allowed, retry_after = self._consume_run(identity)
+            if not allowed:
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=429,
+                    content={
+                        "error": "rate_limited",
+                        "message": "Guest run rate limit exceeded",
+                    },
+                    headers={"Retry-After": str(retry_after)},
+                )
+                return
+
+        bounded_send: Send = _BoundedSSESend(send) if kind == "stream" else send
+        await self.app(scope, receive, bounded_send)
 
 
 class NativeThreadGuard:
@@ -147,6 +951,7 @@ class NativeThreadGuard:
         self.app = app
         self.max_active_threads = max_active_threads
         self._active: set[str] = set()
+        self._active_owners: dict[str, str] = {}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -229,6 +1034,19 @@ class NativeThreadGuard:
             return
 
         if thread_id in self._active:
+            active_owner = self._active_owners.get(thread_id)
+            if (
+                active_owner is not None
+                and active_owner != hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            ):
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=404,
+                    content={"detail": "Not Found"},
+                )
+                return
             await _json_response(
                 scope,
                 receive,
@@ -254,6 +1072,9 @@ class NativeThreadGuard:
             return
 
         self._active.add(thread_id)
+        self._active_owners[thread_id] = hashlib.sha256(
+            identity.encode("utf-8")
+        ).hexdigest()
         try:
             if command.get("method") == "run.start" and thread_status == "busy":
                 await _json_response(
@@ -270,11 +1091,19 @@ class NativeThreadGuard:
             await self.app(scope, receive, send)
         finally:
             self._active.discard(thread_id)
+            self._active_owners.pop(thread_id, None)
 
 
 validate_runtime_preflight()
 
 app = FastAPI(title="syshin0116.dev Aegra extensions")
 app.add_middleware(NativeThreadGuard)
+app.add_middleware(GuestRunGuard)
 
-__all__ = ["NativeThreadGuard", "app"]
+__all__ = [
+    "GuestRequestError",
+    "GuestRunGuard",
+    "GuestStreamLimitError",
+    "NativeThreadGuard",
+    "app",
+]

@@ -250,8 +250,8 @@ async def test_same_process_same_thread_cross_owner_creation_race_is_rejected(
         first_response = await asyncio.wait_for(first, timeout=1)
 
     assert first_response.status_code == 200
-    assert second.status_code == 409
-    assert second.json()["error"] == "conflict"
+    assert second.status_code == 404
+    assert second.json() == {"detail": "Not Found"}
 
 
 async def test_new_run_is_rejected_while_aegra_thread_is_busy(monkeypatch):

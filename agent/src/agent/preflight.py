@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 
 from aegra_api.config import load_config
 from aegra_api.core.auth_middleware import (
@@ -12,7 +13,7 @@ from aegra_api.core.auth_middleware import (
 from aegra_api.settings import settings
 from langgraph_sdk import Auth
 
-from agent.auth import auth, authenticate
+from agent.auth import auth, authenticate, server_anonymous_access_enabled
 from agent.capabilities.quickjs import server_quickjs_enabled
 from agent.database_url import require_direct_neon_database_url
 
@@ -69,6 +70,10 @@ def _require_auth_handler() -> None:
 def validate_runtime_preflight() -> None:
     """Abort application construction if auth/runtime registration is unsafe."""
     server_quickjs_enabled()
+    if server_anonymous_access_enabled() and not os.environ.get("GUEST_MODEL"):
+        raise RuntimeError(
+            "GUEST_MODEL is required when anonymous agent access is enabled"
+        )
     config = load_config()
     if not isinstance(config, dict):
         raise RuntimeError("Aegra configuration is missing or invalid")

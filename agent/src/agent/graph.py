@@ -32,7 +32,12 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 from langgraph_sdk.runtime import ServerRuntime
 
-from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
+from agent.auth import ANONYMOUS_PERMISSION, is_anonymous_identity
+from agent.capabilities.budget import (
+    RunBudget,
+    RunBudgetMiddleware,
+    RunBudgetPolicy,
+)
 from agent.capabilities.quickjs import (
     QUICKJS_TOOL_NAME,
     BoundedQuickJSMiddleware,
@@ -56,6 +61,7 @@ from agent.tools import TOOLS
 
 DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
 MODEL_MAX_OUTPUT_TOKENS = 2_048
+GUEST_MODEL_MAX_OUTPUT_TOKENS = 1_024
 MODEL_TIMEOUT_SECONDS = 60.0
 SUPPORTED_MODEL_PROVIDERS = frozenset({"anthropic"})
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -66,6 +72,22 @@ NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
     excluded_middleware=frozenset({"SummarizationMiddleware"}),
 )
 logger = logging.getLogger(__name__)
+
+GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
+    policy_id="anonymous-public-v1",
+    max_model_calls=4,
+    max_tool_calls=8,
+    max_quickjs_calls=1,
+    max_quickjs_in_flight=1,
+    max_quickjs_output_bytes=1_024,
+    max_quickjs_total_output_bytes=1_024,
+    max_task_calls=1,
+    max_tasks_in_flight=1,
+    max_depth=1,
+    max_output_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
+    max_total_tokens=12_000,
+    max_elapsed_seconds=45,
+)
 
 AGENT_DIR = Path(__file__).resolve().parent.parent.parent  # agent/
 SKILLS_DIR = str(AGENT_DIR / "skills")
@@ -85,20 +107,19 @@ def _memory_namespace(runtime: Runtime[Any]) -> tuple[str, str, str]:
     )
 
 
-def _build_backend() -> CompositeBackend:
+def _build_backend(*, persistent_memory: bool = True) -> CompositeBackend:
     """Build the instance backend used by every Aegra graph copy.
 
     /            -> StateBackend (ephemeral working files per thread)
     /memories/   -> StoreBackend (persistent cross-thread memory)
     /skills/     -> read-only Deep Agents skills
     """
-    return CompositeBackend(
-        default=StateBackend(),
-        routes={
-            "/memories/": StoreBackend(namespace=_memory_namespace),
-            "/skills/": FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True),
-        },
-    )
+    routes = {
+        "/skills/": FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True),
+    }
+    if persistent_memory:
+        routes["/memories/"] = StoreBackend(namespace=_memory_namespace)
+    return CompositeBackend(default=StateBackend(), routes=routes)
 
 
 def _filesystem_permissions() -> list[FilesystemPermission]:
@@ -113,18 +134,46 @@ def _filesystem_permissions() -> list[FilesystemPermission]:
     ]
 
 
-def _normalized_model_spec() -> str:
-    """Return one supported server-configured model in canonical form."""
-    model = os.environ.get("MODEL") or DEFAULT_MODEL
+def _normalize_model_spec(model: str, *, variable: str) -> str:
+    """Validate one non-configurable server-owned provider/model identifier."""
     # Normalize "provider/model" → "provider:model" for deepagents compatibility
     if "/" in model and ":" not in model:
         model = model.replace("/", ":", 1)
     if _MODEL_SPEC.fullmatch(model) is None:
-        raise RuntimeError("MODEL must be one bounded provider:model spec")
+        raise RuntimeError(f"{variable} must be one bounded provider:model spec")
     provider, _separator, _name = model.partition(":")
     if provider not in SUPPORTED_MODEL_PROVIDERS:
-        raise RuntimeError(f"MODEL provider {provider!r} is not supported")
+        raise RuntimeError(f"{variable} provider {provider!r} is not supported")
     return model
+
+
+def _normalized_model_spec() -> str:
+    """Return the supported owner/evaluation model in canonical form."""
+    return _normalize_model_spec(
+        os.environ.get("MODEL") or DEFAULT_MODEL,
+        variable="MODEL",
+    )
+
+
+def _normalized_guest_model_spec() -> str:
+    """Return the explicitly configured lower-cost anonymous model."""
+    model = os.environ.get("GUEST_MODEL", "")
+    if not model:
+        raise RuntimeError(
+            "GUEST_MODEL is required when anonymous agent access is enabled"
+        )
+    return _normalize_model_spec(model, variable="GUEST_MODEL")
+
+
+def _runtime_is_guest(runtime: ServerRuntime[Any]) -> bool:
+    """Recognize only the canonical identity and exact permission minted for guests."""
+    user = runtime.user
+    return bool(
+        user is not None
+        and getattr(user, "is_authenticated", False) is True
+        and is_anonymous_identity(getattr(user, "identity", None))
+        and getattr(user, "permissions", None) == [ANONYMOUS_PERMISSION]
+    )
 
 
 @lru_cache(maxsize=len(SUPPORTED_MODEL_PROVIDERS) * 4)
@@ -147,6 +196,20 @@ def _bounded_model(model_spec: str) -> BaseChatModel:
     return model
 
 
+@lru_cache(maxsize=len(SUPPORTED_MODEL_PROVIDERS) * 4)
+def _bounded_guest_model(model_spec: str) -> BaseChatModel:
+    """Create the anonymous tier client with a lower hard output ceiling."""
+    model = init_chat_model(
+        model_spec,
+        max_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
+        max_retries=0,
+        timeout=MODEL_TIMEOUT_SECONDS,
+    )
+    if not isinstance(model, BaseChatModel):
+        raise RuntimeError("GUEST_MODEL resolved to a runtime-configurable wrapper")
+    return model
+
+
 def create_graph(
     *,
     runtime: ServerRuntime[Any],
@@ -165,20 +228,34 @@ def create_graph(
     from ``ServerRuntime.user.permissions``; client config cannot enable it.
     """
     validate_capability_config(config)
-    model_spec = _normalized_model_spec()
+    is_guest = _runtime_is_guest(runtime)
+    model_spec = (
+        _normalized_guest_model_spec() if is_guest else _normalized_model_spec()
+    )
     _disable_general_purpose_subagent(model_spec)
-    selected_model = model or _bounded_model(model_spec)
-    run_budget = budget or RunBudget()
+    selected_model = model or (
+        _bounded_guest_model(model_spec) if is_guest else _bounded_model(model_spec)
+    )
+    if is_guest and budget is not None and budget.policy != GUEST_RUN_BUDGET_POLICY:
+        raise ValueError("guest graph requires the anonymous run budget policy")
+    run_budget = budget or (
+        RunBudget(GUEST_RUN_BUDGET_POLICY) if is_guest else RunBudget()
+    )
     exact_input_counter = input_token_counter or count_anthropic_input_tokens
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool
     ):
         raise TypeError("dynamic_subagents_enabled must be a boolean")
-    allow_subagents = dynamic_subagents_allowed(runtime) and (
-        dynamic_subagents_enabled is not False
+    allow_subagents = (
+        not is_guest
+        and dynamic_subagents_allowed(runtime)
+        and (dynamic_subagents_enabled is not False)
     )
-    allow_quickjs = quickjs_allowed(runtime, server_enabled=quickjs_enabled)
+    allow_quickjs = not is_guest and quickjs_allowed(
+        runtime,
+        server_enabled=quickjs_enabled,
+    )
     if quickjs_middleware is None:
         quickjs_middleware = BoundedQuickJSMiddleware(enabled=allow_quickjs)
     elif (
@@ -214,7 +291,7 @@ def create_graph(
             budget=run_budget,
             input_token_counter=exact_input_counter,
         ),
-        backend=_build_backend(),
+        backend=_build_backend(persistent_memory=not is_guest),
         skills=["/skills/"],
         permissions=_filesystem_permissions(),
     )
@@ -254,8 +331,11 @@ async def graph(
     runtime: ServerRuntime[Any],
 ) -> AsyncIterator[Any]:
     """Aegra 0.9.24 factory: one non-serializable ledger per run/access call."""
-    budget = RunBudget()
-    quickjs_middleware = BoundedQuickJSMiddleware(enabled=quickjs_allowed(runtime))
+    is_guest = _runtime_is_guest(runtime)
+    budget = RunBudget(GUEST_RUN_BUDGET_POLICY) if is_guest else RunBudget()
+    quickjs_middleware = BoundedQuickJSMiddleware(
+        enabled=not is_guest and quickjs_allowed(runtime)
+    )
     active_error: BaseException | None = None
     try:
         compiled = create_graph(
@@ -297,11 +377,15 @@ def _validate_aegra_registration() -> None:
     from agent.preflight import validate_runtime_preflight
 
     validate_runtime_preflight()
+    if os.environ.get("AGENT_ANONYMOUS_ACCESS_ENABLED", "false") == "true":
+        _normalized_guest_model_spec()
 
 
 _validate_aegra_registration()
 
 __all__ = [
+    "GUEST_MODEL_MAX_OUTPUT_TOKENS",
+    "GUEST_RUN_BUDGET_POLICY",
     "MODEL_MAX_OUTPUT_TOKENS",
     "MODEL_TIMEOUT_SECONDS",
     "create_graph",

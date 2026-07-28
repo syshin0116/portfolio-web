@@ -45,6 +45,8 @@ def _import_runtime(
         "QUICKJS_ENABLED": "false",
         "AGENT_ANONYMOUS_ACCESS_ENABLED": "false",
         "GUEST_MODEL": "",
+        "GUEST_DAILY_BUDGET_MICRO_USD": "",
+        "GUEST_RUN_RESERVATION_MICRO_USD": "",
         "PYTHONDONTWRITEBYTECODE": "1",
         **environment,
     }
@@ -173,6 +175,8 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
         VALID_CONFIG,
         AGENT_ANONYMOUS_ACCESS_ENABLED="true",
         GUEST_MODEL="anthropic:claude-haiku-4-5",
+        GUEST_DAILY_BUDGET_MICRO_USD="500000",
+        GUEST_RUN_RESERVATION_MICRO_USD="25000",
     )
 
     assert result.returncode == 0, result.stderr
@@ -202,8 +206,28 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
             {
                 "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
                 "GUEST_MODEL": "openai:gpt-5",
+                "GUEST_DAILY_BUDGET_MICRO_USD": "500000",
+                "GUEST_RUN_RESERVATION_MICRO_USD": "25000",
             },
             "GUEST_MODEL",
+        ),
+        (
+            {
+                "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
+                "GUEST_MODEL": "anthropic:claude-haiku-4-5",
+                "GUEST_DAILY_BUDGET_MICRO_USD": "",
+                "GUEST_RUN_RESERVATION_MICRO_USD": "",
+            },
+            "GUEST_DAILY_BUDGET_MICRO_USD",
+        ),
+        (
+            {
+                "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
+                "GUEST_MODEL": "anthropic:claude-haiku-4-5",
+                "GUEST_DAILY_BUDGET_MICRO_USD": "25000",
+                "GUEST_RUN_RESERVATION_MICRO_USD": "25001",
+            },
+            "cannot exceed",
         ),
         (
             {
@@ -240,6 +264,8 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
         "invalid-anonymous-opt-in",
         "missing-guest-model",
         "unsupported-guest-model",
+        "missing-guest-budget",
+        "incoherent-guest-budget",
         "neon-pooler",
         "neon-pooler-query-host",
         "neon-pooler-component-host",

@@ -21,14 +21,26 @@ async def test_migration_upgrades_aegra_then_sets_up_and_closes_langgraph(
     async def close():
         events.append("close")
 
+    async def agent_schema(engine):
+        assert engine is sentinel_engine
+        events.append("agent-schema")
+
+    sentinel_engine = object()
     monkeypatch.setattr(migrate, "run_migrations_async", migrations)
     monkeypatch.setattr(migrate.db_manager, "initialize", initialize)
+    monkeypatch.setattr(migrate.db_manager, "get_engine", lambda: sentinel_engine)
     monkeypatch.setattr(migrate.db_manager, "close", close)
+    monkeypatch.setattr(migrate, "migrate_agent_schema", agent_schema)
     monkeypatch.setattr(migrate, "_require_direct_database_url", lambda: None)
 
     await migrate.migrate_database()
 
-    assert events == ["alembic", "persistence-setup", "close"]
+    assert events == [
+        "alembic",
+        "persistence-setup",
+        "agent-schema",
+        "close",
+    ]
 
 
 async def test_migration_closes_database_manager_when_setup_fails(monkeypatch):

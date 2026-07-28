@@ -79,7 +79,7 @@ jobs:
     needs:
       - changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: web
@@ -120,6 +120,22 @@ jobs:
         run: bunx tsc --noEmit --incremental false
       - if: needs.changes.outputs.web == 'true'
         run: bun run build
+      - name: Install the pinned Chromium browser
+        if: needs.changes.outputs.web == 'true'
+        run: bunx playwright install --with-deps chromium
+      - name: Exercise the production assistant runtime in a browser
+        if: needs.changes.outputs.web == 'true'
+        run: bun run test:browser
+      - name: Upload revision-bound browser evidence
+        if: always() && needs.changes.outputs.web == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: assistant-ui-browser-${{ github.sha }}
+          path: |
+            web/playwright-report/${{ github.sha }}
+            web/test-results/${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
 
   agent:
     name: ci/agent
@@ -306,6 +322,80 @@ jobs:
               http://127.0.0.1:8080/threads/00000000-0000-4000-8000-000000000001/commands
           )"
           test "$unauthenticated_status" = "401"
+
+  native_apv2:
+    name: ci/native-apv2
+    if: always()
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        env:
+          POSTGRES_DB: aegra_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aegra_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: agent
+    env:
+      AEGRA_JS_SDK_E2E: "1"
+      AEGRA_POSTGRES_TEST_URL: postgresql://postgres@localhost:5432/aegra_ci
+      AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fail closed if change detection failed
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - name: Report an unaffected runtime boundary
+        if: needs.changes.outputs.web != 'true' && needs.changes.outputs.agent != 'true'
+        run: echo "No web- or agent-affecting paths changed; ci/native-apv2 reports success without rebuilding."
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        with:
+          node-version: "24.14.0"
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        with:
+          bun-version: 1.3.10
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        with:
+          version: "0.11.29"
+          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
+          enable-cache: false
+      - name: Install the frozen web dependency graph
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        working-directory: web
+        run: bun install --frozen-lockfile
+      - name: Install the frozen agent dependency graph
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        run: uv sync --frozen --all-extras --dev
+      - name: Require the official JavaScript SDK boundary
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        run: test "$AEGRA_JS_SDK_E2E" = "1"
+      - name: Exercise JavaScript SDK to Aegra to PostgreSQL 17
+        if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
+        run: >-
+          uv run --frozen pytest -q
+          tests/integration_tests/test_aegra_postgres.py
+          -k native_v2_http_interrupt_resume_persists_checkpoint
 
   eval:
     name: ci/eval
@@ -519,6 +609,7 @@ jobs:
       - changes
       - web
       - agent
+      - native_apv2
       - eval
       - infra
     runs-on: ubuntu-latest
@@ -530,6 +621,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           WEB_RESULT: ${{ needs.web.result }}
           AGENT_RESULT: ${{ needs.agent.result }}
+          NATIVE_APV2_RESULT: ${{ needs.native_apv2.result }}
           EVAL_RESULT: ${{ needs.eval.result }}
           INFRA_RESULT: ${{ needs.infra.result }}
         shell: bash
@@ -538,6 +630,7 @@ jobs:
             "ci/changes=$CHANGES_RESULT"
             "ci/web=$WEB_RESULT"
             "ci/agent=$AGENT_RESULT"
+            "ci/native-apv2=$NATIVE_APV2_RESULT"
             "ci/eval=$EVAL_RESULT"
             "ci/infra=$INFRA_RESULT"
           )

@@ -194,7 +194,7 @@ UV_CHECKSUM = "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
 SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
 EXPECTED_SETUP_UV_WORKFLOW_COUNTS = {
     ".github/workflows/agent-release.yml": 1,
-    ".github/workflows/ci.yml": 4,
+    ".github/workflows/ci.yml": 5,
     ".github/workflows/dependency-audit.yml": 1,
     ".github/workflows/protocol-compat.yml": 1,
 }

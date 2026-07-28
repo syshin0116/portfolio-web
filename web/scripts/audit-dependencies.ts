@@ -40,10 +40,15 @@ const EXPECTED_ESLINT_PLUGIN_RECORDS = new Map([
 ])
 
 const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
+  ["@assistant-ui/react", "@assistant-ui/react@0.14.28"],
+  [
+    "@assistant-ui/react-langgraph",
+    "@assistant-ui/react-langgraph@0.14.13",
+  ],
   ["@auth/pg-adapter", "@auth/pg-adapter@1.11.3"],
-  ["@langchain/langgraph", "@langchain/langgraph@1.4.8"],
+  ["@langchain/core", "@langchain/core@1.2.3"],
   ["@langchain/langgraph-sdk", "@langchain/langgraph-sdk@1.9.28"],
-  ["@langchain/react", "@langchain/react@1.0.29"],
+  ["@langchain/protocol", "@langchain/protocol@0.0.18"],
   ["eslint-config-next", "eslint-config-next@16.2.12"],
   ["mermaid", "mermaid@11.16.0"],
   ["next", "next@16.2.12"],
@@ -51,11 +56,19 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
   ["postcss", "postcss@8.5.23"],
 ])
 
+const EXPECTED_NATIVE_AGENT_PINS = new Map([
+  ["@assistant-ui/react", "0.14.28"],
+  ["@assistant-ui/react-langgraph", "0.14.13"],
+  ["@langchain/langgraph-sdk", "1.9.28"],
+  ["@langchain/protocol", "0.0.18"],
+])
+
 const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
+  ["@axe-core/playwright", "@axe-core/playwright@4.12.1"],
   ["@eslint/compat", "@eslint/compat@2.1.0"],
   ["@giscus/react", "@giscus/react@3.1.0"],
-  ["@langchain/core", "@langchain/core@1.2.2"],
   ["@neondatabase/serverless", "@neondatabase/serverless@1.0.2"],
+  ["@playwright/test", "@playwright/test@1.62.0"],
   ["@radix-ui/react-accordion", "@radix-ui/react-accordion@1.2.12"],
   ["@radix-ui/react-avatar", "@radix-ui/react-avatar@1.1.11"],
   ["@radix-ui/react-checkbox", "@radix-ui/react-checkbox@1.3.3"],
@@ -288,6 +301,28 @@ function requireDirectResolutionBaseline(
   }
 }
 
+function requireNativeAgentPins(
+  records: Map<string, { resolved: string; line: string }>,
+  dependencies: Record<string, unknown>,
+): void {
+  for (const [name, version] of EXPECTED_NATIVE_AGENT_PINS) {
+    if (dependencies[name] !== version) {
+      fail(
+        `native agent dependency ${name} must be pinned exactly; ` +
+          `actual=${JSON.stringify(dependencies[name])}, ` +
+          `expected=${JSON.stringify(version)}`,
+      )
+    }
+    if (records.get(name)?.resolved !== `${name}@${version}`) {
+      fail(
+        `native agent lock resolution ${name} drifted; ` +
+          `actual=${JSON.stringify(records.get(name)?.resolved)}, ` +
+          `expected=${JSON.stringify(`${name}@${version}`)}`,
+      )
+    }
+  }
+}
+
 function requireDevOnlyException(packageJson: string, bunLock: string): void {
   let manifest: unknown
   try {
@@ -329,6 +364,7 @@ function requireDevOnlyException(packageJson: string, bunLock: string): void {
   }
 
   const records = packageRecords(bunLock)
+  requireNativeAgentPins(records, dependencies)
   requireExactRecords(
     records,
     EXPECTED_BRACE_RECORDS,

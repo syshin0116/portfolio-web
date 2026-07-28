@@ -138,6 +138,53 @@ describe("dependency audit exception policy", () => {
     )
   })
 
+  test("rejects reintroducing legacy LangGraph UI dependencies", () => {
+    const candidate = evidence()
+    const manifest = JSON.parse(candidate.packageJson)
+    manifest.dependencies["@langchain/react"] = "^1.0.29"
+    candidate.packageJson = JSON.stringify(manifest)
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "direct dependency set drifted",
+    )
+  })
+
+  test.each([
+    "@assistant-ui/react",
+    "@assistant-ui/react-langgraph",
+    "@langchain/langgraph-sdk",
+    "@langchain/protocol",
+  ])("rejects a non-exact native agent manifest pin for %s", (name) => {
+    const candidate = evidence()
+    const manifest = JSON.parse(candidate.packageJson)
+    manifest.dependencies[name] = `^${manifest.dependencies[name]}`
+    candidate.packageJson = JSON.stringify(manifest)
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      `native agent dependency ${name} must be pinned exactly`,
+    )
+  })
+
+  test.each([
+    ["@assistant-ui/react", "0.14.28", "0.14.27"],
+    ["@assistant-ui/react-langgraph", "0.14.13", "0.14.12"],
+    ["@langchain/langgraph-sdk", "1.9.28", "1.9.27"],
+    ["@langchain/protocol", "0.0.18", "0.0.17"],
+  ])(
+    "rejects native agent lock drift for %s",
+    (name, currentVersion, oldVersion) => {
+      const candidate = evidence()
+      candidate.bunLock = candidate.bunLock.replace(
+        `"${name}": ["${name}@${currentVersion}"`,
+        `"${name}": ["${name}@${oldVersion}"`,
+      )
+
+      expect(() => validateAuditPolicy(candidate)).toThrow(
+        `native agent lock resolution ${name} drifted`,
+      )
+    },
+  )
+
   test("rejects the exception after its review deadline", () => {
     const candidate = evidence()
     candidate.now = new Date("2026-09-01T00:00:00Z")

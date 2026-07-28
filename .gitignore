@@ -10,10 +10,14 @@ node_modules
 
 # testing
 /web/coverage
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
 
 # next.js
 /web/.next/
 /web/out/
+/web/tests/browser/fixture/.next/
 
 # production
 /web/build

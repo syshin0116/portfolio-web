@@ -29,6 +29,7 @@ def _canonical_inspection_payload() -> dict[str, object]:
 
 
 CANONICAL_INSPECTION_PAYLOAD = _canonical_inspection_payload()
+PRIVATE_STATE_SENTINEL = "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"
 
 
 class FixtureState(TypedDict, total=False):
@@ -37,6 +38,7 @@ class FixtureState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     nested_result: str
     approval: str
+    private_state: dict[str, object]
 
 
 class MemoryFixtureState(TypedDict, total=False):
@@ -84,22 +86,31 @@ def request_tool(_state: FixtureState) -> FixtureState:
 
 def run_nested_step(_state: FixtureState) -> FixtureState:
     """Produce an update inside a nested namespace."""
-    return {"nested_result": "nested-ok"}
+    return {
+        "nested_result": "nested-ok",
+        "private_state": {
+            "todos": [{"content": PRIVATE_STATE_SENTINEL}],
+            "files": {"/memories/private.txt": PRIVATE_STATE_SENTINEL},
+            "scratch": {"chain_of_thought": PRIVATE_STATE_SENTINEL},
+        },
+    }
 
 
 def request_approval(_state: FixtureState) -> FixtureState:
-    """Pause so the AP v2 input.respond command has a deterministic target."""
+    """Pause inside the nested graph with a deterministic resume target."""
     response = interrupt(
         {
-            "kind": "fixture-approval",
-            "question": "Continue the deterministic Aegra fixture?",
+            "schema": "syshin.rag.interrupt.v1",
+            "kind": "approval",
+            "title": "Deterministic fixture approval",
+            "prompt": "Continue the deterministic Aegra fixture?",
         }
     )
     return {"approval": str(response)}
 
 
 def finish(state: FixtureState) -> FixtureState:
-    """Stream one stable visible assistant message without a provider."""
+    """Stream one stable visible assistant message without an external provider."""
     return {"messages": [fixture_model.invoke(state["messages"])]}
 
 
@@ -127,8 +138,10 @@ async def exercise_persistent_memory(
 
 nested_builder = StateGraph(FixtureState)
 nested_builder.add_node("nested_worker", run_nested_step)
+nested_builder.add_node("request_approval", request_approval)
 nested_builder.add_edge(START, "nested_worker")
-nested_builder.add_edge("nested_worker", END)
+nested_builder.add_edge("nested_worker", "request_approval")
+nested_builder.add_edge("request_approval", END)
 nested_graph = nested_builder.compile()
 fixture_model = FakeListChatModel(responses=["fixture-complete"])
 
@@ -136,13 +149,11 @@ builder = StateGraph(FixtureState)
 builder.add_node("request_tool", request_tool)
 builder.add_node("fixture_tool", ToolNode([fixture_lookup]))
 builder.add_node("nested_subgraph", nested_graph)
-builder.add_node("request_approval", request_approval)
 builder.add_node("finish", finish)
 builder.add_edge(START, "request_tool")
 builder.add_edge("request_tool", "fixture_tool")
 builder.add_edge("fixture_tool", "nested_subgraph")
-builder.add_edge("nested_subgraph", "request_approval")
-builder.add_edge("request_approval", "finish")
+builder.add_edge("nested_subgraph", "finish")
 builder.add_edge("finish", END)
 graph = builder.compile(transformers=[ToolCallTransformer, InspectionEventTransformer])
 

@@ -33,7 +33,7 @@ from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.types import Command
+from langgraph.types import Command, StateSnapshot
 from pydantic import Field
 
 from agent.auth import (
@@ -46,7 +46,9 @@ from agent.inspection import INSPECTION_EVENT_NAME
 from agent.migrate import migrate_database
 
 POSTGRES_URL = os.environ.get("AEGRA_POSTGRES_TEST_URL")
+RUN_JS_SDK_E2E = os.environ.get("AEGRA_JS_SDK_E2E") == "1"
 FIXTURE_GRAPH = Path(__file__).resolve().parents[1] / "fixtures" / "aegra_graph.py"
+WEB_ROOT = Path(__file__).resolve().parents[3] / "web"
 INSPECTION_FIXTURE = (
     Path(__file__).resolve().parents[3]
     / "protocol"
@@ -134,6 +136,53 @@ def _authorization(subject: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def _run_official_js_sdk_e2e(
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    thread_id: str,
+) -> dict[str, object]:
+    authorization = headers["Authorization"]
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        raise AssertionError("test authorization must use Bearer")
+    process = await asyncio.create_subprocess_exec(
+        "bun",
+        "run",
+        "test:aegra-sdk",
+        cwd=WEB_ROOT,
+        env={
+            **os.environ,
+            "AEGRA_JS_E2E_BASE_URL": base_url,
+            "AEGRA_JS_E2E_THREAD_ID": thread_id,
+            "AEGRA_JS_E2E_TOKEN": authorization.removeprefix(prefix),
+        },
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    except TimeoutError:
+        process.kill()
+        stdout, stderr = await process.communicate()
+        raise AssertionError(
+            "official JavaScript SDK APv2 integration timed out\n"
+            f"stdout:\n{stdout.decode('utf-8')}\n"
+            f"stderr:\n{stderr.decode('utf-8')}"
+        ) from None
+    output = stdout.decode("utf-8")
+    error_output = stderr.decode("utf-8")
+    assert process.returncode == 0, (
+        "official JavaScript SDK APv2 integration failed\n"
+        f"stdout:\n{output}\nstderr:\n{error_output}"
+    )
+    lines = [line for line in output.splitlines() if line.startswith("{")]
+    assert lines, f"JavaScript SDK integration returned no summary: {output}"
+    summary = json.loads(lines[-1])
+    assert isinstance(summary, dict)
+    return summary
+
+
 async def _database_tables(url: str) -> tuple[set[str], list[str]]:
     async with (
         await psycopg.AsyncConnection.connect(url) as connection,
@@ -196,7 +245,9 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
     )
     unique = uuid4().hex
     thread_id = f"postgres-http-{unique}"
+    js_sdk_thread_id = f"postgres-js-sdk-{unique}"
     stream_sessions: list[ThreadEventSession] = []
+    use_short_js_stream_grace = False
 
     def load_fixture_registry() -> None:
         service._graph_registry = {
@@ -214,6 +265,8 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
         **kwargs: Any,
     ) -> None:
         original_session_init(instance, *args, **kwargs)
+        if use_short_js_stream_grace:
+            instance._idle_grace = 0.05
         stream_sessions.append(instance)
 
     settings.db.DATABASE_URL = POSTGRES_URL
@@ -309,9 +362,14 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
             )
             interrupt = interrupt_envelope["params"]["data"]
             assert interrupt["value"] == {
-                "kind": "fixture-approval",
-                "question": "Continue the deterministic Aegra fixture?",
+                "schema": "syshin.rag.interrupt.v1",
+                "kind": "approval",
+                "title": "Deterministic fixture approval",
+                "prompt": "Continue the deterministic Aegra fixture?",
             }
+            interrupt_namespace = interrupt_envelope["params"]["namespace"]
+            assert interrupt_namespace
+            assert interrupt_namespace[0].startswith("nested_subgraph:")
 
             resume_response = await command_client.post(
                 f"/threads/{thread_id}/commands",
@@ -320,6 +378,7 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
                     "id": 2,
                     "method": "input.respond",
                     "params": {
+                        "namespace": interrupt_namespace,
                         "interrupt_id": interrupt["interrupt_id"],
                         "response": "approved-over-http",
                     },
@@ -386,6 +445,15 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
         values = checkpoint.checkpoint["channel_values"]
         assert values["approval"] == "approved-over-http"
         assert values["nested_result"] == "nested-ok"
+        assert values["private_state"] == {
+            "todos": [{"content": "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"}],
+            "files": {
+                "/memories/private.txt": "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"
+            },
+            "scratch": {
+                "chain_of_thought": "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"
+            },
+        }
         assert values["messages"][-1].text == "fixture-complete"
 
         async with (
@@ -405,6 +473,65 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
                 (thread_id,),
             )
             assert (await cursor.fetchone())[0] == "idle"
+
+        if RUN_JS_SDK_E2E:
+            use_short_js_stream_grace = True
+            summary = await _run_official_js_sdk_e2e(
+                base_url=base_url,
+                headers=headers,
+                thread_id=js_sdk_thread_id,
+            )
+            assert summary == {
+                "aegraAppliedThroughSeq": 0,
+                "assistantText": "fixture-complete",
+                "inspectionEvents": 1,
+                "interruptProjectionRecognized": True,
+                "nestedInputOnContent": False,
+                "nestedInterruptNamespace": True,
+                "protocol": "v2",
+                "rawPrivateStateObserved": False,
+                "replayDroppedByRunIdentity": True,
+                "runCorrelationUsesEventIdentity": True,
+                "runCorrelationPersisted": True,
+                "runtimeBoundarySafe": True,
+                "sawNestedLifecycle": True,
+                "sawToolFinish": True,
+                "sawToolStart": True,
+                "streamConnections": 4,
+                "threadId": js_sdk_thread_id,
+            }
+            js_checkpoint = await db_manager.get_checkpointer().aget_tuple(
+                {"configurable": {"thread_id": js_sdk_thread_id}}
+            )
+            assert js_checkpoint is not None
+            js_values = js_checkpoint.checkpoint["channel_values"]
+            assert js_values["approval"] == "approved-via-js-sdk"
+            assert js_values["nested_result"] == "nested-ok"
+            assert (
+                js_values["private_state"]["scratch"]["chain_of_thought"]
+                == "PRIVATE_DEEP_AGENT_STATE_MUST_NOT_REACH_UI"
+            )
+            assert js_values["messages"][-1].text == "fixture-complete"
+            async with (
+                await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+                connection.cursor() as cursor,
+            ):
+                await cursor.execute(
+                    "SELECT status FROM runs WHERE thread_id = %s "
+                    "ORDER BY created_at ASC",
+                    (js_sdk_thread_id,),
+                )
+                assert [row[0] for row in await cursor.fetchall()] == [
+                    "interrupted",
+                    "success",
+                ]
+                await cursor.execute(
+                    "SELECT status FROM thread WHERE thread_id = %s",
+                    (js_sdk_thread_id,),
+                )
+                assert (await cursor.fetchone())[0] == "idle"
+            await asyncio.sleep(0)
+            assert db_manager.get_engine().sync_engine.pool.checkedout() == 0
     finally:
         if server_task is not None:
             server.should_exit = True
@@ -414,10 +541,17 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
         if db_manager.engine is None:
             await db_manager.initialize()
         await db_manager.get_checkpointer().adelete_thread(thread_id)
+        if RUN_JS_SDK_E2E:
+            await db_manager.get_checkpointer().adelete_thread(js_sdk_thread_id)
         async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
             await connection.execute(
-                "DELETE FROM thread WHERE thread_id = %s",
-                (thread_id,),
+                "DELETE FROM thread WHERE thread_id = ANY(%s)",
+                (
+                    [
+                        thread_id,
+                        *([js_sdk_thread_id] if RUN_JS_SDK_E2E else []),
+                    ],
+                ),
             )
         await db_manager.close()
         aegra_orm.async_session_maker = None
@@ -632,8 +766,8 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
                 bob_config,
             )
 
-        assert alice_first["__interrupt__"][0].value["kind"] == "fixture-approval"
-        assert bob_first["__interrupt__"][0].value["kind"] == "fixture-approval"
+        assert alice_first["__interrupt__"][0].value["kind"] == "approval"
+        assert bob_first["__interrupt__"][0].value["kind"] == "approval"
         assert alice_config["configurable"]["langgraph_auth_user"].identity == "alice"
         assert bob_config["configurable"]["langgraph_auth_user"].identity == "bob"
         assert alice_memory_config["configurable"]["user_id"] == "bob"
@@ -871,11 +1005,20 @@ Stop after one verdict.
             config=bob_config,
             user=bob,
         ) as restarted_bob_graph:
-            bob_state = await restarted_bob_graph.aget_state(bob_config)
+            bob_state = await restarted_bob_graph.aget_state(
+                bob_config,
+                subgraphs=True,
+            )
 
         assert alice_resumed["approval"] == "approved-after-restart"
         assert "approval" not in bob_state.values
-        assert bob_state.next == ("request_approval",)
+        assert bob_state.next == ("nested_subgraph",)
+        assert len(bob_state.tasks) == 1
+        nested_task = bob_state.tasks[0]
+        assert nested_task.name == "nested_subgraph"
+        assert isinstance(nested_task.state, StateSnapshot)
+        assert nested_task.state.next == ("request_approval",)
+        assert nested_task.interrupts == nested_task.state.interrupts
 
         restarted_memory_service = _service(
             memory_base_graph,

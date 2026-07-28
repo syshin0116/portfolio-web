@@ -39,6 +39,12 @@ from agent.guest_budget import (
 )
 from agent.maintenance import GUEST_RETENTION_POLICY, collect_expired_guest_threads
 from agent.preflight import validate_runtime_preflight
+from agent.public_wire import (
+    GuestJSONResponseSend,
+    GuestSSEResponseSend,
+    GuestStreamLimitError,
+    GuestWireProjectionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +65,6 @@ _MAX_COMMAND_BODY_BYTES = 64 * 1024
 _RUN_METHODS = frozenset({"run.start", "input.respond"})
 _GUEST_MAX_BODY_BYTES = 32 * 1024
 _GUEST_MAX_STREAM_BODY_BYTES = 2 * 1024
-_GUEST_MAX_SSE_CHUNK_BYTES = 64 * 1024
-_GUEST_MAX_SSE_TOTAL_BYTES = 512 * 1024
 _GUEST_MAX_IDENTITIES = 1_024
 _GUEST_RATE_CAPACITY = 4
 _GUEST_RATE_WINDOW_SECONDS = 60.0
@@ -72,6 +76,7 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_NONCE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
+_SAFE_INTERRUPT_ID = re.compile(r"^[0-9a-f]{32}$")
 _GUEST_THREAD_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$")
 _GUEST_STATE_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/state$")
 _GUEST_HISTORY_PATH = re.compile(
@@ -117,10 +122,6 @@ class GuestRequestError(ValueError):
     """Raised when a guest request crosses the public wire contract."""
 
 
-class GuestStreamLimitError(RuntimeError):
-    """Terminate a guest SSE connection that crosses its response byte budget."""
-
-
 @dataclass(slots=True)
 class _Bucket:
     tokens: float
@@ -164,11 +165,19 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_json_constant(_value: str) -> None:
+    raise GuestRequestError("non-finite JSON number")
+
+
 def _json_object(body: bytes) -> dict[str, Any]:
     try:
         decoded = body.decode("utf-8")
-        value = json.loads(decoded, object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = json.loads(
+            decoded,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise GuestRequestError("invalid JSON body") from exc
     if not isinstance(value, dict):
         raise GuestRequestError("JSON body must be an object")
@@ -306,7 +315,7 @@ def _guest_messages(value: object) -> dict[str, list[dict[str, Any]]]:
         if not set(message) <= allowed or not {"role", "content", "id"} <= set(message):
             raise GuestRequestError("run message fields are invalid")
         role = message["role"]
-        if role not in {"user", "assistant", "tool"}:
+        if not isinstance(role, str) or role not in {"user", "assistant", "tool"}:
             raise GuestRequestError("run message role is invalid")
         message_id = _bounded_string(
             message["id"],
@@ -350,7 +359,11 @@ def _guest_command(body: bytes) -> tuple[bytes, bool]:
         raise GuestRequestError("command id is invalid")
     method = command["method"]
     params = command["params"]
-    if method not in _RUN_METHODS or not isinstance(params, dict):
+    if (
+        not isinstance(method, str)
+        or method not in _RUN_METHODS
+        or not isinstance(params, dict)
+    ):
         raise GuestRequestError("command method is not allowed")
     if method == "run.start":
         allowed = {
@@ -393,27 +406,23 @@ def _guest_command(body: bytes) -> tuple[bytes, bool]:
         raise GuestRequestError("input.respond fields are invalid")
     _nonce, metadata, config = _run_nonce(params)
     namespace = params["namespace"]
-    if (
-        not isinstance(namespace, list)
-        or len(namespace) > 4
-        or any(
-            not isinstance(item, str) or not item or len(item.encode("utf-8")) > 128
-            for item in namespace
-        )
-    ):
+    if namespace != []:
         raise GuestRequestError("interrupt namespace is invalid")
+    interrupt_id = _bounded_string(
+        params["interrupt_id"],
+        max_bytes=32,
+        field="interrupt id",
+    )
+    if _SAFE_INTERRUPT_ID.fullmatch(interrupt_id) is None:
+        raise GuestRequestError("interrupt id is invalid")
     normalized = {
         "id": command_id,
         "method": method,
         "params": {
             "config": config,
-            "interrupt_id": _bounded_string(
-                params["interrupt_id"],
-                max_bytes=128,
-                field="interrupt id",
-            ),
+            "interrupt_id": interrupt_id,
             "metadata": metadata,
-            "namespace": namespace,
+            "namespace": [],
             "response": _bounded_json_value(params["response"]),
         },
     }
@@ -429,6 +438,7 @@ def _guest_stream_subscription(body: bytes) -> bytes:
         not isinstance(channels, list)
         or not channels
         or len(channels) > 5
+        or any(not isinstance(channel, str) for channel in channels)
         or len(set(channels)) != len(channels)
         or any(
             channel not in {"messages", "lifecycle", "input", "tools", "custom"}
@@ -436,15 +446,15 @@ def _guest_stream_subscription(body: bytes) -> bytes:
         )
     ):
         raise GuestRequestError("stream channels are invalid")
-    normalized: dict[str, Any] = {"channels": channels}
-    if "depth" in value:
-        if type(value["depth"]) is not int or value["depth"] != 0:
-            raise GuestRequestError("stream depth is invalid")
-        normalized["depth"] = 0
-    if "namespaces" in value:
-        if value["namespaces"] != [[]]:
-            raise GuestRequestError("stream namespaces are invalid")
-        normalized["namespaces"] = [[]]
+    normalized: dict[str, Any] = {
+        "channels": channels,
+        "depth": 0,
+        "namespaces": [[]],
+    }
+    if "depth" in value and (type(value["depth"]) is not int or value["depth"] != 0):
+        raise GuestRequestError("stream depth is invalid")
+    if "namespaces" in value and value["namespaces"] != [[]]:
+        raise GuestRequestError("stream namespaces are invalid")
     return _canonical_json(normalized)
 
 
@@ -475,7 +485,11 @@ def _guest_thread_metadata(
             field="thread title",
         )
     if "title_status" in value:
-        if value["title_status"] not in {"pending", "manual", "generated"}:
+        if not isinstance(value["title_status"], str) or value["title_status"] not in {
+            "pending",
+            "manual",
+            "generated",
+        }:
             raise GuestRequestError("thread title status is invalid")
         normalized["title_status"] = value["title_status"]
     if "archived" in value:
@@ -623,25 +637,6 @@ def _is_guest_user(user: object) -> bool:
         and is_anonymous_identity(user.get("identity"))
         and user.get("permissions") == [ANONYMOUS_PERMISSION]
     )
-
-
-class _BoundedSSESend:
-    def __init__(self, send: Send) -> None:
-        self._send = send
-        self._total = 0
-
-    async def __call__(self, message: Message) -> None:
-        if message["type"] == "http.response.body":
-            body = message.get("body", b"")
-            self._total += len(body)
-            if (
-                len(body) > _GUEST_MAX_SSE_CHUNK_BYTES
-                or self._total > _GUEST_MAX_SSE_TOTAL_BYTES
-            ):
-                raise GuestStreamLimitError(
-                    "guest SSE response exceeded its byte budget"
-                )
-        await self._send(message)
 
 
 async def _owned_or_new_thread_status(
@@ -1008,8 +1003,12 @@ class GuestRunGuard:
                     )
                     return
 
-        bounded_send: Send = _BoundedSSESend(send) if kind == "stream" else send
-        await self.app(scope, receive, bounded_send)
+        projected_send: Send
+        if kind == "stream":
+            projected_send = GuestSSEResponseSend(send)
+        else:
+            projected_send = GuestJSONResponseSend(send, kind=kind)
+        await self.app(scope, receive, projected_send)
 
 
 class NativeThreadGuard:
@@ -1069,17 +1068,42 @@ class NativeThreadGuard:
             return
         receive = _replay(body)
         command = _native_command(body)
-        if command is None or command.get("method") not in _RUN_METHODS:
+        command_method = command.get("method") if command is not None else None
+        if (
+            command is None
+            or not isinstance(command_method, str)
+            or command_method not in _RUN_METHODS
+        ):
             await self.app(scope, receive, send)
             return
 
         thread_id = command_match.group(1)
+        if is_anonymous_identity(identity) and _SAFE_ID.fullmatch(thread_id) is None:
+            await _json_response(
+                scope,
+                receive,
+                send,
+                status_code=404,
+                content={"detail": "Not Found"},
+            )
+            return
         owned_or_new, thread_status = await _owned_or_new_thread_status(
             thread_id,
             identity,
         )
         if not owned_or_new:
-            # Preserve Aegra's native 404 for another user's existing thread.
+            if is_anonymous_identity(identity):
+                # Ownership is both a privacy and spend boundary for guests:
+                # reject before the inner rate/budget guard can reserve a run.
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=404,
+                    content={"detail": "Not Found"},
+                )
+                return
+            # Preserve Aegra's native owner-preview behavior.
             await self.app(scope, receive, send)
             return
 
@@ -1105,6 +1129,35 @@ class NativeThreadGuard:
                 content=envelope,
             )
             return
+
+        if is_anonymous_identity(identity):
+            if (
+                command.get("method") == "input.respond"
+                and thread_status != "interrupted"
+            ):
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=409,
+                    content={
+                        "error": "conflict",
+                        "message": "The thread is not waiting for guest input",
+                    },
+                )
+                return
+            if command.get("method") == "run.start" and thread_status == "interrupted":
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=409,
+                    content={
+                        "error": "conflict",
+                        "message": "The thread is waiting for guest input",
+                    },
+                )
+                return
 
         if thread_id in self._active:
             active_owner = self._active_owners.get(thread_id)
@@ -1214,13 +1267,14 @@ async def collect_guest_threads(request: Request) -> JSONResponse:
     )
 
 
-app.add_middleware(NativeThreadGuard)
 app.add_middleware(GuestRunGuard, enforce_daily_budget=True)
+app.add_middleware(NativeThreadGuard)
 
 __all__ = [
     "GuestRequestError",
     "GuestRunGuard",
     "GuestStreamLimitError",
+    "GuestWireProjectionError",
     "NativeThreadGuard",
     "app",
 ]

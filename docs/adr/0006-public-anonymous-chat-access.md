@@ -12,7 +12,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-26"
+updated: "2026-07-28"
 owners: ["@syshin0116"]
 refs: [../research/public-exposure.md, ../plans/rag-restack.md, 0004-adopt-aegra.md, 0007-postgres-on-neon-split-projects.md]
 template: adr
@@ -78,6 +78,16 @@ Capabilities are tiered:
 | Dynamic subagents | off by default; bounded tier only after P4.5/P5 gates | owner/eval experiment first | bounded |
 | Thread retention | ~14 days, GC'd | persistent | persistent |
 
+Paid guest commands cross the in-process same-thread acceptance guard before the guest
+spend guard. Ownership, an existing busy run, guard capacity, and Aegra 0.9.24's
+unsupported `input.respond` mutation forms are therefore rejected before the
+non-refundable daily reservation. Guest resumes additionally require an interrupted
+thread, the root namespace, and Aegra's exact 32-character lowercase-hex interrupt ID;
+ordinary `run.start` is rejected while that guest thread is waiting for input. Once
+accepted, the guest guard canonicalizes the request, consumes the process-local rate
+token, reserves the durable worst-case amount, and calls Aegra immediately; post-dispatch
+failures remain intentionally charged.
+
 **Rollout is gated on plan phase P3.** Nothing in that phase is optional.
 
 ## Consequences
@@ -132,3 +142,9 @@ Capabilities are tiered:
 ## Changelog
 
 - 2026-07-26: created, accepted for the access model with rollout gated on P3.
+- 2026-07-28: fixed the middleware acceptance seam so native same-thread rejection
+  precedes the non-refundable guest reservation and accepted commands reserve
+  immediately before Aegra scheduling.
+- 2026-07-28: required root, pinned-format guest interrupt identities and an interrupted
+  thread before a resume can reserve budget, preventing rejected protocol mutations from
+  consuming the shared daily ceiling.

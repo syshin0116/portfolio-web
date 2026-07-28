@@ -24,10 +24,14 @@ from agent.guest_budget import GuestDailyBudgetExhaustedError
 from agent.http import (
     GuestRunGuard,
     GuestStreamLimitError,
+    GuestWireProjectionError,
+    NativeThreadGuard,
 )
 from agent.maintenance import GUEST_RETENTION_POLICY
 
 _NONCE = "123e4567-e89b-42d3-a456-426614174000"
+_INTERRUPT_ID = "0123456789abcdef0123456789abcdef"
+_CREATED_AT = "2026-07-28T00:00:00Z"
 
 
 @pytest.fixture(autouse=True)
@@ -82,17 +86,78 @@ async def _request_body(receive) -> bytes:
 
 def _capturing_app(records: list[dict[str, Any]]):
     async def app(scope, receive, send):
-        records.append(
-            {
-                "body": await _request_body(receive),
-                "method": scope["method"],
-                "path": scope["path"],
-                "query": scope.get("query_string", b""),
+        body = await _request_body(receive)
+        record = {
+            "body": body,
+            "method": scope["method"],
+            "path": scope["path"],
+            "query": scope.get("query_string", b""),
+        }
+        records.append(record)
+        path = scope["path"]
+        if path.endswith("/commands"):
+            command = json.loads(body)
+            response: object = {
+                "id": command["id"],
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "run-1"},
+                "type": "success",
             }
-        )
-        await JSONResponse({"ok": True})(scope, receive, send)
+        elif path == "/threads/search":
+            response = []
+        elif path == "/threads":
+            thread_id = json.loads(body)["thread_id"]
+            response = _thread_response(thread_id)
+        elif path.endswith("/runs"):
+            response = []
+        elif "/runs/" in path:
+            thread_id, run_id = _run_ids(path)
+            response = _run_response(thread_id, run_id)
+        elif path.startswith("/threads/"):
+            response = _thread_response(path.split("/")[2])
+        else:
+            response = {"ok": True}
+        await JSONResponse(response)(scope, receive, send)
 
     return app
+
+
+def _thread_response(thread_id: str) -> dict[str, Any]:
+    return {
+        "created_at": _CREATED_AT,
+        "metadata": {
+            "archived": False,
+            "graph_id": "agent",
+            "title": "새 대화",
+            "title_status": "pending",
+        },
+        "status": "idle",
+        "thread_id": thread_id,
+        "updated_at": _CREATED_AT,
+        "user_id": "private-owner",
+    }
+
+
+def _run_ids(path: str) -> tuple[str, str]:
+    parts = path.split("/")
+    return parts[2], parts[4]
+
+
+def _run_response(thread_id: str, run_id: str) -> dict[str, Any]:
+    return {
+        "assistant_id": "fe096781-5601-53d2-b2f6-0d3403f7e9ca",
+        "config": {},
+        "context": {"private": "must-not-cross"},
+        "created_at": _CREATED_AT,
+        "error_message": "must-not-cross",
+        "input": {"private": "must-not-cross"},
+        "output": {"private": "must-not-cross"},
+        "run_id": run_id,
+        "status": "running",
+        "thread_id": thread_id,
+        "updated_at": _CREATED_AT,
+        "user_id": "private-owner",
+    }
 
 
 def _run_command(
@@ -131,12 +196,38 @@ def _input_respond_command(
         "method": "input.respond",
         "params": {
             "config": {"metadata": metadata.copy()},
-            "interrupt_id": "interrupt-1",
+            "interrupt_id": _INTERRUPT_ID,
             "metadata": metadata,
-            "namespace": ["nested-agent:task-1"],
+            "namespace": [],
             "response": "approve",
         },
     }
+
+
+def _event_frame(
+    method: str,
+    data: dict[str, Any],
+    *,
+    seq: int,
+    event_id: str | None = None,
+    namespace: list[str] | None = None,
+) -> bytes:
+    envelope = {
+        "type": "event",
+        "event_id": event_id or f"run-1_event_{seq}:0",
+        "seq": seq,
+        "method": method,
+        "params": {
+            "data": data,
+            "namespace": namespace or [],
+            "timestamp": 1_785_031_200_000 + seq,
+        },
+    }
+    return (
+        f"event: {method}\n"
+        f"data: {json.dumps(envelope, ensure_ascii=False, separators=(',', ':'))}\n"
+        f"id: {seq}\n\n"
+    ).encode()
 
 
 async def test_disabled_gate_leaves_rejection_to_the_registered_aegra_auth(
@@ -312,6 +403,89 @@ async def test_thread_create_rejects_ambiguous_or_server_owned_fields(body):
     assert not called
 
 
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        (
+            "/threads/guest-thread/commands",
+            json.dumps(
+                {
+                    **_run_command(),
+                    "method": [],
+                }
+            ).encode(),
+        ),
+        (
+            "/threads/guest-thread/commands",
+            json.dumps(
+                {
+                    **_run_command(),
+                    "params": {
+                        **_run_command()["params"],
+                        "input": {
+                            "messages": [
+                                {
+                                    "content": "question",
+                                    "id": "guest-message-1",
+                                    "role": [],
+                                }
+                            ]
+                        },
+                    },
+                }
+            ).encode(),
+        ),
+        (
+            "/threads/guest-thread/stream/events",
+            b'{"channels":[{}]}',
+        ),
+        (
+            "/threads",
+            b'{"if_exists":"do_nothing","metadata":{"title_status":[]},"thread_id":"guest-thread"}',
+        ),
+        (
+            "/threads",
+            b'{"if_exists":"do_nothing","metadata":{"custom":{"score":NaN}},"thread_id":"guest-thread"}',
+        ),
+    ],
+    ids=[
+        "array-command-method",
+        "array-message-role",
+        "object-stream-channel",
+        "array-title-status",
+        "non-finite-number",
+    ],
+)
+async def test_malformed_guest_json_shapes_fail_closed_before_dispatch(path, body):
+    called = False
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            path,
+            headers={
+                **_guest_headers(),
+                "Content-Type": "application/json",
+            },
+            content=body,
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_argument",
+        "message": "Guest request is invalid",
+    }
+    assert not called
+
+
 async def test_run_start_is_rebuilt_from_the_public_wire_contract():
     records: list[dict[str, Any]] = []
     app = GuestRunGuard(_capturing_app(records))
@@ -484,7 +658,32 @@ async def test_identity_bucket_cardinality_fails_closed():
 
 async def test_native_stream_filters_allow_only_reviewed_public_channels():
     records: list[dict[str, Any]] = []
-    app = GuestRunGuard(_capturing_app(records))
+
+    async def stream_app(scope, receive, send):
+        records.append(
+            {
+                "body": await _request_body(receive),
+                "method": scope["method"],
+                "path": scope["path"],
+                "query": scope.get("query_string", b""),
+            }
+        )
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"",
+                "more_body": False,
+            }
+        )
+
+    app = GuestRunGuard(stream_app)
     headers = _guest_headers()
     accepted = [
         {
@@ -525,7 +724,719 @@ async def test_native_stream_filters_allow_only_reviewed_public_channels():
 
     assert [response.status_code for response in accepted_responses] == [200, 200]
     assert all(response.status_code == 400 for response in rejected_responses)
-    assert [json.loads(record["body"]) for record in records] == accepted
+    assert [json.loads(record["body"]) for record in records] == [
+        {
+            "channels": ["messages", "lifecycle", "input", "tools", "custom"],
+            "depth": 0,
+            "namespaces": [[]],
+        },
+        {
+            "channels": ["lifecycle", "input"],
+            "depth": 0,
+            "namespaces": [[]],
+        },
+    ]
+
+
+async def test_guest_state_projects_only_public_messages_and_interrupt_identity():
+    secret = "STATE-SECRET-SENTINEL"
+
+    async def downstream(scope, receive, send):
+        await JSONResponse(
+            {
+                "values": {
+                    "messages": [
+                        {
+                            "type": "human",
+                            "id": "human-1",
+                            "content": "공개 질문",
+                            "additional_kwargs": {"secret": secret},
+                        },
+                        {
+                            "type": "ai",
+                            "id": "assistant-1",
+                            "content": [
+                                {"type": "reasoning", "reasoning": secret},
+                                {"type": "text", "text": "공개 답변"},
+                            ],
+                            "tool_calls": [{"args": {"secret": secret}}],
+                        },
+                        {
+                            "type": "tool",
+                            "id": "tool-1",
+                            "content": secret,
+                        },
+                    ],
+                    "todos": [{"content": secret}],
+                    "files": {"/private.txt": secret},
+                    "scratch": {"chain_of_thought": secret},
+                },
+                "next": ["private-node"],
+                "tasks": [{"result": secret}],
+                "interrupts": [
+                    {
+                        "id": _INTERRUPT_ID,
+                        "ns": [],
+                        "value": {
+                            "schema": "syshin.rag.interrupt.v1",
+                            "kind": "approval",
+                            "prompt": "계속할까요?",
+                            "secret": secret,
+                        },
+                    }
+                ],
+                "metadata": {"private": secret},
+                "created_at": "2026-07-28T00:00:00Z",
+                "checkpoint": {
+                    "checkpoint_id": "checkpoint-1",
+                    "thread_id": secret,
+                    "checkpoint_ns": "",
+                },
+                "parent_checkpoint": None,
+            }
+        )(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/threads/guest-thread/state",
+            headers=_guest_headers(),
+        )
+
+    assert response.status_code == 200
+    assert secret.encode() not in response.content
+    assert response.json() == {
+        "checkpoint": {
+            "checkpoint_id": "checkpoint-1",
+            "checkpoint_ns": "",
+        },
+        "checkpoint_id": "checkpoint-1",
+        "created_at": "2026-07-28T00:00:00Z",
+        "interrupts": [
+            {
+                "id": _INTERRUPT_ID,
+                "ns": [],
+                "resumable": True,
+                "when": "during",
+            }
+        ],
+        "metadata": {},
+        "next": [],
+        "parent_checkpoint": None,
+        "parent_checkpoint_id": None,
+        "tasks": [],
+        "values": {
+            "messages": [
+                {
+                    "content": "공개 질문",
+                    "id": "human-1",
+                    "type": "human",
+                },
+                {
+                    "content": [{"text": "공개 답변", "type": "text"}],
+                    "id": "assistant-1",
+                    "type": "ai",
+                },
+            ]
+        },
+    }
+
+
+async def test_guest_history_projects_every_checkpoint_before_raw_bytes_are_sent():
+    secret = "HISTORY-SECRET-SENTINEL"
+
+    async def downstream(scope, receive, send):
+        await JSONResponse(
+            [
+                {
+                    "values": {
+                        "messages": [
+                            {
+                                "type": "ai",
+                                "id": "assistant-1",
+                                "content": [
+                                    {"type": "thinking", "thinking": secret},
+                                    {"type": "text", "text": "기록된 답변"},
+                                ],
+                            }
+                        ],
+                        "private": secret,
+                    },
+                    "tasks": [{"state": secret}],
+                    "interrupts": [{"id": "interrupt-private", "value": secret}],
+                    "metadata": {"private": secret},
+                    "created_at": "2026-07-28T00:00:00Z",
+                    "checkpoint": {
+                        "checkpoint_id": "checkpoint-1",
+                        "thread_id": secret,
+                        "checkpoint_ns": "",
+                    },
+                    "parent_checkpoint": None,
+                }
+            ]
+        )(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/history",
+            headers=_guest_headers(),
+            json={"limit": 50},
+        )
+
+    assert response.status_code == 200
+    assert secret.encode() not in response.content
+    assert response.json() == [
+        {
+            "checkpoint": {
+                "checkpoint_id": "checkpoint-1",
+                "checkpoint_ns": "",
+            },
+            "checkpoint_id": "checkpoint-1",
+            "created_at": "2026-07-28T00:00:00Z",
+            "interrupts": [],
+            "metadata": {},
+            "next": [],
+            "parent_checkpoint": None,
+            "parent_checkpoint_id": None,
+            "tasks": [],
+            "values": {
+                "messages": [
+                    {
+                        "content": [{"text": "기록된 답변", "type": "text"}],
+                        "id": "assistant-1",
+                        "type": "ai",
+                    }
+                ]
+            },
+        }
+    ]
+
+
+async def test_guest_thread_and_run_routes_never_return_raw_aegra_entities():
+    secret = "RAW-AEGRA-ENTITY-SECRET"
+    thread = {
+        "created_at": _CREATED_AT,
+        "metadata": {
+            "archived": False,
+            "custom": {"view": "compact"},
+            "graph_id": "agent",
+            "owner": secret,
+            "guest_expires_at": secret,
+            "guest_retention_policy": secret,
+            "title": "공개 대화",
+            "title_status": "generated",
+        },
+        "status": "idle",
+        "thread_id": "guest-thread",
+        "updated_at": _CREATED_AT,
+        "user_id": secret,
+    }
+    run = {
+        "assistant_id": "fe096781-5601-53d2-b2f6-0d3403f7e9ca",
+        "config": {
+            "metadata": {
+                "syshin_ui_submit_nonce": _NONCE,
+                "private": secret,
+            },
+            "configurable": {"private": secret},
+        },
+        "context": {"private": secret},
+        "created_at": _CREATED_AT,
+        "error_message": secret,
+        "input": {"private": secret},
+        "metadata": {
+            "syshin_ui_submit_nonce": _NONCE,
+            "private": secret,
+        },
+        "output": {"private": secret},
+        "run_id": "run-1",
+        "status": "running",
+        "thread_id": "guest-thread",
+        "updated_at": _CREATED_AT,
+        "user_id": secret,
+    }
+
+    async def downstream(scope, receive, send):
+        await _request_body(receive)
+        path = scope["path"]
+        if path == "/threads/search":
+            body: object = [thread]
+        elif path.endswith("/runs"):
+            body = [run]
+        elif "/runs/" in path:
+            body = run
+        else:
+            body = thread
+        await JSONResponse(body)(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    headers = _guest_headers()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        responses = [
+            await client.get("/threads/guest-thread", headers=headers),
+            await client.post(
+                "/threads/search",
+                headers=headers,
+                json={
+                    "limit": 10,
+                    "offset": 0,
+                    "sort_by": "updated_at",
+                    "sort_order": "desc",
+                },
+            ),
+            await client.get(
+                "/threads/guest-thread/runs?limit=10&offset=0",
+                headers=headers,
+            ),
+            await client.get(
+                "/threads/guest-thread/runs/run-1",
+                headers=headers,
+            ),
+            await client.post(
+                "/threads/guest-thread/runs/run-1/cancel?action=interrupt&wait=0",
+                headers=headers,
+            ),
+        ]
+
+    assert all(response.status_code == 200 for response in responses)
+    assert all(secret.encode() not in response.content for response in responses)
+    projected_thread = responses[0].json()
+    assert projected_thread == {
+        "created_at": _CREATED_AT,
+        "metadata": {
+            "archived": False,
+            "custom": {"view": "compact"},
+            "graph_id": "agent",
+            "title": "공개 대화",
+            "title_status": "generated",
+        },
+        "status": "idle",
+        "thread_id": "guest-thread",
+        "updated_at": _CREATED_AT,
+    }
+    assert responses[1].json() == [projected_thread]
+    projected_run = {
+        "assistant_id": "agent",
+        "config": {
+            "metadata": {"syshin_ui_submit_nonce": _NONCE},
+        },
+        "created_at": _CREATED_AT,
+        "metadata": {"syshin_ui_submit_nonce": _NONCE},
+        "run_id": "run-1",
+        "status": "running",
+        "thread_id": "guest-thread",
+        "updated_at": _CREATED_AT,
+    }
+    assert responses[2].json() == [projected_run]
+    assert responses[3].json() == projected_run
+    assert responses[4].json() == projected_run
+
+
+async def test_malformed_downstream_enum_raises_public_projection_error():
+    async def downstream(scope, receive, send):
+        thread = _thread_response("guest-thread")
+        thread["status"] = []
+        await JSONResponse(thread)(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        with pytest.raises(GuestWireProjectionError):
+            await client.get(
+                "/threads/guest-thread",
+                headers=_guest_headers(),
+            )
+
+
+async def test_guest_command_errors_replace_raw_aegra_details():
+    secret = "RAW-COMMAND-ERROR-SECRET"
+
+    async def downstream(scope, receive, send):
+        await _request_body(receive)
+        await JSONResponse(
+            {
+                "error": "unknown_error",
+                "id": 7,
+                "message": secret,
+                "type": "error",
+            }
+        )(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "error": "unknown_error",
+        "id": 7,
+        "message": "Guest command failed",
+        "type": "error",
+    }
+    assert secret.encode() not in response.content
+
+
+async def test_owner_state_response_remains_byte_for_byte_unprojected():
+    secret = "OWNER-STATE-SENTINEL"
+
+    async def downstream(scope, receive, send):
+        await JSONResponse({"values": {"private": secret}})(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/threads/owner-thread/state",
+            headers=_owner_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.content == b'{"values":{"private":"OWNER-STATE-SENTINEL"}}'
+
+
+async def test_guest_state_error_replaces_downstream_exception_details():
+    secret = "DATABASE-ERROR-DETAIL-SENTINEL"
+
+    async def downstream(scope, receive, send):
+        await JSONResponse(
+            {"detail": f"Failed to retrieve state: {secret}"},
+            status_code=500,
+        )(scope, receive, send)
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/threads/guest-thread/state",
+            headers=_guest_headers(),
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "service_unavailable",
+        "message": "Guest response is unavailable",
+    }
+    assert secret.encode() not in response.content
+
+
+async def test_guest_sse_redacts_reasoning_tool_and_unsafe_input_payloads():
+    secret = "STREAM-SECRET-SENTINEL"
+    interrupt_payload = {
+        "schema": "syshin.rag.interrupt.v1",
+        "kind": "approval",
+        "title": "공개 확인",
+        "prompt": "계속할까요?",
+    }
+    request_bodies: list[bytes] = []
+    frames = b"".join(
+        [
+            _event_frame(
+                "lifecycle",
+                {"event": "running", "graph_name": "agent"},
+                seq=1,
+            ),
+            _event_frame(
+                "messages",
+                {"event": "message-start", "role": "ai", "id": "assistant-1"},
+                seq=2,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-start",
+                    "index": 0,
+                    "content": {"type": "reasoning", "reasoning": secret},
+                },
+                seq=3,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-delta",
+                    "index": 0,
+                    "delta": {"type": "reasoning-delta", "reasoning": secret},
+                },
+                seq=4,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-finish",
+                    "index": 0,
+                    "content": {"type": "reasoning", "reasoning": secret},
+                },
+                seq=5,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-start",
+                    "index": 1,
+                    "content": {"type": "text", "text": ""},
+                },
+                seq=6,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-delta",
+                    "index": 1,
+                    "delta": {"type": "text-delta", "text": "공개 답변"},
+                },
+                seq=7,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-finish",
+                    "index": 1,
+                    "content": {"type": "text", "text": "공개 답변"},
+                },
+                seq=8,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-start",
+                    "index": 2,
+                    "content": {
+                        "type": "tool_call_chunk",
+                        "id": "tool-call-1",
+                        "name": "search_blog",
+                        "args": secret,
+                    },
+                },
+                seq=9,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-delta",
+                    "index": 2,
+                    "delta": {
+                        "type": "block-delta",
+                        "fields": {
+                            "type": "tool_call_chunk",
+                            "args": secret,
+                        },
+                    },
+                },
+                seq=10,
+            ),
+            _event_frame(
+                "messages",
+                {
+                    "event": "content-block-finish",
+                    "index": 2,
+                    "content": {
+                        "type": "tool_call",
+                        "id": "tool-call-1",
+                        "name": "search_blog",
+                        "args": {"private": secret},
+                    },
+                },
+                seq=11,
+            ),
+            _event_frame("messages", {"event": "message-finish"}, seq=12),
+            _event_frame(
+                "tools",
+                {
+                    "event": "tool-started",
+                    "tool_call_id": "tool-call-1",
+                    "tool_name": "search_blog",
+                    "input": {"private": secret},
+                },
+                seq=13,
+            ),
+            _event_frame(
+                "tools",
+                {
+                    "event": "tool-output-delta",
+                    "tool_call_id": "tool-call-1",
+                    "delta": secret,
+                },
+                seq=14,
+            ),
+            _event_frame(
+                "tools",
+                {
+                    "event": "tool-finished",
+                    "tool_call_id": "tool-call-1",
+                    "output": {"private": secret},
+                },
+                seq=15,
+            ),
+            _event_frame(
+                "input.requested",
+                {
+                    "interrupt_id": _INTERRUPT_ID,
+                    "payload": interrupt_payload,
+                    "value": {"private": secret},
+                },
+                seq=16,
+            ),
+            _event_frame(
+                "lifecycle",
+                {"event": "completed", "graph_name": "agent"},
+                seq=17,
+            ),
+        ]
+    )
+
+    async def downstream(scope, receive, send):
+        request_bodies.append(await _request_body(receive))
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        split = len(frames) // 2
+        await send(
+            {
+                "type": "http.response.body",
+                "body": frames[:split],
+                "more_body": True,
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": frames[split:],
+                "more_body": False,
+            }
+        )
+
+    app = GuestRunGuard(downstream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/stream/events",
+            headers=_guest_headers(),
+            json={"channels": ["messages", "lifecycle", "input", "tools"]},
+        )
+
+    assert response.status_code == 200
+    assert json.loads(request_bodies[0]) == {
+        "channels": ["messages", "lifecycle", "input", "tools"],
+        "depth": 0,
+        "namespaces": [[]],
+    }
+    assert secret.encode() not in response.content
+    assert "공개 답변".encode() in response.content
+    assert b'"reasoning"' not in response.content
+    assert b'"input"' not in response.content
+    assert b'"output":null' in response.content
+    assert f'"interrupt_id":"{_INTERRUPT_ID}"'.encode() in response.content
+    projected_events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    input_data = next(
+        event["params"]["data"]
+        for event in projected_events
+        if event["method"] == "input.requested"
+    )
+    assert input_data["payload"] == interrupt_payload
+    assert input_data["value"] == interrupt_payload
+
+
+async def test_guest_sse_rejects_nested_frame_before_unsafe_body_bytes_are_sent():
+    secret = "NESTED-STREAM-SECRET"
+    frame = _event_frame(
+        "input.requested",
+        {"interrupt_id": _INTERRUPT_ID, "value": secret},
+        seq=1,
+        namespace=["nested-agent"],
+    )
+    sent: list[dict[str, Any]] = []
+
+    async def downstream(scope, receive, send):
+        await _request_body(receive)
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": frame,
+                "more_body": False,
+            }
+        )
+
+    body = json.dumps({"channels": ["input"]}).encode()
+    headers = {
+        **_guest_headers(),
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    }
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/threads/guest-thread/stream/events",
+        "raw_path": b"/threads/guest-thread/stream/events",
+        "query_string": b"",
+        "headers": [
+            (key.lower().encode(), value.encode()) for key, value in headers.items()
+        ],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+    received = False
+
+    async def receive():
+        nonlocal received
+        if received:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        received = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    with pytest.raises(GuestWireProjectionError):
+        await GuestRunGuard(downstream)(scope, receive, send)
+
+    raw_bodies = b"".join(
+        message.get("body", b"")
+        for message in sent
+        if message["type"] == "http.response.body"
+    )
+    assert secret.encode() not in raw_bodies
 
 
 async def test_guest_stream_response_has_chunk_and_total_byte_limits():
@@ -540,12 +1451,49 @@ async def test_guest_stream_response_has_chunk_and_total_byte_limits():
         await send(
             {
                 "type": "http.response.body",
-                "body": b"x" * (64 * 1024 + 1),
+                "body": b"x" * (512 * 1024 + 1),
                 "more_body": True,
             }
         )
 
     app = GuestRunGuard(oversized_stream)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        with pytest.raises(GuestStreamLimitError):
+            await client.post(
+                "/threads/guest-thread/stream/events",
+                headers=_guest_headers(),
+                json={"channels": ["messages"]},
+            )
+
+    heartbeat_chunk = b": heartbeat\n\n" * 24_000
+
+    async def oversized_total(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": heartbeat_chunk,
+                "more_body": True,
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": heartbeat_chunk,
+                "more_body": False,
+            }
+        )
+
+    app = GuestRunGuard(oversized_total)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
@@ -618,6 +1566,191 @@ async def test_input_respond_accepts_one_exact_resume_and_rejects_state_mutation
     assert accepted.status_code == 200
     assert json.loads(records[0]["body"]) == _input_respond_command()
     assert len(records) == 1
+
+
+async def test_invalid_guest_interrupt_identity_never_reserves_or_dispatches():
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    called = False
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    ledger = Ledger()
+    app = GuestRunGuard(downstream, spend_ledger=ledger)
+    malformed = _input_respond_command()
+    malformed["params"]["interrupt_id"] = "interrupt-1"
+    nested = _input_respond_command()
+    nested["params"]["namespace"] = ["nested-agent:task-1"]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        responses = [
+            await client.post(
+                "/threads/guest-thread/commands",
+                headers=_guest_headers(),
+                json=command,
+            )
+            for command in (malformed, nested)
+        ]
+
+    assert [response.status_code for response in responses] == [400, 400]
+    assert ledger.calls == 0
+    assert not called
+
+
+async def test_guest_resume_status_is_checked_before_reservation_and_schedule(
+    monkeypatch,
+):
+    status = ["idle"]
+    timeline: list[str] = []
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("reserve")
+
+    async def thread_status(_thread_id, _user_id):
+        return True, status[0]
+
+    async def downstream(scope, receive, send):
+        command = json.loads(await _request_body(receive))
+        timeline.append("schedule")
+        await JSONResponse(
+            {
+                "id": command["id"],
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "run-resumed"},
+                "type": "success",
+            }
+        )(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        thread_status,
+    )
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+        )
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        idle = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_input_respond_command(),
+        )
+        status[0] = "interrupted"
+        accepted = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_input_respond_command(),
+        )
+
+    assert idle.status_code == 409
+    assert idle.json() == {
+        "error": "conflict",
+        "message": "The thread is not waiting for guest input",
+    }
+    assert accepted.status_code == 200
+    assert timeline == ["reserve", "schedule"]
+
+
+async def test_foreign_guest_thread_is_hidden_before_reservation_and_dispatch(
+    monkeypatch,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    downstream_calls = 0
+
+    async def foreign_thread(_thread_id, _user_id):
+        return False, None
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        downstream_calls += 1
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        foreign_thread,
+    )
+    ledger = Ledger()
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=ledger,
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/foreign-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+    assert ledger.calls == 0
+    assert downstream_calls == 0
+
+
+async def test_unsafe_guest_thread_id_is_hidden_before_ownership_lookup(
+    monkeypatch,
+):
+    ownership_lookups = 0
+
+    async def thread_status(_thread_id, _user_id):
+        nonlocal ownership_lookups
+        ownership_lookups += 1
+        return True, "idle"
+
+    async def downstream(scope, receive, send):
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        thread_status,
+    )
+    app = NativeThreadGuard(GuestRunGuard(downstream))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/bad$thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+    assert ownership_lookups == 0
 
 
 async def test_input_respond_consumes_the_same_paid_run_rate_limit():
@@ -694,6 +1827,155 @@ async def test_paid_commands_reserve_the_durable_daily_budget():
     ]
     assert ledger.calls == 2
     assert len(records) == 3
+
+
+async def test_busy_native_thread_rejects_guest_before_daily_reservation(
+    monkeypatch,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    async def busy(_thread_id, _user_id):
+        return True, "busy"
+
+    called = False
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", busy)
+    ledger = Ledger()
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=ledger,
+        )
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": "conflict",
+        "message": "The thread already has an active run",
+    }
+    assert ledger.calls == 0
+    assert not called
+
+
+async def test_accepted_native_thread_reserves_immediately_before_schedule(
+    monkeypatch,
+):
+    timeline: list[str] = []
+    received_body = b""
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("reserve")
+
+    async def idle(_thread_id, _user_id):
+        return True, "idle"
+
+    async def downstream(scope, receive, send):
+        nonlocal received_body
+        timeline.append("schedule")
+        received_body = await _request_body(receive)
+        command = json.loads(received_body)
+        await JSONResponse(
+            {
+                "id": command["id"],
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "run-1"},
+                "type": "success",
+            }
+        )(scope, receive, send)
+
+    monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", idle)
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+        )
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 200
+    assert timeline == ["reserve", "schedule"]
+    assert json.loads(received_body) == {
+        **_run_command(),
+        "params": {
+            **_run_command()["params"],
+            "multitask_strategy": "reject",
+        },
+    }
+
+
+async def test_unsupported_native_input_resume_is_rejected_before_reservation(
+    monkeypatch,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    async def idle(_thread_id, _user_id):
+        return True, "idle"
+
+    called = False
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", idle)
+    ledger = Ledger()
+    command = _input_respond_command()
+    command["params"]["update"] = {"private": "must-not-dispatch"}
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=ledger,
+        )
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=command,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["type"] == "error"
+    assert response.json()["error"] == "invalid_argument"
+    assert ledger.calls == 0
+    assert not called
 
 
 async def test_exhausted_or_unavailable_daily_budget_fails_closed():

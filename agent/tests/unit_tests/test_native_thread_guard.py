@@ -203,6 +203,55 @@ async def test_update_and_goto_are_rejected_instead_of_silently_ignored(
             assert unsupported in response.json()["message"]
 
 
+async def test_owner_resume_preserves_native_interrupt_validation(monkeypatch):
+    received = None
+
+    async def interrupted(_thread_id, _user_id):
+        return True, "interrupted"
+
+    async def guest_only_validation(_thread_id, _user):
+        raise AssertionError("owner resumes must remain Aegra's responsibility")
+
+    async def downstream(scope, receive, send):
+        nonlocal received
+        received = (await receive())["body"]
+        await _ok_app(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        interrupted,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_current_guest_root_interrupt_id",
+        guest_only_validation,
+    )
+    raw_command = (
+        b'{ "params": {"response":"owner-native-response", "namespace":[], '
+        b'"interrupt_id":"ffffffffffffffffffffffffffffffff"}, '
+        b'"method":"input.respond", "id":9 }'
+    )
+    app = NativeThreadGuard(downstream)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/thread-1/commands",
+            headers={
+                **_authorization(),
+                "Content-Type": "application/json",
+            },
+            content=raw_command,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert received == raw_command
+
+
 async def test_same_process_same_thread_cross_owner_creation_race_is_rejected(
     monkeypatch,
 ):

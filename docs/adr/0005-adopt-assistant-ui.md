@@ -90,29 +90,44 @@ is a bounded root `custom` event and is explicitly live-run-only; reload shows t
 inspection detail is unavailable rather than reconstructing it from tool output.
 
 The local message reducer never displays system/tool content or internal
-chain-of-thought. That is a presentation guarantee, not a network guarantee: a root
-`messages` event can still carry provider reasoning/thinking content blocks across the
-browser SSE connection before the reducer replaces or drops them.
+chain-of-thought. For owner traffic that remains a presentation guarantee. Canonical
+guest traffic now also has a server-side network guarantee: `GuestRunGuard` forces both
+SDK connections to `namespaces: [[]]` and `depth: 0` and buffers and rebuilds every
+allowlisted JSON response before sending it. State/history contain public human/assistant
+text plus bounded root interrupt identity; thread create/search/read/update contain only
+curated public metadata; run list/get/cancel contain identifiers, status, timestamps, and
+the validated submit nonce needed for native run correlation; command success/error
+envelopes have exact bounded shapes and fixed error copy. Each complete SSE frame is also
+parsed and rebuilt before sending it. Reasoning/thinking blocks and system messages are
+dropped; tool arguments, tool output, tool deltas, raw errors, and unreviewed interrupt
+payloads are removed; the one retrieval-inspection custom event is revalidated against its
+public schema. A single frame may use the full bounded 512 KiB connection budget so the
+inspection contract's legal 64 KiB payload still fits after AP/SSE framing. Unknown or
+malformed responses fail closed without forwarding the offending body bytes. Owner
+responses remain unprojected.
+
+One pinned compatibility edge is explicit. Aegra 0.9.24 can observe a nested copy of an
+interrupt before its root copy, mark the identifier as sent, then remove the nested event
+for a root/depth-zero subscription and suppress the root event as a duplicate. The public
+wire does not widen either browser subscription to compensate. On a root `interrupted`
+lifecycle without a matching input event, the client must instead read the official,
+already-projected thread state, accept exactly one schema-valid root interrupt, and resume
+that exact identifier with `namespace: []`; absence, ambiguity, or malformed state fails
+closed. Projected `input.requested` events carry the same sanitized schema under both the
+pinned SDK's `payload` field and Aegra's direct-event `value` field. WEB-B stays disabled
+until that SDK/state fallback is merged and browser-verified.
 
 Run cancellation, thread metadata, history, and state use the official SDK clients. Edit,
 Regenerate, branch mutation, and delete remain visibly unavailable where Aegra cannot
 perform them with the required atomicity; this implementation does not add a custom REST
 facade to imitate missing AP v2 commands.
 
-This decision is **WEB-A owner preview only**. `threads.getState/getHistory` can still
-return the graph's open checkpoint state to browser JavaScript before the adapter reduces
-it to visible human/assistant text. In addition, the SDK's wildcard lifecycle watcher also
-subscribes to `input`; a future nested `input.requested` payload or tool argument may be
-sensitive even though the current bounded fixture is not. Finally, the root `messages`
-channel can carry reasoning/thinking content even though the UI never displays it. UI
-sanitization is not a network security boundary. Anonymous WEB-B is prohibited until:
-
-1. the SDK/server can root-filter the watcher and return a server-side safe state/history
-   projection, or the graph exposes only reviewed bounded HITL/state schemas through a
-   separately proven public endpoint; **and**
-2. upstream/server-side suppression or redaction prevents reasoning blocks from entering
-   browser-bound messages, or the selected model path is separately proven not to emit
-   reasoning on the wire.
+The server-side public-wire prerequisites for WEB-B are implemented, but that does not
+turn anonymous access on by itself. WEB-B remains rollout-gated by ADR-0006's identity,
+durable spend, retention, deployment, and browser-verification requirements. The boundary
+is intentionally guest-only: a signed owner can still inspect complete checkpoints and
+native events, while a canonical `anon:<uuid4>` subject receives only the public
+projection. UI sanitization remains defense in depth rather than the network boundary.
 
 The PostgreSQL integration's `rawPrivateStateObserved=false` assertion proves that the
 current fixture sentinel does not appear on either AP v2 SSE connection. It is a regression
@@ -148,8 +163,9 @@ Exact pins, no `^`.
 - Four `unstable_` APIs sit on the recommended happy path.
 - The application still owns a bounded AP v2-to-assistant-ui projection until an upstream
   adapter exists.
-- State/history reads, the SDK's wildcard input watcher, and root-message reasoning
-  exposure keep this preview owner-only.
+- Guest state/history and both SSE connections are a deliberately smaller wire contract
+  than the owner protocol surface; a future Aegra event variant fails closed until
+  reviewed.
 - `unstable_threadListAdapter` means metadata must be stamped in `initialize()`.
 
 **Follow-ups**
@@ -167,9 +183,9 @@ Exact pins, no `^`.
       401s mid-conversation.
 - [x] Pin the SDK/protocol dependencies and replay committed plus actual Aegra AP v2
       fixtures, including an isolated PostgreSQL 17 integration.
-- [ ] Add a public-safe state/history projection and root-filtered or schema-bounded input
-      watcher, plus upstream reasoning suppression/redaction or a model-level
-      no-reasoning-wire proof, before WEB-B anonymous access.
+- [x] Add a public-safe state/history projection, force the SDK input watcher to the root,
+      and suppress/redact reasoning plus unsafe tool/input payloads before guest response
+      bytes leave the server.
 
 ## Revisit when
 
@@ -191,3 +207,7 @@ Exact pins, no `^`.
 - 2026-07-28: replaced the proposed hand-written AP v2 transport with native
   `useLangGraphRuntime` over the official SDK `ThreadStream`/`MessageAssembler`, constrained
   the content pump to root-only channels, and recorded the owner-only WEB-A boundary.
+- 2026-07-28: added the guest-only server public-wire projection for every allowlisted
+  thread/run/command/state/history JSON response and complete AP v2 SSE frame, forced the
+  SDK watcher to root depth zero, and closed the reasoning plus raw entity/tool/input/error
+  network blockers without changing owner traffic.

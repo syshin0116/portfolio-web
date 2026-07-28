@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -17,8 +18,13 @@ from uuid import UUID
 
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import get_session_maker
+from aegra_api.models import User as AegraUser
 from aegra_api.models.event_streaming import ThreadCommand
 from aegra_api.services.event_streaming.protocol import build_error
+from aegra_api.services.langgraph_service import (
+    create_thread_config,
+    get_langgraph_service,
+)
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -37,8 +43,19 @@ from agent.guest_budget import (
     PostgresGuestSpendLedger,
     guest_budget_config,
 )
+from agent.guest_thread_lock import (
+    COMMAND_GUEST_THREAD_LOCK_TIMEOUT_SECONDS,
+    GuestThreadLockUnavailableError,
+    guest_thread_advisory_lock,
+)
 from agent.maintenance import GUEST_RETENTION_POLICY, collect_expired_guest_threads
 from agent.preflight import validate_runtime_preflight
+from agent.public_wire import (
+    GuestJSONResponseSend,
+    GuestSSEResponseSend,
+    GuestStreamLimitError,
+    GuestWireProjectionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,19 +76,20 @@ _MAX_COMMAND_BODY_BYTES = 64 * 1024
 _RUN_METHODS = frozenset({"run.start", "input.respond"})
 _GUEST_MAX_BODY_BYTES = 32 * 1024
 _GUEST_MAX_STREAM_BODY_BYTES = 2 * 1024
-_GUEST_MAX_SSE_CHUNK_BYTES = 64 * 1024
-_GUEST_MAX_SSE_TOTAL_BYTES = 512 * 1024
 _GUEST_MAX_IDENTITIES = 1_024
 _GUEST_RATE_CAPACITY = 4
 _GUEST_RATE_WINDOW_SECONDS = 60.0
 _GUEST_GLOBAL_RATE_CAPACITY = 24
 _GUEST_GLOBAL_RATE_WINDOW_SECONDS = 60.0
+_GUEST_INTERRUPT_VALIDATION_TIMEOUT_SECONDS = 5.0
+_GUEST_THREAD_LOCK_SCOPE_KEY = "agent.guest_thread_lock"
 _GUEST_SESSION_RETENTION_DAYS = 14
 _GUEST_SUBMIT_NONCE_KEY = "syshin_ui_submit_nonce"
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_NONCE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
+_SAFE_INTERRUPT_ID = re.compile(r"^[0-9a-f]{32}$")
 _GUEST_THREAD_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$")
 _GUEST_STATE_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/state$")
 _GUEST_HISTORY_PATH = re.compile(
@@ -117,14 +135,21 @@ class GuestRequestError(ValueError):
     """Raised when a guest request crosses the public wire contract."""
 
 
-class GuestStreamLimitError(RuntimeError):
-    """Terminate a guest SSE connection that crosses its response byte budget."""
+class _GuestThreadNotFoundError(LookupError):
+    """Raised when a guest thread disappears or no longer belongs to its caller."""
 
 
 @dataclass(slots=True)
 class _Bucket:
     tokens: float
     updated_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnedGuestThread:
+    status: str
+    graph_id: str | None
+    updated_at: datetime
 
 
 def _headers(scope: Scope) -> dict[str, str]:
@@ -164,11 +189,19 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_json_constant(_value: str) -> None:
+    raise GuestRequestError("non-finite JSON number")
+
+
 def _json_object(body: bytes) -> dict[str, Any]:
     try:
         decoded = body.decode("utf-8")
-        value = json.loads(decoded, object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = json.loads(
+            decoded,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise GuestRequestError("invalid JSON body") from exc
     if not isinstance(value, dict):
         raise GuestRequestError("JSON body must be an object")
@@ -306,7 +339,7 @@ def _guest_messages(value: object) -> dict[str, list[dict[str, Any]]]:
         if not set(message) <= allowed or not {"role", "content", "id"} <= set(message):
             raise GuestRequestError("run message fields are invalid")
         role = message["role"]
-        if role not in {"user", "assistant", "tool"}:
+        if not isinstance(role, str) or role not in {"user", "assistant", "tool"}:
             raise GuestRequestError("run message role is invalid")
         message_id = _bounded_string(
             message["id"],
@@ -350,7 +383,11 @@ def _guest_command(body: bytes) -> tuple[bytes, bool]:
         raise GuestRequestError("command id is invalid")
     method = command["method"]
     params = command["params"]
-    if method not in _RUN_METHODS or not isinstance(params, dict):
+    if (
+        not isinstance(method, str)
+        or method not in _RUN_METHODS
+        or not isinstance(params, dict)
+    ):
         raise GuestRequestError("command method is not allowed")
     if method == "run.start":
         allowed = {
@@ -393,27 +430,23 @@ def _guest_command(body: bytes) -> tuple[bytes, bool]:
         raise GuestRequestError("input.respond fields are invalid")
     _nonce, metadata, config = _run_nonce(params)
     namespace = params["namespace"]
-    if (
-        not isinstance(namespace, list)
-        or len(namespace) > 4
-        or any(
-            not isinstance(item, str) or not item or len(item.encode("utf-8")) > 128
-            for item in namespace
-        )
-    ):
+    if namespace != []:
         raise GuestRequestError("interrupt namespace is invalid")
+    interrupt_id = _bounded_string(
+        params["interrupt_id"],
+        max_bytes=32,
+        field="interrupt id",
+    )
+    if _SAFE_INTERRUPT_ID.fullmatch(interrupt_id) is None:
+        raise GuestRequestError("interrupt id is invalid")
     normalized = {
         "id": command_id,
         "method": method,
         "params": {
             "config": config,
-            "interrupt_id": _bounded_string(
-                params["interrupt_id"],
-                max_bytes=128,
-                field="interrupt id",
-            ),
+            "interrupt_id": interrupt_id,
             "metadata": metadata,
-            "namespace": namespace,
+            "namespace": [],
             "response": _bounded_json_value(params["response"]),
         },
     }
@@ -429,6 +462,7 @@ def _guest_stream_subscription(body: bytes) -> bytes:
         not isinstance(channels, list)
         or not channels
         or len(channels) > 5
+        or any(not isinstance(channel, str) for channel in channels)
         or len(set(channels)) != len(channels)
         or any(
             channel not in {"messages", "lifecycle", "input", "tools", "custom"}
@@ -436,15 +470,15 @@ def _guest_stream_subscription(body: bytes) -> bytes:
         )
     ):
         raise GuestRequestError("stream channels are invalid")
-    normalized: dict[str, Any] = {"channels": channels}
-    if "depth" in value:
-        if type(value["depth"]) is not int or value["depth"] != 0:
-            raise GuestRequestError("stream depth is invalid")
-        normalized["depth"] = 0
-    if "namespaces" in value:
-        if value["namespaces"] != [[]]:
-            raise GuestRequestError("stream namespaces are invalid")
-        normalized["namespaces"] = [[]]
+    normalized: dict[str, Any] = {
+        "channels": channels,
+        "depth": 0,
+        "namespaces": [[]],
+    }
+    if "depth" in value and (type(value["depth"]) is not int or value["depth"] != 0):
+        raise GuestRequestError("stream depth is invalid")
+    if "namespaces" in value and value["namespaces"] != [[]]:
+        raise GuestRequestError("stream namespaces are invalid")
     return _canonical_json(normalized)
 
 
@@ -475,7 +509,11 @@ def _guest_thread_metadata(
             field="thread title",
         )
     if "title_status" in value:
-        if value["title_status"] not in {"pending", "manual", "generated"}:
+        if not isinstance(value["title_status"], str) or value["title_status"] not in {
+            "pending",
+            "manual",
+            "generated",
+        }:
             raise GuestRequestError("thread title status is invalid")
         normalized["title_status"] = value["title_status"]
     if "archived" in value:
@@ -625,25 +663,6 @@ def _is_guest_user(user: object) -> bool:
     )
 
 
-class _BoundedSSESend:
-    def __init__(self, send: Send) -> None:
-        self._send = send
-        self._total = 0
-
-    async def __call__(self, message: Message) -> None:
-        if message["type"] == "http.response.body":
-            body = message.get("body", b"")
-            self._total += len(body)
-            if (
-                len(body) > _GUEST_MAX_SSE_CHUNK_BYTES
-                or self._total > _GUEST_MAX_SSE_TOTAL_BYTES
-            ):
-                raise GuestStreamLimitError(
-                    "guest SSE response exceeded its byte budget"
-                )
-        await self._send(message)
-
-
 async def _owned_or_new_thread_status(
     thread_id: str,
     user_id: str,
@@ -665,6 +684,88 @@ async def _owned_or_new_thread_status(
     return True, row.status
 
 
+async def _owned_guest_thread(
+    thread_id: str,
+    user_id: str,
+) -> _OwnedGuestThread | None:
+    """Read the guest-owned thread fields that fence a root-state lookup."""
+    maker = get_session_maker()
+    async with maker() as session:
+        row = (
+            await session.execute(
+                select(
+                    ThreadORM.user_id,
+                    ThreadORM.status,
+                    ThreadORM.metadata_json,
+                    ThreadORM.updated_at,
+                ).where(ThreadORM.thread_id == thread_id)
+            )
+        ).one_or_none()
+    if row is None or row.user_id != user_id:
+        return None
+    metadata = row.metadata_json
+    graph_id = metadata.get("graph_id") if isinstance(metadata, dict) else None
+    return _OwnedGuestThread(
+        status=row.status,
+        graph_id=graph_id if isinstance(graph_id, str) and graph_id else None,
+        updated_at=row.updated_at,
+    )
+
+
+async def _current_guest_root_interrupt_id(
+    thread_id: str,
+    user: dict[str, Any],
+) -> str | None:
+    """Return one stable pending interrupt ID from the official root state.
+
+    The two metadata reads form an optimistic fence around LangGraph's public
+    ``aget_state`` API. ``NativeThreadGuard`` keeps its PostgreSQL advisory
+    claim across this lookup, the spend reservation, and Aegra's downstream
+    busy-state commit. A changed status/timestamp therefore fails closed
+    without holding a PostgreSQL row lock that would deadlock that commit.
+    """
+    identity = user.get("identity")
+    if not isinstance(identity, str) or not identity:
+        raise _GuestThreadNotFoundError
+
+    before = await _owned_guest_thread(thread_id, identity)
+    if before is None:
+        raise _GuestThreadNotFoundError
+    if before.status != "interrupted":
+        return None
+    if before.graph_id is None:
+        raise RuntimeError("guest thread graph metadata is unavailable")
+
+    aegra_user = AegraUser.model_validate(user)
+    config = create_thread_config(thread_id, aegra_user)
+    service = get_langgraph_service()
+    async with service.get_graph(
+        before.graph_id,
+        config=config,
+        access_context="threads.read",
+        user=aegra_user,
+    ) as graph:
+        graph = graph.with_config(config)
+        state = await graph.aget_state(config, subgraphs=False)
+
+    interrupts = getattr(state, "interrupts", ())
+    current_id: str | None = None
+    if isinstance(interrupts, tuple) and len(interrupts) == 1:
+        candidate = getattr(interrupts[0], "id", None)
+        if (
+            isinstance(candidate, str)
+            and _SAFE_INTERRUPT_ID.fullmatch(candidate) is not None
+        ):
+            current_id = candidate
+
+    after = await _owned_guest_thread(thread_id, identity)
+    if after is None:
+        raise _GuestThreadNotFoundError
+    if after != before:
+        return None
+    return current_id
+
+
 async def _authenticated_user(scope: Scope) -> dict[str, Any] | None:
     try:
         user = await authenticate(_headers(scope))
@@ -673,20 +774,12 @@ async def _authenticated_user(scope: Scope) -> dict[str, Any] | None:
     return user if isinstance(user, dict) else None
 
 
-async def _authenticated_identity(scope: Scope) -> str | None:
-    user = await _authenticated_user(scope)
-    if user is None:
-        return None
-    identity = user.get("identity")
-    return identity if isinstance(identity, str) and identity else None
-
-
 def _native_command(body: bytes) -> dict[str, Any] | None:
     """Parse only bodies Aegra's native ThreadCommand model would accept."""
     try:
         parsed = json.loads(body)
         command = ThreadCommand.model_validate(parsed)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValidationError):
         return None
     return command.model_dump()
 
@@ -1008,17 +1101,16 @@ class GuestRunGuard:
                     )
                     return
 
-        bounded_send: Send = _BoundedSSESend(send) if kind == "stream" else send
-        await self.app(scope, receive, bounded_send)
+        projected_send: Send
+        if kind == "stream":
+            projected_send = GuestSSEResponseSend(send)
+        else:
+            projected_send = GuestJSONResponseSend(send, kind=kind)
+        await self.app(scope, receive, projected_send)
 
 
 class NativeThreadGuard:
-    """Enforce owner-preview APv2 mutations inside one process.
-
-    This is deliberately a single-process guard, not a distributed lock. Production
-    deployment must keep one application instance until Aegra exposes a supported
-    cross-instance serialization primitive.
-    """
+    """Enforce owner-safe APv2 mutations with guest-only PostgreSQL serialization."""
 
     def __init__(self, app: ASGIApp, *, max_active_threads: int = 64) -> None:
         self.app = app
@@ -1046,11 +1138,13 @@ class NativeThreadGuard:
         if command_match is None:
             await self.app(scope, receive, send)
             return
-        identity = await _authenticated_identity(scope)
-        if identity is None:
+        user = await _authenticated_user(scope)
+        identity = user.get("identity") if user is not None else None
+        if not isinstance(identity, str) or not identity:
             # Let Aegra's registered dependency produce the canonical 401.
             await self.app(scope, receive, send)
             return
+        is_guest = is_anonymous_identity(identity)
 
         body = b""
         try:
@@ -1069,18 +1163,137 @@ class NativeThreadGuard:
             return
         receive = _replay(body)
         command = _native_command(body)
-        if command is None or command.get("method") not in _RUN_METHODS:
+        command_method = command.get("method") if command is not None else None
+        if (
+            command is None
+            or not isinstance(command_method, str)
+            or command_method not in _RUN_METHODS
+        ):
             await self.app(scope, receive, send)
             return
 
         thread_id = command_match.group(1)
+        if is_guest and _SAFE_ID.fullmatch(thread_id) is None:
+            await _json_response(
+                scope,
+                receive,
+                send,
+                status_code=404,
+                content={"detail": "Not Found"},
+            )
+            return
+
+        guest_resume_id: str | None = None
+        if is_guest:
+            try:
+                normalized_body, _spends = _guest_command(body)
+            except GuestRequestError:
+                # Invalid paid guest wires never take either the PostgreSQL or local
+                # mutation claim. Preserve the hidden-resource response for a foreign
+                # thread, then let the inner guest boundary own its canonical 400.
+                owned_or_new, _thread_status = await _owned_or_new_thread_status(
+                    thread_id,
+                    identity,
+                )
+                if not owned_or_new:
+                    await _json_response(
+                        scope,
+                        receive,
+                        send,
+                        status_code=404,
+                        content={"detail": "Not Found"},
+                    )
+                    return
+                await self.app(scope, receive, send)
+                return
+            if command.get("method") == "input.respond":
+                normalized = json.loads(normalized_body)
+                guest_resume_id = normalized["params"]["interrupt_id"]
+
+            if scope.get(_GUEST_THREAD_LOCK_SCOPE_KEY) != thread_id:
+                lock_context = guest_thread_advisory_lock(
+                    thread_id,
+                    timeout_seconds=COMMAND_GUEST_THREAD_LOCK_TIMEOUT_SECONDS,
+                )
+                try:
+                    await lock_context.__aenter__()
+                except GuestThreadLockUnavailableError as error:
+                    logger.error(
+                        "guest thread serialization failed error_type=%s",
+                        type(error.__cause__).__name__
+                        if error.__cause__ is not None
+                        else type(error).__name__,
+                    )
+                    try:
+                        (
+                            owned_or_new,
+                            _thread_status,
+                        ) = await _owned_or_new_thread_status(
+                            thread_id,
+                            identity,
+                        )
+                    except Exception:
+                        owned_or_new = True
+                    if not owned_or_new:
+                        await _json_response(
+                            scope,
+                            receive,
+                            send,
+                            status_code=404,
+                            content={"detail": "Not Found"},
+                        )
+                        return
+                    await _json_response(
+                        scope,
+                        receive,
+                        send,
+                        status_code=503,
+                        content={
+                            "error": "service_unavailable",
+                            "message": "Guest thread scheduling is unavailable",
+                        },
+                        headers={"Retry-After": "1"},
+                    )
+                    return
+                try:
+                    locked_scope = dict(scope)
+                    locked_scope[_GUEST_THREAD_LOCK_SCOPE_KEY] = thread_id
+                    await self(locked_scope, _replay(body), send)
+                finally:
+                    await lock_context.__aexit__(None, None, None)
+                return
+
         owned_or_new, thread_status = await _owned_or_new_thread_status(
             thread_id,
             identity,
         )
         if not owned_or_new:
-            # Preserve Aegra's native 404 for another user's existing thread.
+            if is_guest:
+                # Ownership is both a privacy and spend boundary for guests:
+                # reject before the inner rate/budget guard can reserve a run.
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=404,
+                    content={"detail": "Not Found"},
+                )
+                return
+            # Preserve Aegra's native owner-preview behavior.
             await self.app(scope, receive, send)
+            return
+
+        if is_guest and thread_status is None:
+            # Public commands operate only on a thread created through the guest
+            # boundary. In particular, a command waiting behind retention GC may
+            # not resurrect the just-deleted identifier as a fresh thread.
+            await _json_response(
+                scope,
+                receive,
+                send,
+                status_code=404,
+                content={"detail": "Not Found"},
+            )
             return
 
         if (
@@ -1105,6 +1318,35 @@ class NativeThreadGuard:
                 content=envelope,
             )
             return
+
+        if is_guest:
+            if (
+                command.get("method") == "input.respond"
+                and thread_status != "interrupted"
+            ):
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=409,
+                    content={
+                        "error": "conflict",
+                        "message": "The thread is not waiting for guest input",
+                    },
+                )
+                return
+            if command.get("method") == "run.start" and thread_status == "interrupted":
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=409,
+                    content={
+                        "error": "conflict",
+                        "message": "The thread is waiting for guest input",
+                    },
+                )
+                return
 
         if thread_id in self._active:
             active_owner = self._active_owners.get(thread_id)
@@ -1149,6 +1391,53 @@ class NativeThreadGuard:
             identity.encode("utf-8")
         ).hexdigest()
         try:
+            if guest_resume_id is not None:
+                try:
+                    async with asyncio.timeout(
+                        _GUEST_INTERRUPT_VALIDATION_TIMEOUT_SECONDS
+                    ):
+                        current_interrupt_id = await _current_guest_root_interrupt_id(
+                            thread_id,
+                            user,
+                        )
+                except _GuestThreadNotFoundError:
+                    await _json_response(
+                        scope,
+                        receive,
+                        send,
+                        status_code=404,
+                        content={"detail": "Not Found"},
+                    )
+                    return
+                except Exception as error:
+                    logger.error(
+                        "guest interrupt validation failed error_type=%s",
+                        type(error).__name__,
+                    )
+                    await _json_response(
+                        scope,
+                        receive,
+                        send,
+                        status_code=503,
+                        content={
+                            "error": "service_unavailable",
+                            "message": "Guest interrupt validation is unavailable",
+                        },
+                        headers={"Retry-After": "1"},
+                    )
+                    return
+                if current_interrupt_id != guest_resume_id:
+                    await _json_response(
+                        scope,
+                        receive,
+                        send,
+                        status_code=409,
+                        content={
+                            "error": "conflict",
+                            "message": "The guest interrupt is no longer current",
+                        },
+                    )
+                    return
             if command.get("method") == "run.start" and thread_status == "busy":
                 await _json_response(
                     scope,
@@ -1214,13 +1503,14 @@ async def collect_guest_threads(request: Request) -> JSONResponse:
     )
 
 
-app.add_middleware(NativeThreadGuard)
 app.add_middleware(GuestRunGuard, enforce_daily_budget=True)
+app.add_middleware(NativeThreadGuard)
 
 __all__ = [
     "GuestRequestError",
     "GuestRunGuard",
     "GuestStreamLimitError",
+    "GuestWireProjectionError",
     "NativeThreadGuard",
     "app",
 ]

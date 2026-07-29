@@ -247,11 +247,20 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    the same external version file. The only delivery-surface additions are the two
    services, their resource IAM, and the production-only maintenance schedule in the
    paused state. Reject a plan that starts the schedule. Apply only after both
-   environments' migration, grant probe, and maintenance job passed. Run
-   `scripts/verify_ops_foundation.sh --live`, configure and verify
-   both GitHub environments, then set `AGENT_CLOUD_RUN_ENABLED=true` and immediately run
-   the first reviewed preview and production deliveries. If either fails, set the
-   variable back to `false` while investigating.
+   environments' migration, grant probe, and maintenance job passed. Do not enable
+   delivery yet. `scripts/verify_ops_foundation.sh --live` is intentionally blocked
+   because the repository has no pinned company-admin attestation key; the script
+   contains no GCP request implementation to reactivate. Its unsigned v1 input can
+   validate structure only and cannot approve this stage. A separate reviewed signed-v2
+   trust and live-read change is a prerequisite to live acceptance,
+   GitHub-environment activation, and setting
+   `AGENT_CLOUD_RUN_ENABLED=true`.
+
+   Missing, stale, future-dated, malformed, duplicate-key, or unsafe unsigned structure
+   fails before the attestation blocker, but valid structure still does not authenticate
+   company-admin origin or project-parent linkage. The verifier never collects policy by
+   traversing company folders or the organization; see
+   [the foundation runbook](gcp-neon-foundation.md#evidence-and-target-state).
 
 After bootstrap, every Terraform plan must explicitly retain `stage=services`, both
 current exact digests, and the complete ten-key numeric version map. Omitting them
@@ -313,9 +322,10 @@ production policies as a dry run:
    `cleanup_policy_dry_run=false`. Only then apply the saved plan. The new empty preview
    repository can start with its active 14-day/20-version policy, but it must pass the
    same candidate review before any later retention change.
-5. After apply, run `scripts/verify_ops_foundation.sh --live`; it fails if cleanup is in
-   dry-run mode, policy names/scope/age/count drift, or either repository becomes
-   cross-writable.
+5. Do not use the current `--live` result as cleanup acceptance: it has no repository
+   metadata reader and always stops at the missing trusted-attestation gate. Keep cleanup
+   activation and public delivery blocked until a separate signed-v2 implementation can
+   verify the exact repository policy, cleanup scope/age/count, and cross-write state.
 
 Artifact Registry cleanup runs periodically and policy changes take about a day. Deletion
 is irreversible, while a keep policy takes precedence over deletion:

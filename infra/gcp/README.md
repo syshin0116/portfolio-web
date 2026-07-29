@@ -36,9 +36,9 @@ delete, create, IAM-policy mutation, and job overrides.
 Repository tags are intentionally mutable because Artifact Registry cannot delete tagged
 versions when immutable tags are enabled. Delivery never trusts or reuses a pre-existing
 tag: each run attempt pushes a fresh run/attempt-scoped tag, resolves it in the same job,
-and passes only the digest. The live verifier requires active cleanup policies and exact
-retention floors; run the documented dry-run review before the first foundation apply
-that enables deletion.
+and passes only the digest. The repository statically pins active cleanup policies and
+retention floors, but the current verifier performs no live repository read; run the
+documented dry-run review before any foundation apply that enables deletion.
 The services are publicly invokable at the Cloud Run layer so Vercel-hosted browsers can
 reach them; fail-closed Aegra bearer authentication protects APv2 operations.
 Public Cloud Run invocation is only transport reachability, not anonymous product access.
@@ -47,23 +47,28 @@ release enables them; an Agent Preview release is never the public guest path.
 
 IAM member resources are deliberately additive: changing them to authoritative
 role-level bindings without a reviewed live plan could remove unrelated or
-Google-managed members. The post-apply live verifier is the acceptance gate. It reads
-project, ancestor, repository, state-bucket, service-account, and secret policies and
-resolves every predefined or custom role before checking sensitive permissions. Public
-members fail. Every sensitive, custom-role, group/domain/principal-set, and direct
-state-bucket binding must match an explicit reviewed JSON record by exact scope, role, and
-member. Custom roles additionally pin the digest of the full included-permission set, and
-conditional bindings pin their condition digest. The verifier also rejects extra direct
-members for the managed roles and direct project or ancestor roles on the eight
-user-managed workload identities. That rejection covers exact service-account members plus
-project, containing-folder, and containing-organization `ServiceAccount` principal sets;
-those encompassing sets cannot be allowlisted as reviewed. The complete repository policy
-must contain only its environment's builder writer, deployer reader, and Cloud Run
-service-agent reader. Production and preview builders cannot write across repositories.
-An unreadable policy or role and any other failure require a separate reviewed IAM
-remediation; they are never ignored or overwritten blindly. Google Group membership
-is not expanded by the policy API, so any reviewed `group:` binding also requires a
-separately reviewed directory-membership export.
+Google-managed members. Post-apply live acceptance is currently blocked, not verified:
+unsigned v1 structure validation ends `--live` at the signed-attestation blocker. The
+shell contains no GCP CLI helper, command catalogue, account digest, or request path. A
+separately reviewed signed v2 attestation format with a repository-pinned company-admin
+public key must land before any live read or deployment acceptance can be implemented.
+
+Unsigned v1 is a structure-only file outside every repository/worktree, not
+company-admin evidence. It declares exactly one organization but proves no parent
+linkage. Every binding must be reviewed; public, group, domain, federated, deleted,
+direct workload-account, dangerous or unclassified permission-verb, and
+project-custom-role bindings are forbidden. Missing, malformed, stale, future-dated,
+duplicate-key, unrelated, or incomplete structure fails, but a passing structure still
+is not deployment approval.
+
+Run the verifier only through its executable path as shown below. Its direct
+`/bin/bash -p` process ignores `BASH_ENV` and imported shell functions; sourcing the file
+is unconditionally refused with no environment override, and invoking
+`bash scripts/verify_ops_foundation.sh ...` is also unsupported and refused.
+Unsigned structure is not permission to inspect company hierarchy from this repository
+and not a waiver of inherited-IAM risk. Exact live IAM, service-account-key, repository,
+service, job, and Scheduler state remain unverified until a separate signed-v2
+implementation is reviewed.
 
 The canonical active `github-production` provider explicitly maps the immutable repository
 and owner numeric IDs. Its `delivery_role` mapping pins event, caller `workflow_ref`, and
@@ -82,8 +87,9 @@ Removing or re-enabling it requires a separately reviewed federation migration; 
 hardening plan must not destroy it.
 GitHub environment reviewers, self-review, and the canonical agent/Vercel production
 branch sets `{main}` live only in `.github/repository-governance.json`. When that manifest and
-`scripts/verify_repository_governance.py` are present, the live foundation verifier
-requires `uv` and `gh`, then delegates without duplicating the rules:
+`scripts/verify_repository_governance.py` are present, the independent
+`--governance-live` mode requires `uv` and `gh`, then delegates without duplicating the
+rules. Foundation `--live` never reaches this mode:
 
 ```sh
 uv run --frozen --package syshin0116-dev-agent \
@@ -207,16 +213,19 @@ not itself wait on Application CI. Production deploy additionally requires the c
 approval. Manual rollback remains usable on red CI but requires
 `workflow_dispatch`, current `main`, environment approval, and an exact revision.
 
-Run `scripts/verify_ops_foundation.sh --static` before review and `--live` only after an
-explicitly approved apply. Live mode requires
-`OPS_FOUNDATION_REVIEWED_IAM_BINDINGS` and
-`OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS`, each populated with exact JSON
-scope/role/member records from reviewed live policy exports. Custom-role records include
-the complete permission-set digest; conditional records include the condition digest.
-Live mode also requires the production Scheduler to remain `PAUSED` with its exact OAuth
-target; `ENABLED` is drift until the separately approved public-launch change updates the
-repository contract. Absence, extra records within an audited scope, or drift fails
-closed. Secret injection and state recovery remain in
+Run `scripts/verify_ops_foundation.sh --static` directly before review; no-argument
+execution also defaults to `--static`, while `--live` always requires explicit opt-in.
+Do not treat `--live` as an acceptance gate: it contains no GCP request path and must
+return the trusted-company-admin-attestation blocker after validating
+`OPS_FOUNDATION_ADMIN_EVIDENCE_FILE`. That variable points only to the private unsigned
+structure described in
+[`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md). Run
+`scripts/verify_ops_foundation.sh --offline-admin-evidence-structure` to validate its
+shape without a network call; success prints `STRUCTURE ONLY / NOT AUTHENTICATED`.
+Any future live-read contract belongs in the separate signed-v2 change and must preserve
+the exact project boundary. The production Scheduler must remain `PAUSED`; `ENABLED` is
+drift until the separately approved public-launch change updates the repository
+contract. Secret injection and state recovery remain in
 [`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md).
 Bootstrap, normal delivery, and rollback are in
 [`docs/runbooks/cloud-run-delivery.md`](../../docs/runbooks/cloud-run-delivery.md).

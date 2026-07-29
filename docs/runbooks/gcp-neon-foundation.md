@@ -77,35 +77,50 @@ After this foundation is reviewed and applied, the target is:
   maintenance, and no database-secret access or project-wide role;
 - no user-managed service-account keys.
 
-The live verifier reads direct policies at the project, every reported folder and
-organization ancestor, both Artifact Registry repositories, the state bucket, service
-accounts, and each managed secret. It resolves every role, including project and
-organization custom roles, before classifying impersonation, secret read or mutation,
-Artifact Registry read or write, state-object access, and IAM-policy escalation. Sensitive
-bindings, every custom-role binding, and every direct state-bucket binding must match
-operator-supplied JSON records by exact `scope` + `role` + `member`. Custom roles also pin
-the SHA-256 of their complete included-permission inventory; conditional bindings pin the
-condition digest. Group, domain, and unrelated principal-set members therefore fail unless
-that exact binding was reviewed; public members always fail. A project, containing folder,
-or containing organization `ServiceAccount` principal set includes the nine workload
-identities and is forbidden at the project and ancestor scopes even when
-listed as reviewed. An unreadable ancestor, role, or policy is a blocker.
+Live acceptance is intentionally unavailable. `--live` first validates an unsigned v1
+structure file and then exits nonzero with
+`BLOCKED: trusted company-admin attestation is not configured`. The verifier contains no
+GCP CLI helper, command catalogue, account digest, or Google request path. Unsigned v1 is
+never deployment approval, company-admin evidence, or proof of the project's parent. A
+separately reviewed signed v2 format and a repository-pinned company-admin public key
+must land before live acceptance or any live read can exist.
+
+Invoke this verifier only through its executable path, for example
+`scripts/verify_ops_foundation.sh --static`. Its `/bin/bash -p` process ignores
+`BASH_ENV` and imported shell functions. Sourcing it or running
+`bash scripts/verify_ops_foundation.sh ...` is unsupported and refused; sourcing has no
+test or environment override. Future signed-v2 work must introduce its trust and
+exact-project read contract from scratch in a separate review; there is no dormant
+execution path to enable.
+
+`OPS_FOUNDATION_ADMIN_EVIDENCE_FILE` names only an unsigned structure input. Its absolute
+path must remain outside every repository/worktree and point to a regular non-symlink
+file owned by the current user, readable only by that owner (`0400` or `0600`; no
+execute, group, or other bits). The file is valid for at most 24 hours, permits no future
+timestamp or duplicate JSON key, and binds the schema version plus exact target project
+ID and number. V1 accepts exactly one declared organization record; it does not assert or
+verify a folder chain or project-parent linkage.
+
+The structure validator requires every binding in that declared organization record to
+have an exact reviewed `scope` + `role` + `member` record and a declared per-role
+permission array whose role keys exactly match the policy. It rejects public, group,
+domain, federated `principal`/`principalSet`, deleted, direct
+workload-service-account, dangerous or unclassified permission-verb, and
+project-custom-role bindings even if listed as reviewed. These checks detect unsafe or
+internally inconsistent input; they do not authenticate who produced it or prove that
+it is complete company policy.
 
 Terraform uses additive IAM member resources so an unreviewed apply cannot erase unrelated
-or Google-managed members. The verifier additionally rejects any direct role on the nine
-user-managed workload identities at the project or ancestor scopes, whether granted to
-their exact addresses or through an encompassing Resource Manager service-account
-principal set, project-level
-`serviceAccountUser`/`serviceAccountTokenCreator`/`secretAccessor`/Secret Manager admin,
-extra members in the managed resource roles, and direct token-creator bindings. If it
-finds drift, remediate the exact binding in a separately reviewed plan. At the repository
-scope, each complete direct policy must be exactly its environment's builder writer,
-deployer reader, and Cloud Run service-agent reader.
+or Google-managed members. Static verification proves the repository-owned Terraform
+shape, not live or inherited IAM. Direct roles on the nine workload identities,
+encompassing Resource Manager principal sets, project-wide impersonation or secret
+access, extra managed-resource members, user-managed keys, and repository cross-write
+remain live acceptance risks until signed-v2 verification is implemented.
 
-The policy API does not expand Google Group membership. A reviewed `group:` binding proves
-only that the exact policy binding was reviewed, not that directory membership is unchanged;
-the operator must attach a separately reviewed group-membership export before approving
-such a binding. The service-account principal-set guard does not rely on group expansion.
+Unsigned v1 is a structure-only precursor, not a waiver of inherited-IAM risk. This
+repository must not collect policy by traversing the company hierarchy. Until a trusted
+company-admin signature authenticates complete project-bound inherited-IAM input,
+deployment verification remains blocked.
 
 The agent delivery workflows bind both the caller `workflow_ref` and reusable
 `job_workflow_ref` inside the mapped `delivery_role`; the provider condition itself
@@ -117,7 +132,9 @@ deployment branches for all five, plus exact secret/variable inventories for Eva
 Publication and the two agent environments, are governed only by
 `.github/repository-governance.json` and
 `scripts/verify_repository_governance.py`; this foundation does not duplicate that policy.
-When those central files are present, `--live` delegates to their live verifier. The
+Repository governance can be verified separately with
+`scripts/verify_ops_foundation.sh --governance-live`; blocked foundation `--live` does
+not reach that delegation. The
 canonical `Agent Production`, `Evaluation Publication`, and Vercel `Production`
 deployment-branch set is `{main}`. `Evaluation Publication` must use `syshin0116` as its
 required reviewer, allow the solo owner to review, forbid admin bypass, and contain no
@@ -251,9 +268,9 @@ Preview resource names use the same suffixes with the `agent-preview-` prefix. T
 manages resource metadata and required additive runtime IAM members only; it never manages
 secret payloads or creates versions. It does manage the non-secret positive numeric
 version ID selected by each Cloud Run service and job. `latest`, `0`, and aliases are
-rejected so scale-to-zero restart cannot silently change a revision's environment. The
-post-apply live verifier is the acceptance gate for effective direct policies and numeric
-secret references.
+rejected so scale-to-zero restart cannot silently change a revision's environment.
+Effective direct-policy and numeric-reference acceptance remains unavailable until the
+signed company-admin attestation gate lands.
 
 The Cloud Run model is fixed to Anthropic. OpenAI credentials are not part of either
 environment's runtime inventory. Any previously managed OpenAI secret is forgotten from
@@ -451,42 +468,59 @@ the reviewed order and the summary is exactly
 result is a failure. `fmt`, fresh `init -backend=false`, and `validate` remain independent
 gates.
 
-After an explicitly approved foundation apply, run the live metadata checks:
+Unsigned v1 can be checked locally without any Google API call:
 
 ```sh
+export OPS_FOUNDATION_ADMIN_EVIDENCE_FILE=/absolute/private/path/admin-iam-structure.json
+scripts/verify_ops_foundation.sh --offline-admin-evidence-structure
 scripts/verify_ops_foundation.sh --live
 ```
 
-Before that command, populate `OPS_FOUNDATION_REVIEWED_IAM_BINDINGS` and
-`OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS` with reviewed JSON arrays. The first
-covers sensitive, critical-principal, and custom-role bindings across the project,
-ancestors, and Artifact Registry. The second contains every direct state-bucket binding.
-Each record has exact `scope`, `role`, and `member` strings. A custom role additionally
-requires `permissions_sha256`; a conditional binding additionally requires
-`condition_sha256`.
+An invocation with no mode defaults to `--static`; `--live` is always an explicit
+operator opt-in. Always invoke the executable directly as shown: sourcing the file and
+`bash scripts/verify_ops_foundation.sh ...` are unconditionally rejected.
 
-Canonical scope strings are `projects/<project-id>`, `folders/<folder-id>`,
-`organizations/<organization-id>`,
-`projects/<project-id>/locations/<region>/repositories/agent`,
-`projects/<project-id>/locations/<region>/repositories/agent-preview`, and
-`buckets/<bucket-name>`. Records are compared only against the matching audited scope;
-missing or extra records within that scope fail.
+The first command prints `STRUCTURE ONLY / NOT AUTHENTICATED` on success. The second must
+exit nonzero with the trusted-attestation blocker. Its implementation contains no GCP
+request path. Neither result approves an apply or deployment. The structure file is
+supplied out of band and must not be committed. It has this exact minimal topology
+(placeholder IDs and policies only; never copy real company policy data into this
+repository):
 
-`permissions_sha256` is SHA-256 over the UTF-8 compact JSON array of the role's sorted,
-unique permission strings. `condition_sha256` uses compact JSON with recursively sorted
-object keys. These canonical forms are the ones used by
-`scripts/ops_foundation_contract.py`; a different permission, role scope, member, or
-condition fails. Do not invent records or digests from this document—derive them from a
-separately reviewed live policy and role export. Missing, extra, incomplete, or stale
-records for an audited scope fail closed, and public members cannot be reviewed through
-this input.
+```json
+{
+  "schemaVersion": "syshin0116.gcp-admin-iam-evidence/v1",
+  "capturedAt": "YYYY-MM-DDTHH:MM:SSZ",
+  "project": {
+    "id": "festive-ally-503605-v7",
+    "number": "72919926064"
+  },
+  "ancestors": [
+    {
+      "scope": "organizations/<company-organization-id>",
+      "policy": {"bindings": []},
+      "rolePermissions": {}
+    }
+  ],
+  "reviewedBindings": []
+}
+```
 
-The live verifier inspects API, direct IAM, role definitions, keys, bucket, repository,
-WIF provider, Cloud Run service/job metadata, exact positive numeric secret references,
-the production Scheduler's exact paused OAuth contract, resource IAM, and secret-resource
-metadata only. It never reads secret payloads or Terraform state values. If the canonical
-repository-governance files are present, it also delegates GitHub environment verification
-to that verifier; otherwise it makes no GitHub environment claim.
+Despite the retained v1 field name, `ancestors` contains exactly one declared
+organization and proves no parent relationship. Every role present in its policy has one
+sorted, duplicate-free, non-empty permission array in `rolePermissions`.
+`reviewedBindings` contains a record for every exact binding in that declared scope and
+uses the digest rules below. Dangerous permissions, project custom roles, federated or
+deleted principals, public principals, groups, and domains are not reviewable exceptions.
+Every project remains undeployable through this verifier until signed v2 trust is
+implemented.
+
+Do not populate any future live-read environment variables from this document. The
+signed-v2 design must separately define authenticated provenance, exact-project scope,
+reviewed policy completeness, role and condition digests, and the live resource
+inventory. Until that change lands, IAM, service-account keys, buckets, repositories,
+WIF, Cloud Run, Secret Manager metadata, and Scheduler state are not live-verified by
+this script.
 
 ## Deletion policy
 

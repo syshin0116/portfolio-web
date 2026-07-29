@@ -447,10 +447,11 @@ re-resolution or add temporary transitive packages to `package.json`.
 1. Merge the Vercel `main` Git auto-deployment guard after the existing three
    required checks pass, before adding any explicit web production delivery
    workflow or its credentials.
-2. Confirm the next `main` push creates no automatic Vercel production
-   deployment, and confirm a contributor branch still receives its routine
-   Preview. Do not continue the web delivery bootstrap if either observation
-   differs.
+2. After the merge, inspect the guard merge SHA itself: confirm it created no
+   automatic Vercel production deployment, and confirm the guard PR source
+   branch already received its routine Preview. These are post-merge live
+   observations; do not create an extra `main` or Preview probe push. Do not
+   continue the web delivery bootstrap if either observation differs.
 3. Confirm each required check has reported successfully on `main`.
 4. Confirm the ruleset list is empty and legacy `main` branch protection
    returns the exact unprotected `404`. Create the single main ruleset as

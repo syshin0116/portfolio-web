@@ -1328,7 +1328,20 @@ runs:
                 "      UV_PROJECT: ../web\n",
             ),
             "job-shell": (
-                "    timeout-minutes: 30\n    services:\n",
+                "  agent:\n"
+                "    name: ci/agent\n"
+                "    if: always()\n"
+                "    needs:\n"
+                "      - changes\n"
+                "    runs-on: ubuntu-latest\n"
+                "    timeout-minutes: 30\n"
+                "    services:\n",
+                "  agent:\n"
+                "    name: ci/agent\n"
+                "    if: always()\n"
+                "    needs:\n"
+                "      - changes\n"
+                "    runs-on: ubuntu-latest\n"
                 "    timeout-minutes: 30\n"
                 "    defaults:\n"
                 "      run:\n"

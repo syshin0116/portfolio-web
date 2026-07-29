@@ -80,13 +80,33 @@ jobs:
       - changes
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: web
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres?sslmode=require
+      AUTH_DATABASE_MIGRATION_URL: postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      AUTH_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable
       AUTH_SECRET: ci-only-auth-secret-ci-only-auth-secret
       AUTH_ALLOWED_EMAILS: ci@example.com
+      AUTH_GITHUB_ID: ci-github-client-id
+      AUTH_GITHUB_SECRET: ci-github-client-secret
+      AUTH_GOOGLE_ID: ci-google-client-id
+      AUTH_GOOGLE_SECRET: ci-google-client-secret
       AGENT_AUTH_SECRET: ci-only-agent-secret-ci-only-agent-secret
       NEXT_PUBLIC_AGENT_API_URL: http://localhost:8000
     steps:
@@ -110,6 +130,15 @@ jobs:
           bun-version: 1.3.10
       - if: needs.changes.outputs.web == 'true'
         run: bun install --frozen-lockfile
+      - name: Apply and verify the Auth.js schema contract
+        if: needs.changes.outputs.web == 'true'
+        run: bun run auth:migrate --allow-insecure-loopback-test
+      - name: Reject Auth.js schema drift independently
+        if: needs.changes.outputs.web == 'true'
+        run: bun run auth:verify --allow-insecure-loopback-test
+      - name: Exercise Auth.js against PostgreSQL 17
+        if: needs.changes.outputs.web == 'true'
+        run: bun run test:auth-postgres
       - if: needs.changes.outputs.web == 'true'
         run: bun run prebuild
       - if: needs.changes.outputs.web == 'true'

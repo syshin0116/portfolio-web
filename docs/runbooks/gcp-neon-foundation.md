@@ -14,6 +14,7 @@ owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
   - cloud-run-delivery.md
+  - web-auth.md
   - ../adr/0006-public-anonymous-chat-access.md
   - ../adr/0007-postgres-on-neon-split-projects.md
   - ../plans/rag-restack.md
@@ -296,15 +297,16 @@ required secret has exactly one intended enabled version without reading its pay
 
 Keep Auth.js v5 and `@auth/pg-adapter`; only its Postgres endpoint changes.
 
-The repository currently contains no committed Auth.js schema migration or migration
-command. Do not describe one as reviewed, and do not cut over until a separate application
-PR adds and tests that contract.
+The committed, idempotent Auth.js schema and exact verifier are operated through
+`bun run auth:migrate` and `bun run auth:verify` from `web/`. Follow the
+[web authentication runbook](web-auth.md); the elevated
+`AUTH_DATABASE_MIGRATION_URL` must never enter Vercel runtime configuration.
 
 1. Confirm or create `syshin0116-web-prod` in the target region.
 2. Create an isolated preview branch and credentials that cannot access the production
    branch.
-3. Land a reviewed Auth.js schema/migration contract, then apply it to preview through a
-   direct endpoint held only for migration.
+3. Apply the reviewed Auth.js schema contract to preview through its separately held
+   direct migration endpoint, then require the independent verifier to pass.
 4. Configure GitHub and Google OAuth callback URLs for Vercel Preview first.
 5. Bind Vercel Preview `DATABASE_URL` to the preview branch's least-privileged direct
    endpoint.

@@ -177,6 +177,30 @@ describe("POST /api/agent-token signed-in precedence", () => {
     expect(payload).not.toHaveProperty("scope")
   })
 
+  test("canonicalizes a numeric adapter user id before signing", async () => {
+    const session: Session = {
+      user: {
+        id: 42,
+        email: "member@example.com",
+        name: null,
+        image: null,
+      },
+      expires: "2099-01-01T00:00:00.000Z",
+    }
+    const handler = createAgentTokenPostHandler(
+      dependencies({
+        authenticate: async () => session,
+        isAllowed: (email) => email === "member@example.com",
+      })
+    )
+
+    const response = await handler(request())
+    const payload = jwtPayload((await responseBody(response)).token as string)
+
+    expect(response.status).toBe(200)
+    expect(payload.sub).toBe("42")
+  })
+
   test("never downgrades a disallowed signed-in session to anonymous", async () => {
     let fetched = false
     const session: Session = {
@@ -208,7 +232,12 @@ describe("POST /api/agent-token signed-in precedence", () => {
 
   test("preserves Unauthorized when an allowed session has no subject", async () => {
     const session: Session = {
-      user: { id: "", email: null, name: null, image: null },
+      user: {
+        id: "",
+        email: "owner@example.com",
+        name: null,
+        image: null,
+      },
       expires: "2099-01-01T00:00:00.000Z",
     }
     const handler = createAgentTokenPostHandler(
@@ -222,6 +251,24 @@ describe("POST /api/agent-token signed-in precedence", () => {
 
     expect(response.status).toBe(401)
     expect(await responseBody(response)).toEqual({ error: "Unauthorized" })
+    expect(response.headers.get("cache-control")).toBe("no-store")
+  })
+
+  test("fails closed when session lookup is unavailable", async () => {
+    const handler = createAgentTokenPostHandler(
+      dependencies({
+        authenticate: async () => {
+          throw new Error("database connection details")
+        },
+      })
+    )
+
+    const response = await handler(request())
+
+    expect(response.status).toBe(503)
+    expect(await responseBody(response)).toEqual({
+      error: "Authentication is unavailable",
+    })
     expect(response.headers.get("cache-control")).toBe("no-store")
   })
 

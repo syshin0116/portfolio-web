@@ -311,14 +311,14 @@ class LocalGovernanceTests(unittest.TestCase):
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
 
-    def test_vercel_main_autodeploy_guard_rejects_missing_main_override(
+    def test_vercel_git_autodeploy_contract_rejects_disabled_main_override(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
             vercel_config = root / governance.VERCEL_CONFIG
             config = json.loads(vercel_config.read_text(encoding="utf-8"))
-            del config["git"]["deploymentEnabled"]["main"]
+            config["git"] = {"deploymentEnabled": {"main": False}}
             vercel_config.write_text(
                 json.dumps(config, indent=2) + "\n",
                 encoding="utf-8",
@@ -327,18 +327,18 @@ class LocalGovernanceTests(unittest.TestCase):
             errors = governance.validate_local(root, governance.load_policy())
 
         self.assertTrue(
-            any("Vercel Git deployment boundary differs" in error for error in errors),
+            any("Vercel Git auto-deploy contract differs" in error for error in errors),
             errors,
         )
 
-    def test_vercel_main_autodeploy_guard_rejects_enabled_main_override(
+    def test_vercel_git_autodeploy_contract_rejects_redundant_main_override(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
             vercel_config = root / governance.VERCEL_CONFIG
             config = json.loads(vercel_config.read_text(encoding="utf-8"))
-            config["git"]["deploymentEnabled"]["main"] = True
+            config["git"] = {"deploymentEnabled": {"main": True}}
             vercel_config.write_text(
                 json.dumps(config, indent=2) + "\n",
                 encoding="utf-8",
@@ -347,11 +347,29 @@ class LocalGovernanceTests(unittest.TestCase):
             errors = governance.validate_local(root, governance.load_policy())
 
         self.assertTrue(
-            any("Vercel Git deployment boundary differs" in error for error in errors),
+            any("Vercel Git auto-deploy contract differs" in error for error in errors),
             errors,
         )
 
-    def test_vercel_main_autodeploy_guard_rejects_unofficial_schema(self) -> None:
+    def test_vercel_git_autodeploy_contract_rejects_empty_git_object(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            vercel_config = root / governance.VERCEL_CONFIG
+            config = json.loads(vercel_config.read_text(encoding="utf-8"))
+            config["git"] = {}
+            vercel_config.write_text(
+                json.dumps(config, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("Vercel Git auto-deploy contract differs" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_git_autodeploy_contract_rejects_unofficial_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
             vercel_config = root / governance.VERCEL_CONFIG
@@ -365,18 +383,18 @@ class LocalGovernanceTests(unittest.TestCase):
             errors = governance.validate_local(root, governance.load_policy())
 
         self.assertTrue(
-            any("Vercel Git deployment boundary differs" in error for error in errors),
+            any("Vercel Git auto-deploy contract differs" in error for error in errors),
             errors,
         )
 
-    def test_vercel_main_autodeploy_guard_rejects_preview_branch_override(
+    def test_vercel_git_autodeploy_contract_rejects_preview_branch_override(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
             vercel_config = root / governance.VERCEL_CONFIG
             config = json.loads(vercel_config.read_text(encoding="utf-8"))
-            config["git"]["deploymentEnabled"]["preview/example"] = False
+            config["git"] = {"deploymentEnabled": {"preview/example": False}}
             vercel_config.write_text(
                 json.dumps(config, indent=2) + "\n",
                 encoding="utf-8",
@@ -385,18 +403,19 @@ class LocalGovernanceTests(unittest.TestCase):
             errors = governance.validate_local(root, governance.load_policy())
 
         self.assertTrue(
-            any("Vercel Git deployment boundary differs" in error for error in errors),
+            any("Vercel Git auto-deploy contract differs" in error for error in errors),
             errors,
         )
 
-    def test_vercel_main_autodeploy_guard_rejects_duplicate_json_keys(self) -> None:
+    def test_vercel_git_autodeploy_contract_rejects_duplicate_json_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
             vercel_config = root / governance.VERCEL_CONFIG
             original = vercel_config.read_text(encoding="utf-8")
             mutated = original.replace(
-                '"main": false',
-                '"main": true,\n      "main": false',
+                '"$schema": "https://openapi.vercel.sh/vercel.json"',
+                '"$schema": "https://example.invalid/vercel.json",\n'
+                '  "$schema": "https://openapi.vercel.sh/vercel.json"',
                 1,
             )
             self.assertNotEqual(original, mutated)

@@ -74,11 +74,24 @@ when `AUTH_POSTGRES_TEST_URL` exactly equals `AUTH_DATABASE_MIGRATION_URL`.
 operator or migration job and must never be stored in Vercel runtime variables.
 
 The verifier requires exactly 24 columns (including precision-6 timestamps), seven
-built-in indexes, nine constraints, eight enabled PostgreSQL RI triggers, no orphaned
-accounts or sessions, no legacy plural verification table, no inheritance, no extra
-indexes or constraints, and no non-internal triggers, rewrite rules, RLS policies, or
-RLS state. This is an application-schema contract, not a claim that any hosted Neon
-database has been migrated.
+built-in indexes, nine non-`NOT NULL` constraints, eight enabled PostgreSQL RI triggers,
+no orphaned accounts or sessions, no legacy plural verification table, no inheritance,
+no extra indexes or non-`NOT NULL` constraints, and no non-internal triggers, rewrite
+rules, RLS policies, or RLS state. PostgreSQL 18 stores relation `NOT NULL`
+specifications as `pg_constraint` rows with `contype = 'n'`, while PostgreSQL 17 does
+not. The verifier accepts that surface only when every expected non-null column has
+exactly one validated, enforced, local, non-inherited, non-period constraint with no
+backing index, duplicate, or extra row. Constraint names are intentionally not part of
+this cross-version contract because a PostgreSQL 18 legacy-table rename can preserve
+the old generated name. Effective nullability remains independently audited through the
+exact column inventory, and every other unexpected constraint type remains a violation.
+This is an application-schema contract, not a claim that any hosted Neon database has
+been migrated.
+
+The nine required primary-key, unique, and foreign-key constraints must also remain
+enforced and non-period on PostgreSQL 18. A `NOT ENFORCED` foreign key, a
+`WITHOUT OVERLAPS` primary/unique key, or a `PERIOD` foreign key is schema drift even
+when its table, columns, and generated name otherwise match.
 
 The runtime database role needs `CONNECT`, schema `USAGE`, and only the required
 `SELECT`, `INSERT`, `UPDATE`, and `DELETE` rights on the four Auth.js tables. UUID text
@@ -155,10 +168,13 @@ Run all of these on preview with a fresh browser profile before production:
 
 CI proves schema idempotency, legacy-row preservation, verifier-triggered rollback,
 constraint failures, adapter user/account/session lifecycle, request-pool cleanup, and
-string token subjects against PostgreSQL 17. The pinned adapter/Neon driver cast remains
-a reviewed compatibility boundary; preview must run the same adapter lifecycle against
-an actual Neon branch before promotion. Real provider callbacks remain an operational
-acceptance gate because CI does not own provider accounts or secrets.
+string token subjects against PostgreSQL 17. It also injects PostgreSQL 18-style
+relation `NOT NULL` catalog rows into the verifier's real PostgreSQL 17 catalog path and
+proves that duplicate, unvalidated, inherited, and extra relation constraints fail while
+an unexpected `CHECK` constraint still fails. The pinned adapter/Neon driver cast
+remains a reviewed compatibility boundary; preview must run the same adapter lifecycle
+against an actual Neon branch before promotion. Real provider callbacks remain an
+operational acceptance gate because CI does not own provider accounts or secrets.
 
 ## Rollback
 

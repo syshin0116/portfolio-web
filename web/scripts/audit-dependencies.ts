@@ -53,6 +53,7 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
   ["mermaid", "mermaid@11.16.0"],
   ["next", "next@16.2.12"],
   ["next-auth", "next-auth@5.0.0-beta.32"],
+  ["pg", "pg@8.22.0"],
   ["postcss", "postcss@8.5.23"],
 ])
 
@@ -92,6 +93,7 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@types/bun", "@types/bun@1.3.14"],
   ["@types/d3", "@types/d3@7.4.3"],
   ["@types/node", "@types/node@26.1.1"],
+  ["@types/pg", "@types/pg@8.20.0"],
   ["@types/react", "@types/react@19.1.16"],
   ["@types/react-dom", "@types/react-dom@19.1.9"],
   ["@vercel/analytics", "@vercel/analytics@2.0.1"],

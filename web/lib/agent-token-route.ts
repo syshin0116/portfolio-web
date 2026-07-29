@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import type { createAgentToken } from "@/lib/agent-auth"
+import { canonicalAuthSubject } from "@/lib/auth-subject"
 import {
   ANONYMOUS_COOKIE_NAME,
   ANONYMOUS_SESSION_TTL_SECONDS,
@@ -16,7 +17,7 @@ import {
 
 interface AgentTokenSession {
   user?: {
-    id?: string | null
+    id?: unknown
     email?: string | null
     name?: string | null
     image?: string | null
@@ -51,8 +52,8 @@ function mintSignedInToken(
   session: AgentTokenSession,
   dependencies: AgentTokenPostDependencies
 ): NextResponse {
-  const subject = session.user?.id ?? session.user?.email
-  if (!subject) {
+  const subject = canonicalAuthSubject(session.user?.id)
+  if (subject === null) {
     return jsonResponse({ error: "Unauthorized" }, 401)
   }
 
@@ -122,7 +123,15 @@ export function createAgentTokenPostHandler(
   dependencies: AgentTokenPostDependencies
 ): (request: NextRequest) => Promise<NextResponse> {
   return async (request: NextRequest): Promise<NextResponse> => {
-    const session = await dependencies.authenticate()
+    let session: AgentTokenSession | null
+    try {
+      session = await dependencies.authenticate()
+    } catch {
+      return jsonResponse(
+        { error: "Authentication is unavailable" },
+        503
+      )
+    }
     if (dependencies.isAllowed(session?.user?.email)) {
       return mintSignedInToken(session as AgentTokenSession, dependencies)
     }

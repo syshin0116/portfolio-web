@@ -16,6 +16,154 @@ import { applyAuthMigration } from "../../scripts/migrate-auth"
 
 const TEST_DATABASE_PREFIX = "auth_contract_"
 
+const POSTGRES_18_NOT_NULL_CONSTRAINT_COLUMNS = [
+  ["accounts", "id"],
+  ["accounts", "userId"],
+  ["accounts", "type"],
+  ["accounts", "provider"],
+  ["accounts", "providerAccountId"],
+  ["sessions", "id"],
+  ["sessions", "userId"],
+  ["sessions", "expires"],
+  ["sessions", "sessionToken"],
+  ["users", "id"],
+  ["verification_token", "identifier"],
+  ["verification_token", "expires"],
+  ["verification_token", "token"],
+] as const
+
+interface SimulatedPostgres18NotNullConstraint {
+  constraint_name: string
+  constraint_type: string
+  constraint_schema: string
+  local_schema: string
+  local_table: string
+  local_columns: string[]
+  referenced_schema: null
+  referenced_table: null
+  referenced_columns: string[]
+  delete_action: string
+  update_action: string
+  match_type: string
+  validated: boolean
+  enforced: boolean
+  deferrable: boolean
+  deferred: boolean
+  local_only: boolean
+  inheritance_count: number
+  no_inherit: boolean
+  parent_constraint_oid: number
+  backing_index_name: null
+  period: boolean
+  equality_operators_exact: boolean
+}
+
+function postgres18NotNullCatalogRows():
+  SimulatedPostgres18NotNullConstraint[] {
+  return POSTGRES_18_NOT_NULL_CONSTRAINT_COLUMNS.map(
+    ([table, column]) => ({
+      constraint_name: `${table}_${column}_not_null`,
+      constraint_type: "n",
+      constraint_schema: "public",
+      local_schema: "public",
+      local_table: table,
+      local_columns: [column],
+      referenced_schema: null,
+      referenced_table: null,
+      referenced_columns: [],
+      delete_action: " ",
+      update_action: " ",
+      match_type: " ",
+      validated: true,
+      enforced: true,
+      deferrable: false,
+      deferred: false,
+      local_only: true,
+      inheritance_count: 0,
+      no_inherit: false,
+      parent_constraint_oid: 0,
+      backing_index_name: null,
+      period: false,
+      equality_operators_exact: true,
+    })
+  )
+}
+
+type ConstraintCatalogRow = Record<string, unknown>
+
+function withConstraintCatalogTransform(
+  client: PoolClient,
+  transform: (
+    rows: readonly ConstraintCatalogRow[]
+  ) => readonly ConstraintCatalogRow[]
+): Pick<PoolClient, "query"> {
+  const query = async (
+    queryTextOrConfig: unknown,
+    values?: readonly unknown[]
+  ) => {
+    assert.equal(typeof queryTextOrConfig, "string")
+    const queryText = queryTextOrConfig as string
+    const result = await client.query(queryText, values as unknown[])
+    if (
+      !queryText.includes(
+        "constraint_row.contype AS constraint_type"
+      )
+    ) {
+      return result
+    }
+
+    const transformedRows = transform(
+      result.rows.map((row) => ({ ...row }))
+    )
+    return {
+      ...result,
+      rowCount:
+        result.rowCount === null ? null : transformedRows.length,
+      rows: [...transformedRows],
+    }
+  }
+  return {
+    query: query as PoolClient["query"],
+  }
+}
+
+function withPostgres18NotNullCatalogRows(
+  client: PoolClient,
+  notNullConstraints:
+    readonly SimulatedPostgres18NotNullConstraint[] =
+      postgres18NotNullCatalogRows()
+): Pick<PoolClient, "query"> {
+  return withConstraintCatalogTransform(client, (rows) => [
+    ...rows.filter((row) => row.constraint_type !== "n"),
+    ...notNullConstraints.map((constraint) => ({ ...constraint })),
+  ])
+}
+
+function withConstraintMetadata(
+  client: PoolClient,
+  constraintName: string,
+  metadata: Readonly<{
+    enforced?: boolean
+    period?: boolean
+  }>
+): Pick<PoolClient, "query"> {
+  return withConstraintCatalogTransform(client, (rows) => {
+    const matches = rows.filter(
+      (row) => row.constraint_name === constraintName
+    )
+    assert.equal(
+      matches.length,
+      1,
+      `expected one ${constraintName} catalog row`
+    )
+    return rows.map((row) =>
+      row.constraint_name === constraintName
+        ? { ...row, ...metadata }
+        : row
+    )
+  })
+}
+
 function testBasePoolConfig(
   value = process.env.AUTH_POSTGRES_TEST_URL
 ): AuthPostgresPoolConfig {
@@ -524,7 +672,7 @@ async function exactSchemaContractRegressions(): Promise<void> {
 
     const inventory = await client.query<{
       columns: string
-      constraints: string
+      audited_constraints: string
       indexes: string
       ri_triggers: string
     }>(`
@@ -534,7 +682,8 @@ async function exactSchemaContractRegressions(): Promise<void> {
             AND table_name IN ('accounts', 'sessions', 'users', 'verification_token'))::text AS columns,
         (SELECT count(*) FROM pg_constraint
           WHERE conrelid IN ('public.accounts'::regclass, 'public.sessions'::regclass,
-                             'public.users'::regclass, 'public.verification_token'::regclass))::text AS constraints,
+                             'public.users'::regclass, 'public.verification_token'::regclass)
+            AND contype <> 'n')::text AS audited_constraints,
         (SELECT count(*) FROM pg_index
           WHERE indrelid IN ('public.accounts'::regclass, 'public.sessions'::regclass,
                              'public.users'::regclass, 'public.verification_token'::regclass))::text AS indexes,
@@ -545,7 +694,7 @@ async function exactSchemaContractRegressions(): Promise<void> {
     `)
     assert.deepEqual(inventory.rows[0], {
       columns: "24",
-      constraints: "9",
+      audited_constraints: "9",
       indexes: "7",
       ri_triggers: "8",
     })
@@ -607,6 +756,194 @@ async function exactSchemaContractRegressions(): Promise<void> {
   })
 }
 
+async function postgres18NotNullCatalogRowsAreAccepted(): Promise<void> {
+  await withTestDatabase("postgres_18_not_null", async (client) => {
+    await applyAuthMigration(client)
+
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withPostgres18NotNullCatalogRows(client)
+      ),
+      []
+    )
+  })
+}
+
+async function postgres18NotNullConstraintMetadataDriftIsRejected(): Promise<void> {
+  await withTestDatabase("postgres_18_not_null_drift", async (client) => {
+    await applyAuthMigration(client)
+    const exactRows = postgres18NotNullCatalogRows()
+    const usersId = exactRows.find(
+      (constraint) =>
+        constraint.local_table === "users" &&
+        constraint.local_columns[0] === "id"
+    )
+    assert.ok(usersId)
+
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withPostgres18NotNullCatalogRows(client, [
+          ...exactRows,
+          { ...usersId },
+        ])
+      ),
+      [
+        "public.users.id must have one exact PostgreSQL 18 NOT NULL constraint",
+      ]
+    )
+
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withPostgres18NotNullCatalogRows(
+          client,
+          exactRows.map((constraint) =>
+            constraint === usersId
+              ? { ...constraint, validated: false }
+              : constraint
+          )
+        )
+      ),
+      [
+        "public.users has unexpected PostgreSQL 18 NOT NULL constraint users_id_not_null",
+        "public.users.id must have one exact PostgreSQL 18 NOT NULL constraint",
+      ]
+    )
+
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withPostgres18NotNullCatalogRows(
+          client,
+          exactRows.map((constraint) =>
+            constraint === usersId
+              ? {
+                  ...constraint,
+                  local_only: false,
+                  inheritance_count: 1,
+                  parent_constraint_oid: 42,
+                }
+              : constraint
+          )
+        )
+      ),
+      [
+        "public.users has unexpected PostgreSQL 18 NOT NULL constraint users_id_not_null",
+        "public.users.id must have one exact PostgreSQL 18 NOT NULL constraint",
+      ]
+    )
+
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withPostgres18NotNullCatalogRows(client, [
+          ...exactRows,
+          {
+            ...usersId,
+            constraint_name: "users_name_not_null",
+            local_columns: ["name"],
+          },
+        ])
+      ),
+      [
+        "public.users has unexpected PostgreSQL 18 NOT NULL constraint users_name_not_null",
+      ]
+    )
+  })
+}
+
+async function postgres18NotEnforcedKeyMetadataIsRejected(): Promise<void> {
+  await withTestDatabase("postgres_18_not_enforced", async (client) => {
+    await applyAuthMigration(client)
+
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withConstraintMetadata(client, "users_pkey", {
+          enforced: false,
+        })
+      ),
+      [
+        "public.users has unexpected constraint users_pkey",
+        "public.users must have primary key (id)",
+      ]
+    )
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withConstraintMetadata(client, "users_email_key", {
+          enforced: false,
+        })
+      ),
+      [
+        "public.users has unexpected constraint users_email_key",
+        "public.users must have one nondeferrable unique constraint (email)",
+      ]
+    )
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withConstraintMetadata(client, "accounts_user_id_fkey", {
+          enforced: false,
+        })
+      ),
+      [
+        "public.accounts has unexpected foreign key accounts_user_id_fkey",
+        "public.accounts(userId) must reference public.users(id) ON DELETE CASCADE with one validated foreign key",
+      ]
+    )
+  })
+}
+
+async function postgres18PeriodKeyMetadataIsRejected(): Promise<void> {
+  await withTestDatabase("postgres_18_period", async (client) => {
+    await applyAuthMigration(client)
+
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withConstraintMetadata(client, "users_pkey", {
+          period: true,
+        })
+      ),
+      [
+        "public.users has unexpected constraint users_pkey",
+        "public.users must have primary key (id)",
+      ]
+    )
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withConstraintMetadata(client, "users_email_key", {
+          period: true,
+        })
+      ),
+      [
+        "public.users has unexpected constraint users_email_key",
+        "public.users must have one nondeferrable unique constraint (email)",
+      ]
+    )
+    assert.deepEqual(
+      await inspectAuthSchema(
+        withConstraintMetadata(client, "accounts_user_id_fkey", {
+          period: true,
+        })
+      ),
+      [
+        "public.accounts has unexpected foreign key accounts_user_id_fkey",
+        "public.accounts(userId) must reference public.users(id) ON DELETE CASCADE with one validated foreign key",
+      ]
+    )
+  })
+}
+
+async function unexpectedCheckConstraintsRemainRejected(): Promise<void> {
+  await withTestDatabase("unexpected_check", async (client) => {
+    await applyAuthMigration(client)
+    await client.query(`
+      ALTER TABLE public.users
+        ADD CONSTRAINT users_name_not_empty
+        CHECK (name IS NULL OR name <> '')
+    `)
+
+    assert.deepEqual(await inspectAuthSchema(client), [
+      "public.users has unexpected constraint users_name_not_empty",
+    ])
+  })
+}
+
 async function maintenanceTransactionContract(): Promise<void> {
   await withTestDatabase("transaction_contract", async (client) => {
     await client.query(`
@@ -657,5 +994,15 @@ await multipleForeignKeysRollBackMigration()
 console.log("auth PostgreSQL: conflicting foreign keys rolled back intact")
 await exactSchemaContractRegressions()
 console.log("auth PostgreSQL: exact schema contract regressions passed")
+await postgres18NotNullCatalogRowsAreAccepted()
+console.log("auth PostgreSQL: PostgreSQL 18 not-null catalog rows accepted")
+await postgres18NotNullConstraintMetadataDriftIsRejected()
+console.log("auth PostgreSQL: PostgreSQL 18 not-null catalog drift rejected")
+await postgres18NotEnforcedKeyMetadataIsRejected()
+console.log("auth PostgreSQL: PostgreSQL 18 unenforced key metadata rejected")
+await postgres18PeriodKeyMetadataIsRejected()
+console.log("auth PostgreSQL: PostgreSQL 18 period key metadata rejected")
+await unexpectedCheckConstraintsRemainRejected()
+console.log("auth PostgreSQL: unexpected check constraints rejected")
 await maintenanceTransactionContract()
 console.log("auth PostgreSQL: explicit maintenance transaction contract passed")

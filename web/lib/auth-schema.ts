@@ -338,6 +338,7 @@ interface ConstraintRow extends QueryResultRow {
   update_action: string
   match_type: string
   validated: boolean
+  enforced: boolean
   deferrable: boolean
   deferred: boolean
   local_only: boolean
@@ -345,6 +346,7 @@ interface ConstraintRow extends QueryResultRow {
   no_inherit: boolean
   parent_constraint_oid: number
   backing_index_name: string | null
+  period: boolean
   equality_operators_exact: boolean
 }
 
@@ -739,6 +741,12 @@ async function constraintRows(
         constraint_row.confupdtype AS update_action,
         constraint_row.confmatchtype AS match_type,
         constraint_row.convalidated AS validated,
+        COALESCE(
+          (
+            to_jsonb(constraint_row) ->> 'conenforced'
+          )::boolean,
+          true
+        ) AS enforced,
         constraint_row.condeferrable AS deferrable,
         constraint_row.condeferred AS deferred,
         constraint_row.conislocal AS local_only,
@@ -746,6 +754,12 @@ async function constraintRows(
         constraint_row.connoinherit AS no_inherit,
         constraint_row.conparentid AS parent_constraint_oid,
         backing_index.relname AS backing_index_name,
+        COALESCE(
+          (
+            to_jsonb(constraint_row) ->> 'conperiod'
+          )::boolean,
+          false
+        ) AS period,
         CASE
           WHEN constraint_row.contype = 'f' THEN
             constraint_row.conpfeqop =
@@ -787,8 +801,67 @@ async function constraintViolations(
   client: Queryable
 ): Promise<string[]> {
   const indexes = await indexRows(client)
-  const constraints = await constraintRows(client)
+  const constraintCatalog = await constraintRows(client)
+  const constraints = constraintCatalog.filter(
+    (constraint) => constraint.constraint_type !== "n"
+  )
+  const notNullConstraints = constraintCatalog.filter(
+    (constraint) => constraint.constraint_type === "n"
+  )
   const violations: string[] = []
+  const expectedNotNullColumns = AUTH_SCHEMA_COLUMNS.filter(
+    (column) => !column.nullable
+  )
+  const exactPostgres18NotNullConstraint = (
+    constraint: ConstraintRow,
+    expected: AuthSchemaColumn
+  ) =>
+    constraint.constraint_type === "n" &&
+    constraint.constraint_schema === "public" &&
+    constraint.local_schema === "public" &&
+    constraint.local_table === expected.table &&
+    sameColumns(constraint.local_columns, [expected.name]) &&
+    constraint.referenced_schema === null &&
+    constraint.referenced_table === null &&
+    constraint.referenced_columns.length === 0 &&
+    constraint.validated &&
+    constraint.enforced &&
+    !constraint.deferrable &&
+    !constraint.deferred &&
+    constraint.local_only &&
+    constraint.inheritance_count === 0 &&
+    !constraint.no_inherit &&
+    constraint.parent_constraint_oid === 0 &&
+    constraint.backing_index_name === null &&
+    !constraint.period &&
+    constraint.equality_operators_exact
+
+  // PostgreSQL 17 keeps relation NOT NULL state outside pg_constraint.
+  // PostgreSQL 18 exposes it as contype = 'n'. Once that surface is
+  // present, require its complete exact inventory instead of treating
+  // every 'n' row as harmless catalog noise.
+  if (notNullConstraints.length > 0) {
+    for (const expected of expectedNotNullColumns) {
+      const matches = notNullConstraints.filter((constraint) =>
+        exactPostgres18NotNullConstraint(constraint, expected)
+      )
+      if (matches.length !== 1) {
+        violations.push(
+          `public.${expected.table}.${expected.name} must have one exact PostgreSQL 18 NOT NULL constraint`
+        )
+      }
+    }
+    for (const constraint of notNullConstraints) {
+      const allowed = expectedNotNullColumns.some((expected) =>
+        exactPostgres18NotNullConstraint(constraint, expected)
+      )
+      if (!allowed) {
+        violations.push(
+          `${constraint.local_schema}.${constraint.local_table} has unexpected PostgreSQL 18 NOT NULL constraint ${constraint.constraint_name}`
+        )
+      }
+    }
+  }
   const requiredPrimaryKeys = new Map<string, readonly string[]>([
     ["users", ["id"]],
     ["accounts", ["id"]],
@@ -804,6 +877,8 @@ async function constraintViolations(
         constraint.local_table === table &&
         sameColumns(constraint.local_columns, columns) &&
         constraint.validated &&
+        constraint.enforced &&
+        !constraint.period &&
         !constraint.deferrable &&
         !constraint.deferred &&
         constraint.local_only &&
@@ -941,6 +1016,8 @@ async function constraintViolations(
     constraint.update_action === "a" &&
     constraint.match_type === "s" &&
     constraint.validated &&
+    constraint.enforced &&
+    !constraint.period &&
     !constraint.deferrable &&
     !constraint.deferred &&
     constraint.local_only &&
@@ -974,6 +1051,8 @@ async function constraintViolations(
           constraint.local_table === table &&
           sameColumns(constraint.local_columns, columns) &&
           constraint.validated &&
+          constraint.enforced &&
+          !constraint.period &&
           !constraint.deferrable &&
           !constraint.deferred &&
           constraint.local_only &&
@@ -1013,6 +1092,8 @@ async function constraintViolations(
         requiredPrimaryKeys.get(constraint.local_table) ?? []
       ) &&
       constraint.validated &&
+      constraint.enforced &&
+      !constraint.period &&
       !constraint.deferrable &&
       !constraint.deferred &&
       constraint.local_only &&
@@ -1032,6 +1113,8 @@ async function constraintViolations(
         sameColumns(constraint.local_columns, columns)
       ) &&
       constraint.validated &&
+      constraint.enforced &&
+      !constraint.period &&
       !constraint.deferrable &&
       !constraint.deferred &&
       constraint.local_only &&

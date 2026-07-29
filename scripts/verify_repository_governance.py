@@ -241,6 +241,15 @@ AGENT_RELEASE_CANDIDATE_SCRIPT = "scripts/validate_agent_release_candidate.py"
 AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
     "a8c0dc770b0314d9b08843c16abae6bac24b405e51ac75e3dd14c6775e2006d3"
 )
+VERCEL_CONFIG = "web/vercel.json"
+EXPECTED_VERCEL_GIT_CONFIG = {
+    "$schema": "https://openapi.vercel.sh/vercel.json",
+    "git": {
+        "deploymentEnabled": {
+            "main": False,
+        }
+    },
+}
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 UPSTREAM_VERSION_AUDIT_SCRIPT = "scripts/upstream_version_audit.py"
 UPSTREAM_VERSION_AUDIT_SCRIPT_SHA256 = (
@@ -574,6 +583,21 @@ def _json_exact(actual: Any, expected: Any) -> bool:
             for actual_item, expected_item in zip(actual, expected, strict=True)
         )
     return actual == expected
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> JsonObject:
+    """Reject duplicate keys instead of accepting parser-order ambiguity."""
+    result: JsonObject = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    """Reject Python's non-standard NaN and Infinity JSON extensions."""
+    raise ValueError(f"non-standard JSON constant: {value}")
 
 
 def _require_yaml() -> None:
@@ -1237,6 +1261,33 @@ def validate_eval_workflow_contracts(
                 f"actual_sha256={actual}"
             )
     return errors
+
+
+def validate_vercel_git_deployment_contract(root: Path) -> list[str]:
+    """Keep main off Vercel Git auto-deploy while previews remain eligible."""
+    config_path = root.resolve() / VERCEL_CONFIG
+    if config_path.is_symlink() or not config_path.is_file():
+        return [f"{VERCEL_CONFIG}: must be a regular repository file"]
+
+    try:
+        config = json.loads(
+            config_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return [f"{VERCEL_CONFIG}: cannot be read as strict JSON: {exc}"]
+
+    if not isinstance(config, dict):
+        return [f"{VERCEL_CONFIG}: top-level JSON value must be an object"]
+
+    actual = {key: config.get(key) for key in EXPECTED_VERCEL_GIT_CONFIG}
+    if _json_exact(actual, EXPECTED_VERCEL_GIT_CONFIG):
+        return []
+    return [
+        f"{VERCEL_CONFIG}: Vercel Git deployment boundary differs; "
+        f"actual={actual!r}, expected={EXPECTED_VERCEL_GIT_CONFIG!r}"
+    ]
 
 
 def validate_dependency_audit_agent_setup(document: YamlDocument) -> list[str]:
@@ -2522,6 +2573,9 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         )
     except GovernanceError as exc:
         errors.append(f"local: invalid eval workflow contract: {exc}")
+    errors.extend(
+        f"local: {error}" for error in validate_vercel_git_deployment_contract(root)
+    )
     errors.extend(
         f"local: {error}" for error in validate_publication_docker_context(root)
     )

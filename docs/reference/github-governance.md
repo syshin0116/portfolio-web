@@ -9,7 +9,7 @@ when_to_read: >
   dependency and upstream-version audit.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
-updated: "2026-07-28"
+updated: "2026-07-29"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/repository-governance.json
@@ -272,6 +272,17 @@ permit self-review so a solo owner cannot deadlock. Creating or reconciling thes
 is an external rollout item; the checked-in contract does not claim it has already been
 applied.
 
+[`web/vercel.json`](../../web/vercel.json) uses Vercel's official static schema
+and sets exactly `git.deploymentEnabled.main=false`. That branch-level opt-out
+prevents Git Integration from automatically deploying a `main` push, while the
+absence of any other branch override keeps routine contributor Preview
+deployments eligible. The local governance verifier rejects a missing or
+enabled `main` entry, a different schema, any additional branch override,
+duplicate JSON keys, and non-standard JSON. This repository guard does not
+disable an explicit Vercel CLI or API deployment and does not prove the linked
+Vercel project's external settings; those remain separate reviewed delivery
+boundaries.
+
 The image builder runs first through `agent-image-build.yml` without any GitHub
 environment, environment secret, or deployment credential. It can write only to the
 target's isolated registry. The one subsequent `agent-release.yml` job references the
@@ -433,29 +444,34 @@ re-resolution or add temporary transitive packages to `package.json`.
 
 ## Rollout order
 
-1. Merge the repository-side governance PR after the existing three required
-   checks pass.
-2. Confirm each required check has reported successfully on `main`.
-3. Confirm the ruleset list is empty and legacy `main` branch protection
+1. Merge the Vercel `main` Git auto-deployment guard after the existing three
+   required checks pass, before adding any explicit web production delivery
+   workflow or its credentials.
+2. Confirm the next `main` push creates no automatic Vercel production
+   deployment, and confirm a contributor branch still receives its routine
+   Preview. Do not continue the web delivery bootstrap if either observation
+   differs.
+3. Confirm each required check has reported successfully on `main`.
+4. Confirm the ruleset list is empty and legacy `main` branch protection
    returns the exact unprotected `404`. Create the single main ruleset as
    `disabled`, read it back, and compare the complete normalized contract.
    Delete it on any mismatch; otherwise activate that same ruleset ID and
    verify it again. It must have zero required approvals and no bypass.
-4. Enable repository Actions and its full-SHA policy.
-5. Enable vulnerability alerts and Dependabot security updates, then confirm
+5. Enable repository Actions and its full-SHA policy.
+6. Enable vulnerability alerts and Dependabot security updates, then confirm
    that security updates are not paused.
-6. Remove the required reviewer from routine Vercel `Preview`; retain the existing
+7. Remove the required reviewer from routine Vercel `Preview`; retain the existing
    `syshin0116` reviewer on Vercel `Production` with self-review allowed, and confirm
    both branch policies.
-7. Create or reconcile `Agent Preview` and `Agent Production` with required reviewer
+8. Create or reconcile `Agent Preview` and `Agent Production` with required reviewer
    `syshin0116`, self-review allowed, admin bypass disabled, the branch policies above,
    only `AGENT_SMOKE_BEARER_TOKEN`, and zero variables.
-8. Run the `--live` command from this runbook; it must pass.
-9. Manually dispatch **Dependency audit** once. Require the web vulnerability, Python
+9. Run the `--live` command from this runbook; it must pass.
+10. Manually dispatch **Dependency audit** once. Require the web vulnerability, Python
    vulnerability, and upstream-version jobs to pass; triage each finding in a focused PR.
 
-The settings in steps 3–7 live outside Git. A green local verifier does not mean
-they have been applied.
+The observations and settings in steps 2–8 live outside Git. A green local
+verifier does not mean they have been applied.
 
 ## Official references
 

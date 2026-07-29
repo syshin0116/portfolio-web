@@ -242,13 +242,8 @@ AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
     "a8c0dc770b0314d9b08843c16abae6bac24b405e51ac75e3dd14c6775e2006d3"
 )
 VERCEL_CONFIG = "web/vercel.json"
-EXPECTED_VERCEL_GIT_CONFIG = {
+EXPECTED_VERCEL_AUTODEPLOY_CONFIG = {
     "$schema": "https://openapi.vercel.sh/vercel.json",
-    "git": {
-        "deploymentEnabled": {
-            "main": False,
-        }
-    },
 }
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 UPSTREAM_VERSION_AUDIT_SCRIPT = "scripts/upstream_version_audit.py"
@@ -1263,8 +1258,8 @@ def validate_eval_workflow_contracts(
     return errors
 
 
-def validate_vercel_git_deployment_contract(root: Path) -> list[str]:
-    """Keep main off Vercel Git auto-deploy while previews remain eligible."""
+def validate_vercel_git_autodeploy_contract(root: Path) -> list[str]:
+    """Keep Vercel Git auto-deploy on its default for main and previews."""
     config_path = root.resolve() / VERCEL_CONFIG
     if config_path.is_symlink() or not config_path.is_file():
         return [f"{VERCEL_CONFIG}: must be a regular repository file"]
@@ -1281,12 +1276,13 @@ def validate_vercel_git_deployment_contract(root: Path) -> list[str]:
     if not isinstance(config, dict):
         return [f"{VERCEL_CONFIG}: top-level JSON value must be an object"]
 
-    actual = {key: config.get(key) for key in EXPECTED_VERCEL_GIT_CONFIG}
-    if _json_exact(actual, EXPECTED_VERCEL_GIT_CONFIG):
+    actual = {key: config.get(key) for key in EXPECTED_VERCEL_AUTODEPLOY_CONFIG}
+    if _json_exact(actual, EXPECTED_VERCEL_AUTODEPLOY_CONFIG) and "git" not in config:
         return []
     return [
-        f"{VERCEL_CONFIG}: Vercel Git deployment boundary differs; "
-        f"actual={actual!r}, expected={EXPECTED_VERCEL_GIT_CONFIG!r}"
+        f"{VERCEL_CONFIG}: Vercel Git auto-deploy contract differs; "
+        f"actual={actual!r}, expected={EXPECTED_VERCEL_AUTODEPLOY_CONFIG!r}, "
+        f"git_override_present={'git' in config}"
     ]
 
 
@@ -2574,7 +2570,7 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     except GovernanceError as exc:
         errors.append(f"local: invalid eval workflow contract: {exc}")
     errors.extend(
-        f"local: {error}" for error in validate_vercel_git_deployment_contract(root)
+        f"local: {error}" for error in validate_vercel_git_autodeploy_contract(root)
     )
     errors.extend(
         f"local: {error}" for error in validate_publication_docker_context(root)

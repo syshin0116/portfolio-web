@@ -273,15 +273,14 @@ is an external rollout item; the checked-in contract does not claim it has alrea
 applied.
 
 [`web/vercel.json`](../../web/vercel.json) uses Vercel's official static schema
-and sets exactly `git.deploymentEnabled.main=false`. That branch-level opt-out
-prevents Git Integration from automatically deploying a `main` push, while the
-absence of any other branch override keeps routine contributor Preview
-deployments eligible. The local governance verifier rejects a missing or
-enabled `main` entry, a different schema, any additional branch override,
-duplicate JSON keys, and non-standard JSON. This repository guard does not
-disable an explicit Vercel CLI or API deployment and does not prove the linked
-Vercel project's external settings; those remain separate reviewed delivery
-boundaries.
+and deliberately has no checked-in top-level `git` object at all. The linked
+Vercel Git Integration therefore retains its default behavior: a `main` push is
+eligible for Production deployment and contributor branches remain eligible
+for Preview. The local governance verifier rejects even an empty `git` object,
+any branch-level deployment override, a different schema, duplicate JSON keys,
+and non-standard JSON. This repository contract does not prove that the
+external Vercel project remains linked or that its dashboard settings permit
+deployments; those remain observable delivery state.
 
 The image builder runs first through `agent-image-build.yml` without any GitHub
 environment, environment secret, or deployment credential. It can write only to the
@@ -444,14 +443,16 @@ re-resolution or add temporary transitive packages to `package.json`.
 
 ## Rollout order
 
-1. Merge the Vercel `main` Git auto-deployment guard after the existing three
-   required checks pass, before adding any explicit web production delivery
-   workflow or its credentials.
-2. After the merge, inspect the guard merge SHA itself: confirm it created no
-   automatic Vercel production deployment, and confirm the guard PR source
-   branch already received its routine Preview. These are post-merge live
-   observations; do not create an extra `main` or Preview probe push. Do not
-   continue the web delivery bootstrap if either observation differs.
+1. Before merging the change that restores or enables Vercel Git
+   auto-deployment, prove the current `main` revision's Production Neon schema
+   and Vercel runtime/OAuth environment prerequisites independently. Apply the
+   same pre-merge gate to every later revision that changes or depends on the
+   Auth/Neon contract; automatic delivery is not a database migration gate.
+2. After each merge, inspect that exact merge SHA: expect its automatic Vercel
+   Production deployment and confirm the PR source branch received its routine
+   Preview. These are post-merge live observations; do not create an extra
+   `main` or Preview probe push. Investigate any missing, duplicate, or
+   revision-mismatched deployment before another production merge.
 3. Confirm each required check has reported successfully on `main`.
 4. Confirm the ruleset list is empty and legacy `main` branch protection
    returns the exact unprotected `404`. Create the single main ruleset as
@@ -471,7 +472,7 @@ re-resolution or add temporary transitive packages to `package.json`.
 10. Manually dispatch **Dependency audit** once. Require the web vulnerability, Python
    vulnerability, and upstream-version jobs to pass; triage each finding in a focused PR.
 
-The observations and settings in steps 2–8 live outside Git. A green local
+The observations and settings in steps 1–8 live outside Git. A green local
 verifier does not mean they have been applied.
 
 ## Official references

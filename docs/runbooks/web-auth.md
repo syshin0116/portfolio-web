@@ -109,11 +109,14 @@ migration credential. Promote only the already-reviewed application revision, th
 its production runtime credential.
 
 This repository change is the first-stage application and schema contract. It does not
-claim that preview or production Neon has been migrated. Vercel's automatic deployment
-is not a migration gate, so production promotion remains blocked until a follow-up
-approval-controlled workflow has an isolated preview branch and
-`AUTH_DATABASE_MIGRATION_URL`, runs migration plus verification before promotion, and
-records the exact revision it verified. Never add that elevated URL to Vercel.
+claim that preview or production Neon has been migrated. Before merging the change that
+restores or enables Vercel Git automatic deployment, verify the current `main` revision's
+Production Neon schema plus its runtime and OAuth environment prerequisites. Apply the
+same pre-merge gate to every later application revision that depends on a schema change:
+use the isolated credential to migrate and verify the target Neon branch, then merge only
+the exact reviewed revision. Never add that elevated URL to Vercel. If a required runtime
+variable or schema prerequisite is absent, the Auth surface must fail closed; automatic
+delivery must not turn missing prerequisites into implicit DDL authority.
 
 ## OAuth provider setup
 

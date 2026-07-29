@@ -294,6 +294,9 @@ def copy_local_governance_fixture(directory: str) -> Path:
         REPO_ROOT / governance.AGENT_RELEASE_CANDIDATE_SCRIPT,
         candidate_validator,
     )
+    vercel_config = root / governance.VERCEL_CONFIG
+    vercel_config.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO_ROOT / governance.VERCEL_CONFIG, vercel_config)
     upstream_audit = root / governance.UPSTREAM_VERSION_AUDIT_SCRIPT
     upstream_audit.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(
@@ -307,6 +310,104 @@ class LocalGovernanceTests(unittest.TestCase):
     def test_repository_policy_and_workflows_are_locally_valid(self) -> None:
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
+
+    def test_vercel_main_autodeploy_guard_rejects_missing_main_override(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            vercel_config = root / governance.VERCEL_CONFIG
+            config = json.loads(vercel_config.read_text(encoding="utf-8"))
+            del config["git"]["deploymentEnabled"]["main"]
+            vercel_config.write_text(
+                json.dumps(config, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("Vercel Git deployment boundary differs" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_main_autodeploy_guard_rejects_enabled_main_override(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            vercel_config = root / governance.VERCEL_CONFIG
+            config = json.loads(vercel_config.read_text(encoding="utf-8"))
+            config["git"]["deploymentEnabled"]["main"] = True
+            vercel_config.write_text(
+                json.dumps(config, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("Vercel Git deployment boundary differs" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_main_autodeploy_guard_rejects_unofficial_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            vercel_config = root / governance.VERCEL_CONFIG
+            config = json.loads(vercel_config.read_text(encoding="utf-8"))
+            config["$schema"] = "https://example.invalid/vercel.json"
+            vercel_config.write_text(
+                json.dumps(config, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("Vercel Git deployment boundary differs" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_main_autodeploy_guard_rejects_preview_branch_override(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            vercel_config = root / governance.VERCEL_CONFIG
+            config = json.loads(vercel_config.read_text(encoding="utf-8"))
+            config["git"]["deploymentEnabled"]["preview/example"] = False
+            vercel_config.write_text(
+                json.dumps(config, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("Vercel Git deployment boundary differs" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_main_autodeploy_guard_rejects_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            vercel_config = root / governance.VERCEL_CONFIG
+            original = vercel_config.read_text(encoding="utf-8")
+            mutated = original.replace(
+                '"main": false',
+                '"main": true,\n      "main": false',
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            vercel_config.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("cannot be read as strict JSON" in error for error in errors),
+            errors,
+        )
 
     def test_publication_docker_context_scope_and_copy_inputs_are_exact(self) -> None:
         rules = governance.publication_dockerignore_rules(REPO_ROOT)

@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts.ops_foundation_contract import (
@@ -95,6 +96,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
             REPO_ROOT / "scripts/verify_ops_foundation.sh",
             verifier,
         )
+        verifier.chmod(0o755)
         shutil.copyfile(
             REPO_ROOT / "scripts/ops_foundation_contract.py",
             root / "scripts/ops_foundation_contract.py",
@@ -113,7 +115,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
 
     def _run(self, root: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["bash", "scripts/verify_ops_foundation.sh", "--static"],
+            ["scripts/verify_ops_foundation.sh", "--static"],
             cwd=root,
             check=False,
             capture_output=True,
@@ -362,7 +364,7 @@ resource "google_project_service" "required" {
                     os.mkfifo(candidate)
 
                 result = subprocess.run(
-                    ["bash", "scripts/verify_ops_foundation.sh", "--static"],
+                    ["scripts/verify_ops_foundation.sh", "--static"],
                     cwd=root,
                     check=False,
                     capture_output=True,
@@ -413,7 +415,6 @@ resource "google_project_service" "required" {
 
                 result = subprocess.run(
                     [
-                        "bash",
                         "scripts/verify_ops_foundation.sh",
                         "--terraform-fmt",
                     ],
@@ -461,7 +462,7 @@ resource "google_project_service" "required" {
                 environment["TERRAFORM_MARKER"] = str(marker)
 
                 result = subprocess.run(
-                    ["bash", "scripts/verify_ops_foundation.sh", mode],
+                    ["scripts/verify_ops_foundation.sh", mode],
                     cwd=root,
                     check=False,
                     capture_output=True,
@@ -496,7 +497,7 @@ printf '%s\n' \
             environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
 
             result = subprocess.run(
-                ["bash", "scripts/verify_ops_foundation.sh", "--terraform-test"],
+                ["scripts/verify_ops_foundation.sh", "--terraform-test"],
                 cwd=root,
                 check=False,
                 capture_output=True,
@@ -811,7 +812,7 @@ output "unreviewed_sensitive_value" {
             environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
             environment["UV_ARGS_FILE"] = str(args_file)
             result = subprocess.run(
-                ["bash", "scripts/verify_ops_foundation.sh", "--governance-live"],
+                ["scripts/verify_ops_foundation.sh", "--governance-live"],
                 cwd=root,
                 check=False,
                 capture_output=True,
@@ -1380,13 +1381,175 @@ data "terraform_remote_state" "escape" # parser-bypass
 
 
 class LiveShellGuardTests(unittest.TestCase):
-    def _run_helper(self, body: str) -> subprocess.CompletedProcess[str]:
+    @staticmethod
+    def _unsigned_live_structure() -> dict[str, object]:
+        return {
+            "schemaVersion": "syshin0116.gcp-admin-iam-evidence/v1",
+            "capturedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "project": {
+                "id": "festive-ally-503605-v7",
+                "number": "72919926064",
+            },
+            "ancestors": [
+                {
+                    "scope": "organizations/987654321",
+                    "policy": {"bindings": []},
+                    "rolePermissions": {},
+                }
+            ],
+            "reviewedBindings": [],
+        }
+
+    def _write_unsigned_live_structure(self, directory: str) -> Path:
+        evidence = Path(directory) / "unsigned-structure.json"
+        evidence.write_text(
+            json.dumps(self._unsigned_live_structure()),
+            encoding="utf-8",
+        )
+        evidence.chmod(0o600)
+        return evidence
+
+    def _run_with_fake_gcloud_marker(
+        self,
+        *arguments: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary_dir = root / "bin"
+            binary_dir.mkdir()
+            log_path = root / "gcloud.log"
+            fake_gcloud = binary_dir / "gcloud"
+            fake_gcloud.write_text(
+                """#!/bin/sh
+printf '%s\n' CALLED >>"$FAKE_GCLOUD_LOG"
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o755)
+            environment = {
+                key: value
+                for key, value in os.environ.items()
+                if key != "BASH_ENV"
+                and not key.startswith(
+                    ("BASH_FUNC_", "CLOUDSDK_", "GOOGLE_", "OPS_FOUNDATION_")
+                )
+            }
+            environment.update(
+                {
+                    "FAKE_GCLOUD_LOG": str(log_path),
+                    "PATH": f"{binary_dir}:{environment['PATH']}",
+                }
+            )
+            if extra_env:
+                environment.update(extra_env)
+            result = subprocess.run(
+                ["scripts/verify_ops_foundation.sh", *arguments],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        return result, log
+
+    def test_operational_sourcing_is_rejected(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("OPS_FOUNDATION_TEST_ONLY_SOURCE", None)
         verifier = shlex.quote(str(REPO_ROOT / "scripts/verify_ops_foundation.sh"))
-        return subprocess.run(
+
+        result = subprocess.run(
             [
-                "bash",
+                "/bin/bash",
+                "--noprofile",
+                "--norc",
                 "-c",
-                f"source {verifier} --help >/dev/null\n{body}",
+                f"source {verifier} --help",
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("sourcing this verifier is unsupported", result.stderr)
+
+    def test_test_only_source_override_cannot_activate_the_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary_dir = root / "bin"
+            binary_dir.mkdir()
+            log_path = root / "gcloud.log"
+            hostile_marker = root / "sourced-verifier-became-operational"
+            fake_gcloud = binary_dir / "gcloud"
+            fake_gcloud.write_text(
+                """#!/bin/sh
+printf '%s\n' CALLED >>"$FAKE_GCLOUD_LOG"
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o755)
+            environment = {
+                key: value
+                for key, value in os.environ.items()
+                if key != "BASH_ENV"
+                and not key.startswith(
+                    ("BASH_FUNC_", "CLOUDSDK_", "GOOGLE_", "OPS_FOUNDATION_")
+                )
+            }
+            environment.update(
+                {
+                    "FAKE_GCLOUD_LOG": str(log_path),
+                    "HOSTILE_MARKER": str(hostile_marker),
+                    "OPS_FOUNDATION_TEST_ONLY_SOURCE": "1",
+                    "PATH": f"{binary_dir}:{environment['PATH']}",
+                    "VERIFIER": str(REPO_ROOT / "scripts/verify_ops_foundation.sh"),
+                }
+            )
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    "--noprofile",
+                    "--norc",
+                    "-c",
+                    """
+source "$VERIFIER" --help
+source_status=$?
+if declare -F verify_static_contract >/dev/null ||
+  declare -F verify_live_contract >/dev/null ||
+  declare -p PROJECT_ID >/dev/null 2>&1; then
+  /usr/bin/printf '%s\n' OPERATIONAL >>"$HOSTILE_MARKER"
+fi
+exit "$source_status"
+""",
+                ],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+            hostile_marker_was_written = hostile_marker.exists()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", log)
+        self.assertFalse(hostile_marker_was_written)
+        self.assertNotIn("Usage:", result.stdout + result.stderr)
+        self.assertNotIn("OK:", result.stdout + result.stderr)
+        self.assertIn("sourcing this verifier is unsupported", result.stderr)
+
+    def test_explicit_bash_interpreter_invocation_is_rejected(self) -> None:
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "scripts/verify_ops_foundation.sh",
+                "--static",
             ],
             cwd=REPO_ROOT,
             check=False,
@@ -1394,478 +1557,201 @@ class LiveShellGuardTests(unittest.TestCase):
             text=True,
         )
 
-    @staticmethod
-    def _artifact_metadata() -> dict[str, object]:
-        return {
-            "name": (
-                "projects/festive-ally-503605-v7/locations/us-east4/repositories/agent"
-            ),
-            "dockerConfig": {"immutableTags": False},
-            "cleanupPolicyDryRun": False,
-            "cleanupPolicies": {
-                "delete-after-90-days": {
-                    "id": "delete-after-90-days",
-                    "action": "DELETE",
-                    "condition": {
-                        "tagState": "ANY",
-                        "olderThan": "7776000s",
-                    },
-                },
-                "keep-last-30": {
-                    "id": "keep-last-30",
-                    "action": "KEEP",
-                    "mostRecentVersions": {"keepCount": 30},
-                },
-            },
-        }
-
-    def _run_artifact_metadata(
-        self,
-        metadata: dict[str, object],
-    ) -> subprocess.CompletedProcess[str]:
-        payload = shlex.quote(json.dumps(metadata, separators=(",", ":")))
-        return self._run_helper(
-            f"printf '%s\\n' {payload} | "
-            "verify_artifact_repository_metadata "
-            "agent delete-after-90-days 7776000s keep-last-30 30"
-        )
-
-    def test_artifact_metadata_accepts_exact_active_retention(self) -> None:
-        result = self._run_artifact_metadata(self._artifact_metadata())
-
-        self.assertEqual(0, result.returncode, result.stderr)
-
-    def test_artifact_metadata_rejects_cleanup_and_mutability_drift(self) -> None:
-        mutations: dict[str, Callable[[dict[str, object]], None]] = {
-            "immutable_tags": lambda metadata: metadata["dockerConfig"].__setitem__(
-                "immutableTags", True
-            ),
-            "dry_run": lambda metadata: metadata.__setitem__(
-                "cleanupPolicyDryRun", True
-            ),
-            "delete_age": lambda metadata: metadata["cleanupPolicies"][
-                "delete-after-90-days"
-            ]["condition"].__setitem__("olderThan", "86400s"),
-            "delete_scope": lambda metadata: metadata["cleanupPolicies"][
-                "delete-after-90-days"
-            ]["condition"].__setitem__("tagPrefixes", ["temporary-"]),
-            "keep_count": lambda metadata: metadata["cleanupPolicies"]["keep-last-30"][
-                "mostRecentVersions"
-            ].__setitem__("keepCount", 3),
-            "extra_policy": lambda metadata: metadata["cleanupPolicies"].__setitem__(
-                "unreviewed", {"action": "KEEP"}
-            ),
-        }
-        for name, mutate in mutations.items():
-            with self.subTest(name=name):
-                metadata = self._artifact_metadata()
-                mutate(metadata)
-                result = self._run_artifact_metadata(metadata)
-
-                self.assertNotEqual(0, result.returncode)
-                self.assertIn(
-                    "active cleanup retention policy drifted",
-                    result.stderr,
-                )
-
-    def test_guest_maintenance_schedule_requires_paused_oauth_contract(self) -> None:
-        scheduler = {
-            "name": (
-                "projects/festive-ally-503605-v7/locations/us-east4/"
-                "jobs/agent-guest-maintenance"
-            ),
-            "schedule": "*/15 * * * *",
-            "timeZone": "Etc/UTC",
-            "attemptDeadline": "60s",
-            "state": "PAUSED",
-            "retryConfig": {"retryCount": 0},
-            "httpTarget": {
-                "httpMethod": "POST",
-                "uri": (
-                    "https://run.googleapis.com/v2/projects/"
-                    "festive-ally-503605-v7/locations/us-east4/"
-                    "jobs/agent-maintenance:run"
-                ),
-                "body": "e30=",
-                "headers": {
-                    "Content-Type": "application/json",
-                    "User-Agent": "Google-Cloud-Scheduler",
-                },
-                "oauthToken": {
-                    "serviceAccountEmail": (
-                        "agent-maintenance-scheduler@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    ),
-                    "scope": "https://www.googleapis.com/auth/cloud-platform",
-                },
-            },
-        }
-
-        def run(payload: dict[str, object]) -> subprocess.CompletedProcess[str]:
-            schedule_json = shlex.quote(json.dumps(payload, separators=(",", ":")))
-            return self._run_helper(
-                f"""
-gcloud() {{
-  case "$*" in
-    "scheduler jobs describe agent-guest-maintenance --project $PROJECT_ID --location $REGION --format=json")
-      printf '%s\\n' {schedule_json}
-      ;;
-    "iam service-accounts get-iam-policy $MAINTENANCE_SCHEDULER_SA --project $PROJECT_ID --format=json")
-      printf '%s\\n' '{{"bindings":[]}}'
-      ;;
-    *)
-      printf 'unexpected gcloud call: %s\\n' "$*" >&2
-      return 99
-      ;;
-  esac
-}}
-verify_guest_maintenance_schedule
-"""
-            )
-
-        accepted = run(scheduler)
-        self.assertEqual(0, accepted.returncode, accepted.stderr)
-
-        for field, value in (
-            ("schedule", "*/5 * * * *"),
-            ("attemptDeadline", "600s"),
-            ("state", "ENABLED"),
-        ):
-            with self.subTest(field=field):
-                mutated = json.loads(json.dumps(scheduler))
-                mutated[field] = value
-                rejected = run(mutated)
-                self.assertNotEqual(0, rejected.returncode)
-                self.assertIn("trigger drifted", rejected.stderr)
-
-    def test_every_workload_account_is_forbidden_on_ancestor_policies(self) -> None:
-        accounts = (
-            "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
-            "agent-maintenance-scheduler@festive-ally-503605-v7.iam.gserviceaccount.com",
-        )
-        ancestors = json.dumps(
-            [
-                {"type": "project", "id": "festive-ally-503605-v7"},
-                {"type": "folder", "id": "123"},
-                {"type": "organization", "id": "456"},
-            ],
-            separators=(",", ":"),
-        )
-        for account in accounts:
-            with self.subTest(account=account):
-                policy = json.dumps(
-                    {
-                        "bindings": [
-                            {
-                                "role": "roles/run.admin",
-                                "members": [f"serviceAccount:{account}"],
-                            }
-                        ]
-                    },
-                    separators=(",", ":"),
-                )
-                result = self._run_helper(
-                    "assert_workload_accounts_have_no_direct_roles "
-                    f"{shlex.quote(policy)} folders/123 {shlex.quote(ancestors)}"
-                )
-                self.assertNotEqual(0, result.returncode)
-                self.assertIn(account, result.stderr)
-                self.assertIn("folders/123", result.stderr)
-        accepted = self._run_helper(
-            "assert_workload_accounts_have_no_direct_roles "
-            f"{shlex.quote(json.dumps({'bindings': []}))} organizations/456 "
-            f"{shlex.quote(ancestors)}"
-        )
-        self.assertEqual(0, accepted.returncode, accepted.stderr)
-
-    def test_encompassing_service_account_principal_sets_are_forbidden(self) -> None:
-        ancestors = json.dumps(
-            [
-                {"type": "project", "id": "festive-ally-503605-v7"},
-                {"type": "folder", "id": "123"},
-                {"type": "organization", "id": "456"},
-            ],
-            separators=(",", ":"),
-        )
-        dangerous_members = (
-            "principalSet://cloudresourcemanager.googleapis.com/"
-            "projects/72919926064/type/ServiceAccount",
-            "principalSet://cloudresourcemanager.googleapis.com/"
-            "folders/123/type/ServiceAccount",
-            "principalSet://cloudresourcemanager.googleapis.com/"
-            "organizations/456/type/ServiceAccount",
-        )
-        for member in dangerous_members:
-            with self.subTest(member=member):
-                policy = json.dumps(
-                    {
-                        "bindings": [
-                            {
-                                "role": "roles/logging.viewer",
-                                "members": [member],
-                            }
-                        ]
-                    },
-                    separators=(",", ":"),
-                )
-                result = self._run_helper(
-                    "assert_workload_accounts_have_no_direct_roles "
-                    f"{shlex.quote(policy)} folders/123 {shlex.quote(ancestors)}"
-                )
-                self.assertNotEqual(0, result.returncode)
-                self.assertIn(member, result.stderr)
-                self.assertIn("folders/123", result.stderr)
-
-    def test_unrelated_service_account_principal_sets_remain_reviewable(self) -> None:
-        ancestors = json.dumps(
-            [
-                {"type": "project", "id": "festive-ally-503605-v7"},
-                {"type": "folder", "id": "123"},
-                {"type": "organization", "id": "456"},
-            ],
-            separators=(",", ":"),
-        )
-        unrelated_members = (
-            "principalSet://cloudresourcemanager.googleapis.com/"
-            "projects/999/type/ServiceAccount",
-            "principalSet://cloudresourcemanager.googleapis.com/"
-            "folders/999/type/ServiceAccount",
-            "principalSet://cloudresourcemanager.googleapis.com/"
-            "organizations/999/type/ServiceAccount",
-        )
-        for member in unrelated_members:
-            with self.subTest(member=member):
-                policy = json.dumps(
-                    {
-                        "bindings": [
-                            {
-                                "role": "roles/logging.viewer",
-                                "members": [member],
-                            }
-                        ]
-                    },
-                    separators=(",", ":"),
-                )
-                result = self._run_helper(
-                    "assert_workload_accounts_have_no_direct_roles "
-                    f"{shlex.quote(policy)} folders/123 {shlex.quote(ancestors)}"
-                )
-                self.assertEqual(0, result.returncode, result.stderr)
-
-    def test_workload_role_guard_is_wired_to_every_broad_policy_scope(self) -> None:
-        verifier = (REPO_ROOT / "scripts/verify_ops_foundation.sh").read_text(
-            encoding="utf-8"
-        )
-        self.assertEqual(
-            2,
-            verifier.count("assert_workload_accounts_have_no_direct_roles \\"),
-        )
-        self.assertIn(
-            '"projects/${PROJECT_ID}" \\\n    "$ancestors_json"',
-            verifier,
-        )
-        self.assertIn("assert_policy_binding_pairs_exactly \\", verifier)
-        self.assertIn(
-            '"${ancestor_type}s/${ancestor_id}" \\\n      "$ancestors_json"',
-            verifier,
-        )
-
-    def test_project_key_scan_checks_accounts_outside_the_managed_nine(self) -> None:
-        legacy_account = "legacy@festive-ally-503605-v7.iam.gserviceaccount.com"
-        inventory = json.dumps(
-            [
-                {
-                    "email": "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-                },
-                {
-                    "email": (
-                        "agent-preview-runtime@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-preview-deployer@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-prod-deployer@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-image-builder@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-preview-image-builder@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-preview-migrator@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-prod-migrator@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-maintenance-scheduler@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {"email": legacy_account},
-            ],
-            separators=(",", ":"),
-        )
-        result = self._run_helper(
-            f"""
-gcloud() {{
-  case "$*" in
-    "iam service-accounts list --project $PROJECT_ID --format=json")
-      printf '%s\\n' {shlex.quote(inventory)}
-      ;;
-    iam\\ service-accounts\\ describe\\ *)
-      return 0
-      ;;
-    *"iam service-accounts keys list"*"{legacy_account}"*)
-      printf '%s\\n' projects/example/serviceAccounts/legacy/keys/user-key
-      ;;
-    iam\\ service-accounts\\ keys\\ list\\ *)
-      return 0
-      ;;
-    *)
-      printf 'unexpected gcloud call: %s\\n' "$*" >&2
-      return 99
-      ;;
-  esac
-}}
-verify_project_has_no_user_managed_service_account_keys
-"""
-        )
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn(f"user-managed key exists for {legacy_account}", result.stderr)
-
-    def test_project_key_scan_requires_all_managed_accounts(self) -> None:
-        incomplete_inventory = json.dumps(
-            [{"email": "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"}],
-            separators=(",", ":"),
-        )
-        result = self._run_helper(
-            f"""
-gcloud() {{
-  case "$*" in
-    "iam service-accounts list --project $PROJECT_ID --format=json")
-      printf '%s\\n' {shlex.quote(incomplete_inventory)}
-      ;;
-    *)
-      return 99
-      ;;
-  esac
-}}
-verify_project_has_no_user_managed_service_account_keys
-"""
-        )
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
-            "managed workload service account is absent from project inventory",
+            "'bash script' is not a supported security boundary",
             result.stderr,
         )
 
-    def test_project_key_scan_accepts_complete_keyless_inventory(self) -> None:
-        inventory = json.dumps(
-            [
-                {
-                    "email": "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
-                },
-                {
-                    "email": (
-                        "agent-preview-runtime@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-preview-deployer@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-prod-deployer@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-image-builder@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-preview-image-builder@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-preview-migrator@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-prod-migrator@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-                {
-                    "email": (
-                        "agent-maintenance-scheduler@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                    )
-                },
-            ],
-            separators=(",", ":"),
+    def test_live_verifier_contains_no_gcp_execution_surface(self) -> None:
+        verifier = (REPO_ROOT / "scripts/verify_ops_foundation.sh").read_text(
+            encoding="utf-8"
         )
-        result = self._run_helper(
-            f"""
-gcloud() {{
-  case "$*" in
-    "iam service-accounts list --project $PROJECT_ID --format=json")
-      printf '%s\\n' {shlex.quote(inventory)}
-      ;;
-    iam\\ service-accounts\\ describe\\ *|iam\\ service-accounts\\ keys\\ list\\ *)
-      return 0
-      ;;
-    *)
-      return 99
-      ;;
-  esac
-}}
-verify_project_has_no_user_managed_service_account_keys
-"""
+        self.assertNotIn("gcloud", verifier.casefold())
+        self.assertNotIn("CLOUDSDK_", verifier)
+        self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", verifier)
+        self.assertNotIn("GOOGLE_CLOUD_PROJECT", verifier)
+        self.assertNotIn("OPS_FOUNDATION_GCLOUD_ACCOUNT", verifier)
+        self.assertNotIn("OPS_FOUNDATION_TEST_ONLY_SOURCE", verifier)
+        self.assertNotIn("resolve_gcloud_binary", verifier)
+        self.assertNotIn("is_allowed_gcloud_command", verifier)
+        self.assertNotIn("verify_cloud_run_service", verifier)
+        self.assertNotIn(
+            "verify_project_has_no_user_managed_service_account_keys", verifier
         )
+        self.assertEqual(
+            1,
+            verifier.count(
+                "verify_live_contract() {\n"
+                "  verify_offline_admin_evidence_structure\n"
+                '  fail "BLOCKED: trusted company-admin attestation is not configured"\n'
+                "}\n"
+            ),
+        )
+
+    def test_no_argument_mode_defaults_to_static_without_gcloud(self) -> None:
+        result, log = self._run_with_fake_gcloud_marker()
+
         self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", log)
+        self.assertIn(
+            "credential-free Terraform security contract verified",
+            result.stdout,
+        )
+
+    def test_multiple_mode_arguments_fail_before_dispatch(self) -> None:
+        for arguments in (("--help", "--live"), ("--static", "--live")):
+            with self.subTest(arguments=arguments):
+                result, log = self._run_with_fake_gcloud_marker(*arguments)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", log)
+                self.assertNotIn("OK:", result.stdout + result.stderr)
+                self.assertIn("at most one mode argument", result.stderr)
+
+    def test_direct_live_ignores_exported_functions_and_bash_env(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary_dir = root / "bin"
+            binary_dir.mkdir()
+            log_path = root / "gcloud.log"
+            hostile_marker = root / "hostile-environment-was-used"
+            fake_gcloud = binary_dir / "gcloud"
+            fake_gcloud.write_text(
+                """#!/bin/sh
+printf '%s\n' CALLED >>"$FAKE_GCLOUD_LOG"
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_gcloud.chmod(0o755)
+            hostile_bash_env = root / "hostile-bash-env"
+            hostile_bash_env.write_text(
+                ("/usr/bin/printf '%s\\n' BASH_ENV_LOADED >>\"$HOSTILE_MARKER\"\n"),
+                encoding="utf-8",
+            )
+            evidence = self._write_unsigned_live_structure(directory)
+            environment = {
+                key: value
+                for key, value in os.environ.items()
+                if key != "BASH_ENV"
+                and not key.startswith(
+                    ("BASH_FUNC_", "CLOUDSDK_", "GOOGLE_", "OPS_FOUNDATION_")
+                )
+            }
+            environment.update(
+                {
+                    "FAKE_GCLOUD_LOG": str(log_path),
+                    "HOSTILE_BASH_ENV": str(hostile_bash_env),
+                    "HOSTILE_MARKER": str(hostile_marker),
+                    "OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence),
+                    "PATH": f"{binary_dir}:{environment['PATH']}",
+                    "VERIFIER": str(REPO_ROOT / "scripts/verify_ops_foundation.sh"),
+                }
+            )
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    "--noprofile",
+                    "--norc",
+                    "-c",
+                    """
+builtin() {
+  /usr/bin/printf '%s\n' BUILTIN_CALLED >>"$HOSTILE_MARKER"
+  return 0
+}
+exit() {
+  /usr/bin/printf '%s\n' EXIT_CALLED >>"$HOSTILE_MARKER"
+  return 0
+}
+type() {
+  /usr/bin/printf '%s\n' TYPE_CALLED >>"$HOSTILE_MARKER"
+  return 0
+}
+compgen() {
+  /usr/bin/printf '%s\n' COMPGEN_CALLED >>"$HOSTILE_MARKER"
+  return 0
+}
+export -f builtin exit type compgen
+export BASH_ENV="$HOSTILE_BASH_ENV"
+exec "$VERIFIER" --live
+""",
+                ],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", log)
+        self.assertFalse(hostile_marker.exists())
+        self.assertNotIn("OK:", result.stdout + result.stderr)
+        self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
+        self.assertIn(
+            "BLOCKED: trusted company-admin attestation is not configured",
+            result.stderr,
+        )
+
+    def test_explicit_live_validates_structure_then_blocks_without_gcloud(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self._write_unsigned_live_structure(directory)
+            result, log = self._run_with_fake_gcloud_marker(
+                "--live",
+                extra_env={"OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence)},
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", log)
+        self.assertNotIn("OK:", result.stdout + result.stderr)
+        self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
+        self.assertIn(
+            "BLOCKED: trusted company-admin attestation is not configured",
+            result.stderr,
+        )
+
+    def test_structure_only_mode_never_claims_authentication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self._write_unsigned_live_structure(directory)
+            result, log = self._run_with_fake_gcloud_marker(
+                "--offline-admin-evidence-structure",
+                extra_env={"OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence)},
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", log)
+        self.assertNotIn("OK:", result.stdout + result.stderr)
+        self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
+
+    def test_live_missing_evidence_blocks_before_any_gcloud_marker(self) -> None:
+        result, log = self._run_with_fake_gcloud_marker("--live")
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", log)
+        self.assertIn("ADMIN_EVIDENCE_FILE is required", result.stderr)
+
+    def test_live_malformed_or_public_evidence_blocks_before_any_gcloud_marker(
+        self,
+    ) -> None:
+        cases = {
+            "malformed": ('{"schemaVersion":', 0o600, "valid UTF-8 JSON"),
+            "public_mode": ("{}", 0o644, "no group or other permissions"),
+        }
+        for name, (content, mode, expected_error) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                evidence = Path(directory) / "admin-evidence.json"
+                evidence.write_text(content, encoding="utf-8")
+                evidence.chmod(mode)
+                result, log = self._run_with_fake_gcloud_marker(
+                    "--live",
+                    extra_env={"OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence)},
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", log)
+                self.assertIn(expected_error, result.stderr)
 
 
 class StateBucketMetadataTests(unittest.TestCase):
@@ -1886,7 +1772,7 @@ class StateBucketMetadataTests(unittest.TestCase):
         metadata: dict[str, object],
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["bash", "scripts/verify_ops_foundation.sh", "--state-bucket-metadata"],
+            ["scripts/verify_ops_foundation.sh", "--state-bucket-metadata"],
             cwd=REPO_ROOT,
             check=False,
             capture_output=True,

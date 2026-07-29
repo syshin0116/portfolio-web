@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1062,6 +1063,32 @@ REVIEW_REQUIRED_MEMBER_PREFIXES = (
     "principal:",
     "principalSet:",
 )
+OFFLINE_ADMIN_EVIDENCE_SCHEMA = "syshin0116.gcp-admin-iam-evidence/v1"
+OFFLINE_ADMIN_EVIDENCE_MAX_AGE = timedelta(hours=24)
+OFFLINE_ADMIN_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+OFFLINE_ADMIN_EVIDENCE_SAFE_PERMISSION_VERBS = frozenset(
+    {
+        "get",
+        "getIamPolicy",
+        "list",
+        "listEffectiveTags",
+        "listTagBindings",
+        "testIamPermissions",
+    }
+)
+OFFLINE_ADMIN_EVIDENCE_TIMESTAMP = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+)
+FORBIDDEN_INHERITED_MEMBER_PREFIXES = (
+    "group:",
+    "domain:",
+    "deleted:group:",
+    "deleted:domain:",
+)
+RESOURCE_MANAGER_SERVICE_ACCOUNT_SET = re.compile(
+    r"^principalSet://cloudresourcemanager\.googleapis\.com/"
+    r"(?:projects|folders|organizations)/[^/]+/type/ServiceAccount$"
+)
 
 
 class ContractError(ValueError):
@@ -1789,6 +1816,8 @@ def _permission_digest(permissions: Iterable[str]) -> str:
 
 def _normalize_reviewed_bindings(
     raw_bindings: Iterable[Mapping[str, Any]],
+    *,
+    allow_empty: bool = False,
 ) -> dict[tuple[str, str, str], tuple[str | None, str | None]]:
     normalized: dict[
         tuple[str, str, str],
@@ -1857,7 +1886,7 @@ def _normalize_reviewed_bindings(
                 f"scope/role/member triples: {key!r}"
             )
         normalized[key] = (permissions_digest, condition_digest)
-    if count == 0:
+    if count == 0 and not allow_empty:
         _fail("reviewed IAM bindings must be a non-empty JSON array")
     return normalized
 
@@ -1920,12 +1949,22 @@ def _permission_categories(permission: str) -> frozenset[str]:
     return frozenset(categories)
 
 
+def _offline_v1_permission_is_dangerous(permission: str) -> bool:
+    if _permission_categories(permission):
+        return True
+    return (
+        permission.rsplit(".", 1)[-1]
+        not in OFFLINE_ADMIN_EVIDENCE_SAFE_PERMISSION_VERBS
+    )
+
+
 def validate_policy_audit(
     document: Mapping[str, Any],
     *,
     scope: str,
     reviewed_bindings: Iterable[Mapping[str, Any]],
     require_all_bindings: bool = False,
+    allow_empty_reviewed_bindings: bool = False,
 ) -> None:
     policy = _json_object(document.get("policy"), "policy")
     bindings = _policy_bindings(policy)
@@ -1933,7 +1972,10 @@ def validate_policy_audit(
         document.get("rolePermissions"),
         "rolePermissions",
     )
-    reviewed = _normalize_reviewed_bindings(reviewed_bindings)
+    reviewed = _normalize_reviewed_bindings(
+        reviewed_bindings,
+        allow_empty=allow_empty_reviewed_bindings,
+    )
 
     roles = {binding["role"] for binding in bindings}
     if set(role_permissions_raw) != roles:
@@ -2024,6 +2066,380 @@ def validate_policy_audit(
         _fail("; ".join(sorted(set(errors))))
 
 
+def _parse_offline_admin_timestamp(raw_timestamp: Any) -> datetime:
+    if (
+        not isinstance(raw_timestamp, str)
+        or OFFLINE_ADMIN_EVIDENCE_TIMESTAMP.fullmatch(raw_timestamp) is None
+    ):
+        _fail("offline admin evidence capturedAt must be UTC RFC3339 whole seconds")
+    try:
+        return datetime.strptime(raw_timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=UTC
+        )
+    except ValueError as exc:
+        raise ContractError(
+            "offline admin evidence capturedAt must be a real UTC timestamp"
+        ) from exc
+
+
+def _validate_offline_ancestor_document(
+    ancestor: Mapping[str, Any],
+    *,
+    allowed_custom_role_parents: frozenset[str],
+    workload_service_accounts: frozenset[str],
+) -> None:
+    if set(ancestor) != {"policy", "rolePermissions", "scope"}:
+        _fail("offline admin ancestor records must contain exact schema keys")
+
+    policy = _json_object(ancestor["policy"], "offline ancestor policy")
+    if set(policy) != {"bindings"}:
+        _fail("offline admin ancestor policies must contain only bindings")
+    bindings = _json_array(policy["bindings"], "offline ancestor policy bindings")
+    seen_role_members: set[tuple[str, str]] = set()
+    for raw_binding in bindings:
+        binding = _json_object(raw_binding, "offline ancestor IAM binding")
+        if not {"members", "role"} <= set(binding) or not set(binding) <= {
+            "condition",
+            "members",
+            "role",
+        }:
+            _fail("offline ancestor IAM bindings have an invalid schema")
+        role = binding["role"]
+        members = binding["members"]
+        if not isinstance(role, str) or not role or role != role.strip():
+            _fail("offline ancestor IAM roles must be exact non-empty strings")
+        if re.fullmatch(r"roles/[^/]+", role) is None:
+            custom_match = re.fullmatch(
+                r"(projects|organizations)/([^/]+)/roles/[^/]+",
+                role,
+            )
+            if custom_match is None:
+                _fail("offline ancestor IAM role names are unsupported")
+            if custom_match.group(1) == "projects":
+                _fail(
+                    "offline ancestor project custom roles are forbidden in "
+                    "unsigned v1 structure"
+                )
+            custom_parent = f"{custom_match.group(1)}/{custom_match.group(2)}"
+            if custom_parent not in allowed_custom_role_parents:
+                _fail("offline ancestor custom role belongs to an unrelated scope")
+
+        member_values = _json_array(members, "offline ancestor IAM members")
+        if not member_values or not all(
+            isinstance(member, str) and member and member == member.strip()
+            for member in member_values
+        ):
+            _fail("offline ancestor IAM members must be exact non-empty strings")
+        if len(set(member_values)) != len(member_values):
+            _fail("offline ancestor IAM members must not contain duplicates")
+        for member in member_values:
+            role_member = (role, member)
+            if role_member in seen_role_members:
+                _fail("offline ancestor policies contain duplicate role/member pairs")
+            seen_role_members.add(role_member)
+            if member in PUBLIC_MEMBERS:
+                _fail("offline ancestor policies must not contain public members")
+            if member.startswith(FORBIDDEN_INHERITED_MEMBER_PREFIXES):
+                _fail("offline ancestor policies must not contain group/domain members")
+            if member.startswith(("deleted:", "principal:", "principalSet:")):
+                _fail(
+                    "offline ancestor policies must not contain federated, "
+                    "deleted, or opaque principals"
+                )
+            if RESOURCE_MANAGER_SERVICE_ACCOUNT_SET.fullmatch(member) is not None:
+                _fail(
+                    "offline ancestor policies must not contain broad "
+                    "service-account principal sets"
+                )
+            if member in {
+                f"serviceAccount:{service_account}"
+                for service_account in workload_service_accounts
+            }:
+                _fail(
+                    "offline ancestor policies must not grant the target "
+                    "workload accounts direct roles"
+                )
+
+        if "condition" in binding:
+            condition = _json_object(
+                binding["condition"],
+                "offline ancestor IAM condition",
+            )
+            if not {"expression", "title"} <= set(condition) or not set(condition) <= {
+                "description",
+                "expression",
+                "title",
+            }:
+                _fail("offline ancestor IAM conditions have an invalid schema")
+            if not all(
+                isinstance(value, str) and value for value in condition.values()
+            ):
+                _fail("offline ancestor IAM condition fields must be non-empty strings")
+
+    role_permissions = _json_object(
+        ancestor["rolePermissions"],
+        "offline ancestor role permissions",
+    )
+    for role, raw_permissions in role_permissions.items():
+        if not isinstance(role, str) or not role:
+            _fail("offline ancestor role inventory keys must be non-empty strings")
+        permissions = _json_array(
+            raw_permissions,
+            "offline ancestor included permissions",
+        )
+        if not permissions or not all(
+            isinstance(permission, str)
+            and permission
+            and permission == permission.strip()
+            for permission in permissions
+        ):
+            _fail(
+                "offline ancestor role inventories must contain exact "
+                "non-empty permissions"
+            )
+        if len(set(permissions)) != len(permissions):
+            _fail(
+                "offline ancestor role inventories must not contain "
+                "duplicate permissions"
+            )
+        if permissions != sorted(permissions):
+            _fail("offline ancestor role inventories must be sorted")
+        if any(
+            _offline_v1_permission_is_dangerous(permission)
+            for permission in permissions
+        ):
+            _fail(
+                "offline ancestor dangerous inherited permission is forbidden; "
+                "unclassified verbs fail closed in unsigned v1 structure"
+            )
+
+
+def validate_offline_admin_evidence(
+    document: Mapping[str, Any],
+    *,
+    expected_project_id: str,
+    expected_project_number: str,
+    workload_service_accounts: Iterable[str],
+    now: datetime | None = None,
+) -> None:
+    if set(document) != {
+        "ancestors",
+        "capturedAt",
+        "project",
+        "reviewedBindings",
+        "schemaVersion",
+    }:
+        _fail("offline admin evidence must contain exact top-level schema keys")
+    if document["schemaVersion"] != OFFLINE_ADMIN_EVIDENCE_SCHEMA:
+        _fail("offline admin evidence schemaVersion is unsupported")
+
+    project = _json_object(document["project"], "offline admin evidence project")
+    if set(project) != {"id", "number"}:
+        _fail("offline admin evidence project must contain exact id/number keys")
+    if (
+        project["id"] != expected_project_id
+        or project["number"] != expected_project_number
+    ):
+        _fail("offline admin evidence is not bound to the exact target project")
+
+    captured_at = _parse_offline_admin_timestamp(document["capturedAt"])
+    observed_at = now or datetime.now(UTC)
+    if observed_at.tzinfo is None:
+        _fail("offline admin evidence validation time must be timezone-aware")
+    observed_at = observed_at.astimezone(UTC)
+    if captured_at > observed_at:
+        _fail("offline admin evidence capture time is in the future")
+    if observed_at - captured_at > OFFLINE_ADMIN_EVIDENCE_MAX_AGE:
+        _fail("offline admin evidence is stale")
+
+    ancestors = _json_array(document["ancestors"], "offline admin ancestors")
+    if not ancestors:
+        _fail("offline admin evidence must include one declared organization")
+    ancestor_scopes: list[str] = []
+    for raw_ancestor in ancestors:
+        ancestor = _json_object(raw_ancestor, "offline admin ancestor")
+        scope = ancestor.get("scope")
+        if (
+            not isinstance(scope, str)
+            or re.fullmatch(
+                r"(?:folders|organizations)/[1-9][0-9]*",
+                scope,
+            )
+            is None
+        ):
+            _fail("offline admin ancestor scopes must be canonical")
+        ancestor_scopes.append(scope)
+    if len(set(ancestor_scopes)) != len(ancestor_scopes):
+        _fail("offline admin ancestor scopes must not contain duplicates")
+    organization_scopes = [
+        scope for scope in ancestor_scopes if scope.startswith("organizations/")
+    ]
+    if len(ancestors) != 1 or len(organization_scopes) != 1:
+        _fail(
+            "offline admin evidence v1 must contain exactly one declared "
+            "organization and no asserted parent chain"
+        )
+
+    reviewed_bindings = [
+        _json_object(binding, "offline admin reviewed binding")
+        for binding in _json_array(
+            document["reviewedBindings"],
+            "offline admin reviewed bindings",
+        )
+    ]
+    try:
+        normalized_reviewed = _normalize_reviewed_bindings(
+            reviewed_bindings,
+            allow_empty=True,
+        )
+    except ContractError as exc:
+        raise ContractError(
+            "offline admin reviewed binding inventory is invalid"
+        ) from exc
+    if any(key[0] not in set(ancestor_scopes) for key in normalized_reviewed):
+        _fail("offline admin reviewed bindings contain an unrelated scope")
+
+    allowed_custom_role_parents = frozenset(organization_scopes)
+    workload_accounts = frozenset(workload_service_accounts)
+    if not workload_accounts or not all(
+        isinstance(account, str)
+        and account
+        and account == account.strip()
+        and account.endswith(f"@{expected_project_id}.iam.gserviceaccount.com")
+        for account in workload_accounts
+    ):
+        _fail("offline admin workload-account inventory is invalid")
+
+    for raw_ancestor in ancestors:
+        ancestor = _json_object(raw_ancestor, "offline admin ancestor")
+        _validate_offline_ancestor_document(
+            ancestor,
+            allowed_custom_role_parents=allowed_custom_role_parents,
+            workload_service_accounts=workload_accounts,
+        )
+        try:
+            validate_policy_audit(
+                {
+                    "policy": ancestor["policy"],
+                    "rolePermissions": ancestor["rolePermissions"],
+                },
+                scope=ancestor["scope"],
+                reviewed_bindings=reviewed_bindings,
+                require_all_bindings=True,
+                allow_empty_reviewed_bindings=True,
+            )
+        except ContractError as exc:
+            raise ContractError(
+                "offline admin evidence inherited-IAM audit failed"
+            ) from exc
+
+
+def _reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in parsed:
+            _fail("offline admin evidence contains a duplicate JSON key")
+        parsed[key] = value
+    return parsed
+
+
+def _read_offline_admin_evidence_file(
+    path: Path,
+    *,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    if not path.is_absolute():
+        _fail("offline admin evidence path must be absolute")
+    try:
+        path_metadata = os.lstat(path)
+    except OSError as exc:
+        raise ContractError(
+            "offline admin evidence file is missing or unreadable"
+        ) from exc
+    if stat.S_ISLNK(path_metadata.st_mode) or not stat.S_ISREG(path_metadata.st_mode):
+        _fail("offline admin evidence must be a regular non-symlink file")
+    try:
+        resolved_path = path.resolve(strict=True)
+    except OSError as exc:
+        raise ContractError(
+            "offline admin evidence file is missing or unreadable"
+        ) from exc
+    if repo_root is not None and resolved_path.is_relative_to(
+        repo_root.resolve(strict=True)
+    ):
+        _fail(
+            "offline admin evidence must remain outside every Git worktree "
+            "and repository"
+        )
+    if any((parent / ".git").exists() for parent in resolved_path.parents):
+        _fail(
+            "offline admin evidence must remain outside every Git worktree "
+            "and repository"
+        )
+
+    open_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    open_flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, open_flags)
+    except OSError as exc:
+        raise ContractError(
+            "offline admin evidence file is missing or unreadable"
+        ) from exc
+    try:
+        opened_metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(opened_metadata.st_mode) or (
+            opened_metadata.st_dev,
+            opened_metadata.st_ino,
+        ) != (path_metadata.st_dev, path_metadata.st_ino):
+            _fail("offline admin evidence changed during secure open")
+        permissions = stat.S_IMODE(opened_metadata.st_mode)
+        if (
+            opened_metadata.st_uid != os.geteuid()
+            or permissions & ~0o600
+            or permissions & stat.S_IRUSR == 0
+        ):
+            _fail(
+                "offline admin evidence must be owner-read-only/owner-writable "
+                "with no group or other permissions"
+            )
+        if opened_metadata.st_size > OFFLINE_ADMIN_EVIDENCE_MAX_BYTES:
+            _fail("offline admin evidence exceeds the maximum accepted size")
+        with os.fdopen(descriptor, encoding="utf-8") as evidence_stream:
+            descriptor = -1
+            try:
+                parsed = json.load(
+                    evidence_stream,
+                    object_pairs_hook=_reject_duplicate_json_object,
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ContractError(
+                    "offline admin evidence must be valid UTF-8 JSON"
+                ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return _json_object(parsed, "offline admin evidence")
+
+
+def validate_offline_admin_evidence_file(
+    path: Path,
+    *,
+    expected_project_id: str,
+    expected_project_number: str,
+    workload_service_accounts: Iterable[str],
+    repo_root: Path | None = None,
+    now: datetime | None = None,
+) -> None:
+    document = _read_offline_admin_evidence_file(path, repo_root=repo_root)
+    validate_offline_admin_evidence(
+        document,
+        expected_project_id=expected_project_id,
+        expected_project_number=expected_project_number,
+        workload_service_accounts=workload_service_accounts,
+        now=now,
+    )
+
+
 def validate_secret_policy(
     policy: Mapping[str, Any],
     *,
@@ -2078,6 +2494,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     audit.add_argument("--reviewed-bindings-env", required=True)
     audit.add_argument("--require-all-bindings", action="store_true")
 
+    offline_admin = subparsers.add_parser("offline-admin-evidence-structure")
+    offline_admin.add_argument("--evidence-file", type=Path, required=True)
+    offline_admin.add_argument("--repo-root", type=Path, required=True)
+    offline_admin.add_argument("--expected-project-id", required=True)
+    offline_admin.add_argument("--expected-project-number", required=True)
+    offline_admin.add_argument(
+        "--expected-workload-service-account",
+        action="append",
+        required=True,
+    )
+
     secret = subparsers.add_parser("secret-policy")
     secret.add_argument("--expected-member", required=True)
     return parser.parse_args(argv)
@@ -2108,6 +2535,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 require_all_bindings=args.require_all_bindings,
             )
+        elif args.command == "offline-admin-evidence-structure":
+            validate_offline_admin_evidence_file(
+                args.evidence_file,
+                expected_project_id=args.expected_project_id,
+                expected_project_number=args.expected_project_number,
+                workload_service_accounts=args.expected_workload_service_account,
+                repo_root=args.repo_root,
+            )
+            print(
+                "STRUCTURE ONLY / NOT AUTHENTICATED: unsigned v1 declares one "
+                "organization; parent linkage and company-admin origin are unverified."
+            )
+            return 0
         elif args.command == "secret-policy":
             validate_secret_policy(
                 _read_stdin_json(),

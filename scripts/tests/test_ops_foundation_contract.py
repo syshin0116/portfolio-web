@@ -1,20 +1,33 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
+import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from scripts.ops_foundation_contract import (
     EXPECTED_ISSUER,
     EXPECTED_LIVE_ATTRIBUTE_MAPPINGS,
     EXPECTED_LIVE_CONDITIONS,
+    OFFLINE_ADMIN_EVIDENCE_SCHEMA,
     ContractError,
     _json_digest,
     _permission_digest,
     validate_live_wif,
+    validate_offline_admin_evidence,
+    validate_offline_admin_evidence_file,
     validate_policy_audit,
     validate_secret_policy,
     validate_terraform_test_result,
 )
+
+SYNTHETIC_PROJECT_ID = "boundary-test-project"
+SYNTHETIC_PROJECT_NUMBER = "123456789012"
+SYNTHETIC_WORKLOAD_ACCOUNT = f"runtime@{SYNTHETIC_PROJECT_ID}.iam.gserviceaccount.com"
+SYNTHETIC_CAPTURED_AT = datetime(2026, 7, 29, 0, 0, tzinfo=UTC)
 
 
 def _live_provider(provider_id: str) -> dict[str, object]:
@@ -89,6 +102,42 @@ def _reviewed_binding(
     if condition is not None:
         binding["condition_sha256"] = _json_digest(condition)
     return binding
+
+
+def _offline_admin_evidence() -> dict[str, object]:
+    scope = "organizations/987654321"
+    role = "roles/logging.viewer"
+    member = "user:reviewer@example.invalid"
+    permissions = ["logging.logEntries.list"]
+    return {
+        "schemaVersion": OFFLINE_ADMIN_EVIDENCE_SCHEMA,
+        "capturedAt": SYNTHETIC_CAPTURED_AT.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "project": {
+            "id": SYNTHETIC_PROJECT_ID,
+            "number": SYNTHETIC_PROJECT_NUMBER,
+        },
+        "ancestors": [
+            {
+                "scope": scope,
+                "policy": {
+                    "bindings": [
+                        {
+                            "role": role,
+                            "members": [member],
+                        }
+                    ]
+                },
+                "rolePermissions": {role: permissions},
+            }
+        ],
+        "reviewedBindings": [
+            _reviewed_binding(
+                scope=scope,
+                role=role,
+                member=member,
+            )
+        ],
+    }
 
 
 def _terraform_test_records() -> list[dict[str, object]]:
@@ -244,6 +293,365 @@ class LiveWifContractTests(unittest.TestCase):
                     "attributeMapping is not exact",
                 ):
                     validate_live_wif(document)
+
+
+class OfflineAdminEvidenceContractTests(unittest.TestCase):
+    def _validate(self, document: dict[str, object]) -> None:
+        validate_offline_admin_evidence(
+            document,
+            expected_project_id=SYNTHETIC_PROJECT_ID,
+            expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+            workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+            now=SYNTHETIC_CAPTURED_AT + timedelta(hours=1),
+        )
+
+    def _write_private_evidence(self, directory: str, content: str) -> Path:
+        evidence_path = Path(directory) / "admin-evidence.json"
+        evidence_path.write_text(content, encoding="utf-8")
+        evidence_path.chmod(0o600)
+        return evidence_path
+
+    def test_fresh_exact_synthetic_bundle_passes(self) -> None:
+        self._validate(_offline_admin_evidence())
+
+    def test_private_absolute_bundle_file_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_path = self._write_private_evidence(
+                directory,
+                json.dumps(_offline_admin_evidence()),
+            )
+
+            validate_offline_admin_evidence_file(
+                evidence_path,
+                expected_project_id=SYNTHETIC_PROJECT_ID,
+                expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                now=SYNTHETIC_CAPTURED_AT + timedelta(hours=1),
+            )
+
+    def test_missing_bundle_fails_before_schema_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_path = Path(directory) / "missing.json"
+            with self.assertRaisesRegex(
+                ContractError,
+                "missing or unreadable",
+            ):
+                validate_offline_admin_evidence_file(
+                    missing_path,
+                    expected_project_id=SYNTHETIC_PROJECT_ID,
+                    expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                    workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                )
+
+    def test_relative_bundle_path_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ContractError, "path must be absolute"):
+            validate_offline_admin_evidence_file(
+                Path("admin-evidence.json"),
+                expected_project_id=SYNTHETIC_PROJECT_ID,
+                expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+            )
+
+    def test_malformed_bundle_is_rejected_without_echoing_contents(self) -> None:
+        marker = "DO-NOT-ECHO-SYNTHETIC-EVIDENCE"
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_path = self._write_private_evidence(
+                directory,
+                f'{{"{marker}":',
+            )
+            with self.assertRaises(ContractError) as caught:
+                validate_offline_admin_evidence_file(
+                    evidence_path,
+                    expected_project_id=SYNTHETIC_PROJECT_ID,
+                    expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                    workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                )
+
+        self.assertIn("valid UTF-8 JSON", str(caught.exception))
+        self.assertNotIn(marker, str(caught.exception))
+
+    def test_bundle_permissions_reject_group_or_other_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_path = self._write_private_evidence(
+                directory,
+                json.dumps(_offline_admin_evidence()),
+            )
+            evidence_path.chmod(0o640)
+
+            with self.assertRaisesRegex(
+                ContractError,
+                "no group or other permissions",
+            ):
+                validate_offline_admin_evidence_file(
+                    evidence_path,
+                    expected_project_id=SYNTHETIC_PROJECT_ID,
+                    expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                    workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                )
+
+    def test_bundle_symlink_is_rejected_even_when_target_is_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = self._write_private_evidence(
+                directory,
+                json.dumps(_offline_admin_evidence()),
+            )
+            link = Path(directory) / "evidence-link.json"
+            os.symlink(target, link)
+
+            with self.assertRaisesRegex(
+                ContractError,
+                "regular non-symlink",
+            ):
+                validate_offline_admin_evidence_file(
+                    link,
+                    expected_project_id=SYNTHETIC_PROJECT_ID,
+                    expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                    workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                )
+
+    def test_bundle_stale_or_future_capture_time_is_rejected(self) -> None:
+        cases = {
+            "stale": SYNTHETIC_CAPTURED_AT + timedelta(hours=24, seconds=1),
+            "future": SYNTHETIC_CAPTURED_AT - timedelta(seconds=1),
+        }
+        for name, observed_at in cases.items():
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(
+                    ContractError,
+                    "stale|future",
+                ),
+            ):
+                validate_offline_admin_evidence(
+                    _offline_admin_evidence(),
+                    expected_project_id=SYNTHETIC_PROJECT_ID,
+                    expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                    workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                    now=observed_at,
+                )
+
+    def test_bundle_rejects_duplicate_and_unrelated_scopes(self) -> None:
+        duplicate = _offline_admin_evidence()
+        duplicate["ancestors"].append(copy.deepcopy(duplicate["ancestors"][0]))
+        unrelated = _offline_admin_evidence()
+        unrelated["reviewedBindings"][0]["scope"] = "organizations/123123123"
+
+        for name, document in (
+            ("duplicate", duplicate),
+            ("unrelated", unrelated),
+        ):
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(
+                    ContractError,
+                    "duplicate|unrelated",
+                ),
+            ):
+                self._validate(document)
+
+    def test_bundle_rejects_public_group_and_domain_members(self) -> None:
+        for member in (
+            "allUsers",
+            "group:admins@example.invalid",
+            "domain:example.invalid",
+        ):
+            with self.subTest(member=member):
+                document = _offline_admin_evidence()
+                document["ancestors"][0]["policy"]["bindings"][0]["members"] = [member]
+                document["reviewedBindings"][0]["member"] = member
+
+                with self.assertRaisesRegex(
+                    ContractError,
+                    "public|group/domain|reviewed binding inventory",
+                ):
+                    self._validate(document)
+
+    def test_bundle_rejects_every_unreviewed_binding(self) -> None:
+        document = _offline_admin_evidence()
+        document["reviewedBindings"] = []
+
+        with self.assertRaisesRegex(
+            ContractError,
+            "inherited-IAM audit failed",
+        ):
+            self._validate(document)
+
+    def test_bundle_v1_accepts_only_one_declared_organization(self) -> None:
+        document = _offline_admin_evidence()
+        document["ancestors"].insert(
+            0,
+            {
+                "scope": "folders/123456789",
+                "policy": {"bindings": []},
+                "rolePermissions": {},
+            },
+        )
+
+        with self.assertRaisesRegex(
+            ContractError,
+            "exactly one declared organization",
+        ):
+            self._validate(document)
+
+    def test_bundle_rejects_broad_or_direct_workload_principals(self) -> None:
+        members = (
+            (
+                "principalSet://cloudresourcemanager.googleapis.com/"
+                "organizations/987654321/type/ServiceAccount"
+            ),
+            f"serviceAccount:{SYNTHETIC_WORKLOAD_ACCOUNT}",
+        )
+        for member in members:
+            with self.subTest(member=member):
+                document = _offline_admin_evidence()
+                document["ancestors"][0]["policy"]["bindings"][0]["members"] = [member]
+                document["reviewedBindings"][0]["member"] = member
+
+                with self.assertRaisesRegex(
+                    ContractError,
+                    "federated, deleted, or opaque principals|workload accounts",
+                ):
+                    self._validate(document)
+
+    def test_bundle_rejects_all_federated_and_deleted_principal_variants(
+        self,
+    ) -> None:
+        members = (
+            (
+                "principalSet://iam.googleapis.com/projects/72919926064/"
+                "locations/global/workloadIdentityPools/github/*"
+            ),
+            (
+                "deleted:principalSet://iam.googleapis.com/projects/72919926064/"
+                "locations/global/workloadIdentityPools/github/*?uid=123"
+            ),
+            (
+                "principal://iam.googleapis.com/projects/72919926064/"
+                "locations/global/workloadIdentityPools/github/subject/example"
+            ),
+            "deleted:user:former@example.invalid?uid=123",
+            (
+                "deleted:serviceAccount:former@festive-ally-503605-v7."
+                "iam.gserviceaccount.com?uid=123"
+            ),
+        )
+        for member in members:
+            with self.subTest(member=member):
+                document = _offline_admin_evidence()
+                document["ancestors"][0]["policy"]["bindings"][0]["members"] = [member]
+                document["reviewedBindings"][0]["member"] = member
+
+                with self.assertRaisesRegex(
+                    ContractError,
+                    "federated, deleted, or opaque principals",
+                ):
+                    self._validate(document)
+
+    def test_bundle_rejects_custom_role_from_another_project(self) -> None:
+        document = _offline_admin_evidence()
+        unrelated_role = "projects/unrelated-project/roles/operator"
+        binding = document["ancestors"][0]["policy"]["bindings"][0]
+        binding["role"] = unrelated_role
+        document["ancestors"][0]["rolePermissions"] = {
+            unrelated_role: ["iam.serviceAccounts.actAs"]
+        }
+        document["reviewedBindings"][0] = _reviewed_binding(
+            scope="organizations/987654321",
+            role=unrelated_role,
+            member="user:reviewer@example.invalid",
+            permissions=["iam.serviceAccounts.actAs"],
+        )
+
+        with self.assertRaisesRegex(
+            ContractError,
+            "project custom roles are forbidden",
+        ):
+            self._validate(document)
+
+    def test_bundle_rejects_target_project_custom_role_in_ancestor(self) -> None:
+        document = _offline_admin_evidence()
+        target_role = f"projects/{SYNTHETIC_PROJECT_ID}/roles/operator"
+        binding = document["ancestors"][0]["policy"]["bindings"][0]
+        binding["role"] = target_role
+        document["ancestors"][0]["rolePermissions"] = {
+            target_role: ["logging.logEntries.list"]
+        }
+        document["reviewedBindings"][0] = _reviewed_binding(
+            scope="organizations/987654321",
+            role=target_role,
+            member="user:reviewer@example.invalid",
+            permissions=["logging.logEntries.list"],
+        )
+
+        with self.assertRaisesRegex(
+            ContractError,
+            "project custom roles are forbidden",
+        ):
+            self._validate(document)
+
+    def test_bundle_rejects_dangerous_or_unknown_permission_when_reviewed(
+        self,
+    ) -> None:
+        for permission in (
+            "iam.serviceAccounts.actAs",
+            "resourcemanager.projects.delete",
+        ):
+            with self.subTest(permission=permission):
+                document = _offline_admin_evidence()
+                role = "roles/syntheticOperator"
+                document["ancestors"][0]["policy"]["bindings"][0]["role"] = role
+                document["ancestors"][0]["rolePermissions"] = {role: [permission]}
+                document["reviewedBindings"][0] = _reviewed_binding(
+                    scope="organizations/987654321",
+                    role=role,
+                    member="user:reviewer@example.invalid",
+                )
+
+                with self.assertRaisesRegex(
+                    ContractError,
+                    "dangerous inherited permission",
+                ):
+                    self._validate(document)
+
+    def test_bundle_rejects_duplicate_json_keys(self) -> None:
+        serialized = json.dumps(_offline_admin_evidence())
+        duplicated = serialized.replace(
+            '"schemaVersion":',
+            '"schemaVersion":"duplicate.invalid","schemaVersion":',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_path = self._write_private_evidence(directory, duplicated)
+
+            with self.assertRaisesRegex(ContractError, "duplicate JSON key"):
+                validate_offline_admin_evidence_file(
+                    evidence_path,
+                    expected_project_id=SYNTHETIC_PROJECT_ID,
+                    expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                    workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                    now=SYNTHETIC_CAPTURED_AT + timedelta(hours=1),
+                )
+
+    def test_bundle_rejects_git_worktree_location(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            git_root = Path(directory)
+            (git_root / ".git").mkdir()
+            evidence_path = self._write_private_evidence(
+                directory,
+                json.dumps(_offline_admin_evidence()),
+            )
+
+            with self.assertRaisesRegex(
+                ContractError,
+                "outside every Git worktree",
+            ):
+                validate_offline_admin_evidence_file(
+                    evidence_path,
+                    expected_project_id=SYNTHETIC_PROJECT_ID,
+                    expected_project_number=SYNTHETIC_PROJECT_NUMBER,
+                    workload_service_accounts=[SYNTHETIC_WORKLOAD_ACCOUNT],
+                    now=SYNTHETIC_CAPTURED_AT + timedelta(hours=1),
+                )
 
 
 class PolicyAuditContractTests(unittest.TestCase):

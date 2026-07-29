@@ -567,6 +567,23 @@ printf '%s\n' \
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Terraform source content digest is not exact", result.stderr)
 
+    def test_guest_maintenance_scheduler_unpause_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            cloud_run_path = root / "infra/gcp/cloud_run.tf"
+            original = cloud_run_path.read_text(encoding="utf-8")
+            expected = "  paused = true"
+            self.assertEqual(1, original.count(expected))
+            cloud_run_path.write_text(
+                original.replace(expected, "  paused = false", 1),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Terraform source content digest is not exact", result.stderr)
+
     def test_every_previously_unchecked_resource_body_fails_closed(self) -> None:
         mutations = {
             "project_service": (
@@ -1451,7 +1468,7 @@ class LiveShellGuardTests(unittest.TestCase):
                     result.stderr,
                 )
 
-    def test_guest_maintenance_schedule_requires_exact_oauth_contract(self) -> None:
+    def test_guest_maintenance_schedule_requires_paused_oauth_contract(self) -> None:
         scheduler = {
             "name": (
                 "projects/festive-ally-503605-v7/locations/us-east4/"
@@ -1460,7 +1477,7 @@ class LiveShellGuardTests(unittest.TestCase):
             "schedule": "*/15 * * * *",
             "timeZone": "Etc/UTC",
             "attemptDeadline": "60s",
-            "state": "ENABLED",
+            "state": "PAUSED",
             "retryConfig": {"retryCount": 0},
             "httpTarget": {
                 "httpMethod": "POST",
@@ -1512,7 +1529,7 @@ verify_guest_maintenance_schedule
         for field, value in (
             ("schedule", "*/5 * * * *"),
             ("attemptDeadline", "600s"),
-            ("state", "PAUSED"),
+            ("state", "ENABLED"),
         ):
             with self.subTest(field=field):
                 mutated = json.loads(json.dumps(scheduler))

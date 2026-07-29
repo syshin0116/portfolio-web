@@ -67,6 +67,11 @@ guest identity or spend state.
 4. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
    real browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.
+5. Keep the production maintenance Scheduler paused until the owner separately approves
+   public launch and recurring billing. Then land the repository change that activates
+   the Terraform-owned schedule, review its exact dedicated-project plan, apply it, and
+   verify the first bounded maintenance execution. Do not activate it with an
+   untracked console-only toggle.
 
 The web gate first attempts a bodyless cookie resume. A missing or expired
 cookie returns to Turnstile. A successful challenge injects its returned
@@ -82,3 +87,11 @@ guest credential can be minted. Then disable
 secret only when every existing guest cookie must be invalidated; rotate the
 shared agent secret only as a broader incident response because it also
 invalidates owner credentials.
+
+For infrastructure spend containment, follow the delivery runbook's exact project-scoped
+order: freeze future delivery and ordinary Terraform applies, perform this emergency
+close, remove the public invoker and stop the service through a separately approved exact
+project action, then pause Scheduler. Land the matching reviewed Terraform configuration
+before allowing another apply so desired state cannot restore exposure.
+`AGENT_CLOUD_RUN_ENABLED=false` alone is not a kill switch, and no step by itself proves
+zero cost.

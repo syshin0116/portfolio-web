@@ -556,7 +556,7 @@ run "foundation_security_contract" {
       && google_cloud_scheduler_job.guest_maintenance["production"].schedule == "*/15 * * * *"
       && google_cloud_scheduler_job.guest_maintenance["production"].time_zone == "Etc/UTC"
       && google_cloud_scheduler_job.guest_maintenance["production"].attempt_deadline == "60s"
-      && google_cloud_scheduler_job.guest_maintenance["production"].paused == false
+      && google_cloud_scheduler_job.guest_maintenance["production"].paused == true
       && google_cloud_scheduler_job.guest_maintenance["production"].retry_config[0].retry_count == 0
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].http_method == "POST"
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].uri == "https://run.googleapis.com/v2/projects/festive-ally-503605-v7/locations/us-east4/jobs/agent-maintenance:run"
@@ -567,7 +567,7 @@ run "foundation_security_contract" {
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].oauth_token[0].service_account_email == "agent-maintenance-scheduler@festive-ally-503605-v7.iam.gserviceaccount.com"
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].oauth_token[0].scope == "https://www.googleapis.com/auth/cloud-platform"
     )
-    error_message = "Production maintenance must run every 15 minutes through the exact OAuth-authenticated Scheduler-to-Cloud-Run contract."
+    error_message = "Production maintenance must be created paused with the exact 15-minute OAuth-authenticated Scheduler-to-Cloud-Run contract."
   }
 
   assert {

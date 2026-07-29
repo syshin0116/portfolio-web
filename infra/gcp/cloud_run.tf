@@ -468,7 +468,9 @@ resource "google_cloud_scheduler_job" "guest_maintenance" {
   schedule         = "*/15 * * * *"
   time_zone        = "Etc/UTC"
   attempt_deadline = "60s"
-  paused           = false
+  # Fail closed: recurring maintenance requires a separately reviewed
+  # public-launch and billing approval that changes this repository-owned constant.
+  paused = true
 
   retry_config {
     retry_count = 0

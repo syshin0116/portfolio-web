@@ -842,7 +842,7 @@ verify_guest_maintenance_schedule() {
       and .schedule == "*/15 * * * *"
       and .timeZone == "Etc/UTC"
       and .attemptDeadline == "60s"
-      and .state == "ENABLED"
+      and .state == "PAUSED"
       and (.retryConfig.retryCount // 0) == 0
       and .httpTarget.httpMethod == "POST"
       and .httpTarget.uri == $expected_uri
@@ -859,7 +859,7 @@ verify_guest_maintenance_schedule() {
       and .httpTarget.oauthToken.scope == "https://www.googleapis.com/auth/cloud-platform"
       and (.httpTarget | has("oidcToken") | not)
     ' >/dev/null <<<"$job_json" ||
-    fail "Cloud Scheduler guest maintenance trigger drifted from its exact OAuth contract"
+    fail "Cloud Scheduler guest maintenance trigger drifted from its exact paused OAuth contract"
 
   scheduler_policy="$(
     gcloud iam service-accounts get-iam-policy \

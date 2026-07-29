@@ -22,7 +22,7 @@ mutable aliases such as `latest` are forbidden.
   migration URL resource per environment;
 - production and preview Cloud Run services fixed to one instance/one Uvicorn worker;
 - same-image migration, real-Neon runtime-grant, and guest-retention maintenance jobs
-  for each service, with production maintenance invoked every 15 minutes by Cloud Scheduler;
+  for each service, with a production-only 15-minute Cloud Scheduler job created paused;
 - each repository writable only by its matching builder and readable only by its matching
   deployer plus the Cloud Run service agent.
 
@@ -141,12 +141,18 @@ Initial setup is an explicit complete-root progression:
    version map creates only the two migration, two grant-probe, and two maintenance jobs
    plus resource IAM;
 3. after all six jobs pass, `services` adds the two serving surfaces, service IAM, and
-   the production-only 15-minute maintenance schedule.
+   the production-only 15-minute maintenance schedule in the paused state.
 
 Never use `-target` to emulate a stage. After bootstrap, retain `services`, both current
 exact digests, and the complete external version file on every plan; omission proposes
 protected removal and fails closed. Payload injection and version creation remain
 out-of-band.
+
+The Scheduler `paused = true` value is a repository-owned Terraform constant, not an
+operator input. Unpausing requires a separate reviewed code change, exact live plan, and
+explicit public-launch and billing approval. `AGENT_CLOUD_RUN_ENABLED` gates future
+GitHub delivery attempts only; changing it does not pause Scheduler, revoke the public
+invoker, stop a running service, or guarantee zero cost.
 
 The serving model is fixed to Anthropic, so the managed inventory has no OpenAI credential.
 The reviewed `removed` blocks forget any legacy OpenAI secret instances from Terraform
@@ -207,8 +213,10 @@ explicitly approved apply. Live mode requires
 `OPS_FOUNDATION_REVIEWED_STATE_BUCKET_BINDINGS`, each populated with exact JSON
 scope/role/member records from reviewed live policy exports. Custom-role records include
 the complete permission-set digest; conditional records include the condition digest.
-Absence, extra records within an audited scope, or drift fails closed. Secret injection
-and state recovery remain in
+Live mode also requires the production Scheduler to remain `PAUSED` with its exact OAuth
+target; `ENABLED` is drift until the separately approved public-launch change updates the
+repository contract. Absence, extra records within an audited scope, or drift fails
+closed. Secret injection and state recovery remain in
 [`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md).
 Bootstrap, normal delivery, and rollback are in
 [`docs/runbooks/cloud-run-delivery.md`](../../docs/runbooks/cloud-run-delivery.md).

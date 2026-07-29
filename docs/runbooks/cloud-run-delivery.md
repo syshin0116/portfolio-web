@@ -29,6 +29,9 @@ environment, or applies Terraform. Those are explicit external gates. Keep the r
 variable `AGENT_CLOUD_RUN_ENABLED` absent or set to `false` until every bootstrap check
 below passes; both trigger workflows then report a deliberate skip instead of attempting a
 half-configured deployment.
+This variable gates future GitHub delivery attempts only. It does not pause Scheduler,
+remove a Cloud Run invoker, stop an existing service, or otherwise act as a spend kill
+switch.
 
 ## Reviewed topology
 
@@ -58,9 +61,13 @@ production image.
 The dedicated `agent-maintenance-scheduler` identity has no database secret and no
 project-wide role. It receives `roles/run.invoker` only on `agent-maintenance`. The
 production-only `agent-guest-maintenance` Cloud Scheduler job uses OAuth to call the
-Cloud Run Jobs v2 `:run` API every 15 minutes; preview maintenance runs only as part
-of a reviewed preview release. The Google-managed Cloud Scheduler service agent must
-retain `roles/cloudscheduler.serviceAgent` or authenticated schedules fail with 403.
+Cloud Run Jobs v2 `:run` API on a 15-minute schedule, but Terraform creates it paused.
+It remains paused through bootstrap and owner-only operation. Unpausing requires a
+separate reviewed repository change, exact live plan, and explicit public-launch and
+billing approval; no environment variable or console-only toggle owns that desired state.
+Preview maintenance runs only as part of a reviewed preview release. The Google-managed
+Cloud Scheduler service agent must retain `roles/cloudscheduler.serviceAgent` or
+authenticated schedules fail with 403.
 
 The `github` workload-identity pool has one canonical active provider,
 `github-production`. It explicitly maps the immutable numeric repository and owner claims,
@@ -238,8 +245,9 @@ remote state and advance the explicit `agent_delivery_stage` in order:
 
 4. **Services.** Re-plan with `agent_delivery_stage=services`, the same two digests, and
    the same external version file. The only delivery-surface additions are the two
-   services, their resource IAM, and the production-only maintenance schedule. Apply only
-   after both environments' migration, grant probe, and maintenance job passed. Run
+   services, their resource IAM, and the production-only maintenance schedule in the
+   paused state. Reject a plan that starts the schedule. Apply only after both
+   environments' migration, grant probe, and maintenance job passed. Run
    `scripts/verify_ops_foundation.sh --live`, configure and verify
    both GitHub environments, then set `AGENT_CLOUD_RUN_ENABLED=true` and immediately run
    the first reviewed preview and production deliveries. If either fails, set the
@@ -314,6 +322,45 @@ is irreversible, while a keep policy takes precedence over deletion:
 [Artifact Registry cleanup policies](https://cloud.google.com/artifact-registry/docs/repositories/cleanup-policy).
 Changing either age or count is a separate reviewed infrastructure change. Before
 reducing a boundary, inventory revision digests again and first repeat the dry run.
+
+## Cost guard and incident containment
+
+The paused Scheduler prevents unattended 15-minute maintenance during bootstrap, but it
+does not make the stack free. Manually executed jobs, Cloud Run requests, Artifact
+Registry, Secret Manager, logging, Terraform state storage, Neon, and model calls can
+still incur usage or charges. Confirm billing and resource telemetry in the exact
+dedicated project rather than inferring zero cost from an idle service or paused schedule.
+
+Recurring guest maintenance is still part of the intended public anonymous launch.
+After every public wire, spend, retention, browser, and billing gate passes, a separate
+pull request may change the repository-owned Scheduler constant from paused to active.
+The owner must approve that public-launch and billing change and the exact project-scoped
+Terraform plan before apply. Do not introduce a runtime flag that can drift from
+Terraform and silently start recurrence.
+
+For a spend or exposure incident, preserve this exact order:
+
+1. Set `AGENT_CLOUD_RUN_ENABLED=false` to prevent new automated deliveries. Treat this
+   only as delivery containment, not as a kill switch, and freeze every ordinary
+   Terraform apply until the incident configuration change below is reviewed and applied.
+2. Close guest issuance and anonymous agent access with the
+   [public-chat emergency-close procedure](public-anonymous-chat.md#emergency-close).
+   For active spend or exposure, use the separately approved incident action scoped to
+   the exact project and service to remove the public `allUsers` invoker and stop the
+   affected Cloud Run service immediately; do not wait for Scheduler containment first.
+3. Pause `agent-guest-maintenance` and verify the paused state in
+   `festive-ally-503605-v7`; if live state had been activated, reconcile the
+   repository-owned Terraform state in the separately reviewed incident change.
+4. Land and apply the same reviewed repository/configuration change that makes the
+   emergency public-IAM and service state the Terraform desired state. Keep ordinary
+   applies and delivery disabled until that exact change is active; otherwise the next
+   `services` apply can recreate `allUsers` exposure or restart the service. Do not reuse
+   the company account's current default project as the target.
+
+Record the exact service, scheduler, project, and observed in-flight work before and after
+each action. Existing executions and non-compute resources can outlive these controls, so
+verify termination and billing telemetry; never report zero cost solely because this
+sequence completed.
 
 ## Normal delivery
 
@@ -511,3 +558,5 @@ Restore a prior secret version only as a separately reviewed operation.
 - Anonymous visitor access remains a later reviewed production release after ADR-0006's
   isolation, concurrency, retention, and spend gates. An unreviewed preview build never
   becomes the public guest path.
+- The production Scheduler remains paused until a separate public-launch and billing
+  approval changes its repository-owned Terraform constant and applies the exact plan.

@@ -25,6 +25,7 @@ import {
   buildSearchIndex,
 } from "nuartz"
 import { renderMarkdown } from "nuartz/markdown"
+import { applyContentImageOverrides } from "../lib/content-image-overrides"
 import type { Frontmatter, TocEntry } from "nuartz"
 import { isAllowedMediaPath } from "../lib/media"
 
@@ -474,8 +475,10 @@ async function main() {
       ? file.mtime.toLocaleDateString("en-CA")
       : null
 
-    // Rewrite /api/content/ to /blog/api/content/ for the blog prefix
-    const html = result.html.replaceAll("/api/content/", "/blog/api/content/")
+    // Rewrite generated and retired content URLs without modifying source posts.
+    const html = applyContentImageOverrides(
+      result.html.replaceAll("/api/content/", "/blog/api/content/")
+    )
 
     const pageData: PageData = {
       html,

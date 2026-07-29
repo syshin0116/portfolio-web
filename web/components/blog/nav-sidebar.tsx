@@ -5,6 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { getBlogSlug } from "@/lib/blog-path"
 import type { FileTreeNode } from "nuartz"
 
 interface NavSidebarProps {
@@ -13,7 +14,7 @@ interface NavSidebarProps {
 
 export function NavSidebar({ tree }: NavSidebarProps) {
   const pathname = usePathname()
-  const currentSlug = pathname.replace(/^\/blog\//, "")
+  const currentSlug = getBlogSlug(pathname)
 
   return (
     <nav className="space-y-0.5 text-sm">

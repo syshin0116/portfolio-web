@@ -98,6 +98,101 @@ async def _exercise_store_dml() -> None:
         await store.adelete(namespace, key)
 
 
+async def _exercise_guest_quarantine_dml(engine: AsyncEngine) -> None:
+    """Prove the runtime/maintenance credential can own the safety boundary."""
+    suffix = uuid.uuid4().hex
+    run_id = f"grant-probe-run-{suffix}"
+    thread_id = f"grant-probe-thread-{suffix}"
+    identity = f"anon:{uuid.uuid4()}"
+    parameters = {
+        "identity": identity,
+        "run_id": run_id,
+        "thread_id": thread_id,
+    }
+    async with engine.begin() as connection:
+        inserted = await connection.execute(
+            text(
+                """
+                INSERT INTO agent_guest_execution_quarantine (
+                    run_id,
+                    thread_id,
+                    identity,
+                    drained_at
+                )
+                VALUES (
+                    :run_id,
+                    :thread_id,
+                    :identity,
+                    clock_timestamp()
+                )
+                RETURNING run_id, thread_id, identity
+                """
+            ),
+            parameters,
+        )
+        if tuple(inserted.one()) != (run_id, thread_id, identity):
+            raise GrantBoundaryError(
+                "runtime quarantine INSERT result was inconsistent"
+            )
+
+        selected = await connection.execute(
+            text(
+                """
+                SELECT recovered_at, drained_at
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = :run_id
+                    AND thread_id = :thread_id
+                    AND identity = :identity
+                """
+            ),
+            parameters,
+        )
+        recovered_at, drained_at = selected.one()
+        if recovered_at is not None or drained_at is None:
+            raise GrantBoundaryError(
+                "runtime quarantine SELECT result was inconsistent"
+            )
+
+        updated = await connection.execute(
+            text(
+                """
+                UPDATE agent_guest_execution_quarantine
+                SET recovered_at = clock_timestamp()
+                WHERE
+                    run_id = :run_id
+                    AND thread_id = :thread_id
+                    AND identity = :identity
+                RETURNING recovered_at, drained_at
+                """
+            ),
+            parameters,
+        )
+        recovered_at, drained_at = updated.one()
+        if recovered_at is None or drained_at is None:
+            raise GrantBoundaryError(
+                "runtime quarantine UPDATE result was inconsistent"
+            )
+
+        deleted = await connection.execute(
+            text(
+                """
+                DELETE FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = :run_id
+                    AND thread_id = :thread_id
+                    AND identity = :identity
+                RETURNING run_id, thread_id, identity
+                """
+            ),
+            parameters,
+        )
+        if tuple(deleted.one()) != (run_id, thread_id, identity):
+            raise GrantBoundaryError(
+                "runtime quarantine DELETE result was inconsistent"
+            )
+
+
 async def probe_runtime_grants() -> None:
     """Require setup/DML while rejecting cross-schema and role administration."""
     _require_direct_database_url()
@@ -107,6 +202,7 @@ async def probe_runtime_grants() -> None:
         await db_manager.initialize()
         engine = db_manager.get_engine()
         await _exercise_store_dml()
+        await _exercise_guest_quarantine_dml(engine)
         await _require_non_admin_role(engine)
 
         suffix = uuid.uuid4().hex

@@ -75,6 +75,7 @@ from agent.graph import (
     graph,
 )
 from agent.inspection import InspectionEventTransformer
+from agent.run_liveness import GuestExecutionFenceUnavailableError
 from agent.tools import TOOLS
 
 
@@ -285,23 +286,162 @@ async def test_graph_factory_creates_a_fresh_budget_for_every_run(monkeypatch):
 
 async def test_graph_factory_selects_the_guest_policy_before_compilation(monkeypatch):
     captured = []
+    fence_calls = []
+    lifecycle = []
 
     def capture_graph(**kwargs):
+        lifecycle.append("compile")
         captured.append(kwargs)
+        return object()
+
+    class FakeFence:
+        monitor_starts = 0
+
+        def start_owner_monitor(self):
+            lifecycle.append("monitor")
+            self.monitor_starts += 1
+
+        async def aclose(self):
+            raise AssertionError("successful owner monitor must own cleanup")
+
+    fence = FakeFence()
+
+    async def acquire_fence(**kwargs):
+        lifecycle.append("acquire")
+        fence_calls.append(kwargs)
+        return fence
+
+    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setattr("agent.graph.create_graph", capture_graph)
+    monkeypatch.setattr(
+        "agent.graph.acquire_guest_execution_fence",
+        acquire_fence,
+    )
+
+    async with graph(
+        {
+            "configurable": {
+                "run_id": "guest-policy-run",
+                "thread_id": "guest-policy-factory",
+            }
+        },
+        _guest_runtime(),
+    ) as request_graph:
+        assert request_graph is not None
+
+    assert fence_calls == [
+        {
+            "run_id": "guest-policy-run",
+            "thread_id": "guest-policy-factory",
+            "identity": f"anon:{UUID(int=1, version=4)}",
+        }
+    ]
+    assert fence.monitor_starts == 1
+    assert lifecycle == ["acquire", "monitor", "compile"]
+    assert len(captured) == 1
+    assert captured[0]["budget"].policy == GUEST_RUN_BUDGET_POLICY
+    assert captured[0]["quickjs_middleware"].enabled is False
+
+
+async def test_guest_monitor_start_failure_closes_fence_before_compilation(
+    monkeypatch,
+):
+    lifecycle = []
+
+    class FakeFence:
+        def start_owner_monitor(self):
+            lifecycle.append("monitor")
+            raise RuntimeError("monitor could not start")
+
+        async def aclose(self):
+            lifecycle.append("close")
+
+    async def acquire_fence(**_kwargs):
+        lifecycle.append("acquire")
+        return FakeFence()
+
+    def reject_compilation(**_kwargs):
+        lifecycle.append("compile")
+        raise AssertionError("monitor failure must precede graph compilation")
+
+    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setattr("agent.graph.create_graph", reject_compilation)
+    monkeypatch.setattr(
+        "agent.graph.acquire_guest_execution_fence",
+        acquire_fence,
+    )
+
+    with pytest.raises(RuntimeError, match="monitor could not start"):
+        async with graph(
+            {
+                "configurable": {
+                    "run_id": "monitor-start-failure-run",
+                    "thread_id": "monitor-start-failure-thread",
+                }
+            },
+            _guest_runtime(),
+        ):
+            pass
+
+    assert lifecycle == ["acquire", "monitor", "close"]
+
+
+async def test_guest_execution_without_server_run_id_fails_before_graph_compilation(
+    monkeypatch,
+):
+    compiled = False
+
+    def capture_graph(**_kwargs):
+        nonlocal compiled
+        compiled = True
         return object()
 
     monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
     monkeypatch.setattr("agent.graph.create_graph", capture_graph)
 
-    async with graph(
-        {"configurable": {"thread_id": "guest-policy-factory"}},
-        _guest_runtime(),
-    ) as request_graph:
-        assert request_graph is not None
+    with pytest.raises(RuntimeError, match="run, thread, and user identity"):
+        async with graph(
+            {"configurable": {"thread_id": "missing-run-id"}},
+            _guest_runtime(),
+        ):
+            pass
 
-    assert len(captured) == 1
-    assert captured[0]["budget"].policy == GUEST_RUN_BUDGET_POLICY
-    assert captured[0]["quickjs_middleware"].enabled is False
+    assert compiled is False
+
+
+async def test_guest_fence_contention_fails_before_graph_compilation(monkeypatch):
+    compiled = False
+
+    def capture_graph(**_kwargs):
+        nonlocal compiled
+        compiled = True
+        return object()
+
+    async def reject_fence(**_kwargs):
+        raise GuestExecutionFenceUnavailableError(
+            "guest execution liveness fence is already held"
+        )
+
+    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setattr("agent.graph.create_graph", capture_graph)
+    monkeypatch.setattr(
+        "agent.graph.acquire_guest_execution_fence",
+        reject_fence,
+    )
+
+    with pytest.raises(GuestExecutionFenceUnavailableError, match="already held"):
+        async with graph(
+            {
+                "configurable": {
+                    "run_id": "contended-run",
+                    "thread_id": "contended-thread",
+                }
+            },
+            _guest_runtime(),
+        ):
+            pass
+
+    assert compiled is False
 
 
 async def test_aegra_factory_creates_a_fresh_quickjs_tool_session_per_access(

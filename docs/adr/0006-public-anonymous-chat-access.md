@@ -12,7 +12,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-28"
+updated: "2026-07-29"
 owners: ["@syshin0116"]
 refs: [../research/public-exposure.md, ../plans/rag-restack.md, 0004-adopt-aegra.md, 0007-postgres-on-neon-split-projects.md]
 template: adr
@@ -145,6 +145,68 @@ post-dispatch failures remain intentionally charged.
 - Anonymous threads accumulate in a capped free-tier Postgres and need a GC that deletes
   checkpoints explicitly - `runs` cascade from `threads`, **checkpoints do not**, and the
   checkpoint tables are what actually consume the cap.
+- Redis-off local execution has no native crash reaper. Each guest graph execution
+  therefore owns a dedicated unpooled PostgreSQL physical connection and deterministic
+  session advisory lock plus one of four global session-advisory execution slots until
+  Aegra commits terminal run/thread state or its owning execution task ends. Both locks
+  live on the same physical connection and are acquired before graph compilation. This
+  caps guest graph execution across instances and overlapping revisions, while a
+  process-local four-attempt acquisition semaphore bounds transient connection pressure.
+  It does not authorize lifting the single-instance deployment boundary because the
+  process-local traffic limiter remains a separate constraint.
+- The owner monitor starts immediately after lock and slot acquisition, before graph
+  compilation or yield, and spans both compiled-graph execution and the Aegra finalizer.
+  Each monitor races one persistent owner-completion task against a database poll with a
+  two-second query deadline. Its deterministic heartbeat is between one and five seconds,
+  so four occupied slots produce at most four steady-state liveness queries per second.
+  A pending poll is always cancelled and awaited; a poll that does not drain causes the
+  physical connection to be invalidated. This cannot consume the bounded ORM pool needed
+  by concurrent finalizers, and an owner-task failure cannot leave a permanent polling
+  lock.
+- The 15-minute recovery threshold selects candidates, but recovery may mutate only a
+  candidate whose same-key transactional liveness lock and the shared guest-thread lock
+  are both acquired. Its exact `thread`/`runs` recheck uses
+  `FOR UPDATE OF t, r SKIP LOCKED`, so one row-locked candidate cannot stop the rest of a
+  bounded sweep. The recovery and GC `batch_size` values cap successful mutations rather
+  than initial candidates: each materializes at most 2,000 ordered candidates, skips
+  contended or changed rows in advisory-lock-before-row-lock order, and stops at the
+  requested success count of at most 1,000. The independent materialization cap remains
+  finite while leaving room to replace locked head rows even at the maximum success
+  batch. If session loss makes the liveness lock acquirable while its owner still exists,
+  the atomic marker and trigger below fence every late owner write.
+- A terminated PostgreSQL backend necessarily destroys its session lock before the
+  monitor can drain its owner. Recovery therefore writes a namespaced marker into that
+  run's `execution_params` in the same active-to-error UPDATE. Project schema migration
+  `0002_recovered_guest_run_fence` installs a `BEFORE UPDATE` trigger that makes a marked
+  run monotonically terminal. Aegra 0.9.24 updates the run before the thread in one
+  `finalize_run` transaction, so a late success, error, interrupt, worker, or API writer
+  fails before it can overwrite either recovered status. DELETE remains allowed.
+- Project migration `0003_guest_execution_quarantine` adds one durable row keyed by
+  `(run_id, thread_id, identity)`. Recovery writes `recovered_at = clock_timestamp()` in
+  the same transaction as the immutable run marker and released thread; statement time
+  is required because transaction-start `CURRENT_TIMESTAMP` would make a long recovery
+  transaction appear older than it is. An unresolved row has a non-null `recovered_at`
+  and null `drained_at`. Guest `run.start` checks that exact owner/thread boundary while
+  holding the same guest-thread advisory lock and rejects it before ownership, capacity,
+  spend reservation, or dispatch. Both the initial GC candidate read and its exact
+  locked recheck exclude unresolved rows, preventing both deletion and batch starvation.
+- The owner monitor has the same durable ordering invariant on normal and abnormal
+  exits. On a normal owner exit, it first observes the owner task terminal, cancels and
+  awaits any pending database poll, commits `drained_at = clock_timestamp()` through a
+  new bounded unpooled connection, and only then unlocks or invalidates the still-live
+  fence. On fence loss or abnormal monitor termination, it first boundedly cancels and
+  awaits both the Aegra owner and pending poll, then commits the same proof before
+  invalidating any surviving fence. A poll that cannot drain may require fence-session
+  invalidation first; recovery is then fail-closed by an unresolved quarantine until the
+  subsequent proof commits, and a proof-write failure never fabricates resolution. If a
+  proof arrived before recovery, the recovery upsert fills only `recovered_at` and
+  preserves `drained_at`. If a hard process crash leaves no monitor to write the proof,
+  elapsed time never resolves the quarantine: later maintenance sweeps and replacement
+  starts remain blocked until an operator establishes equivalent external drain proof.
+  Once both timestamps exist, a normal follow-up may use a new unmarked `run_id`, and
+  expired-thread GC may again delete checkpoint children before the parent.
+  Maintenance imports both identity and recovery-marker contracts from side-effect-free
+  modules and does not require the runtime authentication secret.
 - LLM spend becomes a function of traffic rather than of one person's usage. The only
   provider-enforced hard stop is the Anthropic org-level spend limit; everything else
   slows the burn.
@@ -163,8 +225,11 @@ post-dispatch failures remain intentionally charged.
 - [ ] `anon` scope route allowlist; strip `configurable.model`; force
       `multitask_strategy="reject"`; fix the seeded default model (P3.4).
 - [ ] Rate limiting registered at or before `main.py:102`, plus provider spend caps (P3.5).
-- [ ] `expires_at` + GC that calls `checkpointer.adelete_thread` first (P3.6).
-- [ ] Prompt hardening, `read_post` truncation, AI-generated disclaimer, privacy note (P3.7).
+- [x] `expires_at` + bounded GC that calls `checkpointer.adelete_thread` first,
+      including session-fenced stale Redis-off guest-run reconciliation (P3.6).
+- [x] Deterministic 16 KiB UTF-8 `read_post` truncation with an explicit marker
+      (P3.7 partial).
+- [ ] Prompt hardening, AI-generated disclaimer, and privacy note (remaining P3.7).
 - [ ] Amend the 2026-07-11 `DECISIONS.md` entry and rewrite the `README.md` paragraph
       claiming an allowed Auth.js session is required.
 
@@ -190,3 +255,12 @@ post-dispatch failures remain intentionally charged.
   recheck and retains it through parent-delete commit; stale, ambiguous, changed,
   unavailable, timed-out, GC-deleted, and contended states fail before reservation or
   conflicting deletion.
+- 2026-07-28: recorded durable guest spend/retention delivery, dedicated session-fenced
+  Redis-off stale-run reconciliation with an immediate whole-owner monitor,
+  cancellation-safe polling, monotonic database-triggered recovery fencing, a 15-minute
+  post-recovery GC grace, secret-free maintenance identity validation, and bounded
+  `read_post` output; P3.7 remains open for user-facing prompt, AI, and privacy copy.
+- 2026-07-29: replaced the time-based post-recovery grace with a durable
+  recovery/drain quarantine, added exact thread-lock and row-lock rechecks, bounded
+  owner/poll races and proof-writer connections, and capped cross-instance guest graph
+  execution with four PostgreSQL session-advisory slots.

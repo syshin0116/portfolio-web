@@ -50,10 +50,20 @@ def _enable_guest_agent(monkeypatch):
         assert timeout_seconds > 0
         yield
 
+    async def no_unresolved_quarantine(*, thread_id, identity):
+        assert isinstance(thread_id, str) and thread_id
+        assert identity.startswith("anon:")
+        return False
+
     monkeypatch.setattr(
         http_extension,
         "guest_thread_advisory_lock",
         no_database_lock,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_has_unresolved_quarantine",
+        no_unresolved_quarantine,
     )
 
 
@@ -2447,6 +2457,122 @@ async def test_busy_native_thread_rejects_guest_before_daily_reservation(
     }
     assert ledger.calls == 0
     assert not called
+
+
+async def test_unresolved_quarantine_rejects_guest_before_ownership_and_spend(
+    monkeypatch,
+):
+    timeline: list[str] = []
+
+    @asynccontextmanager
+    async def thread_lock(_thread_id, *, timeout_seconds):
+        assert timeout_seconds > 0
+        timeline.append("lock")
+        try:
+            yield
+        finally:
+            timeline.append("unlock")
+
+    async def unresolved(*, thread_id, identity):
+        assert thread_id == "guest-thread"
+        assert identity.startswith("anon:")
+        timeline.append("quarantine")
+        return True
+
+    async def forbidden_ownership(_thread_id, _identity):
+        raise AssertionError("quarantine must precede ownership")
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("spend")
+
+    async def downstream(_scope, _receive, _send):
+        timeline.append("schedule")
+
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_advisory_lock",
+        thread_lock,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_has_unresolved_quarantine",
+        unresolved,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        forbidden_ownership,
+    )
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": "conflict",
+        "message": "The prior guest execution is still quarantined",
+    }
+    assert timeline == ["lock", "quarantine", "unlock"]
+
+
+async def test_unavailable_quarantine_read_fails_before_guest_spend(
+    monkeypatch,
+):
+    timeline: list[str] = []
+
+    async def unavailable(**_kwargs):
+        timeline.append("quarantine")
+        raise RuntimeError("database unavailable")
+
+    class Ledger:
+        async def reserve_run(self):
+            timeline.append("spend")
+
+    async def downstream(_scope, _receive, _send):
+        timeline.append("schedule")
+
+    monkeypatch.setattr(
+        http_extension,
+        "guest_thread_has_unresolved_quarantine",
+        unavailable,
+    )
+    app = NativeThreadGuard(
+        GuestRunGuard(
+            downstream,
+            spend_ledger=Ledger(),
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(),
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "service_unavailable",
+        "message": "Guest execution quarantine is unavailable",
+    }
+    assert timeline == ["quarantine"]
 
 
 async def test_accepted_native_thread_reserves_immediately_before_schedule(

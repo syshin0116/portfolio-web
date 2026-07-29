@@ -9,7 +9,7 @@ when_to_read: >
   Singapore database.
 tags: [operations, gcp, neon, workload-identity, cloud-run, secrets, terraform]
 status: stable
-updated: "2026-07-28"
+updated: "2026-07-29"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
@@ -334,10 +334,14 @@ administration, role management, or cross-schema privileges.
 This temporary grant is a deployment gate, not an assumed permission recipe. Before
 preview or production rollout, prove the proposed grants with the actual Neon runtime
 credential: initial startup and restart must complete, checkpoint and store operations
-must pass, and attempts to alter another schema, manage roles, or perform administrative
-operations must fail. Record only the tested grant shape and outcomes. Do not deploy
-until those real-Neon tests pass. Tighten the runtime role to DML-only as soon as Aegra
-offers a supported startup path that skips saver/store schema setup.
+must pass, and the project-owned `agent_guest_execution_quarantine` table must permit
+`SELECT`, `INSERT`, `UPDATE`, and `DELETE` for the shared runtime/maintenance credential.
+The checked-in grant probe exercises that full quarantine CRUD path transactionally;
+missing any operation fails before service promotion. Attempts to alter another schema,
+manage roles, or perform administrative operations must fail. Record only the tested
+grant shape and outcomes. Do not deploy until those real-Neon tests pass. Tighten the
+runtime role to DML-only as soon as Aegra offers a supported startup path that skips
+saver/store schema setup.
 
 1. Confirm or create `syshin0116-agent-prod`.
 2. Create an isolated preview branch and credentials that cannot access the `production`

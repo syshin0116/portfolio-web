@@ -5,17 +5,21 @@ from __future__ import annotations
 import os
 import re
 from typing import Any
-from uuid import RFC_4122, UUID
 
 import jwt
 from langgraph_sdk import Auth
+
+from agent.identity import (
+    ANONYMOUS_PERMISSION,
+    ANONYMOUS_SUBJECT_PREFIX,
+    CANONICAL_ANONYMOUS_SUBJECT_PATTERN,
+    is_anonymous_identity,
+)
 
 TOKEN_ISSUER = "syshin0116.dev"
 TOKEN_AUDIENCE = "agent-api"
 MIN_SECRET_LENGTH = 32
 MAX_SCOPE_LENGTH = 512
-ANONYMOUS_PERMISSION = "anon"
-ANONYMOUS_SUBJECT_PREFIX = "anon:"
 ANONYMOUS_TOKEN_TTL_SECONDS = 300
 _SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9:_-]+$")
 
@@ -40,22 +44,6 @@ def server_anonymous_access_enabled() -> bool:
         return False
     raise RuntimeError(
         "AGENT_ANONYMOUS_ACCESS_ENABLED must be exactly 'true' or 'false'"
-    )
-
-
-def is_anonymous_identity(identity: object) -> bool:
-    """Accept only the canonical ``anon:<uuid4>`` identity minted by the web tier."""
-    if not isinstance(identity, str) or not identity.startswith(
-        ANONYMOUS_SUBJECT_PREFIX
-    ):
-        return False
-    raw_uuid = identity.removeprefix(ANONYMOUS_SUBJECT_PREFIX)
-    try:
-        parsed = UUID(raw_uuid)
-    except (ValueError, AttributeError):
-        return False
-    return (
-        parsed.version == 4 and parsed.variant == RFC_4122 and str(parsed) == raw_uuid
     )
 
 
@@ -156,6 +144,7 @@ __all__ = [
     "ANONYMOUS_PERMISSION",
     "ANONYMOUS_SUBJECT_PREFIX",
     "ANONYMOUS_TOKEN_TTL_SECONDS",
+    "CANONICAL_ANONYMOUS_SUBJECT_PATTERN",
     "MAX_SCOPE_LENGTH",
     "MIN_SECRET_LENGTH",
     "TOKEN_AUDIENCE",

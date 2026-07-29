@@ -56,6 +56,7 @@ from agent.public_wire import (
     GuestStreamLimitError,
     GuestWireProjectionError,
 )
+from agent.quarantine import guest_thread_has_unresolved_quarantine
 
 logger = logging.getLogger(__name__)
 
@@ -1261,6 +1262,42 @@ class NativeThreadGuard:
                     await self(locked_scope, _replay(body), send)
                 finally:
                     await lock_context.__aexit__(None, None, None)
+                return
+
+        if is_guest and command_method == "run.start":
+            try:
+                unresolved_quarantine = await guest_thread_has_unresolved_quarantine(
+                    thread_id=thread_id,
+                    identity=identity,
+                )
+            except Exception as error:
+                logger.error(
+                    "guest quarantine read failed error_type=%s",
+                    type(error).__name__,
+                )
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=503,
+                    content={
+                        "error": "service_unavailable",
+                        "message": "Guest execution quarantine is unavailable",
+                    },
+                    headers={"Retry-After": "1"},
+                )
+                return
+            if unresolved_quarantine:
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=409,
+                    content={
+                        "error": "conflict",
+                        "message": "The prior guest execution is still quarantined",
+                    },
+                )
                 return
 
         owned_or_new, thread_status = await _owned_or_new_thread_status(

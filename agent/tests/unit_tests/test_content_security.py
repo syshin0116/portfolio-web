@@ -6,6 +6,7 @@ import json
 import shutil
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from deepagents.backends import FilesystemBackend
@@ -419,6 +420,71 @@ def test_read_post_rejects_noncanonical_and_out_of_corpus_paths(
 ) -> None:
     for path in ("../secret.md", "/etc/passwd", "AI/docker.md/../draft.md"):
         assert "Published file not found" in tools.read_post.invoke({"path": path})
+
+
+def test_read_post_caps_an_oversized_not_found_response(
+    configured_runtime: ServingRuntime,
+) -> None:
+    del configured_runtime
+
+    output = tools.read_post.invoke({"path": "x" * 20_000})
+
+    assert tools.READ_POST_MAX_OUTPUT_BYTES == 16_384
+    assert output.startswith("[read_post] Published file not found:")
+    assert output.endswith(tools.READ_POST_TRUNCATION_MARKER)
+    assert len(output.encode("utf-8")) == 16_384
+
+
+def test_read_post_cap_uses_the_literal_16_kib_boundary() -> None:
+    exact = "x" * 16_384
+    oversized = "x" * 16_385
+
+    assert tools._cap_read_post_output(exact) == exact
+    truncated = tools._cap_read_post_output(oversized)
+    assert truncated.endswith(tools.READ_POST_TRUNCATION_MARKER)
+    assert len(truncated.encode("utf-8")) == 16_384
+
+
+def test_read_post_caps_total_utf8_output_with_an_explicit_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = SimpleNamespace(
+        doc_id="AI/large.md",
+        title="큰 문서",
+        published_label="2026-07-28",
+        category="AI",
+        tags=("한국어", "RAG"),
+    )
+
+    class LargeRuntime:
+        def entry(self, path: str):
+            assert path == entry.doc_id
+            return entry
+
+        def body(self, doc_id: str):
+            assert doc_id == entry.doc_id
+            return "가나다라마바사" * 2_000
+
+    monkeypatch.setattr(tools, "get_serving_runtime", LargeRuntime)
+
+    first = tools.read_post.invoke({"path": entry.doc_id})
+    second = tools.read_post.invoke({"path": entry.doc_id})
+
+    assert first == second
+    assert first.endswith(tools.READ_POST_TRUNCATION_MARKER)
+    assert first.count(tools.READ_POST_TRUNCATION_MARKER) == 1
+    assert len(first.encode("utf-8")) <= tools.READ_POST_MAX_OUTPUT_BYTES
+    assert "\ufffd" not in first
+
+
+def test_read_post_preserves_short_output_without_a_truncation_marker(
+    configured_runtime: ServingRuntime,
+) -> None:
+    output = tools.read_post.invoke({"path": "AI/docker.md"})
+
+    assert "도커 Docker public-marker." in output
+    assert tools.READ_POST_TRUNCATION_MARKER not in output
+    assert len(output.encode("utf-8")) < tools.READ_POST_MAX_OUTPUT_BYTES
 
 
 @pytest.mark.parametrize(

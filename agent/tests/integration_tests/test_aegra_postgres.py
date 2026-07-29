@@ -9,6 +9,8 @@ import os
 import runpy
 import socket
 import time
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -21,13 +23,16 @@ import uvicorn
 from aegra_api.core import orm as aegra_orm
 from aegra_api.core.database import db_manager
 from aegra_api.models.auth import User
+from aegra_api.models.run_job import RunIdentity, RunJob
 from aegra_api.services import graph_factory
+from aegra_api.services import run_executor as aegra_run_executor
 from aegra_api.services.event_streaming.session import ThreadEventSession
 from aegra_api.services.langgraph_service import (
     LangGraphService,
     create_run_config,
     get_langgraph_service,
 )
+from aegra_api.services.run_status import finalize_run, set_thread_status
 from aegra_api.settings import settings
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
@@ -36,6 +41,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.types import Command, StateSnapshot
 from pydantic import Field
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.responses import JSONResponse
 
 from agent import http as http_extension
@@ -57,9 +65,23 @@ from agent.http import GuestRunGuard, NativeThreadGuard
 from agent.inspection import INSPECTION_EVENT_NAME
 from agent.maintenance import (
     GUEST_RETENTION_POLICY,
+    STALE_GUEST_RUN_ERROR,
     collect_expired_guest_threads,
+    reconcile_stale_guest_runs,
 )
 from agent.migrate import migrate_database
+from agent.recovery import (
+    RECOVERED_GUEST_RUN_FENCE_KEY,
+    RECOVERED_GUEST_RUN_FENCE_VALUE,
+)
+from agent.run_liveness import (
+    GuestExecutionFence,
+    GuestExecutionFenceRejectedError,
+    acquire_guest_execution_fence,
+    guest_execution_lock_key,
+    wait_for_guest_execution_fence_monitors,
+)
+from agent.schema import AgentSchemaMigrationError, migrate_agent_schema
 
 POSTGRES_URL = os.environ.get("AEGRA_POSTGRES_TEST_URL")
 RUN_JS_SDK_E2E = os.environ.get("AEGRA_JS_SDK_E2E") == "1"
@@ -641,6 +663,85 @@ async def test_native_v2_http_interrupt_resume_persists_checkpoint(
         settings.cron.CRON_ENABLED = previous_cron_enabled
 
 
+@pytest.mark.parametrize(
+    ("tamper_statements", "repair_version"),
+    [
+        (
+            (
+                """
+                DROP TRIGGER agent_recovered_guest_run_update_guard
+                ON runs
+                """,
+            ),
+            "0002_recovered_guest_run_fence",
+        ),
+        (
+            (
+                """
+                DROP TRIGGER agent_recovered_guest_run_update_guard
+                ON runs
+                """,
+                """
+                CREATE TRIGGER agent_recovered_guest_run_update_guard
+                BEFORE UPDATE OF claimed_by ON runs
+                FOR EACH ROW
+                EXECUTE FUNCTION agent_reject_recovered_guest_run_update()
+                """,
+            ),
+            "0002_recovered_guest_run_fence",
+        ),
+        (
+            (
+                """
+                DROP INDEX
+                    agent_guest_execution_quarantine_unresolved_idx
+                """,
+            ),
+            "0003_guest_execution_quarantine",
+        ),
+    ],
+    ids=["missing-trigger", "column-scoped-trigger", "missing-quarantine-index"],
+)
+async def test_project_migration_rejects_an_altered_recovery_boundary(
+    tamper_statements,
+    repair_version,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            for statement in tamper_statements:
+                await connection.execute(statement)
+
+        with pytest.raises(
+            AgentSchemaMigrationError,
+            match="recovery fence is missing or altered",
+        ):
+            await migrate_agent_schema(db_manager.get_engine())
+    finally:
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                DELETE FROM agent_schema_migrations
+                WHERE version = %s
+                """,
+                (repair_version,),
+            )
+        await migrate_agent_schema(db_manager.get_engine())
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
 async def test_postgres_migration_factory_static_and_pool_restart_persistence(
     monkeypatch,
 ):
@@ -746,6 +847,7 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
             "store_migrations",
             "agent_schema_migrations",
             "agent_guest_daily_budget",
+            "agent_guest_execution_quarantine",
         } <= tables
         assert len(versions) == 1
 
@@ -1898,6 +2000,1701 @@ async def test_cancelled_guest_command_releases_real_postgres_thread_lock(
             reacquired = True
         assert reacquired is True
     finally:
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_stale_local_guest_runs_are_reconciled_without_touching_live_rows():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    now = datetime.now(UTC)
+    stale = now - timedelta(minutes=40)
+    less_stale = now - timedelta(minutes=30)
+    fresh = now - timedelta(minutes=1)
+
+    target_running = f"stale-running-{unique}"
+    target_pending = f"stale-pending-{unique}"
+    fresh_guest = f"fresh-guest-{unique}"
+    owner_thread = f"owner-stale-{unique}"
+    malformed_guest = f"malformed-guest-{unique}"
+    leased_guest = f"leased-guest-{unique}"
+    mixed_guest = f"mixed-guest-{unique}"
+    wrong_policy_guest = f"wrong-policy-{unique}"
+    thread_ids = (
+        target_running,
+        target_pending,
+        fresh_guest,
+        owner_thread,
+        malformed_guest,
+        leased_guest,
+        mixed_guest,
+        wrong_policy_guest,
+    )
+    subjects = {
+        target_running: f"anon:{uuid4()}",
+        target_pending: f"anon:{uuid4()}",
+        fresh_guest: f"anon:{uuid4()}",
+        owner_thread: "owner",
+        malformed_guest: "anon:not-a-uuid",
+        leased_guest: f"anon:{uuid4()}",
+        mixed_guest: f"anon:{uuid4()}",
+        wrong_policy_guest: f"anon:{uuid4()}",
+    }
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    wrong_retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": "other-policy",
+        }
+    )
+    runs = (
+        (f"run-target-running-{unique}", target_running, "running", stale, None, None),
+        (
+            f"run-target-pending-{unique}",
+            target_pending,
+            "pending",
+            less_stale,
+            None,
+            None,
+        ),
+        (f"run-fresh-{unique}", fresh_guest, "running", fresh, None, None),
+        (f"run-owner-{unique}", owner_thread, "running", stale, None, None),
+        (
+            f"run-malformed-{unique}",
+            malformed_guest,
+            "running",
+            stale,
+            None,
+            None,
+        ),
+        (
+            f"run-leased-{unique}",
+            leased_guest,
+            "running",
+            stale,
+            "redis-worker",
+            stale,
+        ),
+        (f"run-mixed-stale-{unique}", mixed_guest, "running", stale, None, None),
+        (f"run-mixed-fresh-{unique}", mixed_guest, "pending", fresh, None, None),
+        (
+            f"run-wrong-policy-{unique}",
+            wrong_policy_guest,
+            "running",
+            stale,
+            None,
+            None,
+        ),
+    )
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            thread_rows = [
+                (
+                    thread_id,
+                    "busy",
+                    wrong_retention if thread_id == wrong_policy_guest else retention,
+                    subjects[thread_id],
+                    fresh if thread_id == fresh_guest else stale,
+                    fresh if thread_id == fresh_guest else stale,
+                )
+                for thread_id in thread_ids
+            ]
+            async with connection.cursor() as cursor:
+                await cursor.executemany(
+                    """
+                    INSERT INTO thread (
+                        thread_id,
+                        status,
+                        metadata_json,
+                        user_id,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s::jsonb, %s, %s, %s)
+                    """,
+                    thread_rows,
+                )
+                await cursor.executemany(
+                    """
+                    INSERT INTO runs (
+                        run_id,
+                        thread_id,
+                        status,
+                        user_id,
+                        created_at,
+                        updated_at,
+                        claimed_by,
+                        lease_expires_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            run_id,
+                            thread_id,
+                            status,
+                            subjects[thread_id],
+                            updated_at,
+                            updated_at,
+                            claimed_by,
+                            lease_expires_at,
+                        )
+                        for (
+                            run_id,
+                            thread_id,
+                            status,
+                            updated_at,
+                            claimed_by,
+                            lease_expires_at,
+                        ) in runs
+                    ],
+                )
+
+        first = await reconcile_stale_guest_runs(batch_size=1)
+        assert first.lock_acquired is True
+        assert first.reconciled_runs == 1
+        assert first.released_threads == 1
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT t.thread_id, t.status, r.run_id, r.status, r.error_message
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = ANY(%s)
+                """,
+                (list(thread_ids),),
+            )
+            first_rows = {
+                row[2]: (row[0], row[1], row[3], row[4])
+                for row in await cursor.fetchall()
+            }
+
+        assert first_rows[f"run-target-running-{unique}"] == (
+            target_running,
+            "error",
+            "error",
+            STALE_GUEST_RUN_ERROR,
+        )
+        assert first_rows[f"run-target-pending-{unique}"][1:3] == (
+            "busy",
+            "pending",
+        )
+
+        second = await reconcile_stale_guest_runs(batch_size=10)
+        assert second.lock_acquired is True
+        assert second.reconciled_runs == 1
+        assert second.released_threads == 1
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT
+                    t.thread_id,
+                    t.status,
+                    r.run_id,
+                    r.status,
+                    r.error_message,
+                    r.claimed_by
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = ANY(%s)
+                """,
+                (list(thread_ids),),
+            )
+            final_rows = {
+                row[2]: (row[0], row[1], row[3], row[4], row[5])
+                for row in await cursor.fetchall()
+            }
+
+        assert final_rows[f"run-target-pending-{unique}"] == (
+            target_pending,
+            "error",
+            "error",
+            STALE_GUEST_RUN_ERROR,
+            None,
+        )
+        for run_id in (
+            f"run-fresh-{unique}",
+            f"run-owner-{unique}",
+            f"run-malformed-{unique}",
+            f"run-mixed-stale-{unique}",
+            f"run-mixed-fresh-{unique}",
+            f"run-wrong-policy-{unique}",
+        ):
+            expected_status = next(row[2] for row in runs if row[0] == run_id)
+            assert final_rows[run_id][1:4] == (
+                "busy",
+                expected_status,
+                None,
+            )
+        assert final_rows[f"run-leased-{unique}"] == (
+            leased_guest,
+            "busy",
+            "running",
+            None,
+            "redis-worker",
+        )
+    finally:
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = ANY(%s)",
+                (list(thread_ids),),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_live_guest_execution_fence_blocks_reconciliation_until_release():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    thread_id = f"live-fenced-thread-{unique}"
+    run_id = f"live-fenced-run-{unique}"
+    identity = f"anon:{uuid4()}"
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    fence = None
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                (thread_id, retention, identity, stale, stale),
+            )
+            await connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (%s, %s, 'running', %s, %s, %s, NULL, NULL)
+                """,
+                (run_id, thread_id, identity, stale, stale),
+            )
+
+        fence = await acquire_guest_execution_fence(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+
+        while_held = await reconcile_stale_guest_runs(batch_size=10)
+        assert while_held.lock_acquired is True
+        assert while_held.liveness_skipped_runs == 1
+        assert while_held.reconciled_runs == 0
+        assert while_held.released_threads == 0
+        assert while_held.stale_after_seconds == 900
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT t.status, r.status, r.error_message
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = %s AND r.run_id = %s
+                """,
+                (thread_id, run_id),
+            )
+            assert await cursor.fetchone() == ("busy", "running", None)
+
+        await fence.aclose()
+        fence = None
+
+        after_release = await reconcile_stale_guest_runs(batch_size=10)
+        assert after_release.lock_acquired is True
+        assert after_release.liveness_skipped_runs == 0
+        assert after_release.reconciled_runs == 1
+        assert after_release.released_threads == 1
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT t.status, r.status, r.error_message
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = %s AND r.run_id = %s
+                """,
+                (thread_id, run_id),
+            )
+            assert await cursor.fetchone() == (
+                "error",
+                "error",
+                STALE_GUEST_RUN_ERROR,
+            )
+    finally:
+        if fence is not None:
+            await fence.aclose()
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_killed_factory_fence_quarantines_until_durable_owner_drain(
+    monkeypatch,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    run_id = f"killed-factory-run-{unique}"
+    thread_id = f"killed-factory-thread-{unique}"
+    identity = f"anon:{uuid4()}"
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2000-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    acquisition_done = asyncio.Event()
+    graph_entered = asyncio.Event()
+    second_poll_waiting = asyncio.Event()
+    allow_second_poll = asyncio.Event()
+    allow_gap_checkpoint = asyncio.Event()
+    gap_checkpoint_written = asyncio.Event()
+    allow_post_cancel_checkpoint = asyncio.Event()
+    post_cancel_checkpoint_started = asyncio.Event()
+    owner_cancelled = asyncio.Event()
+    fence_ready = asyncio.get_running_loop().create_future()
+    monitor_ready = asyncio.get_running_loop().create_future()
+    owner_task = None
+    monitor = None
+    original_acquire = acquire_guest_execution_fence
+    original_start_monitor = GuestExecutionFence.start_owner_monitor
+    original_execution_is_active = GuestExecutionFence.execution_is_active
+    monitor_poll_count = 0
+
+    async def capture_fence(**kwargs):
+        fence = await original_acquire(**kwargs)
+        backend_pid = (
+            await fence.connection.execute(text("SELECT pg_backend_pid()"))
+        ).scalar_one()
+        await fence.connection.commit()
+        acquisition_done.set()
+        fence_ready.set_result((fence, backend_pid))
+        return fence
+
+    def capture_monitor(fence):
+        monitor_task = original_start_monitor(fence)
+        monitor_ready.set_result(monitor_task)
+        return monitor_task
+
+    async def gate_second_monitor_poll(fence):
+        nonlocal monitor_poll_count
+        if not acquisition_done.is_set():
+            return await original_execution_is_active(fence)
+        monitor_poll_count += 1
+        if monitor_poll_count == 2:
+            second_poll_waiting.set()
+            await allow_second_poll.wait()
+        return await original_execution_is_active(fence)
+
+    def provider_free_graph(**_kwargs):
+        return object()
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                (thread_id, retention, identity, stale, stale),
+            )
+            await connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    execution_params,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    'running',
+                    %s,
+                    %s,
+                    %s,
+                    '{}'::jsonb,
+                    NULL,
+                    NULL
+                )
+                """,
+                (run_id, thread_id, identity, stale, stale),
+            )
+
+        guest = User(identity=identity, permissions=["anon"])
+        config = create_run_config(run_id, thread_id, guest)
+        checkpoint_config = {
+            **config,
+            "configurable": {
+                **config["configurable"],
+                "checkpoint_ns": "",
+            },
+        }
+        runtime = graph_factory.build_server_runtime(
+            access_context="threads.create_run",
+            store=db_manager.get_store(),
+            user=guest,
+            context=None,
+        )
+        checkpointer = db_manager.get_checkpointer()
+        monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+        monkeypatch.setattr(
+            "agent.graph.acquire_guest_execution_fence",
+            capture_fence,
+        )
+        monkeypatch.setattr("agent.graph.create_graph", provider_free_graph)
+        monkeypatch.setattr(
+            GuestExecutionFence,
+            "start_owner_monitor",
+            capture_monitor,
+        )
+        monkeypatch.setattr(
+            GuestExecutionFence,
+            "execution_is_active",
+            gate_second_monitor_poll,
+        )
+
+        async def graph_owner():
+            try:
+                async with production_graph(config, runtime):
+                    graph_entered.set()
+                    await allow_gap_checkpoint.wait()
+                    await checkpointer.aput(
+                        checkpoint_config,
+                        empty_checkpoint(),
+                        {"source": "input", "step": -1, "parents": {}},
+                        {},
+                    )
+                    gap_checkpoint_written.set()
+                    await allow_post_cancel_checkpoint.wait()
+                    post_cancel_checkpoint_started.set()
+                    await checkpointer.aput(
+                        checkpoint_config,
+                        empty_checkpoint(),
+                        {"source": "loop", "step": 0, "parents": {}},
+                        {},
+                    )
+            except asyncio.CancelledError:
+                owner_cancelled.set()
+                raise
+
+        owner_task = asyncio.create_task(graph_owner())
+        _fence, backend_pid = await fence_ready
+        monitor = await monitor_ready
+        async with asyncio.timeout(5):
+            await graph_entered.wait()
+            await second_poll_waiting.wait()
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute("SELECT pg_terminate_backend(%s)", (backend_pid,))
+            assert (await cursor.fetchone())[0] is True
+
+        allow_gap_checkpoint.set()
+        async with asyncio.timeout(5):
+            await gap_checkpoint_written.wait()
+
+        recovered = await reconcile_stale_guest_runs(batch_size=10)
+        assert recovered.liveness_skipped_runs == 0
+        assert recovered.reconciled_runs == 1
+        assert recovered.released_threads == 1
+
+        same_sweep = await collect_expired_guest_threads(batch_size=10)
+        assert same_sweep.deleted_threads == 0
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT
+                    t.status,
+                    r.status,
+                    r.execution_params ->> %s
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = %s AND r.run_id = %s
+                """,
+                (RECOVERED_GUEST_RUN_FENCE_KEY, thread_id, run_id),
+            )
+            assert await cursor.fetchone() == (
+                "error",
+                "error",
+                RECOVERED_GUEST_RUN_FENCE_VALUE,
+            )
+            await cursor.execute(
+                "SELECT count(*) FROM checkpoints WHERE thread_id = %s",
+                (thread_id,),
+            )
+            checkpoint_count_before_cancel = (await cursor.fetchone())[0]
+            assert checkpoint_count_before_cancel >= 1
+            await cursor.execute(
+                """
+                SELECT recovered_at IS NOT NULL, drained_at
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            assert await cursor.fetchone() == (True, None)
+            await cursor.execute(
+                """
+                UPDATE agent_guest_execution_quarantine
+                SET recovered_at = '2000-01-01T00:00:00Z'
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+
+        after_arbitrary_age = await collect_expired_guest_threads(batch_size=10)
+        assert after_arbitrary_age.deleted_threads == 0
+
+        allow_second_poll.set()
+        async with asyncio.timeout(5):
+            await owner_cancelled.wait()
+        with pytest.raises(asyncio.CancelledError):
+            await owner_task
+        with pytest.raises(DBAPIError):
+            await monitor
+        monitor = None
+
+        allow_post_cancel_checkpoint.set()
+        await asyncio.sleep(0)
+        assert post_cancel_checkpoint_started.is_set() is False
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                "SELECT count(*) FROM checkpoints WHERE thread_id = %s",
+                (thread_id,),
+            )
+            assert (await cursor.fetchone())[0] == checkpoint_count_before_cancel
+            await cursor.execute(
+                """
+                SELECT recovered_at, drained_at
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            recovered_at, drained_at = await cursor.fetchone()
+            assert recovered_at is not None
+            assert drained_at is not None
+
+        after_drain_proof = await collect_expired_guest_threads(batch_size=10)
+        assert after_drain_proof.deleted_threads == 1
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            for table, column in (
+                ("thread", "thread_id"),
+                ("runs", "thread_id"),
+                ("checkpoints", "thread_id"),
+                ("checkpoint_blobs", "thread_id"),
+                ("checkpoint_writes", "thread_id"),
+            ):
+                await cursor.execute(
+                    f"SELECT count(*) FROM {table} WHERE {column} = %s",
+                    (thread_id,),
+                )
+                assert (await cursor.fetchone())[0] == 0
+    finally:
+        allow_second_poll.set()
+        allow_gap_checkpoint.set()
+        allow_post_cancel_checkpoint.set()
+        if owner_task is not None and not owner_task.done():
+            owner_task.cancel()
+            with suppress(BaseException):
+                await owner_task
+        if monitor is not None and not monitor.done():
+            monitor.cancel()
+            with suppress(BaseException):
+                await monitor
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        await db_manager.get_checkpointer().adelete_thread(thread_id)
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+@pytest.mark.parametrize("late_outcome", ["success", "error", "cancel"])
+async def test_killed_fence_backend_blocks_each_late_aegra_execute_run_finalizer(
+    monkeypatch,
+    late_outcome,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    run_id = f"killed-fence-{late_outcome}-run-{unique}"
+    replacement_run_id = f"killed-fence-{late_outcome}-replacement-{unique}"
+    thread_id = f"killed-fence-{late_outcome}-thread-{unique}"
+    identity = f"anon:{uuid4()}"
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    owner_cancelled = asyncio.Event()
+    allow_late_finalize = asyncio.Event()
+    monitor_ready = asyncio.get_running_loop().create_future()
+    owner_task = None
+    monitor = None
+    job = RunJob(
+        identity=RunIdentity(
+            run_id=run_id,
+            thread_id=thread_id,
+            graph_id="fixture",
+        ),
+        user=User(identity=identity, permissions=["anon"]),
+    )
+
+    async def controlled_stream(active_job):
+        assert active_job is job
+        fence = await acquire_guest_execution_fence(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+        backend_pid = (
+            await fence.connection.execute(text("SELECT pg_backend_pid()"))
+        ).scalar_one()
+        await fence.connection.commit()
+        monitor_ready.set_result((fence.start_owner_monitor(), backend_pid))
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            owner_cancelled.set()
+            await allow_late_finalize.wait()
+            if late_outcome == "cancel":
+                raise
+        if late_outcome == "error":
+            raise RuntimeError("late graph failure")
+        result = aegra_run_executor._GraphResult()
+        result.data = {"late": True}
+        return result
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                (thread_id, retention, identity, stale, stale),
+            )
+            await connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    execution_params,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (%s, %s, 'pending', %s, %s, %s, %s::jsonb, NULL, NULL)
+                """,
+                (
+                    run_id,
+                    thread_id,
+                    identity,
+                    stale,
+                    stale,
+                    json.dumps(job.to_execution_params()),
+                ),
+            )
+
+        monkeypatch.setattr(aegra_run_executor, "_stream_graph", controlled_stream)
+        monkeypatch.setattr(aegra_run_executor, "_best_effort_signal", no_op)
+        monkeypatch.setattr(aegra_run_executor, "_signal_run_done", no_op)
+        monkeypatch.setattr(
+            aegra_run_executor.streaming_service,
+            "cleanup_run",
+            no_op,
+        )
+        owner_task = asyncio.create_task(aegra_run_executor.execute_run(job))
+        monitor, backend_pid = await monitor_ready
+        assert isinstance(backend_pid, int)
+
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                UPDATE runs
+                SET updated_at = %s
+                WHERE run_id = %s
+                """,
+                (stale, run_id),
+            )
+            await connection.execute(
+                """
+                UPDATE thread
+                SET updated_at = %s
+                WHERE thread_id = %s
+                """,
+                (stale, thread_id),
+            )
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute("SELECT pg_terminate_backend(%s)", (backend_pid,))
+            assert (await cursor.fetchone())[0] is True
+
+        async with asyncio.timeout(5):
+            await owner_cancelled.wait()
+        assert not owner_task.done()
+        assert not monitor.done()
+
+        recovered = await reconcile_stale_guest_runs(batch_size=10)
+        assert recovered.liveness_skipped_runs == 0
+        assert recovered.reconciled_runs == 1
+        assert recovered.released_threads == 1
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT
+                    t.status,
+                    r.status,
+                    r.error_message,
+                    r.execution_params ->> %s
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = %s AND r.run_id = %s
+                """,
+                (RECOVERED_GUEST_RUN_FENCE_KEY, thread_id, run_id),
+            )
+            assert await cursor.fetchone() == (
+                "error",
+                "error",
+                STALE_GUEST_RUN_ERROR,
+                RECOVERED_GUEST_RUN_FENCE_VALUE,
+            )
+
+        allow_late_finalize.set()
+        with pytest.raises(DBAPIError, match="recovered guest run is immutable"):
+            await owner_task
+        with pytest.raises(DBAPIError):
+            await monitor
+        monitor = None
+
+        maker = aegra_orm.get_session_maker()
+        async with maker() as session:
+            await set_thread_status(session, thread_id, "busy")
+            await session.commit()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    execution_params
+                )
+                VALUES (%s, %s, 'running', %s, '{}'::jsonb)
+                """,
+                (replacement_run_id, thread_id, identity),
+            )
+
+        await finalize_run(
+            replacement_run_id,
+            thread_id,
+            status="success",
+            thread_status="idle",
+            output={"replacement": True},
+        )
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT t.status, old.status, replacement.status
+                FROM thread AS t
+                JOIN runs AS old
+                    ON old.thread_id = t.thread_id AND old.run_id = %s
+                JOIN runs AS replacement
+                    ON replacement.thread_id = t.thread_id
+                    AND replacement.run_id = %s
+                WHERE t.thread_id = %s
+                """,
+                (run_id, replacement_run_id, thread_id),
+            )
+            assert await cursor.fetchone() == ("idle", "error", "success")
+    finally:
+        allow_late_finalize.set()
+        if owner_task is not None and not owner_task.done():
+            owner_task.cancel()
+            with suppress(BaseException):
+                await owner_task
+        if monitor is not None and not monitor.done():
+            monitor.cancel()
+            with suppress(BaseException):
+                await monitor
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_cancelled_monitor_quarantines_until_live_owner_is_drained():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    run_id = f"cancelled-monitor-run-{unique}"
+    thread_id = f"cancelled-monitor-thread-{unique}"
+    identity = f"anon:{uuid4()}"
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    owner_cancelled = asyncio.Event()
+    allow_owner_finalize = asyncio.Event()
+    monitor_ready = asyncio.get_running_loop().create_future()
+    owner_task = None
+    monitor = None
+
+    async def cancelled_aegra_owner():
+        fence = await acquire_guest_execution_fence(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+        monitor_ready.set_result(fence.start_owner_monitor())
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            owner_cancelled.set()
+            await allow_owner_finalize.wait()
+        await finalize_run(
+            run_id,
+            thread_id,
+            status="interrupted",
+            thread_status="idle",
+            output={},
+        )
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                (thread_id, retention, identity, stale, stale),
+            )
+            await connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    execution_params,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (%s, %s, 'running', %s, %s, %s, '{}'::jsonb, NULL, NULL)
+                """,
+                (run_id, thread_id, identity, stale, stale),
+            )
+
+        owner_task = asyncio.create_task(cancelled_aegra_owner())
+        monitor = await monitor_ready
+        monitor.cancel()
+        async with asyncio.timeout(5):
+            await owner_cancelled.wait()
+
+        while_draining = await reconcile_stale_guest_runs(batch_size=10)
+        assert while_draining.liveness_skipped_runs == 0
+        assert while_draining.reconciled_runs == 1
+        assert while_draining.released_threads == 1
+        assert not owner_task.done()
+        assert not monitor.done()
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT recovered_at IS NOT NULL, drained_at
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            assert await cursor.fetchone() == (True, None)
+
+        allow_owner_finalize.set()
+        with pytest.raises(DBAPIError, match="recovered guest run is immutable"):
+            await owner_task
+        with pytest.raises(asyncio.CancelledError):
+            await monitor
+        monitor = None
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT
+                    t.status,
+                    r.status,
+                    r.error_message,
+                    quarantine.recovered_at IS NOT NULL,
+                    quarantine.drained_at IS NOT NULL
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                JOIN agent_guest_execution_quarantine AS quarantine
+                    ON quarantine.run_id = r.run_id
+                    AND quarantine.thread_id = r.thread_id
+                    AND quarantine.identity = r.user_id
+                WHERE t.thread_id = %s AND r.run_id = %s
+                """,
+                (thread_id, run_id),
+            )
+            status_row = await cursor.fetchone()
+            assert status_row[:2] == ("error", "error")
+            assert status_row[2] == STALE_GUEST_RUN_ERROR
+            assert status_row[3:] == (True, True)
+            await cursor.execute(
+                "SELECT pg_try_advisory_lock(%s)",
+                (
+                    guest_execution_lock_key(
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        identity=identity,
+                    ),
+                ),
+            )
+            assert (await cursor.fetchone())[0] is True
+    finally:
+        allow_owner_finalize.set()
+        if owner_task is not None and not owner_task.done():
+            owner_task.cancel()
+            with suppress(BaseException):
+                await owner_task
+        if monitor is not None and not monitor.done():
+            monitor.cancel()
+            with suppress(BaseException):
+                await monitor
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_dedicated_fences_leave_size_two_orm_pool_for_finalizers():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    executions = tuple(
+        (
+            f"pool-two-run-{index}-{unique}",
+            f"pool-two-thread-{index}-{unique}",
+            f"anon:{uuid4()}",
+        )
+        for index in range(2)
+    )
+    begin_finalization = asyncio.Event()
+    owner_tasks: list[asyncio.Task[None]] = []
+    monitors: list[asyncio.Task[None]] = []
+    owner_monitors_active = False
+
+    async def fenced_finalizer(
+        run_id: str,
+        thread_id: str,
+        identity: str,
+        monitor_ready: asyncio.Future[asyncio.Task[None]],
+    ) -> None:
+        fence = await acquire_guest_execution_fence(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+        monitor_ready.set_result(fence.start_owner_monitor())
+        await begin_finalization.wait()
+        await finalize_run(
+            run_id,
+            thread_id,
+            status="success",
+            thread_status="idle",
+            output={"completed": True},
+        )
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        await db_manager.get_engine().dispose()
+        db_manager.engine = create_async_engine(
+            settings.db.database_url,
+            pool_size=2,
+            max_overflow=0,
+            pool_timeout=0.2,
+            pool_pre_ping=True,
+            connect_args={"prepared_statement_cache_size": 0},
+        )
+        aegra_orm.async_session_maker = None
+        shared_pool = db_manager.get_engine().pool
+        assert shared_pool.size() == 2
+        assert shared_pool._max_overflow == 0
+        assert shared_pool.timeout() == 0.2
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.executemany(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                [
+                    (thread_id, retention, identity, stale, stale)
+                    for _run_id, thread_id, identity in executions
+                ],
+            )
+            await cursor.executemany(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (%s, %s, 'running', %s, %s, %s, NULL, NULL)
+                """,
+                [
+                    (run_id, thread_id, identity, stale, stale)
+                    for run_id, thread_id, identity in executions
+                ],
+            )
+
+        monitor_futures = [
+            asyncio.get_running_loop().create_future() for _execution in executions
+        ]
+        owner_tasks = [
+            asyncio.create_task(
+                fenced_finalizer(
+                    run_id,
+                    thread_id,
+                    identity,
+                    monitor_ready,
+                )
+            )
+            for (run_id, thread_id, identity), monitor_ready in zip(
+                executions,
+                monitor_futures,
+                strict=True,
+            )
+        ]
+        monitors = list(await asyncio.gather(*monitor_futures))
+        owner_monitors_active = True
+        begin_finalization.set()
+
+        async with asyncio.timeout(2):
+            await asyncio.gather(*owner_tasks)
+            await asyncio.gather(*monitors)
+        owner_monitors_active = False
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT t.thread_id, t.status, r.run_id, r.status
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = ANY(%s)
+                ORDER BY t.thread_id
+                """,
+                ([thread_id for _run_id, thread_id, _identity in executions],),
+            )
+            rows = await cursor.fetchall()
+            assert {(row[1], row[3]) for row in rows} == {("idle", "success")}
+            assert len(rows) == 2
+            for run_id, thread_id, identity in executions:
+                lock_key = guest_execution_lock_key(
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    identity=identity,
+                )
+                await cursor.execute(
+                    "SELECT pg_try_advisory_lock(%s)",
+                    (lock_key,),
+                )
+                assert (await cursor.fetchone())[0] is True
+                await cursor.execute(
+                    "SELECT pg_advisory_unlock(%s)",
+                    (lock_key,),
+                )
+                assert (await cursor.fetchone())[0] is True
+    finally:
+        begin_finalization.set()
+        for owner_task in owner_tasks:
+            if not owner_task.done():
+                owner_task.cancel()
+        if owner_tasks:
+            await asyncio.gather(*owner_tasks, return_exceptions=True)
+        if owner_monitors_active:
+            async with await psycopg.AsyncConnection.connect(
+                POSTGRES_URL
+            ) as connection:
+                await connection.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'error', updated_at = CURRENT_TIMESTAMP
+                    WHERE run_id = ANY(%s)
+                    """,
+                    ([run_id for run_id, _thread_id, _identity in executions],),
+                )
+                await connection.execute(
+                    """
+                    UPDATE thread
+                    SET status = 'error', updated_at = CURRENT_TIMESTAMP
+                    WHERE thread_id = ANY(%s)
+                    """,
+                    ([thread_id for _run_id, thread_id, _identity in executions],),
+                )
+            async with asyncio.timeout(5):
+                await wait_for_guest_execution_fence_monitors()
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = ANY(%s)",
+                ([thread_id for _run_id, thread_id, _identity in executions],),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_owner_failure_releases_active_fence_for_stale_recovery():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    run_id = f"failed-owner-run-{unique}"
+    thread_id = f"failed-owner-thread-{unique}"
+    identity = f"anon:{uuid4()}"
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    allow_owner_failure = asyncio.Event()
+    monitor_ready = asyncio.get_running_loop().create_future()
+    owner_task = None
+    monitor = None
+
+    async def failed_aegra_owner():
+        fence = await acquire_guest_execution_fence(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+        monitor_ready.set_result(fence.start_owner_monitor())
+        await allow_owner_failure.wait()
+        raise RuntimeError("Aegra finalizer failed before terminal commit")
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                (thread_id, retention, identity, stale, stale),
+            )
+            await connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (%s, %s, 'running', %s, %s, %s, NULL, NULL)
+                """,
+                (run_id, thread_id, identity, stale, stale),
+            )
+
+        owner_task = asyncio.create_task(failed_aegra_owner())
+        monitor = await monitor_ready
+        lock_key = guest_execution_lock_key(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+            assert (await cursor.fetchone())[0] is False
+        assert not owner_task.done()
+        assert not monitor.done()
+
+        allow_owner_failure.set()
+        with pytest.raises(RuntimeError, match="finalizer failed"):
+            await owner_task
+        async with asyncio.timeout(2):
+            await monitor
+        monitor = None
+
+        recovered = await reconcile_stale_guest_runs(batch_size=10)
+        assert recovered.lock_acquired is True
+        assert recovered.liveness_skipped_runs == 0
+        assert recovered.reconciled_runs == 1
+        assert recovered.released_threads == 1
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT t.status, r.status, r.error_message
+                FROM thread AS t
+                JOIN runs AS r ON r.thread_id = t.thread_id
+                WHERE t.thread_id = %s AND r.run_id = %s
+                """,
+                (thread_id, run_id),
+            )
+            assert await cursor.fetchone() == (
+                "error",
+                "error",
+                STALE_GUEST_RUN_ERROR,
+            )
+            await cursor.execute(
+                """
+                SELECT recovered_at IS NOT NULL, drained_at IS NOT NULL
+                FROM agent_guest_execution_quarantine
+                WHERE
+                    run_id = %s
+                    AND thread_id = %s
+                    AND identity = %s
+                """,
+                (run_id, thread_id, identity),
+            )
+            assert await cursor.fetchone() == (True, True)
+            await cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+            assert (await cursor.fetchone())[0] is True
+            await cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+            assert (await cursor.fetchone())[0] is True
+    finally:
+        allow_owner_failure.set()
+        if owner_task is not None and not owner_task.done():
+            with suppress(RuntimeError):
+                await owner_task
+        if monitor is not None and not monitor.done():
+            async with asyncio.timeout(5):
+                await monitor
+        if db_manager.engine is None:
+            await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id = %s",
+                (thread_id,),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_aegra_factory_keeps_the_guest_fence_until_terminal_commit(
+    monkeypatch,
+):
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    graph_id = f"guest-finalizer-{unique}"
+    thread_id = f"finalizer-fenced-thread-{unique}"
+    run_id = f"finalizer-fenced-run-{unique}"
+    identity = f"anon:{uuid4()}"
+    stale = datetime.now(UTC) - timedelta(minutes=40)
+    retention = json.dumps(
+        {
+            "guest_expires_at": "2999-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+    graph_factory_returned = asyncio.Event()
+    allow_terminal_commit = asyncio.Event()
+    owner_task: asyncio.Task[None] | None = None
+    owner_monitor_active = False
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (
+                    thread_id,
+                    status,
+                    metadata_json,
+                    user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, 'busy', %s::jsonb, %s, %s, %s)
+                """,
+                (thread_id, retention, identity, stale, stale),
+            )
+            await connection.execute(
+                """
+                INSERT INTO runs (
+                    run_id,
+                    thread_id,
+                    status,
+                    user_id,
+                    created_at,
+                    updated_at,
+                    claimed_by,
+                    lease_expires_at
+                )
+                VALUES (%s, %s, 'running', %s, %s, %s, NULL, NULL)
+                """,
+                (run_id, thread_id, identity, stale, stale),
+            )
+
+        guest = User(identity=identity, permissions=["anon"])
+        config = create_run_config(run_id, thread_id, guest)
+        service = _factory_service(production_graph, graph_id=graph_id)
+        model = ToolCapableFakeModel(
+            responses=[AIMessage(content="provider-free guest factory proof")]
+        )
+        monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+        monkeypatch.setattr(
+            "agent.graph._bounded_guest_model",
+            lambda _model_spec: model,
+        )
+        lock_key = guest_execution_lock_key(
+            run_id=run_id,
+            thread_id=thread_id,
+            identity=identity,
+        )
+
+        async def aegra_owner() -> None:
+            async with service.get_graph(
+                graph_id,
+                config=config,
+                user=guest,
+            ) as guest_graph:
+                assert guest_graph is not None
+            graph_factory_returned.set()
+            await allow_terminal_commit.wait()
+            async with await psycopg.AsyncConnection.connect(
+                POSTGRES_URL
+            ) as connection:
+                await connection.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'success', updated_at = CURRENT_TIMESTAMP
+                    WHERE run_id = %s AND thread_id = %s AND user_id = %s
+                    """,
+                    (run_id, thread_id, identity),
+                )
+                await connection.execute(
+                    """
+                    UPDATE thread
+                    SET status = 'idle', updated_at = CURRENT_TIMESTAMP
+                    WHERE thread_id = %s AND user_id = %s
+                    """,
+                    (thread_id, identity),
+                )
+
+        owner_task = asyncio.create_task(aegra_owner())
+        async with asyncio.timeout(5):
+            await graph_factory_returned.wait()
+        owner_monitor_active = True
+
+        during_finalization = await reconcile_stale_guest_runs(batch_size=10)
+        assert during_finalization.liveness_skipped_runs == 1
+        assert during_finalization.reconciled_runs == 0
+        assert during_finalization.released_threads == 0
+
+        allow_terminal_commit.set()
+        async with asyncio.timeout(5):
+            await owner_task
+            await wait_for_guest_execution_fence_monitors()
+        owner_monitor_active = False
+
+        with pytest.raises(
+            GuestExecutionFenceRejectedError,
+            match="no longer active",
+        ):
+            async with service.get_graph(
+                graph_id,
+                config=config,
+                user=guest,
+            ):
+                pass
+
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+            assert (await cursor.fetchone())[0] is True
+            await cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+            assert (await cursor.fetchone())[0] is True
+    finally:
+        allow_terminal_commit.set()
+        if owner_task is not None and not owner_task.done():
+            owner_task.cancel()
+            with suppress(BaseException):
+                await owner_task
+        if owner_monitor_active:
+            async with await psycopg.AsyncConnection.connect(
+                POSTGRES_URL
+            ) as connection:
+                await connection.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'error', updated_at = CURRENT_TIMESTAMP
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                await connection.execute(
+                    """
+                    UPDATE thread
+                    SET status = 'error', updated_at = CURRENT_TIMESTAMP
+                    WHERE thread_id = %s
+                    """,
+                    (thread_id,),
+                )
+            async with asyncio.timeout(5):
+                await wait_for_guest_execution_fence_monitors()
+        graph_factory.clear_factory_registry(graph_id)
         if db_manager.engine is None:
             await db_manager.initialize()
         async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:

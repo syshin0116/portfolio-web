@@ -303,6 +303,10 @@ def copy_local_governance_fixture(directory: str) -> Path:
         REPO_ROOT / governance.UPSTREAM_VERSION_AUDIT_SCRIPT,
         upstream_audit,
     )
+    for relative in governance.VERCEL_PRODUCTION_OBSERVER_FILES_SHA256:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / relative, target)
     return root
 
 
@@ -425,6 +429,71 @@ class LocalGovernanceTests(unittest.TestCase):
 
         self.assertTrue(
             any("cannot be read as strict JSON" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_production_observer_rejects_workflow_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / governance.VERCEL_PRODUCTION_WORKFLOW
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "contents: read",
+                "contents: write",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("exact workflow AST differs" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_production_observer_requires_the_event_deployment_url(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / governance.VERCEL_PRODUCTION_WORKFLOW
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                '            test -n "$EXPECTED_DEPLOYMENT_URL"\n',
+                "",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any("exact workflow AST differs" in error for error in errors),
+            errors,
+        )
+
+    def test_vercel_production_observer_rejects_runtime_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            observer = root / "web/lib/vercel-production-revision.ts"
+            observer.write_text(
+                observer.read_text(encoding="utf-8").replace(
+                    '"production"',
+                    '"preview"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "exact reviewed credential-free Vercel production observer" in error
+                for error in errors
+            ),
             errors,
         )
 

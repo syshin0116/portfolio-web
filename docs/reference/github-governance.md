@@ -9,12 +9,13 @@ when_to_read: >
   dependency and upstream-version audit.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
-updated: "2026-07-29"
+updated: "2026-07-30"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/repository-governance.json
   - ../../.github/workflows/ci.yml
   - ../../.github/workflows/protocol-compat.yml
+  - ../../.github/workflows/vercel-production.yml
   - ../../.github/workflows/wiki-verify.yml
   - ../runbooks/upstream-version-audit.md
   - ../adr/0003-agent-code-changes-via-pr.md
@@ -278,9 +279,31 @@ Vercel Git Integration therefore retains its default behavior: a `main` push is
 eligible for Production deployment and contributor branches remain eligible
 for Preview. The local governance verifier rejects even an empty `git` object,
 any branch-level deployment override, a different schema, duplicate JSON keys,
-and non-standard JSON. This repository contract does not prove that the
-external Vercel project remains linked or that its dashboard settings permit
-deployments; those remain observable delivery state.
+and non-standard JSON.
+
+The canonical public domain is the verified Production project domain
+`syshin0116.vercel.app`, not a one-off deployment alias. Keep Vercel Production's
+**Auto-assign Custom Production Domains** and **Automatically expose System
+Environment Variables** settings enabled. The first setting makes each successful
+`main` Production deployment current on the public domain; the second supplies the
+runtime deployment, project, repository, branch, and SHA identity used by the
+read-only observer.
+
+[`vercel-production.yml`](../../.github/workflows/vercel-production.yml) observes every
+`main` push and every successful Vercel `Production` deployment status. It gives GitHub
+no Vercel token and no write permission. Instead it polls the canonical domain's
+no-store [`/api/deployment-revision`](../../web/app/api/deployment-revision/route.ts)
+response until the runtime Git SHA matches the exact GitHub deployment SHA. For a
+Vercel deployment-status event it also requires the runtime's unique `VERCEL_URL` to
+equal that status's `environment_url`, so an older redeployment of the same commit
+cannot satisfy the check. The endpoint returns 503 unless the Vercel project ID,
+GitHub repository, `main` ref, Production environment, system-variable exposure, and
+runtime identifiers all match the reviewed contract. This detects a staged or stale
+public domain without storing a Vercel secret in GitHub.
+
+The checked-in contract still cannot mutate or fully inventory Vercel dashboard
+settings. A red or missing observer run is an incident to investigate; it is not
+permission for CI to promote, alias, redeploy, or change environment variables.
 
 The image builder runs first through `agent-image-build.yml` without any GitHub
 environment, environment secret, or deployment credential. It can write only to the
@@ -448,11 +471,11 @@ re-resolution or add temporary transitive packages to `package.json`.
    and Vercel runtime/OAuth environment prerequisites independently. Apply the
    same pre-merge gate to every later revision that changes or depends on the
    Auth/Neon contract; automatic delivery is not a database migration gate.
-2. After each merge, inspect that exact merge SHA: expect its automatic Vercel
-   Production deployment and confirm the PR source branch received its routine
-   Preview. These are post-merge live observations; do not create an extra
-   `main` or Preview probe push. Investigate any missing, duplicate, or
-   revision-mismatched deployment before another production merge.
+2. After each merge, require `vercel/production` to observe the exact merge SHA on
+   `syshin0116.vercel.app`; a Vercel deployment-status run must also match its unique
+   deployment URL. Confirm the PR source branch received its routine Preview. Do not
+   create an extra `main` or Preview probe push. Investigate any missing, duplicate,
+   staged, or revision-mismatched deployment before another production merge.
 3. Confirm each required check has reported successfully on `main`.
 4. Confirm the ruleset list is empty and legacy `main` branch protection
    returns the exact unprotected `404`. Create the single main ruleset as

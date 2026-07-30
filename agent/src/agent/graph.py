@@ -255,9 +255,7 @@ def create_graph(
     allow_subagents = not is_guest and dynamic_subagents_allowed(
         runtime,
         server_enabled=(
-            True
-            if dynamic_subagents_enabled is None
-            else dynamic_subagents_enabled
+            True if dynamic_subagents_enabled is None else dynamic_subagents_enabled
         ),
     )
     allow_quickjs = not is_guest and quickjs_allowed(

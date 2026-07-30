@@ -1,13 +1,14 @@
 """Reproducible QuickJS × dynamic-subagent capability experiments.
 
-Capability experiments are deliberately separate from retrieval evaluation.  The
-runner owns the four factorial arms, one real :class:`RunBudget` per task, strict
-scoring, and immutable report bytes.  A caller supplies the provider/agent executor;
-tests use a deterministic no-provider executor.
+Capability experiments are deliberately separate from retrieval evaluation. The runner
+owns the four factorial arms, one real :class:`RunBudget` per attempt, strict scoring,
+and immutable report bytes. A caller supplies the provider/agent executor; tests fake
+only the provider while executing the production graph.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -21,11 +22,14 @@ from dataclasses import asdict, dataclass
 from fcntl import LOCK_EX, LOCK_UN, flock
 from pathlib import Path
 from typing import Any, Protocol, cast
+from uuid import UUID, uuid5
 
 from agent.capabilities.budget import (
     BudgetSnapshot,
     RunBudget,
+    RunBudgetExceededError,
     RunBudgetPolicy,
+    RunBudgetUnsettledError,
 )
 from agent.capabilities.subagents import validate_capability_config
 from agent.retrieval.protocol import DocId
@@ -44,8 +48,8 @@ from blogeval.provenance import (
 )
 
 CAPABILITY_TASKSET_SCHEMA = "blogeval-capability-taskset-v1"
-CAPABILITY_RUN_SCHEMA = "blogeval-capability-run-v1"
-CAPABILITY_RUNNER_ID = "blogeval.capability_runner@1"
+CAPABILITY_RUN_SCHEMA = "blogeval-capability-run-v2"
+CAPABILITY_RUNNER_ID = "blogeval.capability_runner@2"
 CAPABILITY_MANIFEST_SCHEMA = "blogeval-capability-result-manifest-v1"
 CAPABILITY_RESULT_DIGEST_SCHEMA = "blogeval-capability-result-digest-v1"
 CAPABILITY_RESULT_FILES = ("capability-report.md", "run.json")
@@ -56,6 +60,8 @@ _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_DATASET_ID_BYTES = 128
 _MAX_PROMPT_BYTES = 16_000
 _RATE_SCALE = 1_000_000
+_MAX_ATTEMPTS = 3
+_CACHE_MODES = frozenset({"disabled", "anthropic-ephemeral-5m-recorded"})
 _FAILURE_CODES = frozenset(
     {
         "budget_exhausted",
@@ -142,32 +148,66 @@ class CapabilityExecutorIdentity:
     """Stable execution identity and exact model pricing for one sweep."""
 
     executor_id: str
+    execution_id: str
     model_id: str
     random_seed: int
-    input_usd_micros_per_million_tokens: int
+    max_attempts: int
+    cache_mode: str
+    uncached_input_usd_micros_per_million_tokens: int
     output_usd_micros_per_million_tokens: int
+    cache_read_input_usd_micros_per_million_tokens: int
+    cache_write_input_usd_micros_per_million_tokens: int
 
     def __post_init__(self) -> None:
+        try:
+            execution_uuid = UUID(self.execution_id)
+        except (AttributeError, TypeError, ValueError):
+            execution_uuid = None
         if (
             not isinstance(self.executor_id, str)
             or not self.executor_id
             or self.executor_id != self.executor_id.strip()
+            or execution_uuid is None
+            or execution_uuid.version != 4
+            or str(execution_uuid) != self.execution_id
             or not isinstance(self.model_id, str)
             or not self.model_id
             or self.model_id != self.model_id.strip()
             or not _is_non_negative_int(self.random_seed)
-            or not _is_non_negative_int(self.input_usd_micros_per_million_tokens)
+            or not isinstance(self.max_attempts, int)
+            or isinstance(self.max_attempts, bool)
+            or not 1 <= self.max_attempts <= _MAX_ATTEMPTS
+            or not isinstance(self.cache_mode, str)
+            or self.cache_mode not in _CACHE_MODES
+            or not _is_non_negative_int(
+                self.uncached_input_usd_micros_per_million_tokens
+            )
             or not _is_non_negative_int(self.output_usd_micros_per_million_tokens)
+            or not _is_non_negative_int(
+                self.cache_read_input_usd_micros_per_million_tokens
+            )
+            or not _is_non_negative_int(
+                self.cache_write_input_usd_micros_per_million_tokens
+            )
         ):
             raise ValueError("capability executor identity is malformed")
 
     def as_dict(self) -> dict[str, object]:
         return {
+            "cache_mode": self.cache_mode,
+            "execution_id": self.execution_id,
             "executor_id": self.executor_id,
+            "max_attempts": self.max_attempts,
             "model_id": self.model_id,
             "pricing": {
-                "input_usd_micros_per_million_tokens": (
-                    self.input_usd_micros_per_million_tokens
+                "cache_read_input_usd_micros_per_million_tokens": (
+                    self.cache_read_input_usd_micros_per_million_tokens
+                ),
+                "cache_write_input_usd_micros_per_million_tokens": (
+                    self.cache_write_input_usd_micros_per_million_tokens
+                ),
+                "uncached_input_usd_micros_per_million_tokens": (
+                    self.uncached_input_usd_micros_per_million_tokens
                 ),
                 "output_usd_micros_per_million_tokens": (
                     self.output_usd_micros_per_million_tokens
@@ -184,8 +224,8 @@ class CapabilityObservation:
     status: str
     answer: Mapping[str, object] | None
     citations: tuple[DocId, ...]
-    input_tokens: int
-    output_tokens: int
+    persistence_empty: bool
+    cache_mode: str
     failure_code: str | None = None
 
 
@@ -197,6 +237,10 @@ class CapabilityExecutionContext:
     task: CapabilityTask
     budget: RunBudget
     random_seed: int
+    attempt_id: str
+    attempt_number: int
+    thread_id: str
+    graph_run_id: UUID
     run_config: Mapping[str, object]
 
 
@@ -211,6 +255,12 @@ class CapabilityExecutor(Protocol):
 @dataclass(frozen=True, slots=True)
 class CapabilityTaskResult:
     task_id: str
+    attempt_id: str
+    attempt_number: int
+    thread_id: str
+    graph_run_id: str
+    persistence_empty: bool
+    cache_mode: str
     status: str
     answer: Mapping[str, object] | None
     citations: tuple[DocId, ...]
@@ -219,6 +269,8 @@ class CapabilityTaskResult:
     latency_ms: int
     input_tokens: int
     output_tokens: int
+    cache_read_input_tokens: int
+    cache_write_input_tokens: int
     estimated_cost_usd_micros: int
     failure_code: str | None
     budget: BudgetSnapshot
@@ -226,17 +278,25 @@ class CapabilityTaskResult:
     def as_dict(self) -> dict[str, object]:
         return {
             "answer": None if self.answer is None else dict(self.answer),
+            "attempt_id": self.attempt_id,
+            "attempt_number": self.attempt_number,
             "budget": asdict(self.budget),
+            "cache_mode": self.cache_mode,
+            "cache_read_input_tokens": self.cache_read_input_tokens,
+            "cache_write_input_tokens": self.cache_write_input_tokens,
             "citation_correct": self.citation_correct,
             "citations": [str(value) for value in self.citations],
             "estimated_cost_usd_micros": self.estimated_cost_usd_micros,
             "failure_code": self.failure_code,
+            "graph_run_id": self.graph_run_id,
             "input_tokens": self.input_tokens,
             "latency_ms": self.latency_ms,
             "output_tokens": self.output_tokens,
+            "persistence_empty": self.persistence_empty,
             "status": self.status,
             "task_id": self.task_id,
             "task_success": self.task_success,
+            "thread_id": self.thread_id,
         }
 
 
@@ -256,6 +316,8 @@ class CapabilityArmMetrics:
     task_calls: int
     input_tokens: int
     output_tokens: int
+    cache_read_input_tokens: int
+    cache_write_input_tokens: int
     total_tokens: int
     estimated_cost_usd_micros: int
 
@@ -356,6 +418,12 @@ def _integer(value: object, *, location: str) -> int:
     if not _is_non_negative_int(value):
         raise CapabilityEvaluationError(f"{location} must be a non-negative integer")
     return cast(int, value)
+
+
+def _optional_integer(value: object, *, location: str) -> int | None:
+    if value is None:
+        return None
+    return _integer(value, location=location)
 
 
 def _boolean(value: object, *, location: str) -> bool:
@@ -566,6 +634,8 @@ def build_capability_graph(
     *,
     runtime: Any,
     model: Any,
+    input_token_counter: Any | None = None,
+    quickjs_middleware: Any | None = None,
 ):
     """Compile the actual topology-stable agent graph for one server-owned arm."""
 
@@ -576,8 +646,10 @@ def build_capability_graph(
         config=context.run_config,
         budget=context.budget,
         model=model,
+        input_token_counter=input_token_counter,
         quickjs_enabled=context.arm.quickjs_enabled,
-        subagents_enabled=context.arm.subagents_enabled,
+        dynamic_subagents_enabled=context.arm.subagents_enabled,
+        quickjs_middleware=quickjs_middleware,
     )
 
 
@@ -585,27 +657,66 @@ def _derived_seed(
     identity: CapabilityExecutorIdentity,
     arm: CapabilityArm,
     task: CapabilityTask,
+    *,
+    attempt_number: int,
 ) -> int:
     payload = canonical_json_bytes(
         {
             "arm_id": arm.arm_id,
             "executor_id": identity.executor_id,
+            "execution_id": identity.execution_id,
             "random_seed": identity.random_seed,
             "task_id": task.task_id,
+            "attempt_number": attempt_number,
         }
     )
     return int.from_bytes(hashlib.sha256(payload).digest()[:8], byteorder="big")
 
 
-def _thread_id(
+def _attempt_identity(
     identity: CapabilityExecutorIdentity,
     arm: CapabilityArm,
     task: CapabilityTask,
-) -> str:
-    payload = (
-        f"{identity.executor_id}\0{identity.random_seed}\0{arm.arm_id}\0{task.task_id}"
-    ).encode()
-    return f"capability-{hashlib.sha256(payload).hexdigest()[:32]}"
+    *,
+    attempt_number: int,
+) -> tuple[str, str, UUID]:
+    payload = canonical_json_bytes(
+        {
+            "arm_id": arm.arm_id,
+            "attempt_number": attempt_number,
+            "execution_id": identity.execution_id,
+            "executor_id": identity.executor_id,
+            "task_id": task.task_id,
+        }
+    )
+    digest = hashlib.sha256(payload).hexdigest()
+    attempt_id = f"capability-attempt-{digest[:32]}"
+    thread_id = f"capability-thread-{digest[32:]}"
+    graph_run_id = uuid5(UUID(identity.execution_id), digest)
+    return attempt_id, thread_id, graph_run_id
+
+
+_COUNTERBALANCED_ARM_INDEXES = (
+    (0, 1, 3, 2),
+    (1, 2, 0, 3),
+    (2, 3, 1, 0),
+    (3, 0, 2, 1),
+)
+
+
+def _counterbalanced_arms(
+    identity: CapabilityExecutorIdentity,
+    *,
+    task_index: int,
+) -> tuple[CapabilityArm, ...]:
+    row = (identity.random_seed + task_index) % len(_COUNTERBALANCED_ARM_INDEXES)
+    return tuple(CAPABILITY_ARMS[index] for index in _COUNTERBALANCED_ARM_INDEXES[row])
+
+
+def _task_capabilities(task: CapabilityTask) -> tuple[bool, bool]:
+    quickjs_required = "quickjs" in task.tags or "combined" in task.tags
+    subagents_required = "subagents" in task.tags or "combined" in task.tags
+    return quickjs_required, subagents_required
 
 
 def _estimated_cost(
@@ -613,10 +724,16 @@ def _estimated_cost(
     *,
     input_tokens: int,
     output_tokens: int,
+    cache_read_input_tokens: int,
+    cache_write_input_tokens: int,
 ) -> int:
     numerator = (
-        input_tokens * identity.input_usd_micros_per_million_tokens
+        input_tokens * identity.uncached_input_usd_micros_per_million_tokens
         + output_tokens * identity.output_usd_micros_per_million_tokens
+        + cache_read_input_tokens
+        * identity.cache_read_input_usd_micros_per_million_tokens
+        + cache_write_input_tokens
+        * identity.cache_write_input_usd_micros_per_million_tokens
     )
     return (numerator + 999_999) // 1_000_000
 
@@ -626,6 +743,10 @@ def _validate_observation(
     *,
     arm: CapabilityArm,
     task: CapabilityTask,
+    attempt_id: str,
+    attempt_number: int,
+    thread_id: str,
+    graph_run_id: UUID,
     latency_ms: int,
     budget: BudgetSnapshot,
     identity: CapabilityExecutorIdentity,
@@ -636,14 +757,14 @@ def _validate_observation(
         )
     if observation.status not in {"completed", "failed"}:
         raise CapabilityEvaluationError("capability observation status is unsupported")
-    input_tokens = _integer(
-        observation.input_tokens,
-        location="observation.input_tokens",
-    )
-    output_tokens = _integer(
-        observation.output_tokens,
-        location="observation.output_tokens",
-    )
+    if observation.persistence_empty is not True:
+        raise CapabilityEvaluationError(
+            "executor did not verify empty attempt persistence"
+        )
+    if observation.cache_mode != identity.cache_mode:
+        raise CapabilityEvaluationError(
+            "executor cache mode differs from the recorded execution identity"
+        )
     citations = observation.citations
     if (
         not isinstance(citations, tuple)
@@ -655,13 +776,41 @@ def _validate_observation(
         )
     if not budget.policy_id or budget.policy_id != budget.policy_id.strip():
         raise CapabilityEvaluationError("budget snapshot policy is malformed")
-    if budget.quickjs_in_flight != 0 or budget.tasks_in_flight != 0:
+    if budget.finalized is not True:
+        raise CapabilityEvaluationError(
+            "capability result requires a terminal RunBudget snapshot"
+        )
+    if (
+        budget.model_reservations_in_flight != 0
+        or budget.quickjs_in_flight != 0
+        or budget.tasks_in_flight != 0
+    ):
         raise CapabilityEvaluationError(
             "executor returned with an unsettled capability reservation"
         )
-    if budget.charged_tokens != input_tokens + output_tokens:
+    provider_buckets = (
+        budget.provider_input_tokens,
+        budget.provider_output_tokens,
+        budget.provider_cache_read_input_tokens,
+        budget.provider_cache_write_input_tokens,
+    )
+    if budget.provider_usage_complete is not True or any(
+        not _is_non_negative_int(value) for value in provider_buckets
+    ):
         raise CapabilityEvaluationError(
-            "executor token usage differs from the shared RunBudget ledger"
+            "capability result requires complete Anthropic provider usage buckets"
+        )
+    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = cast(
+        tuple[int, int, int, int],
+        provider_buckets,
+    )
+    if (
+        budget.model_calls < 1
+        or budget.charged_tokens
+        != input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+    ):
+        raise CapabilityEvaluationError(
+            "Anthropic provider usage differs from the shared RunBudget ledger"
         )
     if not arm.quickjs_enabled and (
         budget.quickjs_calls != 0 or budget.quickjs_output_bytes != 0
@@ -672,6 +821,17 @@ def _validate_observation(
     if budget.quickjs_calls == 0 and budget.quickjs_output_bytes != 0:
         raise CapabilityEvaluationError(
             "QuickJS output was charged without an execution"
+        )
+    quickjs_required, subagents_required = _task_capabilities(task)
+    expected_quickjs = arm.quickjs_enabled and quickjs_required
+    expected_subagents = arm.subagents_enabled and subagents_required
+    if (budget.quickjs_calls > 0) is not expected_quickjs:
+        raise CapabilityEvaluationError(
+            "task-level QuickJS activity differs from its requested arm capability"
+        )
+    if (budget.task_calls > 0) is not expected_subagents:
+        raise CapabilityEvaluationError(
+            "task-level subagent activity differs from its requested arm capability"
         )
 
     if observation.status == "completed":
@@ -706,6 +866,12 @@ def _validate_observation(
     )
     return CapabilityTaskResult(
         task_id=task.task_id,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        thread_id=thread_id,
+        graph_run_id=str(graph_run_id),
+        persistence_empty=observation.persistence_empty,
+        cache_mode=observation.cache_mode,
         status=observation.status,
         answer=answer,
         citations=citations,
@@ -714,10 +880,14 @@ def _validate_observation(
         latency_ms=latency_ms,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        cache_read_input_tokens=cache_read_tokens,
+        cache_write_input_tokens=cache_write_tokens,
         estimated_cost_usd_micros=_estimated_cost(
             identity,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_read_input_tokens=cache_read_tokens,
+            cache_write_input_tokens=cache_write_tokens,
         ),
         failure_code=observation.failure_code,
         budget=budget,
@@ -733,19 +903,13 @@ def _summarize_arm(
         raise CapabilityEvaluationError(f"arm {arm.arm_id} contains no task results")
     quickjs_calls = sum(task.budget.quickjs_calls for task in tasks)
     task_calls = sum(task.budget.task_calls for task in tasks)
-    if arm.quickjs_enabled and quickjs_calls < 1:
-        raise CapabilityEvaluationError(
-            f"arm {arm.arm_id} did not exercise enabled QuickJS"
-        )
-    if arm.subagents_enabled and task_calls < 1:
-        raise CapabilityEvaluationError(
-            f"arm {arm.arm_id} did not exercise enabled subagents"
-        )
     successes = sum(task.task_success for task in tasks)
     correct_citations = sum(task.citation_correct for task in tasks)
     latency_total = sum(task.latency_ms for task in tasks)
     input_tokens = sum(task.input_tokens for task in tasks)
     output_tokens = sum(task.output_tokens for task in tasks)
+    cache_read_tokens = sum(task.cache_read_input_tokens for task in tasks)
+    cache_write_tokens = sum(task.cache_write_input_tokens for task in tasks)
     return CapabilityArmMetrics(
         task_count=task_count,
         task_success_count=successes,
@@ -761,7 +925,11 @@ def _summarize_arm(
         task_calls=task_calls,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        total_tokens=input_tokens + output_tokens,
+        cache_read_input_tokens=cache_read_tokens,
+        cache_write_input_tokens=cache_write_tokens,
+        total_tokens=(
+            input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+        ),
         estimated_cost_usd_micros=sum(task.estimated_cost_usd_micros for task in tasks),
     )
 
@@ -791,6 +959,71 @@ def _run_id(
     return json_checksum(canonical_json_bytes(payload))
 
 
+def _finalize_attempt_budget(
+    budget: RunBudget,
+    *,
+    arm: CapabilityArm,
+    task: CapabilityTask,
+) -> BudgetSnapshot:
+    label = f"{arm.arm_id}/{task.task_id}"
+    try:
+        snapshot = budget.finalize()
+    except RunBudgetUnsettledError as exc:
+        raise CapabilityEvaluationError(
+            f"executor left an unsettled RunBudget reservation for {label}: {exc}"
+        ) from exc
+    except RunBudgetExceededError as exc:
+        raise CapabilityEvaluationError(
+            f"executor exceeded the terminal RunBudget deadline for {label}"
+        ) from exc
+    if snapshot.finalized is not True:
+        raise CapabilityEvaluationError(
+            f"executor did not return a terminal RunBudget snapshot for {label}"
+        )
+    if (
+        snapshot.model_reservations_in_flight != 0
+        or snapshot.quickjs_in_flight != 0
+        or snapshot.tasks_in_flight != 0
+    ):
+        raise CapabilityEvaluationError(
+            f"executor returned an unsettled terminal RunBudget for {label}"
+        )
+    provider_buckets = (
+        snapshot.provider_input_tokens,
+        snapshot.provider_output_tokens,
+        snapshot.provider_cache_read_input_tokens,
+        snapshot.provider_cache_write_input_tokens,
+    )
+    if snapshot.provider_usage_complete is not True or any(
+        not _is_non_negative_int(value) for value in provider_buckets
+    ):
+        raise CapabilityEvaluationError(
+            f"executor returned incomplete Anthropic provider usage for {label}"
+        )
+    if sum(cast(tuple[int, int, int, int], provider_buckets)) != (
+        snapshot.charged_tokens
+    ):
+        raise CapabilityEvaluationError(
+            f"executor provider usage differs from RunBudget for {label}"
+        )
+    return snapshot
+
+
+def _attempt_has_zero_spend(snapshot: BudgetSnapshot) -> bool:
+    return (
+        snapshot.model_calls == 0
+        and snapshot.tool_calls == 0
+        and snapshot.quickjs_calls == 0
+        and snapshot.task_calls == 0
+        and snapshot.charged_tokens == 0
+        and snapshot.provider_input_tokens == 0
+        and snapshot.provider_output_tokens == 0
+        and snapshot.provider_cache_read_input_tokens == 0
+        and snapshot.provider_cache_write_input_tokens == 0
+        and snapshot.exhausted is False
+    )
+
+
 async def run_capability_experiment(
     *,
     dataset: CapabilityTaskSet,
@@ -810,51 +1043,121 @@ async def run_capability_experiment(
         raise CapabilityEvaluationError("RunBudgetPolicy is required")
     measured_provenance = provenance or collect_run_provenance()
 
-    arms: list[CapabilityArmResult] = []
-    for arm in CAPABILITY_ARMS:
-        task_results: list[CapabilityTaskResult] = []
-        for task in dataset.tasks:
-            budget = budget_factory(budget_policy)
-            if not isinstance(budget, RunBudget) or budget.policy != budget_policy:
-                raise CapabilityEvaluationError(
-                    "budget factory must return RunBudget with the requested policy"
+    task_results_by_arm: dict[str, list[CapabilityTaskResult]] = {
+        arm.arm_id: [] for arm in CAPABILITY_ARMS
+    }
+    seen_attempt_ids: set[str] = set()
+    seen_thread_ids: set[str] = set()
+    seen_graph_run_ids: set[UUID] = set()
+    for task_index, task in enumerate(dataset.tasks):
+        for arm in _counterbalanced_arms(
+            executor_identity,
+            task_index=task_index,
+        ):
+            for attempt_number in range(1, executor_identity.max_attempts + 1):
+                budget = budget_factory(budget_policy)
+                if not isinstance(budget, RunBudget) or budget.policy != budget_policy:
+                    raise CapabilityEvaluationError(
+                        "budget factory must return RunBudget with the requested policy"
+                    )
+                attempt_id, thread_id, graph_run_id = _attempt_identity(
+                    executor_identity,
+                    arm,
+                    task,
+                    attempt_number=attempt_number,
                 )
-            run_config: dict[str, object] = {
-                "configurable": {
-                    "thread_id": _thread_id(executor_identity, arm, task),
+                if (
+                    attempt_id in seen_attempt_ids
+                    or thread_id in seen_thread_ids
+                    or graph_run_id in seen_graph_run_ids
+                ):
+                    raise CapabilityEvaluationError(
+                        "capability attempts require fresh thread and run identities"
+                    )
+                seen_attempt_ids.add(attempt_id)
+                seen_thread_ids.add(thread_id)
+                seen_graph_run_ids.add(graph_run_id)
+                run_config: dict[str, object] = {
+                    "configurable": {"thread_id": thread_id},
+                    "run_id": graph_run_id,
                 }
-            }
-            validate_capability_config(run_config)
-            context = CapabilityExecutionContext(
-                arm=arm,
-                task=task,
-                budget=budget,
-                random_seed=_derived_seed(executor_identity, arm, task),
-                run_config=run_config,
-            )
-            started_ns = clock_ns()
-            if not _is_non_negative_int(started_ns):
-                raise CapabilityEvaluationError("experiment clock is malformed")
-            try:
-                observation = await executor.execute(context)
-            except Exception as exc:
-                raise CapabilityEvaluationError(
-                    f"executor failed before a complete observation for "
-                    f"{arm.arm_id}/{task.task_id}"
-                ) from exc
-            finished_ns = clock_ns()
-            if not _is_non_negative_int(finished_ns) or finished_ns < started_ns:
-                raise CapabilityEvaluationError("experiment clock moved backwards")
-            latency_ms = (finished_ns - started_ns + 500_000) // 1_000_000
-            task_results.append(
-                _validate_observation(
-                    observation,
+                validate_capability_config(run_config)
+                context = CapabilityExecutionContext(
                     arm=arm,
                     task=task,
-                    latency_ms=latency_ms,
-                    budget=budget.snapshot(),
-                    identity=executor_identity,
+                    budget=budget,
+                    random_seed=_derived_seed(
+                        executor_identity,
+                        arm,
+                        task,
+                        attempt_number=attempt_number,
+                    ),
+                    attempt_id=attempt_id,
+                    attempt_number=attempt_number,
+                    thread_id=thread_id,
+                    graph_run_id=graph_run_id,
+                    run_config=run_config,
                 )
+                started_ns = clock_ns()
+                if not _is_non_negative_int(started_ns):
+                    raise CapabilityEvaluationError("experiment clock is malformed")
+                try:
+                    async with asyncio.timeout(budget.remaining_seconds()):
+                        observation = await executor.execute(context)
+                except TimeoutError as exc:
+                    budget.exhaust()
+                    raise CapabilityEvaluationError(
+                        "executor exceeded the complete RunBudget deadline for "
+                        f"{arm.arm_id}/{task.task_id}"
+                    ) from exc
+                except Exception as exc:
+                    snapshot = _finalize_attempt_budget(
+                        budget,
+                        arm=arm,
+                        task=task,
+                    )
+                    if (
+                        attempt_number < executor_identity.max_attempts
+                        and _attempt_has_zero_spend(snapshot)
+                    ):
+                        continue
+                    raise CapabilityEvaluationError(
+                        f"executor failed before a complete observation for "
+                        f"{arm.arm_id}/{task.task_id}"
+                    ) from exc
+                finished_ns = clock_ns()
+                if not _is_non_negative_int(finished_ns) or finished_ns < started_ns:
+                    raise CapabilityEvaluationError("experiment clock moved backwards")
+                latency_ms = (finished_ns - started_ns + 500_000) // 1_000_000
+                snapshot = _finalize_attempt_budget(
+                    budget,
+                    arm=arm,
+                    task=task,
+                )
+                task_results_by_arm[arm.arm_id].append(
+                    _validate_observation(
+                        observation,
+                        arm=arm,
+                        task=task,
+                        attempt_id=attempt_id,
+                        attempt_number=attempt_number,
+                        thread_id=thread_id,
+                        graph_run_id=graph_run_id,
+                        latency_ms=latency_ms,
+                        budget=snapshot,
+                        identity=executor_identity,
+                    )
+                )
+                break
+
+    arms: list[CapabilityArmResult] = []
+    for arm in CAPABILITY_ARMS:
+        task_results = task_results_by_arm[arm.arm_id]
+        if tuple(result.task_id for result in task_results) != tuple(
+            task.task_id for task in dataset.tasks
+        ):
+            raise CapabilityEvaluationError(
+                f"arm {arm.arm_id} is missing a canonical task result"
             )
         metrics = _summarize_arm(arm, task_results)
         arms.append(
@@ -885,36 +1188,76 @@ def _parse_executor(value: object) -> CapabilityExecutorIdentity:
     raw = _mapping(
         value,
         location="run.executor",
-        keys=frozenset({"executor_id", "model_id", "pricing", "random_seed"}),
+        keys=frozenset(
+            {
+                "cache_mode",
+                "execution_id",
+                "executor_id",
+                "max_attempts",
+                "model_id",
+                "pricing",
+                "random_seed",
+            }
+        ),
     )
     pricing = _mapping(
         raw["pricing"],
         location="run.executor.pricing",
         keys=frozenset(
             {
-                "input_usd_micros_per_million_tokens",
+                "cache_read_input_usd_micros_per_million_tokens",
+                "cache_write_input_usd_micros_per_million_tokens",
                 "output_usd_micros_per_million_tokens",
+                "uncached_input_usd_micros_per_million_tokens",
             }
         ),
     )
     try:
         return CapabilityExecutorIdentity(
+            cache_mode=_text(
+                raw["cache_mode"],
+                location="run.executor.cache_mode",
+            ),
+            execution_id=_text(
+                raw["execution_id"],
+                location="run.executor.execution_id",
+            ),
             executor_id=_text(
                 raw["executor_id"],
                 location="run.executor.executor_id",
+            ),
+            max_attempts=_integer(
+                raw["max_attempts"],
+                location="run.executor.max_attempts",
             ),
             model_id=_text(raw["model_id"], location="run.executor.model_id"),
             random_seed=_integer(
                 raw["random_seed"],
                 location="run.executor.random_seed",
             ),
-            input_usd_micros_per_million_tokens=_integer(
-                pricing["input_usd_micros_per_million_tokens"],
-                location=("run.executor.pricing.input_usd_micros_per_million_tokens"),
+            uncached_input_usd_micros_per_million_tokens=_integer(
+                pricing["uncached_input_usd_micros_per_million_tokens"],
+                location=(
+                    "run.executor.pricing.uncached_input_usd_micros_per_million_tokens"
+                ),
             ),
             output_usd_micros_per_million_tokens=_integer(
                 pricing["output_usd_micros_per_million_tokens"],
                 location=("run.executor.pricing.output_usd_micros_per_million_tokens"),
+            ),
+            cache_read_input_usd_micros_per_million_tokens=_integer(
+                pricing["cache_read_input_usd_micros_per_million_tokens"],
+                location=(
+                    "run.executor.pricing."
+                    "cache_read_input_usd_micros_per_million_tokens"
+                ),
+            ),
+            cache_write_input_usd_micros_per_million_tokens=_integer(
+                pricing["cache_write_input_usd_micros_per_million_tokens"],
+                location=(
+                    "run.executor.pricing."
+                    "cache_write_input_usd_micros_per_million_tokens"
+                ),
             ),
         )
     except ValueError as exc:
@@ -962,6 +1305,10 @@ def _parse_budget(
             raw["model_calls"],
             location=f"{location}.model_calls",
         ),
+        model_reservations_in_flight=_integer(
+            raw["model_reservations_in_flight"],
+            location=f"{location}.model_reservations_in_flight",
+        ),
         tool_calls=_integer(raw["tool_calls"], location=f"{location}.tool_calls"),
         quickjs_calls=_integer(
             raw["quickjs_calls"],
@@ -984,11 +1331,33 @@ def _parse_budget(
             raw["charged_tokens"],
             location=f"{location}.charged_tokens",
         ),
+        provider_input_tokens=_optional_integer(
+            raw["provider_input_tokens"],
+            location=f"{location}.provider_input_tokens",
+        ),
+        provider_output_tokens=_optional_integer(
+            raw["provider_output_tokens"],
+            location=f"{location}.provider_output_tokens",
+        ),
+        provider_cache_read_input_tokens=_optional_integer(
+            raw["provider_cache_read_input_tokens"],
+            location=f"{location}.provider_cache_read_input_tokens",
+        ),
+        provider_cache_write_input_tokens=_optional_integer(
+            raw["provider_cache_write_input_tokens"],
+            location=f"{location}.provider_cache_write_input_tokens",
+        ),
+        provider_usage_complete=_boolean(
+            raw["provider_usage_complete"],
+            location=f"{location}.provider_usage_complete",
+        ),
         elapsed_ms=_integer(raw["elapsed_ms"], location=f"{location}.elapsed_ms"),
         exhausted=_boolean(raw["exhausted"], location=f"{location}.exhausted"),
+        finalized=_boolean(raw["finalized"], location=f"{location}.finalized"),
     )
     limits = {
         "model_calls": policy.max_model_calls,
+        "model_reservations_in_flight": policy.max_model_calls,
         "tool_calls": policy.max_tool_calls,
         "quickjs_calls": policy.max_quickjs_calls,
         "quickjs_in_flight": policy.max_quickjs_in_flight,
@@ -1003,6 +1372,21 @@ def _parse_budget(
     ):
         raise CapabilityEvaluationError(
             f"{location} exceeds or differs from its RunBudgetPolicy"
+        )
+    provider_buckets = (
+        snapshot.provider_input_tokens,
+        snapshot.provider_output_tokens,
+        snapshot.provider_cache_read_input_tokens,
+        snapshot.provider_cache_write_input_tokens,
+    )
+    if snapshot.provider_usage_complete:
+        if any(value is None for value in provider_buckets):
+            raise CapabilityEvaluationError(
+                f"{location} complete provider usage has a missing bucket"
+            )
+    elif any(value is not None for value in provider_buckets):
+        raise CapabilityEvaluationError(
+            f"{location} incomplete provider usage must redact every bucket"
         )
     return snapshot
 
@@ -1086,17 +1470,25 @@ def _parse_task_result(
         keys=frozenset(
             {
                 "answer",
+                "attempt_id",
+                "attempt_number",
                 "budget",
+                "cache_mode",
+                "cache_read_input_tokens",
+                "cache_write_input_tokens",
                 "citation_correct",
                 "citations",
                 "estimated_cost_usd_micros",
                 "failure_code",
+                "graph_run_id",
                 "input_tokens",
                 "latency_ms",
                 "output_tokens",
+                "persistence_empty",
                 "status",
                 "task_id",
                 "task_success",
+                "thread_id",
             }
         ),
     )
@@ -1107,6 +1499,28 @@ def _parse_task_result(
     failure_code = raw["failure_code"]
     if failure_code is not None and not isinstance(failure_code, str):
         raise CapabilityEvaluationError(f"{location}.failure_code is malformed")
+    attempt_number = _integer(
+        raw["attempt_number"],
+        location=f"{location}.attempt_number",
+    )
+    if not 1 <= attempt_number <= identity.max_attempts:
+        raise CapabilityEvaluationError(
+            f"{location}.attempt_number exceeds the execution retry policy"
+        )
+    attempt_id, thread_id, graph_run_id = _attempt_identity(
+        identity,
+        arm,
+        task,
+        attempt_number=attempt_number,
+    )
+    if (
+        raw["attempt_id"] != attempt_id
+        or raw["thread_id"] != thread_id
+        or raw["graph_run_id"] != str(graph_run_id)
+    ):
+        raise CapabilityEvaluationError(
+            f"{location} attempt/thread/run identity is inconsistent"
+        )
     observation = CapabilityObservation(
         status=status,
         answer=(
@@ -1115,13 +1529,13 @@ def _parse_task_result(
             else _canonical_object(raw["answer"], location=f"{location}.answer")
         ),
         citations=citations,
-        input_tokens=_integer(
-            raw["input_tokens"],
-            location=f"{location}.input_tokens",
+        persistence_empty=_boolean(
+            raw["persistence_empty"],
+            location=f"{location}.persistence_empty",
         ),
-        output_tokens=_integer(
-            raw["output_tokens"],
-            location=f"{location}.output_tokens",
+        cache_mode=_text(
+            raw["cache_mode"],
+            location=f"{location}.cache_mode",
         ),
         failure_code=cast(str | None, failure_code),
     )
@@ -1129,6 +1543,10 @@ def _parse_task_result(
         observation,
         arm=arm,
         task=task,
+        attempt_id=attempt_id,
+        attempt_number=attempt_number,
+        thread_id=thread_id,
+        graph_run_id=graph_run_id,
         latency_ms=_integer(raw["latency_ms"], location=f"{location}.latency_ms"),
         budget=_parse_budget(
             raw["budget"],
@@ -1149,10 +1567,30 @@ def _parse_task_result(
         raw["estimated_cost_usd_micros"],
         location=f"{location}.estimated_cost_usd_micros",
     )
+    input_tokens = _integer(
+        raw["input_tokens"],
+        location=f"{location}.input_tokens",
+    )
+    output_tokens = _integer(
+        raw["output_tokens"],
+        location=f"{location}.output_tokens",
+    )
+    cache_read_tokens = _integer(
+        raw["cache_read_input_tokens"],
+        location=f"{location}.cache_read_input_tokens",
+    )
+    cache_write_tokens = _integer(
+        raw["cache_write_input_tokens"],
+        location=f"{location}.cache_write_input_tokens",
+    )
     if (
         task_success is not result.task_success
         or citation_correct is not result.citation_correct
         or estimated_cost != result.estimated_cost_usd_micros
+        or input_tokens != result.input_tokens
+        or output_tokens != result.output_tokens
+        or cache_read_tokens != result.cache_read_input_tokens
+        or cache_write_tokens != result.cache_write_input_tokens
     ):
         raise CapabilityEvaluationError(f"{location} derived scoring is inconsistent")
     return result
@@ -1315,14 +1753,18 @@ def render_capability_report(run: CapabilityRun) -> str:
         f"- Label status: `{run.dataset.label_status}`",
         f"- Content tree: `{run.dataset.content_tree_sha}`",
         f"- Executor: `{_markdown(run.executor.executor_id)}`",
+        f"- Execution ID: `{run.executor.execution_id}`",
         f"- Model: `{_markdown(run.executor.model_id)}`",
         f"- Random seed: `{run.executor.random_seed}`",
+        f"- Maximum zero-spend attempts: `{run.executor.max_attempts}`",
+        f"- Cache mode: `{run.executor.cache_mode}`",
         f"- Shared budget policy: `{_markdown(run.budget_policy.policy_id)}`",
         "",
         "## Arm summary",
         "",
         "| Arm | QuickJS | Subagents | Task success | Citation correctness | "
-        "Mean latency | Model/tool/task calls | Tokens | Estimated cost |",
+        "Mean latency | Model/tool/task calls | Tokens (in/out/read/write/total) | "
+        "Estimated cost |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm in run.arms:
@@ -1337,7 +1779,9 @@ def render_capability_report(run: CapabilityRun) -> str:
             f"({_percent(metrics.citation_correctness_rate_ppm)}) | "
             f"{_milliseconds(metrics.latency_ms_mean_milli)} | "
             f"{metrics.model_calls}/{metrics.tool_calls}/{metrics.task_calls} | "
-            f"{metrics.total_tokens} | "
+            f"{metrics.input_tokens}/{metrics.output_tokens}/"
+            f"{metrics.cache_read_input_tokens}/"
+            f"{metrics.cache_write_input_tokens}/{metrics.total_tokens} | "
             f"{_usd(metrics.estimated_cost_usd_micros)} |"
         )
 
@@ -1348,7 +1792,7 @@ def render_capability_report(run: CapabilityRun) -> str:
                 f"### `{arm.arm.arm_id}`",
                 "",
                 "| Task | Status | Success | Citations | Latency | "
-                "Model/tool/QuickJS/task | Tokens | Cost |",
+                "Model/tool/QuickJS/task | Tokens (in/out/read/write/total) | Cost |",
                 "|---|---|---:|---:|---:|---:|---:|---:|",
             ]
         )
@@ -1360,15 +1804,19 @@ def render_capability_report(run: CapabilityRun) -> str:
                 f"{task.latency_ms} ms | "
                 f"{task.budget.model_calls}/{task.budget.tool_calls}/"
                 f"{task.budget.quickjs_calls}/{task.budget.task_calls} | "
-                f"{task.input_tokens + task.output_tokens} | "
+                f"{task.input_tokens}/{task.output_tokens}/"
+                f"{task.cache_read_input_tokens}/"
+                f"{task.cache_write_input_tokens}/"
+                f"{task.budget.charged_tokens} | "
                 f"{_usd(task.estimated_cost_usd_micros)} |"
             )
         lines.append("")
     lines.extend(
         [
             "Latency is monotonic elapsed time rounded to the nearest millisecond. "
-            "Rates use integer parts-per-million; model cost is rounded up per task "
-            "to the nearest micro-US-dollar from the recorded input/output pricing.",
+            "Rates use integer parts-per-million; model cost is rounded up once per "
+            "task to the nearest micro-US-dollar from finalized Anthropic uncached "
+            "input, output, cache-read input, and cache-write input buckets.",
             "",
             "The canonical source of record is `run.json`.",
             "",

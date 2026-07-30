@@ -946,8 +946,7 @@ async def test_server_selected_capability_axes_bind_four_distinct_model_surfaces
     expected_task,
 ):
     thread_id = (
-        f"capability-factorial-{int(quickjs_enabled)}-"
-        f"{int(dynamic_subagents_enabled)}"
+        f"capability-factorial-{int(quickjs_enabled)}-{int(dynamic_subagents_enabled)}"
     )
     model = ToolCapableFakeModel(responses=[_final_message("arm complete")])
     compiled = create_graph(

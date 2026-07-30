@@ -149,11 +149,21 @@ class CloudRunDeliveryTests(unittest.TestCase):
 
                 plain_env = {
                     "AEGRA_CONFIG": "/app/aegra.json",
+                    "AGENT_ANONYMOUS_ACCESS_ENABLED": os.environ.get(
+                        "FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED", "false"
+                    ),
                     "BG_JOB_MAX_RETRIES": os.environ.get(
                         "FAKE_BG_JOB_MAX_RETRIES", "0"
                     ),
                     "ENV_MODE": os.environ.get("FAKE_ENV_MODE", "PRODUCTION"),
                     "FF_V2_EVENT_STREAMING": "true",
+                    "GUEST_DAILY_BUDGET_MICRO_USD": os.environ.get(
+                        "FAKE_GUEST_DAILY_BUDGET_MICRO_USD", ""
+                    ),
+                    "GUEST_MODEL": os.environ.get("FAKE_GUEST_MODEL", ""),
+                    "GUEST_RUN_RESERVATION_MICRO_USD": os.environ.get(
+                        "FAKE_GUEST_RUN_RESERVATION_MICRO_USD", ""
+                    ),
                     "HOST": "0.0.0.0",
                     "LANGGRAPH_MAX_POOL_SIZE": "4",
                     "LANGGRAPH_MIN_POOL_SIZE": "1",
@@ -177,7 +187,25 @@ class CloudRunDeliveryTests(unittest.TestCase):
 
                 def runtime_template(image):
                     env = [
-                        {"name": name, "value": value}
+                        (
+                            {"name": name, "value": None}
+                            if (
+                                value == ""
+                                and os.environ.get(
+                                    "FAKE_NULL_EMPTY_ENV_VALUES"
+                                ) == "true"
+                            )
+                            else (
+                                {"name": name}
+                                if (
+                                    value == ""
+                                    and os.environ.get(
+                                        "FAKE_OMIT_EMPTY_ENV_VALUES"
+                                    ) == "true"
+                                )
+                                else {"name": name, "value": value}
+                            )
+                        )
                         for name, value in plain_env.items()
                     ]
                     env.extend(
@@ -749,6 +777,27 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("agent-target", state["serving"])
 
+    def test_official_v2_omitted_empty_environment_values_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAKE_OMIT_EMPTY_ENV_VALUES"] = "true"
+            result = self._run(directory, environment, "rollback", "agent-target")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_official_v2_null_empty_environment_values_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAKE_NULL_EMPTY_ENV_VALUES"] = "true"
+            result = self._run(directory, environment, "rollback", "agent-target")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("runtime contract drifted", result.stderr)
+        self.assertNotIn("--to-revisions", operations)
+
     def test_failed_pretraffic_protocol_smoke_never_promotes(
         self,
     ) -> None:
@@ -855,6 +904,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "port": {"FAKE_RUNTIME_PORT": "9090"},
             "timeout": {"FAKE_RUNTIME_TIMEOUT": "301s"},
             "plain_environment": {"FAKE_ENV_MODE": "PREVIEW"},
+            "anonymous_access": {"FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED": "true"},
+            "guest_model": {"FAKE_GUEST_MODEL": "anthropic:claude-haiku-4-5"},
+            "guest_daily_budget": {"FAKE_GUEST_DAILY_BUDGET_MICRO_USD": "500000"},
+            "guest_run_reservation": {"FAKE_GUEST_RUN_RESERVATION_MICRO_USD": "25000"},
             "background_retry_budget": {"FAKE_BG_JOB_MAX_RETRIES": "3"},
             "redis_broker": {"FAKE_REDIS_BROKER_ENABLED": "true"},
             "volumes": {"FAKE_RUNTIME_VOLUMES": "true"},
@@ -1158,6 +1211,19 @@ class CloudRunDeliveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             environment = self._fixture(directory)
             environment["FAKE_RUNTIME_SECRET_VERSION"] = "latest"
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("runtime contract drifted", result.stderr)
+        self.assertNotIn("gcloud run jobs update", operations)
+
+    def test_anonymous_access_drift_fails_before_jobs_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED"] = "true"
             result = self._run(directory, environment, "deploy")
             operations = (Path(directory) / "operations.log").read_text(
                 encoding="utf-8"

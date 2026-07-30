@@ -65,19 +65,23 @@ locals {
   }
 
   cloud_run_runtime_environment = {
-    AEGRA_CONFIG              = "/app/aegra.json"
-    BG_JOB_MAX_RETRIES        = "0"
-    ENV_MODE                  = "PRODUCTION"
-    FF_V2_EVENT_STREAMING     = "true"
-    HOST                      = "0.0.0.0"
-    LANGGRAPH_MAX_POOL_SIZE   = "4"
-    LANGGRAPH_MIN_POOL_SIZE   = "1"
-    MODEL                     = "anthropic:claude-sonnet-4-6"
-    PORT                      = "8080"
-    REDIS_BROKER_ENABLED      = "false"
-    RUN_MIGRATIONS_ON_STARTUP = "false"
-    SQLALCHEMY_MAX_OVERFLOW   = "0"
-    SQLALCHEMY_POOL_SIZE      = "2"
+    AEGRA_CONFIG                    = "/app/aegra.json"
+    AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
+    BG_JOB_MAX_RETRIES              = "0"
+    ENV_MODE                        = "PRODUCTION"
+    FF_V2_EVENT_STREAMING           = "true"
+    GUEST_DAILY_BUDGET_MICRO_USD    = ""
+    GUEST_MODEL                     = ""
+    GUEST_RUN_RESERVATION_MICRO_USD = ""
+    HOST                            = "0.0.0.0"
+    LANGGRAPH_MAX_POOL_SIZE         = "4"
+    LANGGRAPH_MIN_POOL_SIZE         = "1"
+    MODEL                           = "anthropic:claude-sonnet-4-6"
+    PORT                            = "8080"
+    REDIS_BROKER_ENABLED            = "false"
+    RUN_MIGRATIONS_ON_STARTUP       = "false"
+    SQLALCHEMY_MAX_OVERFLOW         = "0"
+    SQLALCHEMY_POOL_SIZE            = "2"
   }
 }
 

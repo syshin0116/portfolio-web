@@ -402,7 +402,7 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
-      && length(service.template[0].containers[0].env) == 17
+      && length(service.template[0].containers[0].env) == 21
       && {
         for env in service.template[0].containers[0].env :
         env.name => env.value
@@ -422,6 +422,28 @@ run "foundation_security_contract" {
       ])
     ])
     error_message = "Both services must keep the immutable image, one-instance/one-worker runtime, deletion protection, and exact numeric secret pins."
+  }
+
+  assert {
+    condition = alltrue([
+      for service in google_cloud_run_v2_service.agent :
+      {
+        for env in service.template[0].containers[0].env :
+        env.name => env.value
+        if contains([
+          "AGENT_ANONYMOUS_ACCESS_ENABLED",
+          "GUEST_DAILY_BUDGET_MICRO_USD",
+          "GUEST_MODEL",
+          "GUEST_RUN_RESERVATION_MICRO_USD",
+        ], env.name)
+        } == {
+        AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
+        GUEST_DAILY_BUDGET_MICRO_USD    = ""
+        GUEST_MODEL                     = ""
+        GUEST_RUN_RESERVATION_MICRO_USD = ""
+      }
+    ])
+    error_message = "Anonymous access must remain repository-owned, disabled, and unpriced until a separate reviewed public-launch change."
   }
 
   assert {

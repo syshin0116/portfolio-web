@@ -23,6 +23,26 @@ Both public flags stay exactly `false` in repository examples. Enabling the
 browser gate before the agent's public-safe state/history/SSE projection is
 verified violates ADR-0005 even if the visible UI appears sanitized.
 
+## Cloud Run fail-closed baseline
+
+The repository-owned Cloud Run template and delivery verifier require this exact
+pre-launch environment:
+
+- `AGENT_ANONYMOUS_ACCESS_ENABLED=false`
+- `GUEST_MODEL=` (empty)
+- `GUEST_DAILY_BUDGET_MICRO_USD=` (empty)
+- `GUEST_RUN_RESERVATION_MICRO_USD=` (empty)
+
+Do not make these values apply-time Terraform variables or change them in the
+console. Selecting a guest model and its worst-case per-run and UTC-day
+micro-dollar ceilings is a paid public-launch decision. Land those three exact
+values and the `true` opt-in together in a separate reviewed PR, then apply its
+exact plan. An ordinary image delivery verifies and preserves the reviewed
+values; it must refuse a revision with console or out-of-band drift.
+The pre-launch map is shared only because both environments are disabled; that
+launch PR must split Preview and Production configuration and keep Preview
+disabled unless its own model, budget, and public-test gate are approved.
+
 ## Cloudflare Turnstile
 
 Create separate production and preview widgets. Configure the exact canonical
@@ -62,8 +82,10 @@ guest identity or spend state.
 1. Deploy and verify the agent with anonymous access still false.
 2. Run owner, PostgreSQL, public raw-wire, rate, concurrency, spend, retention,
    and maintenance proofs against the exact revision.
-3. Enable `AGENT_ANONYMOUS_ACCESS_ENABLED=true` in the production agent release
-   while Vercel still cannot mint or display anonymous access.
+3. Land the separately approved repository change that selects the guest model,
+   fixes both reviewed micro-dollar ceilings, splits Preview from Production,
+   and sets the Production `AGENT_ANONYMOUS_ACCESS_ENABLED=true`; apply it while
+   Vercel still cannot mint or display anonymous access.
 4. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
    real browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.

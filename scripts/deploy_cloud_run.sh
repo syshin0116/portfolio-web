@@ -229,9 +229,13 @@ runtime_expectations() {
   esac
   readonly EXPECTED_PLAIN_ENV='{
     "AEGRA_CONFIG":"/app/aegra.json",
+    "AGENT_ANONYMOUS_ACCESS_ENABLED":"false",
     "BG_JOB_MAX_RETRIES":"0",
     "ENV_MODE":"PRODUCTION",
     "FF_V2_EVENT_STREAMING":"true",
+    "GUEST_DAILY_BUDGET_MICRO_USD":"",
+    "GUEST_MODEL":"",
+    "GUEST_RUN_RESERVATION_MICRO_USD":"",
     "HOST":"0.0.0.0",
     "LANGGRAPH_MAX_POOL_SIZE":"4",
     "LANGGRAPH_MIN_POOL_SIZE":"1",
@@ -380,13 +384,15 @@ verify_runtime_template() {
       )
       and (
         (.containers[0].env // []) as $env
-        | ($env | length) == 17
+        | ($env | length) == 21
           and ([$env[].name] | length) == ([$env[].name] | unique | length)
           and (
+            # Cloud Run proto JSON may omit EnvVar.value for its empty default.
             [
               $env[]
-              | select(has("value") and (has("valueSource") | not))
-              | {key:.name, value:.value}
+              | select(has("valueSource") | not)
+              | select((has("value") | not) or (.value | type == "string"))
+              | {key:.name, value:(.value // "")}
             ] | from_entries
           ) == $expected_plain_env
           and (

@@ -40,6 +40,8 @@ The required targets are:
 | `deepagents` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/deepagents/json` |
 | `langgraph` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/langgraph/json` |
 | Python `langgraph-sdk` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/langgraph-sdk/json` |
+| `langchain-openai` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/langchain-openai/json` |
+| OpenAI Python SDK | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/openai/json` |
 | `langchain-quickjs` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/langchain-quickjs/json` |
 | direct `quickjs-rs` | `agent/pyproject.toml`, `uv.lock` | `https://pypi.org/pypi/quickjs-rs/json` |
 
@@ -49,16 +51,25 @@ strict JSON parsing, and an exact canonical final URL. A redirect to another hos
 package, or repository fails before its payload is trusted. HTTP, timeout, malformed,
 oversized, pagination, and schema errors fail closed.
 
+### OpenAI serialization pins
+
+The guest Responses payload is serialized by exact `langchain-openai==1.3.5`
+and `openai==2.50.0` pins, so both are required manifest/lock audit targets and
+isolated from routine grouped Dependabot updates. `langchain-openai` is audited
+against the latest stable release below the reviewed exclusive `1.4.0`
+compatibility ceiling: 1.4.x requires `langchain-core>=1.5.1`, while this
+repository remains on 1.4.9. The report exposes that ceiling explicitly.
+Changing or removing it requires a focused compatibility PR with capture,
+native-stream, provider-usage, and full agent evidence.
+
 ### assistant-ui activation
 
-The current repository state at this change does not yet contain
-`@assistant-ui/react` or `@assistant-ui/react-langgraph`; planned versions in a document
-are not product pins. The report therefore includes the `assistant-ui` group as
-explicitly `inactive`, with `installed` and `latest` left `null`, and makes no registry
-request for it.
+The repository contains both `@assistant-ui/react` and
+`@assistant-ui/react-langgraph`, so the `assistant-ui` group is active and every
+target below is mandatory.
 
-As soon as either package appears in `web/package.json` or `web/bun.lock`, the whole group
-becomes mandatory:
+The activation rule remains fail-closed: if either package appears in
+`web/package.json` or `web/bun.lock`, the whole group is mandatory:
 
 - `@assistant-ui/react`;
 - `@assistant-ui/react-langgraph`;

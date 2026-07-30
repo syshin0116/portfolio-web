@@ -2415,6 +2415,7 @@ runs:
                     "langgraph-*",
                     "langsmith",
                     "numpy",
+                    "openai",
                     "quickjs-rs",
                 ]
             ),

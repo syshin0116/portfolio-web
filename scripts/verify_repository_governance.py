@@ -248,7 +248,7 @@ EXPECTED_VERCEL_AUTODEPLOY_CONFIG = {
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 UPSTREAM_VERSION_AUDIT_SCRIPT = "scripts/upstream_version_audit.py"
 UPSTREAM_VERSION_AUDIT_SCRIPT_SHA256 = (
-    "4d3ce8ece65e08d7cdb5d0ae260634708eeac45e1daed676db520d423ac97c74"
+    "c8c60905b320bd8263496d096cc30f86c5b1e10b40956ec25539390b8bb45b2f"
 )
 EXPECTED_DEPENDENCY_AUDIT_JOB_AST_SHA256 = {
     "upstream": "69d71776cf99461e058269b3aec66b5730c661a820d6360b355f6031c13601f3",
@@ -356,6 +356,7 @@ EXPECTED_DEPENDABOT = {
                         "langgraph-*",
                         "langsmith",
                         "numpy",
+                        "openai",
                         "quickjs-rs",
                     ],
                     "update_types": ["minor", "patch"],

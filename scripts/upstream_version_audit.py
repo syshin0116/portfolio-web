@@ -91,6 +91,7 @@ class Target:
     source: Source
     pin_sources: tuple[str, ...]
     validate_aegra_protocol_pin: bool = False
+    stable_version_ceiling: str | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +205,24 @@ REQUIRED_TARGETS = (
         package="langgraph-sdk",
         pin_kind="python",
         source=_pypi_source("langgraph-sdk"),
+        pin_sources=(PYTHON_MANIFEST, PYTHON_LOCK),
+    ),
+    Target(
+        id="langchain-openai",
+        display_name="LangChain OpenAI",
+        package="langchain-openai",
+        pin_kind="python",
+        source=_pypi_source("langchain-openai"),
+        pin_sources=(PYTHON_MANIFEST, PYTHON_LOCK),
+        # 1.4.x requires langchain-core>=1.5.1; this repository pins 1.4.9.
+        stable_version_ceiling="1.4.0",
+    ),
+    Target(
+        id="openai-python",
+        display_name="OpenAI Python SDK",
+        package="openai",
+        pin_kind="python",
+        source=_pypi_source("openai"),
         pin_sources=(PYTHON_MANIFEST, PYTHON_LOCK),
     ),
     Target(
@@ -1027,7 +1046,12 @@ def _fetch_json(source: Source) -> JsonResponse:
     return JsonResponse(data=data, final_url=final_url, headers=response_headers)
 
 
-def _latest_pypi(source: Source, response: JsonResponse) -> LatestRelease:
+def _latest_pypi(
+    source: Source,
+    response: JsonResponse,
+    *,
+    stable_version_ceiling: str | None = None,
+) -> LatestRelease:
     payload = _require_object(response.data, source.package, SourceError)
     info = _require_object(
         payload.get("info"),
@@ -1086,17 +1110,36 @@ def _latest_pypi(source: Source, response: JsonResponse) -> LatestRelease:
                 has_non_yanked_file = True
         if version is not None and has_non_yanked_file:
             candidates.append(version)
-    latest = _highest_stable(candidates, context=source.package)
+    global_latest = _highest_stable(candidates, context=source.package)
     reported = _parse_stable_version(
         reported_latest,
         "pypi",
         context=f"{source.package} info.version",
         error_type=SourceError,
     )
-    if reported is None or reported.text != latest.text:
+    if reported is None or reported.text != global_latest.text:
         raise SourceError(
             f"{source.package}: PyPI info.version {reported_latest!r} does not "
-            f"identify the highest non-yanked stable release {latest.text!r}"
+            f"identify the highest non-yanked stable release {global_latest.text!r}"
+        )
+    if stable_version_ceiling is None:
+        latest = global_latest
+    else:
+        ceiling = _parse_stable_version(
+            stable_version_ceiling,
+            "pypi",
+            context=f"{source.package} reviewed compatibility ceiling",
+            error_type=SourceError,
+        )
+        if ceiling is None:
+            raise SourceError(
+                f"{source.package}: compatibility ceiling must be a stable release"
+            )
+        latest = _highest_stable(
+            [candidate for candidate in candidates if candidate.key < ceiling.key],
+            context=(
+                f"{source.package} below compatibility ceiling {stable_version_ceiling}"
+            ),
         )
     return LatestRelease(
         latest,
@@ -1266,14 +1309,25 @@ def _latest_github(source: Source, response: JsonResponse) -> LatestRelease:
     return LatestRelease(latest, next(iter(release_urls)))
 
 
-def _latest_release(source: Source, response: JsonResponse) -> LatestRelease:
+def _latest_release(
+    source: Source,
+    response: JsonResponse,
+    *,
+    stable_version_ceiling: str | None = None,
+) -> LatestRelease:
     if response.final_url != source.canonical_url:
         raise SourceError(
             f"{source.package}: fixture/transport final URL is not canonical: "
             f"{response.final_url!r}"
         )
     if source.ecosystem == "pypi":
-        return _latest_pypi(source, response)
+        return _latest_pypi(
+            source,
+            response,
+            stable_version_ceiling=stable_version_ceiling,
+        )
+    if stable_version_ceiling is not None:
+        raise SourceError("compatibility ceilings are supported only for PyPI")
     if source.ecosystem == "npm":
         return _latest_npm(source, response)
     return _latest_github(source, response)
@@ -1301,6 +1355,7 @@ def _target_result(
         "pinSources": list(target.pin_sources),
         "releaseUrl": release_url,
         "source": target.source.canonical_url,
+        "stableVersionCeiling": target.stable_version_ceiling,
         "status": status,
     }
 
@@ -1313,7 +1368,11 @@ def _audit_target(
     try:
         installed = _extract_target_pin(repo_root, target)
         response = fetch(target.source)
-        latest = _latest_release(target.source, response)
+        latest = _latest_release(
+            target.source,
+            response,
+            stable_version_ceiling=target.stable_version_ceiling,
+        )
     except AuditError as exc:
         return _target_result(
             target,
@@ -1327,7 +1386,14 @@ def _audit_target(
             target,
             active=True,
             status="current",
-            message="The exact repository pin matches the latest stable release.",
+            message=(
+                "The exact repository pin matches the latest stable release"
+                + (
+                    " below the reviewed compatibility ceiling."
+                    if target.stable_version_ceiling is not None
+                    else "."
+                )
+            ),
             installed=installed.text,
             latest=latest.version.text,
             release_url=latest.release_url,

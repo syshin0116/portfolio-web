@@ -350,8 +350,8 @@ default cooldown. Routine minor/patch updates are grouped for Bun, uv, and
 Actions; the npm bridge opens no version PRs. Security updates are not grouped
 or cooled, so one vulnerable package is not held behind unrelated upgrades.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
-the direct QuickJS Rust binding (`quickjs-rs`), LangGraph (`langgraph` and
-`langgraph-*`), LangSmith, assistant-ui,
+the OpenAI Python SDK (`openai`), the direct QuickJS Rust binding
+(`quickjs-rs`), LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
 `@langchain/*`, Next.js, NextAuth, `@auth/*`, React/React DOM and their type
 packages, and NumPy remain isolated bump PRs. React updates require focused
 build/browser evidence, while NumPy is part of the persisted BM25 artifact

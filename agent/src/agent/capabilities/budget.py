@@ -6,9 +6,9 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any
+from typing import Any, Literal
 
 from langchain.agents.middleware import (
     AgentMiddleware,
@@ -121,6 +121,8 @@ class ModelReservation:
 
     reservation_id: int
     reserved_tokens: int
+    phase: Literal["attempt", "counted"]
+    ledger_id: object = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,11 +131,12 @@ class TaskReservation:
 
     reservation_id: int
     reserved_tokens: int
+    ledger_id: object = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class _ProviderTokenUsage:
-    """Trusted Anthropic pricing buckets parsed inside model middleware."""
+    """Trusted provider pricing buckets parsed inside model middleware."""
 
     input_tokens: int
     output_tokens: int
@@ -149,6 +152,14 @@ class _ProviderTokenUsage:
             + self.cache_write_input_tokens
         )
 
+    @property
+    def total_input_tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.cache_read_input_tokens
+            + self.cache_write_input_tokens
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class QuickJSReservation:
@@ -156,6 +167,7 @@ class QuickJSReservation:
 
     reservation_id: int
     reserved_output_bytes: int
+    ledger_id: object = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +175,7 @@ class BudgetSnapshot:
     """Bounded, serializable observation of a run ledger.
 
     Provider buckets are populated only when every settled model call carried
-    complete Anthropic metadata; otherwise all four are ``None`` and
+    complete provider metadata; otherwise all four are ``None`` and
     ``provider_usage_complete`` is false. Only :meth:`RunBudget.finalize`
     produces ``finalized=True``.
     """
@@ -200,8 +212,10 @@ class RunBudget:
         "_clock",
         "_exhausted",
         "_finalized_snapshot",
+        "_ledger_id",
         "_lock",
         "_model_calls",
+        "_model_reservations_needing_input",
         "_next_reservation_id",
         "_next_quickjs_reservation_id",
         "_next_task_reservation_id",
@@ -235,6 +249,7 @@ class RunBudget:
         self._policy = policy
         self._clock = clock
         self._started_at = clock()
+        self._ledger_id = object()
         self._lock = Lock()
         self._model_calls = 0
         self._tool_calls = 0
@@ -246,6 +261,7 @@ class RunBudget:
         self._charged_tokens = 0
         self._next_reservation_id = 0
         self._open_model_reservations: dict[int, int] = {}
+        self._model_reservations_needing_input: set[int] = set()
         self._next_quickjs_reservation_id = 0
         self._open_quickjs_reservations: dict[int, int] = {}
         self._next_task_reservation_id = 0
@@ -303,25 +319,7 @@ class RunBudget:
                 or input_tokens < 0
             ):
                 raise ValueError("input_tokens must be a non-negative integer")
-            task_tranche = 0
-            if task_reservation is not None:
-                if (
-                    not isinstance(task_reservation, TaskReservation)
-                    or not isinstance(task_reservation.reservation_id, int)
-                    or isinstance(task_reservation.reservation_id, bool)
-                    or not isinstance(task_reservation.reserved_tokens, int)
-                    or isinstance(task_reservation.reserved_tokens, bool)
-                ):
-                    raise TypeError("task_reservation must be a TaskReservation")
-                reservation_id = task_reservation.reservation_id
-                if (
-                    reservation_id not in self._open_task_reservations
-                    or task_reservation.reserved_tokens
-                    != self._policy.max_output_tokens
-                ):
-                    raise RuntimeError("task reservation is unknown or invalid")
-                if self._open_task_reservations[reservation_id]:
-                    task_tranche = task_reservation.reserved_tokens
+            task_tranche = self._task_tranche_locked(task_reservation)
             if self._model_calls >= self._policy.max_model_calls:
                 self._exhausted = True
                 raise RunBudgetExceededError("model-call budget exhausted")
@@ -336,9 +334,121 @@ class RunBudget:
             if task_tranche:
                 self._open_task_reservations[task_reservation.reservation_id] = False
             self._next_reservation_id += 1
-            reservation = ModelReservation(self._next_reservation_id, reserved)
+            reservation = ModelReservation(
+                self._next_reservation_id,
+                reserved,
+                "counted",
+                self._ledger_id,
+            )
             self._open_model_reservations[reservation.reservation_id] = reserved
             return reservation
+
+    def reserve_model_attempt(
+        self,
+        *,
+        task_reservation: TaskReservation | None = None,
+    ) -> ModelReservation:
+        """Reserve a call slot and maximum output before remote input counting."""
+        with self._lock:
+            self._require_active_locked()
+            task_tranche = self._task_tranche_locked(task_reservation)
+            if self._model_calls >= self._policy.max_model_calls:
+                self._exhausted = True
+                raise RunBudgetExceededError("model-call budget exhausted")
+            reserved = self._policy.max_output_tokens
+            additional_charge = reserved - task_tranche
+            if self._charged_tokens + additional_charge > self._policy.max_total_tokens:
+                self._exhausted = True
+                raise RunBudgetExceededError("token budget exhausted")
+
+            self._model_calls += 1
+            self._charged_tokens += additional_charge
+            if task_tranche:
+                self._open_task_reservations[task_reservation.reservation_id] = False
+            self._next_reservation_id += 1
+            reservation = ModelReservation(
+                self._next_reservation_id,
+                reserved,
+                "attempt",
+                self._ledger_id,
+            )
+            self._open_model_reservations[reservation.reservation_id] = reserved
+            self._model_reservations_needing_input.add(reservation.reservation_id)
+            return reservation
+
+    def reserve_model_input(
+        self,
+        reservation: ModelReservation,
+        *,
+        input_tokens: int,
+    ) -> ModelReservation:
+        """Extend a pre-count attempt with its exact provider-counted input."""
+        with self._lock:
+            self._require_active_locked()
+            if (
+                not isinstance(reservation, ModelReservation)
+                or not isinstance(reservation.reservation_id, int)
+                or isinstance(reservation.reservation_id, bool)
+                or not isinstance(reservation.reserved_tokens, int)
+                or isinstance(reservation.reserved_tokens, bool)
+                or reservation.phase != "attempt"
+                or reservation.ledger_id is not self._ledger_id
+            ):
+                raise TypeError("reservation must be a ModelReservation")
+            if (
+                reservation.reservation_id not in self._model_reservations_needing_input
+                or self._open_model_reservations.get(reservation.reservation_id)
+                != reservation.reserved_tokens
+                or reservation.reserved_tokens != self._policy.max_output_tokens
+            ):
+                raise RuntimeError(
+                    "model attempt reservation is unknown or already extended"
+                )
+            if (
+                not isinstance(input_tokens, int)
+                or isinstance(input_tokens, bool)
+                or input_tokens < 0
+            ):
+                raise ValueError("input_tokens must be a non-negative integer")
+            if self._charged_tokens + input_tokens > self._policy.max_total_tokens:
+                self._exhausted = True
+                raise RunBudgetExceededError("token budget exhausted")
+
+            reserved = reservation.reserved_tokens + input_tokens
+            self._charged_tokens += input_tokens
+            self._open_model_reservations[reservation.reservation_id] = reserved
+            self._model_reservations_needing_input.remove(reservation.reservation_id)
+            return ModelReservation(
+                reservation.reservation_id,
+                reserved,
+                "counted",
+                self._ledger_id,
+            )
+
+    def _task_tranche_locked(
+        self,
+        task_reservation: TaskReservation | None,
+    ) -> int:
+        if task_reservation is None:
+            return 0
+        if (
+            not isinstance(task_reservation, TaskReservation)
+            or not isinstance(task_reservation.reservation_id, int)
+            or isinstance(task_reservation.reservation_id, bool)
+            or not isinstance(task_reservation.reserved_tokens, int)
+            or isinstance(task_reservation.reserved_tokens, bool)
+            or task_reservation.ledger_id is not self._ledger_id
+        ):
+            raise TypeError("task_reservation must be a TaskReservation")
+        reservation_id = task_reservation.reservation_id
+        if (
+            reservation_id not in self._open_task_reservations
+            or task_reservation.reserved_tokens != self._policy.max_output_tokens
+        ):
+            raise RuntimeError("task reservation is unknown or invalid")
+        if self._open_task_reservations[reservation_id]:
+            return task_reservation.reserved_tokens
+        return 0
 
     def settle_model(
         self,
@@ -357,12 +467,39 @@ class RunBudget:
         self,
         reservation: ModelReservation,
         response: Any,
+        *,
+        model_provider: str,
+        expected_response_models: frozenset[str],
     ) -> None:
         """Settle totals and pricing buckets parsed from the provider response."""
+        try:
+            provider_usage = _provider_token_usage(
+                response,
+                model_provider=model_provider,
+                expected_response_models=expected_response_models,
+            )
+            actual_tokens = _actual_token_usage(response)
+        except Exception as exc:
+            try:
+                self._settle_model(
+                    reservation,
+                    actual_tokens=None,
+                    provider_usage=None,
+                    require_provider_usage=True,
+                )
+            except RunBudgetExceededError as failure:
+                raise failure from exc
+            raise AssertionError("fail-closed settlement did not raise") from exc
         self._settle_model(
             reservation,
-            actual_tokens=_actual_token_usage(response),
-            provider_usage=_anthropic_provider_token_usage(response),
+            actual_tokens=actual_tokens,
+            provider_usage=provider_usage,
+            require_provider_usage=model_provider == "openai",
+            expected_provider_input_tokens=(
+                reservation.reserved_tokens - self._policy.max_output_tokens
+                if model_provider == "openai"
+                else None
+            ),
         )
 
     def _settle_model(
@@ -371,6 +508,8 @@ class RunBudget:
         *,
         actual_tokens: int | None,
         provider_usage: _ProviderTokenUsage | None,
+        require_provider_usage: bool = False,
+        expected_provider_input_tokens: int | None = None,
     ) -> None:
         """Settle one reservation; missing usage retains the full charge."""
         with self._lock:
@@ -380,19 +519,46 @@ class RunBudget:
                 or isinstance(reservation.reservation_id, bool)
                 or not isinstance(reservation.reserved_tokens, int)
                 or isinstance(reservation.reserved_tokens, bool)
+                or reservation.phase not in {"attempt", "counted"}
+                or reservation.ledger_id is not self._ledger_id
             ):
                 raise TypeError("reservation must be a ModelReservation")
-            reserved = self._open_model_reservations.pop(
-                reservation.reservation_id,
-                None,
+            reserved = self._open_model_reservations.get(reservation.reservation_id)
+            needs_input = (
+                reservation.reservation_id in self._model_reservations_needing_input
             )
-            if reserved is None or reserved != reservation.reserved_tokens:
+            expected_phase = "attempt" if needs_input else "counted"
+            if (
+                reserved is None
+                or reserved != reservation.reserved_tokens
+                or reservation.phase != expected_phase
+            ):
                 raise RuntimeError("model reservation is unknown or already settled")
+            del self._open_model_reservations[reservation.reservation_id]
+            self._model_reservations_needing_input.discard(reservation.reservation_id)
+            if needs_input and (
+                actual_tokens is not None or provider_usage is not None
+            ):
+                self._provider_usage_complete = False
+                self._exhausted = True
+                raise RunBudgetExceededError(
+                    "model response arrived without an exact input reservation"
+                )
             if provider_usage is None:
                 self._provider_usage_complete = False
+                if require_provider_usage:
+                    self._exhausted = True
+                    raise RunBudgetExceededError(
+                        "provider response left the exact usage contract"
+                    )
             elif (
                 not isinstance(provider_usage, _ProviderTokenUsage)
                 or actual_tokens != provider_usage.total_tokens
+                or (
+                    expected_provider_input_tokens is not None
+                    and provider_usage.total_input_tokens
+                    != expected_provider_input_tokens
+                )
             ):
                 self._provider_usage_complete = False
                 self._exhausted = True
@@ -472,6 +638,7 @@ class RunBudget:
             reservation = QuickJSReservation(
                 self._next_quickjs_reservation_id,
                 reserved,
+                self._ledger_id,
             )
             self._open_quickjs_reservations[reservation.reservation_id] = reserved
             return reservation
@@ -490,6 +657,7 @@ class RunBudget:
                 or isinstance(reservation.reservation_id, bool)
                 or not isinstance(reservation.reserved_output_bytes, int)
                 or isinstance(reservation.reserved_output_bytes, bool)
+                or reservation.ledger_id is not self._ledger_id
             ):
                 raise TypeError("reservation must be a QuickJSReservation")
             reserved = self._open_quickjs_reservations.pop(
@@ -550,6 +718,7 @@ class RunBudget:
             reservation = TaskReservation(
                 self._next_task_reservation_id,
                 self._policy.max_output_tokens,
+                self._ledger_id,
             )
             self._open_task_reservations[reservation.reservation_id] = True
             return reservation
@@ -563,6 +732,7 @@ class RunBudget:
                 or isinstance(reservation.reservation_id, bool)
                 or not isinstance(reservation.reserved_tokens, int)
                 or isinstance(reservation.reserved_tokens, bool)
+                or reservation.ledger_id is not self._ledger_id
                 or reservation.reservation_id not in self._open_task_reservations
                 or reservation.reserved_tokens != self._policy.max_output_tokens
             ):
@@ -739,6 +909,25 @@ _ANTHROPIC_INPUT_DETAIL_KEYS = frozenset(
         *_ANTHROPIC_CACHE_CREATION_TTL_KEYS,
     }
 )
+_OPENAI_INPUT_DETAIL_KEYS = frozenset({"cache_creation", "cache_read"})
+_OPENAI_OUTPUT_DETAIL_KEYS = frozenset({"reasoning"})
+
+
+def _provider_token_usage(
+    response: Any,
+    *,
+    model_provider: str,
+    expected_response_models: frozenset[str],
+) -> _ProviderTokenUsage | None:
+    """Dispatch only from the server-owned provider, never metadata shape."""
+    if model_provider == "anthropic":
+        return _anthropic_provider_token_usage(response)
+    if model_provider == "openai":
+        return _openai_provider_token_usage(
+            response,
+            expected_response_models=expected_response_models,
+        )
+    return None
 
 
 def _anthropic_provider_token_usage(response: Any) -> _ProviderTokenUsage | None:
@@ -817,6 +1006,80 @@ def _anthropic_provider_token_usage(response: Any) -> _ProviderTokenUsage | None
         output_tokens=output_tokens_total,
         cache_read_input_tokens=cache_read_total,
         cache_write_input_tokens=cache_write_total,
+    )
+
+
+def _openai_provider_token_usage(
+    response: Any,
+    *,
+    expected_response_models: frozenset[str],
+) -> _ProviderTokenUsage | None:
+    """Parse exact OpenAI Responses pricing buckets for the pinned guest model."""
+    messages = _model_messages(response)
+    if not messages or not expected_response_models:
+        return None
+
+    input_tokens_total = 0
+    output_tokens_total = 0
+    cache_read_total = 0
+    for message in messages:
+        response_metadata = getattr(message, "response_metadata", None)
+        response_model = (
+            response_metadata.get("model_name")
+            if isinstance(response_metadata, Mapping)
+            else None
+        )
+        if (
+            not isinstance(response_metadata, Mapping)
+            or response_metadata.get("model_provider") != "openai"
+            or not isinstance(response_model, str)
+            or response_model not in expected_response_models
+        ):
+            return None
+
+        usage = getattr(message, "usage_metadata", None)
+        if not isinstance(usage, Mapping):
+            return None
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        total_tokens = usage.get("total_tokens")
+        if (
+            not _is_non_negative_integer(input_tokens)
+            or not _is_non_negative_integer(output_tokens)
+            or not _is_non_negative_integer(total_tokens)
+            or input_tokens + output_tokens != total_tokens
+        ):
+            return None
+
+        input_details = usage.get("input_token_details")
+        output_details = usage.get("output_token_details")
+        if (
+            not isinstance(input_details, Mapping)
+            or set(input_details) != _OPENAI_INPUT_DETAIL_KEYS
+            or not isinstance(output_details, Mapping)
+            or set(output_details) != _OPENAI_OUTPUT_DETAIL_KEYS
+        ):
+            return None
+        cache_read = input_details.get("cache_read")
+        cache_creation = input_details.get("cache_creation")
+        reasoning = output_details.get("reasoning")
+        if (
+            not _is_non_negative_integer(cache_read)
+            or cache_creation != 0
+            or reasoning != 0
+            or cache_read > input_tokens
+        ):
+            return None
+
+        input_tokens_total += input_tokens - cache_read
+        output_tokens_total += output_tokens
+        cache_read_total += cache_read
+
+    return _ProviderTokenUsage(
+        input_tokens=input_tokens_total,
+        output_tokens=output_tokens_total,
+        cache_read_input_tokens=cache_read_total,
+        cache_write_input_tokens=0,
     )
 
 
@@ -899,6 +1162,8 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         allow_subagents: bool,
         allowed_subagents: frozenset[str],
         input_token_counter: InputTokenCounter,
+        model_provider: str = "anthropic",
+        expected_response_models: frozenset[str] = frozenset(),
         native_subagent_prompt: str | None = None,
         quickjs_tool_name: str | None = None,
         allow_quickjs: bool = False,
@@ -912,11 +1177,26 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             raise TypeError("allow_quickjs must be a boolean")
         if allow_quickjs and quickjs_tool_name is None:
             raise ValueError("allow_quickjs requires quickjs_tool_name")
+        if model_provider not in {"anthropic", "openai"}:
+            raise ValueError("model_provider must be anthropic or openai")
+        if (
+            not isinstance(expected_response_models, frozenset)
+            or any(
+                not isinstance(model, str) or not model
+                for model in expected_response_models
+            )
+            or (model_provider == "openai") is not bool(expected_response_models)
+        ):
+            raise ValueError(
+                "OpenAI middleware requires exact expected response models"
+            )
         self._budget = budget
         self._depth = depth
         self._allow_subagents = allow_subagents
         self._allowed_subagents = allowed_subagents
         self._input_token_counter = input_token_counter
+        self._model_provider = model_provider
+        self._expected_response_models = expected_response_models
         self._native_subagent_prompt = native_subagent_prompt
         self._prompt_caching = AnthropicPromptCachingMiddleware(
             unsupported_model_behavior="ignore"
@@ -1010,20 +1290,32 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         async def count_then_generate(
             final_request: ModelRequest[Any],
         ) -> ModelResponse[Any]:
-            input_tokens = await self._count_input_tokens(final_request)
-            reservation = self._budget.reserve_model(
-                input_tokens=input_tokens,
+            attempt = self._budget.reserve_model_attempt(
                 task_reservation=(
                     _ACTIVE_TASK_RESERVATION.get() if self._depth > 0 else None
                 ),
             )
+            try:
+                input_tokens = await self._count_input_tokens(final_request)
+                reservation = self._budget.reserve_model_input(
+                    attempt,
+                    input_tokens=input_tokens,
+                )
+            except BaseException:
+                self._budget.settle_model(attempt, actual_tokens=None)
+                raise
             try:
                 async with asyncio.timeout(self._budget.remaining_seconds()):
                     response = await handler(final_request)
             except BaseException:
                 self._budget.settle_model(reservation, actual_tokens=None)
                 raise
-            self._budget._settle_model_response(reservation, response)
+            self._budget._settle_model_response(
+                reservation,
+                response,
+                model_provider=self._model_provider,
+                expected_response_models=self._expected_response_models,
+            )
             return response
 
         # Deep Agents appends this native middleware after user middleware.

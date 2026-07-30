@@ -316,6 +316,7 @@
               "langgraph-*",
               "langsmith",
               "numpy",
+              "openai",
               "quickjs-rs"
             ],
             "update_types": [

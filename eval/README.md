@@ -163,7 +163,10 @@ P4.5. It contains structured direct-answer, ranked-list transform, stateless evi
 and combined tasks. It is not a retrieval query-set and is never accepted by `sweep` or
 rendered into `leaderboard.md`. Its v1 label status is `synthetic-only`; it proves the
 harness and capability boundaries but is not owner-reviewed evidence for public
-enablement.
+enablement. Every current run and artifact is additionally fixed to
+`synthetic-provider-free`: this PR is a harness foundation, does not satisfy the P4.5
+acceptance or standalone/combined quality gates, and cannot justify enabling either
+capability for visitors.
 
 `blogeval.capability_runner.run_capability_experiment` owns the exact four arms:
 QuickJS off/on × subagents off/on. A provider adapter implements `CapabilityExecutor`
@@ -178,7 +181,12 @@ Each sweep requires a fresh UUIDv4 execution ID. A deterministic four-row Willia
 schedule counterbalances arm position per task while artifacts retain one canonical arm
 and task order. Every zero-spend preflight retry receives a different attempt, thread,
 graph-run ID, and seed; a failure after any model/tool/capability spend is never retried
-or omitted from cost. `max_attempts` is bounded to three.
+or omitted from cost. `max_attempts` is bounded to three. The run boundary measures
+`HEAD:content` from the required local workspace, rejects tracked, staged, or untracked
+`content/` drift, and requires the measured tree to equal both the dataset and executor
+identity. It also caps the task set and every `RunBudgetPolicy` field, and rejects the
+experiment before its first executor call unless a conservative four-arm worst-case
+token cost fits the explicit micro-dollar ceiling.
 
 The executor returns only a redacted structured outcome plus verified-empty persistence
 and the exact recorded cache mode. It cannot report tokens or cost. The runner wraps the
@@ -214,15 +222,23 @@ are byte-stable for the same complete observations. A same-ID rerun with differe
 is rejected, making nondeterministic provider output explicit instead of silently
 replacing a result.
 
-PR CI does not call a paid model. `tests/test_capability_runner.py` substitutes only a
+PR CI does not call a paid model. There is deliberately no capability CLI, provider
+executor, credential lookup, workflow, or supported paid execution path in this
+foundation. `CapabilityExecutor` is only an internal protocol exercised by tests; its
+declared model, cache, and prices are not yet provider-derived evidence.
+`tests/test_capability_runner.py` substitutes only a
 deterministic provider-free chat model with exact normalized Anthropic metadata, then
 executes the production `create_graph` topology in all four arms. It runs native QuickJS
 and native Deep Agents `task`, verifies fresh empty in-memory persistence, proves that the
 QuickJS-only root has no task surface, proves the combined task executes both
 capabilities, and proves the child has no QuickJS, task, filesystem, environment, or
-network surface. Provider-backed experiments remain owner/eval operations and must
-declare a fresh execution ID, exact cache mode, four pricing rates, seed, and bounded
-zero-spend attempt count.
+network surface.
+
+A later, separately reviewed paid-adapter PR must derive rather than accept or echo the
+exact Anthropic model spec, cache mode, versioned pricing rates, fresh execution UUID,
+measured content tree, and explicit spend cap. It must add a new evidence tier and retain
+the synthetic banner on old artifacts. Until that adapter and a real reviewed result
+land, no P4.5 quality/cost conclusion exists.
 
 ## Development gates
 

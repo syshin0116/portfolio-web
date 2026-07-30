@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import copy
 import hashlib
@@ -61,10 +62,12 @@ FIXED_PROVENANCE = RunProvenance(
 FIXED_IDENTITY = CapabilityExecutorIdentity(
     executor_id="tests:deterministic-capability-executor@1",
     execution_id="123e4567-e89b-42d3-a456-426614174000",
+    content_tree_sha=CONTENT_TREE_SHA,
     model_id="fixture:structured-agent-v1",
     random_seed=20260728,
     max_attempts=2,
     cache_mode="anthropic-ephemeral-5m-recorded",
+    max_experiment_cost_usd_micros=500_000,
     uncached_input_usd_micros_per_million_tokens=3_000_000,
     output_usd_micros_per_million_tokens=15_000_000,
     cache_read_input_usd_micros_per_million_tokens=300_000,
@@ -342,6 +345,7 @@ class DeterministicCapabilityExecutor:
                 "arm_id": context.arm.arm_id,
                 "attempt_id": context.attempt_id,
                 "bound_tool_names": tuple(model.bound_tool_names),
+                "content_tree_sha": context.content_tree_sha,
                 "graph_run_id": str(context.graph_run_id),
                 "persistence_empty": persistence_empty,
                 "task_id": context.task.task_id,
@@ -418,6 +422,7 @@ def _run_dataset(dataset, *, executor=GRAPH_EXECUTOR, identity=FIXED_IDENTITY):
             executor=executor,
             executor_identity=identity,
             budget_policy=FIXED_POLICY,
+            workspace_root=REPO_ROOT,
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
             budget_factory=_budget_factory,
@@ -517,6 +522,26 @@ def test_capability_taskset_rejects_unsafe_or_unbounded_dataset_ids(
     with pytest.raises(
         CapabilityEvaluationError,
         match="bounded lower kebab-case",
+    ):
+        parse_capability_taskset(
+            value,
+            checksum=json_checksum(canonical_json_bytes(value)),
+        )
+
+
+def test_capability_taskset_rejects_more_than_the_bounded_task_count() -> None:
+    dataset = load_capability_taskset(TASKSET_PATH)
+    value = dataset.as_dict()
+    template = copy.deepcopy(value["tasks"][0])
+    value["tasks"] = []
+    for index in range(33):
+        task = copy.deepcopy(template)
+        task["task_id"] = f"task-{index:02d}"
+        value["tasks"].append(task)
+
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="cannot contain more than 32 tasks",
     ):
         parse_capability_taskset(
             value,
@@ -653,6 +678,7 @@ def test_provider_free_graph_exercises_real_four_arm_topology_with_isolation() -
     for identity_key in ("attempt_id", "thread_id", "graph_run_id"):
         assert len({record[identity_key] for record in records}) == len(records)
     assert all(record["persistence_empty"] is True for record in records)
+    assert all(record["content_tree_sha"] == CONTENT_TREE_SHA for record in records)
 
     quickjs_only = [
         record for record in records if record["arm_id"] == "quickjs-on_subagents-off"
@@ -734,6 +760,9 @@ def test_capability_artifacts_are_byte_stable_and_not_a_retrieval_leaderboard(
     )
     assert not (first.directory / "leaderboard.md").exists()
     report = first.report_markdown.read_text(encoding="utf-8")
+    assert "SYNTHETIC PROVIDER-FREE EVIDENCE ONLY" in report
+    assert "does not satisfy P4.5 acceptance" in report
+    assert "synthetic-provider-free" in report
     assert "intentionally excluded from the retrieval leaderboard" in report
     assert "QuickJS" in report
     assert "Subagents" in report
@@ -743,6 +772,58 @@ def test_capability_artifacts_are_byte_stable_and_not_a_retrieval_leaderboard(
     )
     assert verified.result_digest == first.result_digest
     assert verified.run == first_run
+
+
+def test_capability_artifacts_reject_provider_backed_evidence_claims(
+    tmp_path: Path,
+) -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    value["evidence_status"] = "provider-backed"
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="cannot claim provider-backed evidence",
+    ):
+        parse_capability_run(value, dataset=run.dataset)
+
+    artifacts = write_capability_artifacts(run, output_root=tmp_path)
+    manifest = json.loads(artifacts.result_manifest.read_bytes())
+    manifest["evidence_status"] = "provider-backed"
+    artifacts.result_manifest.write_bytes(canonical_json_bytes(manifest))
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="cannot claim provider-backed evidence",
+    ):
+        verify_capability_run_directory(
+            artifacts.directory,
+            dataset=run.dataset,
+        )
+
+
+def test_capability_foundation_exposes_no_provider_or_capability_cli() -> None:
+    runner_path = REPO_ROOT / "eval" / "src" / "blogeval" / "capability_runner.py"
+    cli_path = REPO_ROOT / "eval" / "src" / "blogeval" / "cli.py"
+
+    def imported_modules(path: Path) -> set[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                modules.add(node.module)
+        return modules
+
+    assert imported_modules(runner_path).isdisjoint(
+        {"anthropic", "langchain_anthropic"}
+    )
+    assert "blogeval.capability_runner" not in imported_modules(cli_path)
+    workflow_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+    )
+    assert "capability-sweep" not in workflow_source
+    assert "blogeval.capability_runner" not in workflow_source
 
 
 def test_capability_verifier_rejects_partial_result_directory(
@@ -944,6 +1025,13 @@ def _mark_incomplete_provider_usage_without_redaction(value) -> None:
             ),
             "attempt/thread/run identity is inconsistent",
         ),
+        (
+            lambda value: value["arms"][0]["tasks"][0]["budget"].__setitem__(
+                "elapsed_ms",
+                FIXED_POLICY.max_elapsed_seconds * 1_000,
+            ),
+            "exceeds or differs from its RunBudgetPolicy",
+        ),
     ],
     ids=[
         "nonterminal-snapshot",
@@ -955,6 +1043,7 @@ def _mark_incomplete_provider_usage_without_redaction(value) -> None:
         "pricing-bool-as-int",
         "persistence-not-empty",
         "attempt-identity-drift",
+        "elapsed-at-exclusive-deadline",
     ],
 )
 def test_recorded_run_rejects_nonterminal_or_untrusted_execution_evidence(
@@ -986,6 +1075,7 @@ def test_runner_aborts_when_executor_does_not_return_a_complete_observation() ->
                 executor=ExplodingExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -993,6 +1083,190 @@ def test_runner_aborts_when_executor_does_not_return_a_complete_observation() ->
         )
 
     assert "provider detail" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"max_experiment_cost_usd_micros": 25_000_001},
+        {"uncached_input_usd_micros_per_million_tokens": 0},
+        {"output_usd_micros_per_million_tokens": 0},
+        {"cache_read_input_usd_micros_per_million_tokens": 0},
+        {"cache_write_input_usd_micros_per_million_tokens": 0},
+        {"output_usd_micros_per_million_tokens": 100_000_001},
+    ],
+    ids=[
+        "experiment-cap",
+        "uncached-input-zero",
+        "output-zero",
+        "cache-read-zero",
+        "cache-write-zero",
+        "price-cap",
+    ],
+)
+def test_executor_identity_rejects_unbounded_or_zero_pricing(
+    changes: dict[str, int],
+) -> None:
+    with pytest.raises(ValueError, match="executor identity is malformed"):
+        replace(FIXED_IDENTITY, **changes)
+
+
+@pytest.mark.parametrize(
+    ("identity", "policy", "message"),
+    [
+        (
+            replace(FIXED_IDENTITY, max_experiment_cost_usd_micros=1),
+            FIXED_POLICY,
+            "worst-case capability experiment cost exceeds",
+        ),
+        (
+            FIXED_IDENTITY,
+            replace(FIXED_POLICY, max_task_calls=3),
+            "RunBudgetPolicy exceeds the capability experiment maxima",
+        ),
+    ],
+    ids=["whole-sweep-cost", "policy-maxima"],
+)
+def test_runner_rejects_unsafe_experiment_inputs_before_executor_invocation(
+    identity: CapabilityExecutorIdentity,
+    policy: RunBudgetPolicy,
+    message: str,
+) -> None:
+    class InvocationSpy:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, context):
+            del context
+            self.calls += 1
+            raise AssertionError("unsafe experiment reached the executor")
+
+    executor = InvocationSpy()
+    with pytest.raises(CapabilityEvaluationError, match=message):
+        asyncio.run(
+            run_capability_experiment(
+                dataset=_task_subset("baseline-citation-shape"),
+                executor=executor,
+                executor_identity=identity,
+                budget_policy=policy,
+                workspace_root=REPO_ROOT,
+                provenance=FIXED_PROVENANCE,
+                clock_ns=DeterministicClock(),
+                budget_factory=_budget_factory,
+            )
+        )
+    assert executor.calls == 0
+
+
+def test_runner_measures_the_clean_local_content_tree() -> None:
+    assert capability_runner._measure_content_tree_sha(REPO_ROOT) == CONTENT_TREE_SHA
+
+
+def test_content_tree_measurement_rejects_drift_before_rev_parse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def dirty_status(command, **kwargs):
+        del kwargs
+        commands.append(command)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="?? content/wiki/transient.md\n",
+        )
+
+    monkeypatch.setattr(capability_runner.subprocess, "run", dirty_status)
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="dirty workspace",
+    ):
+        capability_runner._measure_content_tree_sha(REPO_ROOT)
+
+    assert len(commands) == 1
+    assert commands[0][-2:] == ("--", "content")
+
+
+def test_runner_rejects_measured_content_drift_before_executor_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvocationSpy:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, context):
+            del context
+            self.calls += 1
+            raise AssertionError("content drift reached the executor")
+
+    measured_roots: list[Path] = []
+
+    def drifted_content_tree(root: Path) -> str:
+        measured_roots.append(root)
+        return "f" * 40
+
+    monkeypatch.setattr(
+        capability_runner,
+        "_measure_content_tree_sha",
+        drifted_content_tree,
+    )
+    executor = InvocationSpy()
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="measured content tree differs",
+    ):
+        asyncio.run(
+            run_capability_experiment(
+                dataset=_task_subset("baseline-citation-shape"),
+                executor=executor,
+                executor_identity=FIXED_IDENTITY,
+                budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
+                provenance=FIXED_PROVENANCE,
+                clock_ns=DeterministicClock(),
+                budget_factory=_budget_factory,
+            )
+        )
+
+    assert measured_roots == [REPO_ROOT]
+    assert executor.calls == 0
+
+
+def test_runner_deep_isolates_tasks_and_rejects_executor_mutation() -> None:
+    class MutatingExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, context):
+            self.calls += 1
+            evidence = context.task.inputs["evidence"]
+            assert isinstance(evidence, list)
+            evidence.append({"doc_id": "mutated", "statement": "mutated"})
+            await _record_provider_usage(context)
+            return _observation(context)
+
+    dataset = _task_subset("baseline-citation-shape")
+    executor = MutatingExecutor()
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="executor mutated its isolated capability task",
+    ):
+        asyncio.run(
+            run_capability_experiment(
+                dataset=dataset,
+                executor=executor,
+                executor_identity=FIXED_IDENTITY,
+                budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
+                provenance=FIXED_PROVENANCE,
+                clock_ns=DeterministicClock(),
+                budget_factory=_budget_factory,
+            )
+        )
+
+    assert executor.calls == 1
+    original_evidence = dataset.tasks[0].inputs["evidence"]
+    assert isinstance(original_evidence, list)
+    assert len(original_evidence) == 1
 
 
 def test_runner_rejects_incomplete_provider_usage_without_executor_accounting() -> None:
@@ -1012,6 +1286,35 @@ def test_runner_rejects_incomplete_provider_usage_without_executor_accounting() 
                 executor=IncompleteUsageExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
+                provenance=FIXED_PROVENANCE,
+                clock_ns=DeterministicClock(),
+                budget_factory=_budget_factory,
+            )
+        )
+
+
+def test_disabled_cache_mode_rejects_nonzero_provider_cache_buckets() -> None:
+    class CacheDriftExecutor:
+        async def execute(self, context):
+            await _record_provider_usage(context)
+            return replace(_observation(context), cache_mode="disabled")
+
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="disabled cache mode cannot record cache token buckets",
+    ):
+        asyncio.run(
+            run_capability_experiment(
+                dataset=_task_subset("baseline-citation-shape"),
+                executor=CacheDriftExecutor(),
+                executor_identity=replace(
+                    FIXED_IDENTITY,
+                    cache_mode="disabled",
+                    max_attempts=1,
+                ),
+                budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1044,6 +1347,7 @@ def test_runner_wraps_the_complete_executor_in_the_runbudget_deadline() -> None:
                 executor=BlockingExecutor(),
                 executor_identity=replace(FIXED_IDENTITY, max_attempts=1),
                 budget_policy=replace(FIXED_POLICY, max_elapsed_seconds=1),
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
             ),
             timeout=2,
@@ -1079,6 +1383,7 @@ def test_runner_rejects_each_open_reservation_explicitly(reserve) -> None:
                 executor=OpenReservationExecutor(),
                 executor_identity=replace(FIXED_IDENTITY, max_attempts=1),
                 budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1105,6 +1410,7 @@ def test_zero_spend_retry_uses_fresh_attempt_thread_and_graph_run_ids() -> None:
             executor=executor,
             executor_identity=FIXED_IDENTITY,
             budget_policy=FIXED_POLICY,
+            workspace_root=REPO_ROOT,
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
             budget_factory=_budget_factory,
@@ -1140,6 +1446,7 @@ def test_spent_executor_failure_is_never_retried_or_omitted_from_cost() -> None:
                 executor=executor,
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1172,6 +1479,7 @@ def test_runner_requires_attempt_isolation_and_exact_cache_mode(
                 executor=IsolationDriftExecutor(),
                 executor_identity=replace(FIXED_IDENTITY, max_attempts=1),
                 budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1226,6 +1534,7 @@ def test_enabled_arm_without_capability_activity_is_rejected_as_incomplete() -> 
                 executor=CapabilityIgnoringExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1252,6 +1561,7 @@ def test_unsettled_combined_capability_reservation_fails_closed() -> None:
                 executor=UnsettledExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1283,6 +1593,7 @@ def test_completed_but_wrong_structured_output_scores_zero_without_aborting() ->
             executor=WrongOutputExecutor(),
             executor_identity=FIXED_IDENTITY,
             budget_policy=FIXED_POLICY,
+            workspace_root=REPO_ROOT,
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
             budget_factory=_budget_factory,

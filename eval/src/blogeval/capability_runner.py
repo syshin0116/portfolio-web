@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import shutil
 import stat
+import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -50,6 +52,7 @@ from blogeval.provenance import (
 CAPABILITY_TASKSET_SCHEMA = "blogeval-capability-taskset-v1"
 CAPABILITY_RUN_SCHEMA = "blogeval-capability-run-v2"
 CAPABILITY_RUNNER_ID = "blogeval.capability_runner@2"
+CAPABILITY_EVIDENCE_STATUS = "synthetic-provider-free"
 CAPABILITY_MANIFEST_SCHEMA = "blogeval-capability-result-manifest-v1"
 CAPABILITY_RESULT_DIGEST_SCHEMA = "blogeval-capability-result-digest-v1"
 CAPABILITY_RESULT_FILES = ("capability-report.md", "run.json")
@@ -59,9 +62,26 @@ _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_DATASET_ID_BYTES = 128
 _MAX_PROMPT_BYTES = 16_000
+_MAX_TASKS = 32
 _RATE_SCALE = 1_000_000
 _MAX_ATTEMPTS = 3
+_MAX_EXPERIMENT_COST_USD_MICROS = 25_000_000
+_MAX_PRICE_USD_MICROS_PER_MILLION_TOKENS = 100_000_000
 _CACHE_MODES = frozenset({"disabled", "anthropic-ephemeral-5m-recorded"})
+_CAPABILITY_POLICY_MAXIMA = {
+    "max_model_calls": 12,
+    "max_tool_calls": 24,
+    "max_quickjs_calls": 4,
+    "max_quickjs_in_flight": 1,
+    "max_quickjs_output_bytes": 4_096,
+    "max_quickjs_total_output_bytes": 16_384,
+    "max_task_calls": 2,
+    "max_tasks_in_flight": 2,
+    "max_depth": 1,
+    "max_output_tokens": 2_048,
+    "max_total_tokens": 48_000,
+    "max_elapsed_seconds": 90,
+}
 _FAILURE_CODES = frozenset(
     {
         "budget_exhausted",
@@ -149,10 +169,12 @@ class CapabilityExecutorIdentity:
 
     executor_id: str
     execution_id: str
+    content_tree_sha: str
     model_id: str
     random_seed: int
     max_attempts: int
     cache_mode: str
+    max_experiment_cost_usd_micros: int
     uncached_input_usd_micros_per_million_tokens: int
     output_usd_micros_per_million_tokens: int
     cache_read_input_usd_micros_per_million_tokens: int
@@ -170,6 +192,8 @@ class CapabilityExecutorIdentity:
             or execution_uuid is None
             or execution_uuid.version != 4
             or str(execution_uuid) != self.execution_id
+            or not isinstance(self.content_tree_sha, str)
+            or _SHA1_RE.fullmatch(self.content_tree_sha) is None
             or not isinstance(self.model_id, str)
             or not self.model_id
             or self.model_id != self.model_id.strip()
@@ -179,25 +203,32 @@ class CapabilityExecutorIdentity:
             or not 1 <= self.max_attempts <= _MAX_ATTEMPTS
             or not isinstance(self.cache_mode, str)
             or self.cache_mode not in _CACHE_MODES
-            or not _is_non_negative_int(
-                self.uncached_input_usd_micros_per_million_tokens
-            )
-            or not _is_non_negative_int(self.output_usd_micros_per_million_tokens)
-            or not _is_non_negative_int(
-                self.cache_read_input_usd_micros_per_million_tokens
-            )
-            or not _is_non_negative_int(
+            or not _is_positive_int(self.max_experiment_cost_usd_micros)
+            or (self.max_experiment_cost_usd_micros > _MAX_EXPERIMENT_COST_USD_MICROS)
+            or not _is_positive_int(self.uncached_input_usd_micros_per_million_tokens)
+            or not _is_positive_int(self.output_usd_micros_per_million_tokens)
+            or not _is_positive_int(self.cache_read_input_usd_micros_per_million_tokens)
+            or not _is_positive_int(
                 self.cache_write_input_usd_micros_per_million_tokens
             )
+            or max(
+                self.uncached_input_usd_micros_per_million_tokens,
+                self.output_usd_micros_per_million_tokens,
+                self.cache_read_input_usd_micros_per_million_tokens,
+                self.cache_write_input_usd_micros_per_million_tokens,
+            )
+            > _MAX_PRICE_USD_MICROS_PER_MILLION_TOKENS
         ):
             raise ValueError("capability executor identity is malformed")
 
     def as_dict(self) -> dict[str, object]:
         return {
             "cache_mode": self.cache_mode,
+            "content_tree_sha": self.content_tree_sha,
             "execution_id": self.execution_id,
             "executor_id": self.executor_id,
             "max_attempts": self.max_attempts,
+            "max_experiment_cost_usd_micros": (self.max_experiment_cost_usd_micros),
             "model_id": self.model_id,
             "pricing": {
                 "cache_read_input_usd_micros_per_million_tokens": (
@@ -236,6 +267,7 @@ class CapabilityExecutionContext:
     arm: CapabilityArm
     task: CapabilityTask
     budget: RunBudget
+    content_tree_sha: str
     random_seed: int
     attempt_id: str
     attempt_number: int
@@ -359,6 +391,7 @@ class CapabilityRun:
                 "label_status": self.dataset.label_status,
                 "task_count": len(self.dataset.tasks),
             },
+            "evidence_status": CAPABILITY_EVIDENCE_STATUS,
             "executor": self.executor.as_dict(),
             "provenance": self.provenance.as_dict(),
             "run_id": self.run_id,
@@ -384,6 +417,10 @@ class VerifiedCapabilityRun:
 
 def _is_non_negative_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _mapping(
@@ -507,6 +544,10 @@ def parse_capability_taskset(
     raw_tasks = _array(raw["tasks"], location="task-set.tasks")
     if not raw_tasks:
         raise CapabilityEvaluationError("capability task-set must not be empty")
+    if len(raw_tasks) > _MAX_TASKS:
+        raise CapabilityEvaluationError(
+            f"capability task-set cannot contain more than {_MAX_TASKS} tasks"
+        )
 
     tasks: list[CapabilityTask] = []
     for index, task_value in enumerate(raw_tasks):
@@ -719,6 +760,131 @@ def _task_capabilities(task: CapabilityTask) -> tuple[bool, bool]:
     return quickjs_required, subagents_required
 
 
+def _isolated_task(task: CapabilityTask) -> CapabilityTask:
+    """Give one attempt its own nested JSON values so arms cannot contaminate peers."""
+
+    inputs = json.loads(canonical_json_bytes(task.inputs))
+    expected_answer = json.loads(canonical_json_bytes(task.expected_answer))
+    if not isinstance(inputs, dict) or not isinstance(expected_answer, dict):
+        raise CapabilityEvaluationError("capability task JSON isolation failed")
+    return CapabilityTask(
+        task_id=task.task_id,
+        prompt=task.prompt,
+        inputs=inputs,
+        expected_answer=expected_answer,
+        expected_citations=task.expected_citations,
+        tags=task.tags,
+    )
+
+
+def _require_task_unchanged(
+    task: CapabilityTask,
+    *,
+    expected_payload: bytes,
+) -> None:
+    try:
+        actual_payload = canonical_json_bytes(task.as_dict())
+    except (StrictJsonError, TypeError, UnicodeEncodeError, ValueError) as exc:
+        raise CapabilityEvaluationError(
+            "executor mutated its isolated capability task"
+        ) from exc
+    if actual_payload != expected_payload:
+        raise CapabilityEvaluationError("executor mutated its isolated capability task")
+
+
+def _validated_capability_policy(policy: object) -> RunBudgetPolicy:
+    if not isinstance(policy, RunBudgetPolicy):
+        raise CapabilityEvaluationError("RunBudgetPolicy is required")
+    if any(
+        getattr(policy, field) > maximum
+        for field, maximum in _CAPABILITY_POLICY_MAXIMA.items()
+    ):
+        raise CapabilityEvaluationError(
+            "RunBudgetPolicy exceeds the capability experiment maxima"
+        )
+    return policy
+
+
+def _measure_content_tree_sha(workspace_root: Path) -> str:
+    """Measure a clean workspace's committed ``content/`` tree without network I/O."""
+
+    if not isinstance(workspace_root, Path):
+        raise CapabilityEvaluationError(
+            "workspace root is required to measure the current content tree"
+        )
+    try:
+        root = workspace_root.resolve()
+    except OSError as exc:
+        raise CapabilityEvaluationError(
+            "workspace root cannot be resolved for content-tree measurement"
+        ) from exc
+    if (
+        not root.is_dir()
+        or not (root / "content").is_dir()
+        or not (root / "agent").is_dir()
+        or not (root / "eval").is_dir()
+        or not (root / "uv.lock").is_file()
+    ):
+        raise CapabilityEvaluationError(
+            "workspace root is incomplete for content-tree measurement"
+        )
+
+    def git_output(*args: str) -> str:
+        try:
+            completed = subprocess.run(
+                ("git", "-C", str(root), *args),
+                check=False,
+                capture_output=True,
+                encoding="utf-8",
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+            raise CapabilityEvaluationError(
+                "current content tree cannot be measured from local git"
+            ) from exc
+        if completed.returncode != 0:
+            raise CapabilityEvaluationError(
+                "current content tree cannot be measured from local git"
+            )
+        return completed.stdout
+
+    status = git_output(
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        "content",
+    )
+    if status:
+        raise CapabilityEvaluationError(
+            "current content tree cannot be measured from a dirty workspace"
+        )
+    measured = git_output("rev-parse", "--verify", "HEAD:content").strip()
+    if _SHA1_RE.fullmatch(measured) is None:
+        raise CapabilityEvaluationError(
+            "local git returned a malformed current content tree"
+        )
+    return measured
+
+
+def _worst_case_experiment_cost(
+    identity: CapabilityExecutorIdentity,
+    *,
+    policy: RunBudgetPolicy,
+    task_count: int,
+) -> int:
+    maximum_rate = max(
+        identity.uncached_input_usd_micros_per_million_tokens,
+        identity.output_usd_micros_per_million_tokens,
+        identity.cache_read_input_usd_micros_per_million_tokens,
+        identity.cache_write_input_usd_micros_per_million_tokens,
+    )
+    maximum_task_cost = (policy.max_total_tokens * maximum_rate + 999_999) // 1_000_000
+    return maximum_task_cost * task_count * len(CAPABILITY_ARMS)
+
+
 def _estimated_cost(
     identity: CapabilityExecutorIdentity,
     *,
@@ -804,6 +970,12 @@ def _validate_observation(
         tuple[int, int, int, int],
         provider_buckets,
     )
+    if identity.cache_mode == "disabled" and (
+        cache_read_tokens != 0 or cache_write_tokens != 0
+    ):
+        raise CapabilityEvaluationError(
+            "disabled cache mode cannot record cache token buckets"
+        )
     if (
         budget.model_calls < 1
         or budget.charged_tokens
@@ -951,6 +1123,7 @@ def _run_id(
             "label_status": dataset.label_status,
             "task_count": len(dataset.tasks),
         },
+        "evidence_status": CAPABILITY_EVIDENCE_STATUS,
         "executor": executor.as_dict(),
         "provenance": provenance.as_dict(),
         "runner": CAPABILITY_RUNNER_ID,
@@ -1030,6 +1203,7 @@ async def run_capability_experiment(
     executor: CapabilityExecutor,
     executor_identity: CapabilityExecutorIdentity,
     budget_policy: RunBudgetPolicy,
+    workspace_root: Path,
     provenance: RunProvenance | None = None,
     clock_ns: Callable[[], int] = time.monotonic_ns,
     budget_factory: Callable[[RunBudgetPolicy], RunBudget] = RunBudget,
@@ -1039,8 +1213,24 @@ async def run_capability_experiment(
     dataset = _validated_taskset(dataset, location="experiment dataset")
     if not isinstance(executor_identity, CapabilityExecutorIdentity):
         raise CapabilityEvaluationError("executor identity is required")
-    if not isinstance(budget_policy, RunBudgetPolicy):
-        raise CapabilityEvaluationError("RunBudgetPolicy is required")
+    budget_policy = _validated_capability_policy(budget_policy)
+    measured_content_tree_sha = _measure_content_tree_sha(workspace_root)
+    if (
+        measured_content_tree_sha != dataset.content_tree_sha
+        or measured_content_tree_sha != executor_identity.content_tree_sha
+    ):
+        raise CapabilityEvaluationError(
+            "measured content tree differs from the dataset or executor identity"
+        )
+    worst_case_cost = _worst_case_experiment_cost(
+        executor_identity,
+        policy=budget_policy,
+        task_count=len(dataset.tasks),
+    )
+    if worst_case_cost > executor_identity.max_experiment_cost_usd_micros:
+        raise CapabilityEvaluationError(
+            "worst-case capability experiment cost exceeds the explicit ceiling"
+        )
     measured_provenance = provenance or collect_run_provenance()
 
     task_results_by_arm: dict[str, list[CapabilityTaskResult]] = {
@@ -1050,11 +1240,13 @@ async def run_capability_experiment(
     seen_thread_ids: set[str] = set()
     seen_graph_run_ids: set[UUID] = set()
     for task_index, task in enumerate(dataset.tasks):
+        expected_task_payload = canonical_json_bytes(task.as_dict())
         for arm in _counterbalanced_arms(
             executor_identity,
             task_index=task_index,
         ):
             for attempt_number in range(1, executor_identity.max_attempts + 1):
+                attempt_task = _isolated_task(task)
                 budget = budget_factory(budget_policy)
                 if not isinstance(budget, RunBudget) or budget.policy != budget_policy:
                     raise CapabilityEvaluationError(
@@ -1084,8 +1276,9 @@ async def run_capability_experiment(
                 validate_capability_config(run_config)
                 context = CapabilityExecutionContext(
                     arm=arm,
-                    task=task,
+                    task=attempt_task,
                     budget=budget,
+                    content_tree_sha=measured_content_tree_sha,
                     random_seed=_derived_seed(
                         executor_identity,
                         arm,
@@ -1105,12 +1298,20 @@ async def run_capability_experiment(
                     async with asyncio.timeout(budget.remaining_seconds()):
                         observation = await executor.execute(context)
                 except TimeoutError as exc:
+                    _require_task_unchanged(
+                        attempt_task,
+                        expected_payload=expected_task_payload,
+                    )
                     budget.exhaust()
                     raise CapabilityEvaluationError(
                         "executor exceeded the complete RunBudget deadline for "
                         f"{arm.arm_id}/{task.task_id}"
                     ) from exc
                 except Exception as exc:
+                    _require_task_unchanged(
+                        attempt_task,
+                        expected_payload=expected_task_payload,
+                    )
                     snapshot = _finalize_attempt_budget(
                         budget,
                         arm=arm,
@@ -1125,6 +1326,10 @@ async def run_capability_experiment(
                         f"executor failed before a complete observation for "
                         f"{arm.arm_id}/{task.task_id}"
                     ) from exc
+                _require_task_unchanged(
+                    attempt_task,
+                    expected_payload=expected_task_payload,
+                )
                 finished_ns = clock_ns()
                 if not _is_non_negative_int(finished_ns) or finished_ns < started_ns:
                     raise CapabilityEvaluationError("experiment clock moved backwards")
@@ -1169,6 +1374,11 @@ async def run_capability_experiment(
         )
     if tuple(result.arm for result in arms) != CAPABILITY_ARMS:
         raise CapabilityEvaluationError("capability experiment is missing a fixed arm")
+    actual_cost = sum(arm.metrics.estimated_cost_usd_micros for arm in arms)
+    if actual_cost > executor_identity.max_experiment_cost_usd_micros:
+        raise CapabilityEvaluationError(
+            "capability experiment cost exceeds the explicit ceiling"
+        )
     return CapabilityRun(
         run_id=_run_id(
             dataset=dataset,
@@ -1191,9 +1401,11 @@ def _parse_executor(value: object) -> CapabilityExecutorIdentity:
         keys=frozenset(
             {
                 "cache_mode",
+                "content_tree_sha",
                 "execution_id",
                 "executor_id",
                 "max_attempts",
+                "max_experiment_cost_usd_micros",
                 "model_id",
                 "pricing",
                 "random_seed",
@@ -1218,6 +1430,10 @@ def _parse_executor(value: object) -> CapabilityExecutorIdentity:
                 raw["cache_mode"],
                 location="run.executor.cache_mode",
             ),
+            content_tree_sha=_text(
+                raw["content_tree_sha"],
+                location="run.executor.content_tree_sha",
+            ),
             execution_id=_text(
                 raw["execution_id"],
                 location="run.executor.execution_id",
@@ -1229,6 +1445,10 @@ def _parse_executor(value: object) -> CapabilityExecutorIdentity:
             max_attempts=_integer(
                 raw["max_attempts"],
                 location="run.executor.max_attempts",
+            ),
+            max_experiment_cost_usd_micros=_integer(
+                raw["max_experiment_cost_usd_micros"],
+                location="run.executor.max_experiment_cost_usd_micros",
             ),
             model_id=_text(raw["model_id"], location="run.executor.model_id"),
             random_seed=_integer(
@@ -1283,7 +1503,7 @@ def _parse_policy(value: object) -> RunBudgetPolicy:
             location=f"run.budget_policy.{key}",
         )
     try:
-        return RunBudgetPolicy(**values)
+        return _validated_capability_policy(RunBudgetPolicy(**values))
     except (TypeError, ValueError) as exc:
         raise CapabilityEvaluationError("run budget policy is invalid") from exc
 
@@ -1365,10 +1585,11 @@ def _parse_budget(
         "task_calls": policy.max_task_calls,
         "tasks_in_flight": policy.max_tasks_in_flight,
         "charged_tokens": policy.max_total_tokens,
-        "elapsed_ms": policy.max_elapsed_seconds * 1_000,
     }
-    if snapshot.policy_id != policy.policy_id or any(
-        getattr(snapshot, field) > maximum for field, maximum in limits.items()
+    if (
+        snapshot.policy_id != policy.policy_id
+        or any(getattr(snapshot, field) > maximum for field, maximum in limits.items())
+        or snapshot.elapsed_ms >= policy.max_elapsed_seconds * 1_000
     ):
         raise CapabilityEvaluationError(
             f"{location} exceeds or differs from its RunBudgetPolicy"
@@ -1612,6 +1833,7 @@ def parse_capability_run(
                 "arms",
                 "budget_policy",
                 "dataset",
+                "evidence_status",
                 "executor",
                 "provenance",
                 "run_id",
@@ -1622,6 +1844,10 @@ def parse_capability_run(
     )
     if raw["schema"] != CAPABILITY_RUN_SCHEMA or raw["runner"] != CAPABILITY_RUNNER_ID:
         raise CapabilityEvaluationError("capability run schema/runner is unsupported")
+    if raw["evidence_status"] != CAPABILITY_EVIDENCE_STATUS:
+        raise CapabilityEvaluationError(
+            "capability run cannot claim provider-backed evidence"
+        )
     expected_dataset = {
         "checksum": dataset.checksum,
         "content_tree_sha": dataset.content_tree_sha,
@@ -1635,6 +1861,21 @@ def parse_capability_run(
         )
     identity = _parse_executor(raw["executor"])
     policy = _parse_policy(raw["budget_policy"])
+    if identity.content_tree_sha != dataset.content_tree_sha:
+        raise CapabilityEvaluationError(
+            "executor content tree differs from the supplied task-set"
+        )
+    if (
+        _worst_case_experiment_cost(
+            identity,
+            policy=policy,
+            task_count=len(dataset.tasks),
+        )
+        > identity.max_experiment_cost_usd_micros
+    ):
+        raise CapabilityEvaluationError(
+            "worst-case capability experiment cost exceeds the explicit ceiling"
+        )
     try:
         provenance = parse_run_provenance(raw["provenance"])
     except ProvenanceError as exc:
@@ -1710,6 +1951,13 @@ def parse_capability_run(
         raise CapabilityEvaluationError(
             "capability run ID differs from its canonical experiment inputs"
         )
+    if (
+        sum(arm.metrics.estimated_cost_usd_micros for arm in arms)
+        > identity.max_experiment_cost_usd_micros
+    ):
+        raise CapabilityEvaluationError(
+            "capability experiment cost exceeds the explicit ceiling"
+        )
     return CapabilityRun(
         run_id=expected_run_id,
         dataset=dataset,
@@ -1745,9 +1993,12 @@ def render_capability_report(run: CapabilityRun) -> str:
     lines = [
         f"# Capability 2×2 report: {_markdown(run.dataset.dataset_id)}",
         "",
-        "> Agent-capability experiment only. This report is intentionally excluded "
-        "from the retrieval leaderboard.",
+        "> **SYNTHETIC PROVIDER-FREE EVIDENCE ONLY.** This report is not provider "
+        "quality/cost evidence, does not satisfy P4.5 acceptance, cannot enable a "
+        "public capability, and is intentionally excluded from the retrieval "
+        "leaderboard.",
         "",
+        f"- Evidence status: `{CAPABILITY_EVIDENCE_STATUS}`",
         f"- Run ID: `{run.run_id}`",
         f"- Task-set checksum: `{run.dataset.checksum}`",
         f"- Label status: `{run.dataset.label_status}`",
@@ -1758,6 +2009,10 @@ def render_capability_report(run: CapabilityRun) -> str:
         f"- Random seed: `{run.executor.random_seed}`",
         f"- Maximum zero-spend attempts: `{run.executor.max_attempts}`",
         f"- Cache mode: `{run.executor.cache_mode}`",
+        f"- Explicit experiment cost ceiling: "
+        f"`{_usd(run.executor.max_experiment_cost_usd_micros)}`",
+        f"- Conservative worst-case cost: "
+        f"`{_usd(_worst_case_experiment_cost(run.executor, policy=run.budget_policy, task_count=len(run.dataset.tasks)))}`",
         f"- Shared budget policy: `{_markdown(run.budget_policy.policy_id)}`",
         "",
         "## Arm summary",
@@ -1856,6 +2111,7 @@ def _artifact_payloads(run: CapabilityRun) -> tuple[dict[str, bytes], bytes, str
     result_digest = _result_digest(files)
     manifest = canonical_json_bytes(
         {
+            "evidence_status": CAPABILITY_EVIDENCE_STATUS,
             "files": files,
             "result_digest": result_digest,
             "schema": CAPABILITY_MANIFEST_SCHEMA,
@@ -1899,10 +2155,14 @@ def verify_capability_run_directory(
     manifest = _mapping(
         manifest_value,
         location="capability result manifest",
-        keys=frozenset({"files", "result_digest", "schema"}),
+        keys=frozenset({"evidence_status", "files", "result_digest", "schema"}),
     )
     if manifest["schema"] != CAPABILITY_MANIFEST_SCHEMA:
         raise CapabilityEvaluationError("unsupported capability result manifest schema")
+    if manifest["evidence_status"] != CAPABILITY_EVIDENCE_STATUS:
+        raise CapabilityEvaluationError(
+            "capability result manifest cannot claim provider-backed evidence"
+        )
     raw_files = _array(
         manifest["files"],
         location="capability result manifest.files",

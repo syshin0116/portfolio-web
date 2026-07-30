@@ -32,6 +32,7 @@ from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolRuntime
@@ -55,6 +56,11 @@ from agent.capabilities.subagents import (
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
 )
+from agent.capabilities.token_counting import (
+    OPENAI_GUEST_MODEL_SPEC,
+    OPENAI_GUEST_RESPONSE_MODEL_NAMES,
+    _require_exact_openai_guest_model,
+)
 from agent.graph import (
     DEFAULT_MODEL,
     GUEST_MODEL_MAX_OUTPUT_TOKENS,
@@ -73,6 +79,10 @@ from agent.graph import (
     _runtime_is_guest,
     create_graph,
     graph,
+)
+from agent.guest_budget import (
+    GUEST_MIN_RUN_RESERVATION_MICRO_USD,
+    minimum_guest_generation_cost_micro_usd,
 )
 from agent.inspection import InspectionEventTransformer
 from agent.run_liveness import GuestExecutionFenceUnavailableError
@@ -184,15 +194,54 @@ def _final_message(content: str, *, total_tokens: int = 10) -> AIMessage:
     )
 
 
-async def _exact_test_input_tokens(_request) -> int:
+def _openai_final_message(content: str) -> AIMessage:
+    return AIMessage(
+        content=content,
+        response_metadata={
+            "model_provider": "openai",
+            "model_name": "gpt-5.4-nano",
+        },
+        usage_metadata={
+            "input_tokens": 1,
+            "output_tokens": 9,
+            "total_tokens": 10,
+            "input_token_details": {
+                "cache_creation": 0,
+                "cache_read": 0,
+            },
+            "output_token_details": {"reasoning": 0},
+        },
+    )
+
+
+async def _exact_anthropic_test_input_tokens(_request) -> int:
     return 1
+
+
+async def _exact_openai_test_input_tokens(_request) -> int:
+    return 1
+
+
+def test_guest_generation_cost_floor_tracks_the_runtime_policy():
+    assert (
+        minimum_guest_generation_cost_micro_usd(
+            max_model_calls=GUEST_RUN_BUDGET_POLICY.max_model_calls,
+            max_output_tokens=GUEST_RUN_BUDGET_POLICY.max_output_tokens,
+            max_total_tokens=GUEST_RUN_BUDGET_POLICY.max_total_tokens,
+        )
+        == GUEST_MIN_RUN_RESERVATION_MICRO_USD
+    )
 
 
 @pytest.fixture(autouse=True)
 def _replace_provider_token_count(monkeypatch):
     monkeypatch.setattr(
         "agent.graph.count_anthropic_input_tokens",
-        _exact_test_input_tokens,
+        _exact_anthropic_test_input_tokens,
+    )
+    monkeypatch.setattr(
+        "agent.graph.count_openai_input_tokens",
+        _exact_openai_test_input_tokens,
     )
 
 
@@ -311,7 +360,7 @@ async def test_graph_factory_selects_the_guest_policy_before_compilation(monkeyp
         fence_calls.append(kwargs)
         return fence
 
-    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
     monkeypatch.setattr("agent.graph.create_graph", capture_graph)
     monkeypatch.setattr(
         "agent.graph.acquire_guest_execution_fence",
@@ -364,7 +413,7 @@ async def test_guest_monitor_start_failure_closes_fence_before_compilation(
         lifecycle.append("compile")
         raise AssertionError("monitor failure must precede graph compilation")
 
-    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
     monkeypatch.setattr("agent.graph.create_graph", reject_compilation)
     monkeypatch.setattr(
         "agent.graph.acquire_guest_execution_fence",
@@ -396,7 +445,7 @@ async def test_guest_execution_without_server_run_id_fails_before_graph_compilat
         compiled = True
         return object()
 
-    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
     monkeypatch.setattr("agent.graph.create_graph", capture_graph)
 
     with pytest.raises(RuntimeError, match="run, thread, and user identity"):
@@ -422,7 +471,7 @@ async def test_guest_fence_contention_fails_before_graph_compilation(monkeypatch
             "guest execution liveness fence is already held"
         )
 
-    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
     monkeypatch.setattr("agent.graph.create_graph", capture_graph)
     monkeypatch.setattr(
         "agent.graph.acquire_guest_execution_fence",
@@ -710,40 +759,77 @@ def test_bounded_provider_model_disables_retries_and_runtime_configuration(monke
 
 
 def test_bounded_guest_model_uses_the_lower_nonconfigurable_output_limit(monkeypatch):
-    calls = []
-    fake_model = ToolCapableFakeModel(responses=[_final_message("done")])
-
-    def fake_init(model_spec, **kwargs):
-        calls.append((model_spec, kwargs))
-        return fake_model
-
-    monkeypatch.setattr("agent.graph.init_chat_model", fake_init)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-guest-construction-key")
     _bounded_guest_model.cache_clear()
     try:
-        resolved = _bounded_guest_model("anthropic:test-guest-model")
-        cached = _bounded_guest_model("anthropic:test-guest-model")
+        resolved = _bounded_guest_model(OPENAI_GUEST_MODEL_SPEC)
+        cached = _bounded_guest_model(OPENAI_GUEST_MODEL_SPEC)
     finally:
         _bounded_guest_model.cache_clear()
 
-    assert resolved is fake_model
-    assert cached is fake_model
-    assert calls == [
-        (
-            "anthropic:test-guest-model",
-            {
-                "max_tokens": GUEST_MODEL_MAX_OUTPUT_TOKENS,
-                "max_retries": 0,
-                "timeout": MODEL_TIMEOUT_SECONDS,
-            },
-        )
-    ]
+    assert isinstance(resolved, ChatOpenAI)
+    assert cached is resolved
+    assert resolved.model_name == "gpt-5.4-nano"
+    assert resolved.max_tokens == GUEST_MODEL_MAX_OUTPUT_TOKENS
+    assert resolved.max_retries == 0
+    assert resolved.request_timeout == MODEL_TIMEOUT_SECONDS
+    assert resolved.use_responses_api is True
+    assert resolved.output_version == "responses/v1"
+    assert resolved.reasoning == {"effort": "none"}
+    assert resolved.store is False
+    assert resolved.truncation == "disabled"
+    assert resolved.streaming is False
+    assert "streaming" not in resolved.model_fields_set
+    assert resolved.cache is False
+    assert _require_exact_openai_guest_model(resolved) is resolved
+
+
+def test_guest_and_owner_graphs_route_distinct_server_owned_counters(monkeypatch):
+    captured = []
+    compiled = SimpleNamespace(stream_transformers=())
+    compiled.copy = lambda *, update: SimpleNamespace(**update)
+
+    def capture_deep_agent(**kwargs):
+        captured.append(kwargs)
+        return compiled
+
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
+    monkeypatch.setattr("agent.graph.create_deep_agent", capture_deep_agent)
+    monkeypatch.setattr("agent.graph.build_subagents", lambda **_kwargs: [])
+    fake_model = ToolCapableFakeModel(responses=[_final_message("unused")])
+
+    create_graph(
+        runtime=_guest_runtime(),
+        config={"configurable": {"thread_id": "guest-counter-routing"}},
+        model=fake_model,
+        budget=RunBudget(GUEST_RUN_BUDGET_POLICY),
+    )
+    create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": "owner-counter-routing"}},
+        model=fake_model,
+        budget=RunBudget(),
+    )
+
+    guest_middleware = captured[0]["middleware"][-1]
+    owner_middleware = captured[1]["middleware"][-1]
+    assert isinstance(guest_middleware, RunBudgetMiddleware)
+    assert isinstance(owner_middleware, RunBudgetMiddleware)
+    assert guest_middleware._input_token_counter is _exact_openai_test_input_tokens
+    assert guest_middleware._model_provider == "openai"
+    assert (
+        guest_middleware._expected_response_models == OPENAI_GUEST_RESPONSE_MODEL_NAMES
+    )
+    assert owner_middleware._input_token_counter is _exact_anthropic_test_input_tokens
+    assert owner_middleware._model_provider == "anthropic"
+    assert owner_middleware._expected_response_models == frozenset()
 
 
 @pytest.mark.parametrize(
     ("configured_model", "expected"),
     [
-        ("anthropic:claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
-        ("anthropic/claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+        (OPENAI_GUEST_MODEL_SPEC, OPENAI_GUEST_MODEL_SPEC),
+        ("openai/gpt-5.4-nano", OPENAI_GUEST_MODEL_SPEC),
     ],
 )
 def test_guest_model_is_explicit_and_canonical(monkeypatch, configured_model, expected):
@@ -754,7 +840,12 @@ def test_guest_model_is_explicit_and_canonical(monkeypatch, configured_model, ex
 
 @pytest.mark.parametrize(
     "configured_model",
-    ["", "openai:gpt-5", "anthropic:", "runtime configurable"],
+    [
+        "",
+        "openai:gpt-5",
+        "anthropic:claude-haiku-4-5",
+        "runtime configurable",
+    ],
 )
 def test_missing_or_unsupported_guest_model_fails_closed(
     monkeypatch,
@@ -827,8 +918,8 @@ async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt
 async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilities(
     monkeypatch,
 ):
-    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
-    model = ToolCapableFakeModel(responses=[_final_message("guest answer")])
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
+    model = ToolCapableFakeModel(responses=[_openai_final_message("guest answer")])
     budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
     compiled = create_graph(
         runtime=_guest_runtime(),
@@ -855,7 +946,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
 
 
 def test_guest_runtime_rejects_an_owner_budget_override(monkeypatch):
-    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
 
     with pytest.raises(ValueError, match="anonymous run budget"):
         create_graph(

@@ -41,7 +41,7 @@ _CREATED_AT = "2026-07-28T00:00:00Z"
 @pytest.fixture(autouse=True)
 def _enable_guest_agent(monkeypatch):
     monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "true")
-    monkeypatch.setenv("GUEST_MODEL", "anthropic:claude-haiku-4-5")
+    monkeypatch.setenv("GUEST_MODEL", "openai:gpt-5.4-nano")
     monkeypatch.setenv("GUEST_DAILY_BUDGET_MICRO_USD", "500000")
     monkeypatch.setenv("GUEST_RUN_RESERVATION_MICRO_USD", "25000")
 

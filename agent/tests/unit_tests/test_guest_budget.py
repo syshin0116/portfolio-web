@@ -9,6 +9,7 @@ import pytest
 from agent import guest_budget
 from agent.guest_budget import (
     GUEST_DAILY_BUDGET_ENV,
+    GUEST_MIN_RUN_RESERVATION_MICRO_USD,
     GUEST_RUN_RESERVATION_ENV,
     GuestBudgetConfig,
     GuestBudgetConfigurationError,
@@ -16,6 +17,7 @@ from agent.guest_budget import (
     GuestDailyBudgetExhaustedError,
     PostgresGuestSpendLedger,
     guest_budget_config,
+    minimum_guest_generation_cost_micro_usd,
 )
 
 
@@ -65,6 +67,7 @@ class _Session:
         ("100000", "0", "canonical positive integer"),
         ("100000", "01", "canonical positive integer"),
         ("100000", "100001", "cannot exceed"),
+        ("100000", "6700", "generation floor"),
     ],
 )
 def test_required_guest_budget_configuration_fails_closed(
@@ -94,6 +97,18 @@ def test_optional_guest_budget_is_absent_or_exact(monkeypatch):
     assert guest_budget_config(required=False) == GuestBudgetConfig(
         daily_limit_micro_usd=500_000,
         run_reservation_micro_usd=25_000,
+    )
+
+
+def test_guest_generation_floor_uses_exact_integer_ceiling():
+    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 6_701
+    assert (
+        minimum_guest_generation_cost_micro_usd(
+            max_model_calls=4,
+            max_output_tokens=1_024,
+            max_total_tokens=12_000,
+        )
+        == GUEST_MIN_RUN_RESERVATION_MICRO_USD
     )
 
 

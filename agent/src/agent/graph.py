@@ -29,6 +29,7 @@ from deepagents.backends import (
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
+from langchain_openai import ChatOpenAI
 from langgraph.runtime import Runtime
 from langgraph_sdk.runtime import ServerRuntime
 
@@ -52,8 +53,15 @@ from agent.capabilities.subagents import (
     validate_capability_config,
 )
 from agent.capabilities.token_counting import (
+    OPENAI_GUEST_MAX_OUTPUT_TOKENS,
+    OPENAI_GUEST_MODEL_NAME,
+    OPENAI_GUEST_MODEL_SPEC,
+    OPENAI_GUEST_RESPONSE_MODEL_NAMES,
+    OPENAI_GUEST_TIMEOUT_SECONDS,
     InputTokenCounter,
     count_anthropic_input_tokens,
+    count_openai_input_tokens,
+    require_openai_api_key,
 )
 from agent.inspection import InspectionEventTransformer
 from agent.prompts import SYSTEM_PROMPT
@@ -66,9 +74,9 @@ from agent.tools import TOOLS
 
 DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
 MODEL_MAX_OUTPUT_TOKENS = 2_048
-GUEST_MODEL_MAX_OUTPUT_TOKENS = 1_024
-MODEL_TIMEOUT_SECONDS = 60.0
-SUPPORTED_MODEL_PROVIDERS = frozenset({"anthropic"})
+GUEST_MODEL_MAX_OUTPUT_TOKENS = OPENAI_GUEST_MAX_OUTPUT_TOKENS
+MODEL_TIMEOUT_SECONDS = OPENAI_GUEST_TIMEOUT_SECONDS
+SUPPORTED_OWNER_MODEL_PROVIDERS = frozenset({"anthropic"})
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
     general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
@@ -139,7 +147,12 @@ def _filesystem_permissions() -> list[FilesystemPermission]:
     ]
 
 
-def _normalize_model_spec(model: str, *, variable: str) -> str:
+def _normalize_model_spec(
+    model: str,
+    *,
+    variable: str,
+    supported_providers: frozenset[str],
+) -> str:
     """Validate one non-configurable server-owned provider/model identifier."""
     # Normalize "provider/model" → "provider:model" for deepagents compatibility
     if "/" in model and ":" not in model:
@@ -147,7 +160,7 @@ def _normalize_model_spec(model: str, *, variable: str) -> str:
     if _MODEL_SPEC.fullmatch(model) is None:
         raise RuntimeError(f"{variable} must be one bounded provider:model spec")
     provider, _separator, _name = model.partition(":")
-    if provider not in SUPPORTED_MODEL_PROVIDERS:
+    if provider not in supported_providers:
         raise RuntimeError(f"{variable} provider {provider!r} is not supported")
     return model
 
@@ -157,6 +170,7 @@ def _normalized_model_spec() -> str:
     return _normalize_model_spec(
         os.environ.get("MODEL") or DEFAULT_MODEL,
         variable="MODEL",
+        supported_providers=SUPPORTED_OWNER_MODEL_PROVIDERS,
     )
 
 
@@ -167,7 +181,14 @@ def _normalized_guest_model_spec() -> str:
         raise RuntimeError(
             "GUEST_MODEL is required when anonymous agent access is enabled"
         )
-    return _normalize_model_spec(model, variable="GUEST_MODEL")
+    normalized = _normalize_model_spec(
+        model,
+        variable="GUEST_MODEL",
+        supported_providers=frozenset({"openai"}),
+    )
+    if normalized != OPENAI_GUEST_MODEL_SPEC:
+        raise RuntimeError(f"GUEST_MODEL must be exactly {OPENAI_GUEST_MODEL_SPEC!r}")
+    return normalized
 
 
 def _runtime_is_guest(runtime: ServerRuntime[Any]) -> bool:
@@ -181,13 +202,13 @@ def _runtime_is_guest(runtime: ServerRuntime[Any]) -> bool:
     )
 
 
-@lru_cache(maxsize=len(SUPPORTED_MODEL_PROVIDERS) * 4)
+@lru_cache(maxsize=(len(SUPPORTED_OWNER_MODEL_PROVIDERS) + 1) * 4)
 def _disable_general_purpose_subagent(model: str) -> None:
     """Register the fail-closed profile once per normalized server model."""
     register_harness_profile(model, NO_GENERAL_PURPOSE_SUBAGENT)
 
 
-@lru_cache(maxsize=len(SUPPORTED_MODEL_PROVIDERS) * 4)
+@lru_cache(maxsize=len(SUPPORTED_OWNER_MODEL_PROVIDERS) * 4)
 def _bounded_model(model_spec: str) -> BaseChatModel:
     """Create a non-configurable provider client with hard request bounds."""
     model = init_chat_model(
@@ -201,14 +222,23 @@ def _bounded_model(model_spec: str) -> BaseChatModel:
     return model
 
 
-@lru_cache(maxsize=len(SUPPORTED_MODEL_PROVIDERS) * 4)
+@lru_cache(maxsize=1)
 def _bounded_guest_model(model_spec: str) -> BaseChatModel:
     """Create the anonymous tier client with a lower hard output ceiling."""
-    model = init_chat_model(
-        model_spec,
+    if model_spec != OPENAI_GUEST_MODEL_SPEC:
+        raise RuntimeError(f"GUEST_MODEL must be exactly {OPENAI_GUEST_MODEL_SPEC!r}")
+    model = ChatOpenAI(
+        model=OPENAI_GUEST_MODEL_NAME,
+        api_key=require_openai_api_key(),
         max_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
         max_retries=0,
         timeout=MODEL_TIMEOUT_SECONDS,
+        use_responses_api=True,
+        output_version="responses/v1",
+        reasoning={"effort": "none"},
+        store=False,
+        truncation="disabled",
+        cache=False,
     )
     if not isinstance(model, BaseChatModel):
         raise RuntimeError("GUEST_MODEL resolved to a runtime-configurable wrapper")
@@ -246,7 +276,11 @@ def create_graph(
     run_budget = budget or (
         RunBudget(GUEST_RUN_BUDGET_POLICY) if is_guest else RunBudget()
     )
-    exact_input_counter = input_token_counter or count_anthropic_input_tokens
+    exact_input_counter = input_token_counter or (
+        count_openai_input_tokens
+        if model_spec == OPENAI_GUEST_MODEL_SPEC
+        else count_anthropic_input_tokens
+    )
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool
@@ -287,6 +321,10 @@ def create_graph(
                 allow_subagents=allow_subagents,
                 allowed_subagents=SUBAGENT_NAMES,
                 input_token_counter=exact_input_counter,
+                model_provider="openai" if is_guest else "anthropic",
+                expected_response_models=(
+                    OPENAI_GUEST_RESPONSE_MODEL_NAMES if is_guest else frozenset()
+                ),
                 native_subagent_prompt=NATIVE_SUBAGENT_SYSTEM_PROMPT,
                 quickjs_tool_name=QUICKJS_TOOL_NAME,
                 allow_quickjs=allow_quickjs,
@@ -419,7 +457,9 @@ def _validate_aegra_registration() -> None:
     validate_runtime_preflight()
     validate_guest_execution_fencing_factory(graph)
     if os.environ.get("AGENT_ANONYMOUS_ACCESS_ENABLED", "false") == "true":
-        _normalized_guest_model_spec()
+        guest_model = _normalized_guest_model_spec()
+        if guest_model == OPENAI_GUEST_MODEL_SPEC:
+            require_openai_api_key()
 
 
 _validate_aegra_registration()

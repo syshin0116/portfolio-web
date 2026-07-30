@@ -383,6 +383,123 @@ def test_task_tranche_transfers_to_first_child_model_without_double_charge():
     assert budget.snapshot().charged_tokens == 240
 
 
+def test_two_phase_model_attempt_reserves_output_before_exact_input():
+    budget = RunBudget(clock=lambda: 0.0)
+
+    attempt = budget.reserve_model_attempt()
+    assert (
+        budget.snapshot().model_calls,
+        budget.snapshot().model_reservations_in_flight,
+        budget.snapshot().charged_tokens,
+    ) == (1, 1, 2_048)
+
+    reservation = budget.reserve_model_input(attempt, input_tokens=100)
+    assert reservation.reserved_tokens == 2_148
+    assert budget.snapshot().charged_tokens == 2_148
+
+    budget.settle_model(reservation, actual_tokens=120)
+    assert budget.snapshot().charged_tokens == 120
+    assert budget.snapshot().model_reservations_in_flight == 0
+
+
+def test_two_phase_model_attempt_consumes_the_task_output_tranche_once():
+    budget = RunBudget(clock=lambda: 0.0)
+    task = budget.reserve_task(depth=1)
+
+    attempt = budget.reserve_model_attempt(task_reservation=task)
+    assert budget.snapshot().charged_tokens == 2_048
+    reservation = budget.reserve_model_input(attempt, input_tokens=100)
+    assert budget.snapshot().charged_tokens == 2_148
+
+    budget.settle_model(reservation, actual_tokens=120)
+    budget.finish_task(task)
+    assert budget.snapshot().charged_tokens == 120
+
+
+@pytest.mark.parametrize("input_tokens", [0, 1])
+def test_two_phase_model_attempt_rejects_stale_handle_after_extension(input_tokens):
+    budget = RunBudget(clock=lambda: 0.0)
+    attempt = budget.reserve_model_attempt()
+    reservation = budget.reserve_model_input(
+        attempt,
+        input_tokens=input_tokens,
+    )
+
+    with pytest.raises(RuntimeError, match="already extended"):
+        budget.reserve_model_input(attempt, input_tokens=1)
+    with pytest.raises(RuntimeError, match="unknown or already settled"):
+        budget.settle_model(attempt, actual_tokens=None)
+    assert budget.snapshot().model_reservations_in_flight == 1
+
+    budget.settle_model(reservation, actual_tokens=input_tokens)
+
+
+def test_two_phase_model_attempt_rejects_oversized_extension():
+    constrained = RunBudget(
+        replace(DEFAULT_RUN_BUDGET_POLICY, max_total_tokens=2_048),
+        clock=lambda: 0.0,
+    )
+    constrained_attempt = constrained.reserve_model_attempt()
+    with pytest.raises(RunBudgetExceededError, match="token"):
+        constrained.reserve_model_input(constrained_attempt, input_tokens=1)
+    constrained.settle_model(constrained_attempt, actual_tokens=None)
+    assert constrained.snapshot().model_reservations_in_flight == 0
+    assert constrained.snapshot().charged_tokens == 2_048
+    assert constrained.snapshot().exhausted is True
+
+
+def test_concurrent_model_attempts_cannot_overbook_the_output_floor():
+    policy = replace(
+        DEFAULT_RUN_BUDGET_POLICY,
+        max_model_calls=100,
+        max_total_tokens=4_096,
+    )
+    budget = RunBudget(policy, clock=lambda: 0.0)
+    barrier = Barrier(100)
+
+    def reserve() -> object | None:
+        barrier.wait()
+        try:
+            return budget.reserve_model_attempt()
+        except RunBudgetExceededError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        attempts = list(executor.map(lambda _index: reserve(), range(100)))
+    reservations = [attempt for attempt in attempts if attempt is not None]
+
+    assert len(reservations) == 2
+    assert budget.snapshot().charged_tokens == 4_096
+    assert budget.snapshot().model_calls == 2
+    for reservation in reservations:
+        budget.settle_model(reservation, actual_tokens=None)
+
+
+def test_opaque_handles_cannot_cross_run_ledgers():
+    first = RunBudget(clock=lambda: 0.0)
+    second = RunBudget(clock=lambda: 0.0)
+    first_model = first.reserve_model()
+    second_model = second.reserve_model()
+    first_quickjs = first.reserve_quickjs()
+    second_quickjs = second.reserve_quickjs()
+    first_task = first.reserve_task(depth=1)
+    second_task = second.reserve_task(depth=1)
+
+    with pytest.raises(TypeError, match="ModelReservation"):
+        second.settle_model(first_model, actual_tokens=None)
+    with pytest.raises(TypeError, match="QuickJSReservation"):
+        second.settle_quickjs(first_quickjs, actual_output_bytes=None)
+    with pytest.raises(RuntimeError, match="unknown"):
+        second.finish_task(first_task)
+
+    first.settle_model(first_model, actual_tokens=None)
+    second.settle_model(second_model, actual_tokens=None)
+    first.settle_quickjs(first_quickjs, actual_output_bytes=None)
+    second.settle_quickjs(second_quickjs, actual_output_bytes=None)
+    first.finish_task(first_task)
+    second.finish_task(second_task)
+
+
 def test_failed_task_reservation_does_not_partially_spend_any_counter():
     budget = RunBudget()
 
@@ -588,6 +705,220 @@ async def test_anthropic_usage_tracks_exact_provider_pricing_buckets(
 
 
 @pytest.mark.parametrize(
+    "response_model",
+    ["gpt-5.4-nano", "gpt-5.4-nano-2026-03-17"],
+)
+async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model):
+    budget = RunBudget()
+
+    async def exact_input_tokens(_request):
+        return 120
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=exact_input_tokens,
+        model_provider="openai",
+        expected_response_models=frozenset({"gpt-5.4-nano", "gpt-5.4-nano-2026-03-17"}),
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def respond(_request):
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="bounded",
+                    response_metadata={
+                        "model_provider": "openai",
+                        "model_name": response_model,
+                    },
+                    usage_metadata={
+                        "input_tokens": 120,
+                        "output_tokens": 20,
+                        "total_tokens": 140,
+                        "input_token_details": {
+                            "cache_read": 40,
+                            "cache_creation": 0,
+                        },
+                        "output_token_details": {"reasoning": 0},
+                    },
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(request, respond)
+
+    snapshot = budget.finalize()
+    assert snapshot.provider_usage_complete is True
+    assert (
+        snapshot.provider_input_tokens,
+        snapshot.provider_output_tokens,
+        snapshot.provider_cache_read_input_tokens,
+        snapshot.provider_cache_write_input_tokens,
+    ) == (80, 20, 40, 0)
+    assert snapshot.charged_tokens == 140
+
+
+@pytest.mark.parametrize(
+    ("metadata", "input_details", "output_details"),
+    [
+        (
+            {"model_provider": "anthropic", "model_name": "gpt-5.4-nano"},
+            {"cache_read": 40, "cache_creation": 0},
+            {"reasoning": 0},
+        ),
+        (
+            {"model_provider": "openai", "model_name": "gpt-5.4-mini"},
+            {"cache_read": 40, "cache_creation": 0},
+            {"reasoning": 0},
+        ),
+        (
+            {"model_provider": "openai", "model_name": []},
+            {"cache_read": 40, "cache_creation": 0},
+            {"reasoning": 0},
+        ),
+        (
+            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
+            {"cache_read": 40},
+            {"reasoning": 0},
+        ),
+        (
+            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
+            {"cache_read": 40, "cache_creation": 1},
+            {"reasoning": 0},
+        ),
+        (
+            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
+            {"cache_read": 40, "cache_creation": 0},
+            {"reasoning": 1},
+        ),
+        (
+            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
+            {"cache_read": 40, "cache_creation": 0},
+            {"reasoning": 0, "audio": 0},
+        ),
+    ],
+    ids=[
+        "wrong-provider",
+        "wrong-model",
+        "non-string-model",
+        "missing-cache-creation",
+        "cache-creation",
+        "reasoning",
+        "unknown-output-bucket",
+    ],
+)
+async def test_openai_usage_drift_fails_the_run_closed(
+    metadata,
+    input_details,
+    output_details,
+):
+    budget = RunBudget()
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=_zero_input_tokens,
+        model_provider="openai",
+        expected_response_models=frozenset({"gpt-5.4-nano"}),
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def respond(_request):
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="bounded",
+                    response_metadata=metadata,
+                    usage_metadata={
+                        "input_tokens": 120,
+                        "output_tokens": 20,
+                        "total_tokens": 140,
+                        "input_token_details": input_details,
+                        "output_token_details": output_details,
+                    },
+                )
+            ]
+        )
+
+    with pytest.raises(RunBudgetExceededError, match="exact usage contract"):
+        await middleware.awrap_model_call(request, respond)
+
+    snapshot = budget.snapshot()
+    assert snapshot.provider_usage_complete is False
+    assert (
+        snapshot.provider_input_tokens,
+        snapshot.provider_output_tokens,
+        snapshot.provider_cache_read_input_tokens,
+        snapshot.provider_cache_write_input_tokens,
+    ) == (None, None, None, None)
+    assert snapshot.charged_tokens == 2_048
+    assert snapshot.exhausted is True
+    assert snapshot.model_reservations_in_flight == 0
+
+
+async def test_openai_provider_input_must_equal_the_exact_precount():
+    budget = RunBudget()
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=_zero_input_tokens,
+        model_provider="openai",
+        expected_response_models=frozenset({"gpt-5.4-nano"}),
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def respond(_request):
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="must not escape settlement",
+                    response_metadata={
+                        "model_provider": "openai",
+                        "model_name": "gpt-5.4-nano",
+                    },
+                    usage_metadata={
+                        "input_tokens": 1_000,
+                        "output_tokens": 0,
+                        "total_tokens": 1_000,
+                        "input_token_details": {
+                            "cache_read": 0,
+                            "cache_creation": 0,
+                        },
+                        "output_token_details": {"reasoning": 0},
+                    },
+                )
+            ]
+        )
+
+    with pytest.raises(RunBudgetExceededError, match="inconsistent"):
+        await middleware.awrap_model_call(request, respond)
+
+    snapshot = budget.snapshot()
+    assert snapshot.charged_tokens == 2_048
+    assert snapshot.exhausted is True
+    assert snapshot.provider_usage_complete is False
+    assert snapshot.model_reservations_in_flight == 0
+
+
+@pytest.mark.parametrize(
     "input_details",
     [
         {},
@@ -762,8 +1093,90 @@ async def test_dense_unicode_input_is_rejected_before_calling_provider():
 
     assert called is False
     snapshot = budget.snapshot()
-    assert (snapshot.model_calls, snapshot.charged_tokens) == (0, 0)
+    assert (snapshot.model_calls, snapshot.charged_tokens) == (1, 2_048)
+    assert snapshot.model_reservations_in_flight == 0
+    assert snapshot.provider_usage_complete is False
     assert snapshot.exhausted is True
+
+
+async def test_call_limit_rejects_before_remote_input_count():
+    policy = replace(DEFAULT_RUN_BUDGET_POLICY, max_model_calls=1)
+    budget = RunBudget(policy)
+    first = budget.reserve_model(input_tokens=0)
+    budget.settle_model(first, actual_tokens=1)
+    counted = False
+
+    async def unexpected_count(_request):
+        nonlocal counted
+        counted = True
+        return 0
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=unexpected_count,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    with pytest.raises(RunBudgetExceededError, match="model-call"):
+        await middleware.awrap_model_call(
+            request,
+            lambda _request: pytest.fail("generation must not run"),
+        )
+
+    assert counted is False
+    assert budget.snapshot().model_calls == 1
+    assert budget.snapshot().charged_tokens == 1
+    assert budget.snapshot().exhausted is True
+
+
+async def test_input_counter_observes_an_atomic_call_and_output_reservation():
+    budget = RunBudget()
+
+    async def inspect_reservation(_request):
+        snapshot = budget.snapshot()
+        assert (
+            snapshot.model_calls,
+            snapshot.model_reservations_in_flight,
+            snapshot.charged_tokens,
+        ) == (1, 1, 2_048)
+        return 1
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=inspect_reservation,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def respond(_request):
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="bounded",
+                    usage_metadata={
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(request, respond)
+    assert budget.snapshot().charged_tokens == 2
 
 
 async def test_native_prompt_cache_shape_is_counted_before_generation():
@@ -882,7 +1295,9 @@ async def test_exact_count_failure_is_closed_before_generation(failure):
 
     assert generated is False
     snapshot = budget.snapshot()
-    assert (snapshot.model_calls, snapshot.charged_tokens) == (0, 0)
+    assert (snapshot.model_calls, snapshot.charged_tokens) == (1, 2_048)
+    assert snapshot.model_reservations_in_flight == 0
+    assert snapshot.provider_usage_complete is False
     assert snapshot.exhausted is True
 
 
@@ -916,7 +1331,9 @@ async def test_exact_count_timeout_is_closed_before_generation(monkeypatch):
         await middleware.awrap_model_call(request, provider)
 
     assert generated is False
-    assert budget.snapshot().model_calls == 0
+    assert budget.snapshot().model_calls == 1
+    assert budget.snapshot().charged_tokens == 2_048
+    assert budget.snapshot().model_reservations_in_flight == 0
     assert budget.snapshot().exhausted is True
 
 

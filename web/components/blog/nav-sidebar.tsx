@@ -20,14 +20,16 @@ export function NavSidebar({ tree }: NavSidebarProps) {
     <nav className="space-y-0.5 text-sm">
       <Link
         href="/blog"
+        aria-current={pathname === "/blog" ? "page" : undefined}
         className={cn(
-          "flex items-center rounded-md px-2 py-1.5 transition-colors hover:bg-muted",
+          "flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-muted",
           pathname === "/blog"
-            ? "font-medium text-foreground bg-muted"
+            ? "bg-muted font-semibold text-foreground shadow-[inset_3px_0_0_var(--foreground)]"
             : "text-muted-foreground hover:text-foreground"
         )}
       >
-        Home
+        <span className="min-w-0 flex-1 truncate">Home</span>
+        {pathname === "/blog" && <CurrentPageBadge />}
       </Link>
       <div className="mt-2 space-y-0.5">
         {tree.map((node) => (
@@ -153,14 +155,26 @@ function NavNode({
       href={`/blog/${node.path}`}
       aria-current={isActive ? "page" : undefined}
       className={cn(
-        "flex items-center rounded-md py-1.5 pr-2 transition-colors hover:bg-muted truncate",
+        "flex items-center gap-2 rounded-md py-1.5 pr-2 transition-colors hover:bg-muted",
         isActive
-          ? "font-medium text-foreground bg-muted"
+          ? "bg-muted font-semibold text-foreground shadow-[inset_3px_0_0_var(--foreground)]"
           : "text-muted-foreground hover:text-foreground"
       )}
       style={{ paddingLeft: `${8 + indent}px` }}
     >
-      <span className="truncate">{node.name}</span>
+      <span className="min-w-0 flex-1 truncate">{node.name}</span>
+      {isActive && <CurrentPageBadge />}
     </Link>
+  )
+}
+
+function CurrentPageBadge() {
+  return (
+    <span
+      aria-hidden="true"
+      className="shrink-0 rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-semibold leading-none text-background"
+    >
+      현재
+    </span>
   )
 }

@@ -595,7 +595,9 @@ a.tag {
   }
 
   img {
-    @apply my-4 rounded-lg max-w-full;
+    @apply my-4 block max-w-full rounded-lg;
+    height: auto;
+    margin-inline: auto;
   }
 
   p > img + em {
@@ -621,8 +623,10 @@ a.tag {
     overflow-x: auto;
   }
   figure.beoe svg {
+    display: block;
     max-width: 100%;
     height: auto;
+    margin-inline: auto;
     color: var(--foreground);
   }
   figure.beoe.graphviz svg [fill="black"],
@@ -636,4 +640,14 @@ a.tag {
   figure.beoe .beoe-dark { display: none; }
   .dark figure.beoe .beoe-light { display: none; }
   .dark figure.beoe .beoe-dark { display: block; }
+
+  .mermaid-diagram {
+    margin-block: 1.5rem;
+    overflow-x: auto;
+  }
+  .mermaid-diagram svg {
+    display: block;
+    height: auto;
+    margin-inline: auto;
+  }
 }

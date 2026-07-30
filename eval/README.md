@@ -156,6 +156,90 @@ The currently committed 90-query set intentionally fails step 3 until its qrels 
 an explicit owner review. As of 2026-07-28, the manual publication workflow has not been
 dispatched and no evaluation result is claimed as published gold.
 
+## QuickJS × dynamic-subagent capability experiment
+
+`querysets/capability-tasks-v1.json` is a separate, content-tree-pinned contract for
+P4.5. It contains structured direct-answer, ranked-list transform, stateless evidence,
+and combined tasks. It is not a retrieval query-set and is never accepted by `sweep` or
+rendered into `leaderboard.md`. Its v1 label status is `synthetic-only`; it proves the
+harness and capability boundaries but is not owner-reviewed evidence for public
+enablement. Every current run and artifact is additionally fixed to
+`synthetic-provider-free`: this PR is a harness foundation, does not satisfy the P4.5
+acceptance or standalone/combined quality gates, and cannot justify enabling either
+capability for visitors.
+
+`blogeval.capability_runner.run_capability_experiment` owns the exact four arms:
+QuickJS off/on × subagents off/on. A provider adapter implements `CapabilityExecutor`
+and receives a server-owned `CapabilityExecutionContext` containing the fixed arm, a
+deterministic per-attempt seed, fresh attempt/thread/graph-run identities, an ordinary
+Aegra run config with no capability override, and one real non-serializable `RunBudget`.
+`build_capability_graph` compiles the native Deep Agents graph from that context. The
+server selection may remove an otherwise authorized capability; client config still
+cannot grant one.
+
+Each sweep requires a fresh UUIDv4 execution ID. A deterministic four-row Williams
+schedule counterbalances arm position per task while artifacts retain one canonical arm
+and task order. Every zero-spend preflight retry receives a different attempt, thread,
+graph-run ID, and seed; a failure after any model/tool/capability spend is never retried
+or omitted from cost. `max_attempts` is bounded to three. The run boundary measures
+`HEAD:content` from the required local workspace, rejects tracked, staged, or untracked
+`content/` drift, and requires the measured tree to equal both the dataset and executor
+identity. It also caps the task set and every `RunBudgetPolicy` field, and rejects the
+experiment before its first executor call unless a conservative four-arm worst-case
+token cost fits the explicit micro-dollar ceiling.
+
+The executor returns only a redacted structured outcome plus verified-empty persistence
+and the exact recorded cache mode. It cannot report tokens or cost. The runner wraps the
+entire executor in the remaining run deadline, atomically calls `RunBudget.finalize()`,
+and accepts only a terminal snapshot with no model, QuickJS, or task reservation in
+flight. Every model call must have complete normalized Anthropic usage metadata. The
+canonical token and cost fields come only from the finalized uncached-input, output,
+cache-read-input, and cache-write-input buckets; their exact sum must equal the ledger
+charge. Cost applies the four recorded integer micro-US-dollar rates and rounds up once
+per task.
+
+The runner rejects usage in a disabled arm and derives task-level capability evidence
+from the same ledger. A task tagged `quickjs` or `combined` must execute QuickJS whenever
+that arm enables it, and a task tagged `subagents` or `combined` must execute `task`
+whenever that arm enables it. Unexpected capability use is rejected as well. Missing,
+duplicate, reordered, nonterminal, unsettled, cache-drifted, persistence-contaminated,
+provider-incomplete, or otherwise malformed data aborts the sweep. Latency uses monotonic
+elapsed nanoseconds rounded to the nearest millisecond.
+
+Artifacts are written atomically and immutably beneath a distinct namespace:
+
+```text
+results/capabilities/<dataset-id>/<run-id>/
+├── capability-report.md
+├── manifest.json
+└── run.json
+```
+
+The run ID binds the task-set checksum and content tree, all four arm definitions,
+execution/executor/model/seed/cache/retry/pricing identity, `RunBudgetPolicy`, agent/eval
+source trees, root lock, and runtime platform. The canonical JSON and Markdown projection
+are byte-stable for the same complete observations. A same-ID rerun with different bytes
+is rejected, making nondeterministic provider output explicit instead of silently
+replacing a result.
+
+PR CI does not call a paid model. There is deliberately no capability CLI, provider
+executor, credential lookup, workflow, or supported paid execution path in this
+foundation. `CapabilityExecutor` is only an internal protocol exercised by tests; its
+declared model, cache, and prices are not yet provider-derived evidence.
+`tests/test_capability_runner.py` substitutes only a
+deterministic provider-free chat model with exact normalized Anthropic metadata, then
+executes the production `create_graph` topology in all four arms. It runs native QuickJS
+and native Deep Agents `task`, verifies fresh empty in-memory persistence, proves that the
+QuickJS-only root has no task surface, proves the combined task executes both
+capabilities, and proves the child has no QuickJS, task, filesystem, environment, or
+network surface.
+
+A later, separately reviewed paid-adapter PR must derive rather than accept or echo the
+exact Anthropic model spec, cache mode, versioned pricing rates, fresh execution UUID,
+measured content tree, and explicit spend cap. It must add a new evidence tier and retain
+the synthetic banner on old artifacts. Until that adapter and a real reviewed result
+land, no P4.5 quality/cost conclusion exists.
+
 ## Development gates
 
 ```bash

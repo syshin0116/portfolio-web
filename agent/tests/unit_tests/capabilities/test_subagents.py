@@ -189,6 +189,24 @@ def test_server_runtime_permission_enables_dynamic_subagents(permission):
     assert dynamic_subagents_allowed(_runtime([permission])) is True
 
 
+def test_server_selected_off_arm_cannot_be_reenabled_by_eval_permission():
+    assert (
+        dynamic_subagents_allowed(
+            _runtime(["eval"]),
+            server_enabled=False,
+        )
+        is False
+    )
+
+
+def test_malformed_server_subagent_selection_fails_closed():
+    with pytest.raises(TypeError, match="boolean"):
+        dynamic_subagents_allowed(
+            _runtime(["eval"]),
+            server_enabled=1,
+        )
+
+
 @pytest.mark.parametrize(
     "permissions",
     [

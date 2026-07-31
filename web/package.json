@@ -50,7 +50,7 @@
     "d3": "^7.9.0",
     "embla-carousel-react": "^8.5.2",
     "framer-motion": "^12.42.2",
-    "lucide-react": "^1.25.0",
+    "lucide-react": "^1.26.0",
     "marked": "^18.0.7",
     "medium-zoom": "^1.1.0",
     "mermaid": "^11.16.0",

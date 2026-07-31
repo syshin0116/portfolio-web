@@ -27,7 +27,15 @@ QUICKJS_VERSIONS = {
     "langchain-quickjs": "0.3.4",
     "quickjs-rs": "0.2.5",
 }
-PYTHON_VERSIONS = {**CORE_PYTHON_VERSIONS, **QUICKJS_VERSIONS}
+OPENAI_VERSIONS = {
+    "langchain-openai": "1.3.5",
+    "openai": "2.50.0",
+}
+PYTHON_VERSIONS = {
+    **CORE_PYTHON_VERSIONS,
+    **OPENAI_VERSIONS,
+    **QUICKJS_VERSIONS,
+}
 NPM_VERSIONS = {
     "@assistant-ui/react": "0.14.28",
     "@assistant-ui/react-langgraph": "0.14.13",
@@ -89,6 +97,12 @@ class OfflineFetcher:
                 PYTHON_VERSIONS[source.package],
             )
             payload: object = pypi_payload(source.package, version)
+            if (
+                source.package == "langchain-openai"
+                and source.package not in self.overrides
+            ):
+                payload = pypi_payload(source.package, "1.4.1")
+                payload["releases"]["1.3.5"] = [{"yanked": False}]
         elif source.ecosystem == "npm":
             version = self.overrides.get(
                 source.package,
@@ -631,7 +645,7 @@ class RepositoryAuditTests(unittest.TestCase):
         }
         self.assertEqual("current", document["status"])
         self.assertEqual(before, after, "the audit must never update repository pins")
-        self.assertEqual(8, document["activeTargetCount"])
+        self.assertEqual(10, document["activeTargetCount"])
         self.assertEqual(3, document["inactiveTargetCount"])
         groups = document["groups"]
         self.assertIsInstance(groups, list)
@@ -657,6 +671,14 @@ class RepositoryAuditTests(unittest.TestCase):
                 result["source"],
             )
             self.assertIn(result["source"], audit.ALLOWED_SOURCE_URLS)
+        langchain_openai = target(document, "langchain-openai")
+        self.assertEqual("current", langchain_openai["status"])
+        self.assertEqual("1.3.5", langchain_openai["installed"])
+        self.assertEqual("1.3.5", langchain_openai["latest"])
+        self.assertEqual("1.4.0", langchain_openai["stableVersionCeiling"])
+        openai = target(document, "openai-python")
+        self.assertEqual("2.50.0", openai["installed"])
+        self.assertEqual("2.50.0", openai["latest"])
 
     def test_assistant_ui_activation_requires_and_audits_complete_exact_group(
         self,
@@ -667,7 +689,7 @@ class RepositoryAuditTests(unittest.TestCase):
         document = audit.audit_repository(self.root, fetch=fetcher)
 
         self.assertEqual("current", document["status"])
-        self.assertEqual(11, document["activeTargetCount"])
+        self.assertEqual(13, document["activeTargetCount"])
         for target_id, expected in (
             ("assistant-ui-react", "0.14.28"),
             ("assistant-ui-react-langgraph", "0.14.13"),
@@ -936,6 +958,33 @@ class RepositoryAuditTests(unittest.TestCase):
             "https://pypi.org/pypi/deepagents/json",
             result["source"],
         )
+
+    def test_newer_compatible_langchain_openai_release_fails_the_audit(self) -> None:
+        fallback = OfflineFetcher()
+
+        def fetch(source: audit.Source) -> audit.JsonResponse:
+            if source.package != "langchain-openai":
+                return fallback(source)
+            payload = pypi_payload(source.package, "1.4.1")
+            payload["releases"]["1.3.5"] = [{"yanked": False}]
+            payload["releases"]["1.3.6"] = [{"yanked": False}]
+            return audit.JsonResponse(
+                data=payload,
+                final_url=source.canonical_url,
+                headers={},
+            )
+
+        document = audit.audit_repository(
+            self.root,
+            fetch=fetch,
+        )
+
+        self.assertEqual("outdated", document["status"])
+        self.assertEqual(["langchain-openai"], document["outdatedTargets"])
+        result = target(document, "langchain-openai")
+        self.assertEqual("1.3.5", result["installed"])
+        self.assertEqual("1.3.6", result["latest"])
+        self.assertEqual("1.4.0", result["stableVersionCeiling"])
 
     def test_newer_quickjs_releases_are_visible_and_fail_the_audit(self) -> None:
         cases = (

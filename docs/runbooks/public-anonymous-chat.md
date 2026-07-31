@@ -43,6 +43,28 @@ The pre-launch map is shared only because both environments are disabled; that
 launch PR must split Preview and Production configuration and keep Preview
 disabled unless its own model, budget, and public-test gate are approved.
 
+The runtime accepts only `openai:gpt-5.4-nano` as the eventual non-empty
+`GUEST_MODEL`. It uses the OpenAI Responses API with reasoning disabled,
+provider-side response storage disabled, and the official Responses input-token
+count endpoint before every generation. The run ledger atomically consumes a
+model-call slot and reserves that call's 1,024-token output ceiling before the
+remote count; only then may it extend the reservation by the exact counted
+input. The configured per-run reservation may never be below 6,701 µUSD, the
+integer-ceiling generation cost for the 12,000-token/four-call policy at
+$0.20/M uncached input and $1.25/M output. That is a generation-only floor, not
+a claim about the count endpoint's currently undocumented billing.
+
+The serialization boundary is pinned to `langchain-openai==1.3.5` and
+`openai==2.50.0`; the dependency audit isolates both and keeps
+`langchain-openai` below the reviewed exclusive 1.4.0 compatibility ceiling
+until `langchain-core` moves beyond 1.4.9. The model's
+[official catalogue entry](https://developers.openai.com/api/docs/models/gpt-5.4-nano)
+does not support the API Free tier. Therefore this code contract does **not**
+authorize launch: Production remains disabled until the owner explicitly
+approves a non-zero provider budget, the input-count endpoint's billing
+semantics are confirmed, and the separately reviewed launch PR supplies the
+OpenAI secret and all spend ceilings atomically.
+
 ## Cloudflare Turnstile
 
 Create separate production and preview widgets. Configure the exact canonical

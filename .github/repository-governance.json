@@ -238,7 +238,7 @@
           "time": "04:00",
           "timezone": "Asia/Seoul"
         },
-        "open_pull_requests_limit": 7,
+        "open_pull_requests_limit": 10,
         "cooldown": {
           "default_days": 7,
           "semver_major_days": 14,
@@ -301,11 +301,37 @@
             ]
           },
           {
+            "name": "web-neon",
+            "applies_to": "version-updates",
+            "patterns": [
+              "@neondatabase/*"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
             "name": "web-next",
             "applies_to": "version-updates",
             "patterns": [
               "eslint-config-next",
               "next"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "web-typescript",
+            "applies_to": "version-updates",
+            "patterns": [
+              "typescript"
             ],
             "exclude_patterns": [],
             "update_types": [
@@ -331,6 +357,19 @@
             ]
           },
           {
+            "name": "web-lucide",
+            "applies_to": "version-updates",
+            "patterns": [
+              "lucide-react"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
             "name": "web-monthly",
             "applies_to": "version-updates",
             "patterns": [
@@ -340,13 +379,16 @@
               "@assistant-ui/*",
               "@auth/*",
               "@langchain/*",
+              "@neondatabase/*",
               "@types/react",
               "@types/react-dom",
               "eslint-config-next",
+              "lucide-react",
               "next",
               "next-auth",
               "react",
-              "react-dom"
+              "react-dom",
+              "typescript"
             ],
             "update_types": [
               "major",

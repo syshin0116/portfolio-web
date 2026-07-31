@@ -8,7 +8,7 @@ updates:
       timezone: "Asia/Seoul"
     # One routine rollup plus focused compatibility PRs. Security updates do
     # not count against this limit.
-    open-pull-requests-limit: 7
+    open-pull-requests-limit: 10
     cooldown:
       default-days: 7
       semver-major-days: 14
@@ -50,11 +50,27 @@ updates:
           - "major"
           - "minor"
           - "patch"
+      web-neon:
+        applies-to: "version-updates"
+        patterns:
+          - "@neondatabase/*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       web-next:
         applies-to: "version-updates"
         patterns:
           - "eslint-config-next"
           - "next"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      web-typescript:
+        applies-to: "version-updates"
+        patterns:
+          - "typescript"
         update-types:
           - "major"
           - "minor"
@@ -70,6 +86,14 @@ updates:
           - "major"
           - "minor"
           - "patch"
+      web-lucide:
+        applies-to: "version-updates"
+        patterns:
+          - "lucide-react"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       web-monthly:
         applies-to: "version-updates"
         patterns:
@@ -78,13 +102,16 @@ updates:
           - "@assistant-ui/*"
           - "@auth/*"
           - "@langchain/*"
+          - "@neondatabase/*"
           - "@types/react"
           - "@types/react-dom"
           - "eslint-config-next"
+          - "lucide-react"
           - "next"
           - "next-auth"
           - "react"
           - "react-dom"
+          - "typescript"
         update-types:
           - "major"
           - "minor"

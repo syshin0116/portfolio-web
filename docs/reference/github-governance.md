@@ -9,7 +9,7 @@ when_to_read: >
   dependency and upstream-version audit.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
-updated: "2026-07-30"
+updated: "2026-07-31"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/repository-governance.json
@@ -365,23 +365,29 @@ security updates for Bun, so the npm bridge sets
 PRs remain enabled. Such a security PR does not own `bun.lock`; regenerate and
 verify that lock in a dedicated worktree before merge.
 
-The identities run weekly on Monday in `Asia/Seoul`, staggered at 04:00, 04:10,
-04:20, and 04:40. Bun, uv, and Actions allow three version PRs; the npm bridge
-allows zero version PRs. Bun and uv use the reviewed 7-day default, 14-day
-major, 7-day minor, and 3-day patch cooldowns; Actions uses the reviewed 7-day
-default cooldown. Routine minor/patch updates are grouped for Bun, uv, and
-Actions; the npm bridge opens no version PRs. Security updates are not grouped
-or cooled, so one vulnerable package is not held behind unrelated upgrades.
+The identities run monthly in `Asia/Seoul`, staggered at 04:00, 04:10, 04:20,
+and 04:40. Bun, uv, and Actions allow 10, eight, and one version PRs
+respectively; the npm bridge allows zero version PRs. Bun and uv use the
+reviewed 7-day default, 14-day major, 7-day minor, and 3-day patch cooldowns;
+Actions uses the reviewed 7-day default cooldown. Routine updates of every
+SemVer level are grouped for Bun, uv, and Actions; the npm bridge opens no
+version PRs. These groups apply only to version updates, so security updates
+remain outside the routine rollups.
 Aegra (`aegra-*`), Deep Agents, LangChain (`langchain` and `langchain-*`),
 the OpenAI Python SDK (`openai`), the direct QuickJS Rust binding
 (`quickjs-rs`), LangGraph (`langgraph` and `langgraph-*`), LangSmith, assistant-ui,
-`@langchain/*`, Next.js, NextAuth, `@auth/*`, React/React DOM and their type
-packages, and NumPy remain isolated bump PRs. React updates require focused
-build/browser evidence, while NumPy is part of the persisted BM25 artifact
-provenance contract; the other exclusions can change an agent, protocol,
-framework, or authentication compatibility surface. The local verifier compares
-version, update identity set, schedule, open-PR limit, full cooldown object, and
-every group exactly; missing, duplicate, changed, or extra updates/groups fail.
+`@langchain/*`, Next.js, NextAuth, `@auth/*`, `@neondatabase/*`, TypeScript,
+`lucide-react`, React/React DOM and their type packages, and NumPy remain
+isolated bump PRs. The Bun limit equals its 10 possible group PRs, so all nine
+focused compatibility updates can coexist without starving the routine monthly
+rollup. React and icon updates require focused build/browser evidence, Neon
+updates require the Auth.js adapter type contract, and TypeScript updates
+must be validated against the pinned ESLint/Bun/Next toolchain. NumPy is part of the
+persisted BM25 artifact provenance contract; the other exclusions can change an
+agent, protocol, framework, or authentication compatibility surface. The local
+verifier compares version, update identity set, schedule, open-PR limit, full
+cooldown object, and every group exactly; missing, duplicate, changed, or extra
+updates/groups fail.
 
 The version-update schedule in `dependabot.yml` does not itself enable GitHub's
 repository security features. The external contract separately requires

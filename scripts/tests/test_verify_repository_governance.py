@@ -2465,13 +2465,16 @@ runs:
                 "@langchain/langgraph*",
             ],
             "bun:/web:web-auth": ["@auth/*", "next-auth"],
+            "bun:/web:web-neon": ["@neondatabase/*"],
             "bun:/web:web-next": ["eslint-config-next", "next"],
+            "bun:/web:web-typescript": ["typescript"],
             "bun:/web:web-react": [
                 "@types/react",
                 "@types/react-dom",
                 "react",
                 "react-dom",
             ],
+            "bun:/web:web-lucide": ["lucide-react"],
             "uv:/:python-aegra-protocol": ["aegra-*"],
             "uv:/:python-langgraph": ["langgraph", "langgraph-*"],
             "uv:/:python-deepagents": ["deepagents"],
@@ -2497,13 +2500,16 @@ runs:
                     "@assistant-ui/*",
                     "@auth/*",
                     "@langchain/*",
+                    "@neondatabase/*",
                     "@types/react",
                     "@types/react-dom",
                     "eslint-config-next",
+                    "lucide-react",
                     "next",
                     "next-auth",
                     "react",
                     "react-dom",
+                    "typescript",
                 ]
             ),
             groups["bun:/web:web-monthly"]["exclude_patterns"],
@@ -2534,9 +2540,14 @@ runs:
             self.assertEqual(["major", "minor", "patch"], groups[key]["update_types"])
 
         updates = governance._normalized_dependabot(document)["updates"]
-        self.assertEqual(7, updates["bun:/web"]["open_pull_requests_limit"])
+        self.assertEqual(10, updates["bun:/web"]["open_pull_requests_limit"])
         self.assertEqual(8, updates["uv:/"]["open_pull_requests_limit"])
         self.assertEqual(1, updates["github-actions:/"]["open_pull_requests_limit"])
+        bun_group_count = sum(key.startswith("bun:/web:") for key in groups)
+        self.assertEqual(
+            bun_group_count,
+            updates["bun:/web"]["open_pull_requests_limit"],
+        )
 
     def test_dependabot_group_pattern_mutation_is_rejected(self) -> None:
         policy = governance.load_policy()
@@ -2572,13 +2583,13 @@ runs:
             ),
             (
                 "open-limit-removal",
-                "    open-pull-requests-limit: 7\n",
+                "    open-pull-requests-limit: 10\n",
                 "",
             ),
             (
                 "open-limit-change",
-                "    open-pull-requests-limit: 7\n",
-                "    open-pull-requests-limit: 6\n",
+                "    open-pull-requests-limit: 10\n",
+                "    open-pull-requests-limit: 9\n",
             ),
             ("cooldown-removal", "      semver-major-days: 14\n", ""),
             (

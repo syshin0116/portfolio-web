@@ -25,7 +25,7 @@ export function MermaidRenderer() {
           const id = `mermaid-${Math.random().toString(36).slice(2)}`
           const { svg } = await mermaid.render(id, definition)
           const container = document.createElement("div")
-          container.className = "mermaid-diagram my-4 overflow-x-auto"
+          container.className = "mermaid-diagram"
           container.innerHTML = svg
           target.replaceWith(container)
         } catch (e) {

@@ -8,7 +8,7 @@ when_to_read: >
   or when looking for what has already been tried and what it scored.
 tags: [reference, retrieval, rag, evaluation, registry]
 status: draft
-updated: "2026-07-28"
+updated: "2026-07-31"
 owners: ["@syshin0116"]
 refs: [../adr/0008-chatbot-is-a-rag-evaluation-testbed.md, ../plans/rag-restack.md]
 template: reference
@@ -83,10 +83,21 @@ those same links turned out to be the better prize.
 |---|---|---|
 | BM25 + Kiwi morphological tokenization | `implemented` | The fitted, raw-score baseline everything else is measured against |
 | Character n-grams over raw Markdown + positive-IDF BM25 variant | `implemented` | A compound lexical alternative; it changes document representation and IDF/ranker behavior, so it is not a tokenizer-only morphology ablation |
-| BM25 field weighting (title/tags/body) | `planned` | How much of retrieval quality is just "the title said so" |
+| BM25 field weighting (title/tags/body) | `implemented` | How much of retrieval quality is just "the title said so" |
 | Exact substring | `implemented` | The safe literal-match floor. If a method cannot beat it, it is not earning its cost |
 | Bounded regex | `planned` | Whether regex expressiveness adds useful recall without exposing unbounded query execution |
 | SPLADE or learned sparse | `planned` | Whether learned sparse transfers to Korean at all |
+
+The field-weighted arm is a BM25F comparison, not a second baseline: it reuses the
+verified fitted BM25 term IDFs and exact Kiwi/dictionary tokenizer, then changes only
+field-aware term-frequency saturation. Its fingerprinted configuration fixes title,
+tags, and body boosts at 3:2:1, applies length normalisation only to body, and groups the
+frontmatter description with Markdown body. It is registered once in the agent's
+servable registry, which the evaluation registry copies unchanged. Field statistics are
+derived deterministically at runtime from the checksum-verified published mirror and
+catalog; the method identity binds the catalog checksum and fitted-baseline fingerprint.
+`implemented` means the shared contract and synthetic harness evidence pass; no
+publication-qualified score exists yet.
 
 ### Dense
 

@@ -25,7 +25,12 @@ from blogeval.runner import (
     write_run_artifacts,
 )
 
-DEFAULT_METHODS = ("bm25", "char-ngram", "rrf-bm25-char-ngram")
+DEFAULT_METHODS = (
+    "bm25",
+    "bm25-field-weighted",
+    "char-ngram",
+    "rrf-bm25-char-ngram",
+)
 DEFAULT_CUTOFFS = (1, 5, 10)
 
 

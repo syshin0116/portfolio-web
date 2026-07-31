@@ -4,6 +4,7 @@
 from agent.retrieval.bm25 import Bm25Retriever  # noqa: E402
 from agent.retrieval.corpus import CorpusManifestError, PublishedCorpus
 from agent.retrieval.exact import ExactSubstringRetriever  # noqa: E402
+from agent.retrieval.field_weighted import FieldWeightedBm25Retriever  # noqa: E402
 from agent.retrieval.fingerprint import retriever_fingerprint
 from agent.retrieval.protocol import (
     Corpus,
@@ -26,6 +27,7 @@ __all__ = [
     "Corpus",
     "CorpusManifestError",
     "ExactSubstringRetriever",
+    "FieldWeightedBm25Retriever",
     "DocId",
     "Bm25Retriever",
     "Hit",

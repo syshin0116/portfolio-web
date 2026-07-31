@@ -234,12 +234,11 @@
         "package_ecosystem": "bun",
         "directory": "/web",
         "schedule": {
-          "interval": "weekly",
-          "day": "monday",
+          "interval": "monthly",
           "time": "04:00",
           "timezone": "Asia/Seoul"
         },
-        "open_pull_requests_limit": 3,
+        "open_pull_requests_limit": 1,
         "cooldown": {
           "default_days": 7,
           "semver_major_days": 14,
@@ -248,23 +247,14 @@
         },
         "groups": [
           {
-            "name": "web-routine",
+            "name": "web-monthly",
             "applies_to": "version-updates",
             "patterns": [
               "*"
             ],
-            "exclude_patterns": [
-              "@assistant-ui/*",
-              "@auth/*",
-              "@langchain/*",
-              "next",
-              "next-auth",
-              "react",
-              "react-dom",
-              "@types/react",
-              "@types/react-dom"
-            ],
+            "exclude_patterns": [],
             "update_types": [
+              "major",
               "minor",
               "patch"
             ]
@@ -275,8 +265,7 @@
         "package_ecosystem": "npm",
         "directory": "/web",
         "schedule": {
-          "interval": "weekly",
-          "day": "monday",
+          "interval": "monthly",
           "time": "04:10",
           "timezone": "Asia/Seoul"
         },
@@ -288,12 +277,11 @@
         "package_ecosystem": "uv",
         "directory": "/",
         "schedule": {
-          "interval": "weekly",
-          "day": "monday",
+          "interval": "monthly",
           "time": "04:20",
           "timezone": "Asia/Seoul"
         },
-        "open_pull_requests_limit": 3,
+        "open_pull_requests_limit": 1,
         "cooldown": {
           "default_days": 7,
           "semver_major_days": 14,
@@ -302,24 +290,14 @@
         },
         "groups": [
           {
-            "name": "python-routine",
+            "name": "python-monthly",
             "applies_to": "version-updates",
             "patterns": [
               "*"
             ],
-            "exclude_patterns": [
-              "aegra-*",
-              "deepagents",
-              "langchain",
-              "langchain-*",
-              "langgraph",
-              "langgraph-*",
-              "langsmith",
-              "numpy",
-              "openai",
-              "quickjs-rs"
-            ],
+            "exclude_patterns": [],
             "update_types": [
+              "major",
               "minor",
               "patch"
             ]
@@ -330,24 +308,24 @@
         "package_ecosystem": "github-actions",
         "directory": "/",
         "schedule": {
-          "interval": "weekly",
-          "day": "monday",
+          "interval": "monthly",
           "time": "04:40",
           "timezone": "Asia/Seoul"
         },
-        "open_pull_requests_limit": 3,
+        "open_pull_requests_limit": 1,
         "cooldown": {
           "default_days": 7
         },
         "groups": [
           {
-            "name": "actions-routine",
+            "name": "actions-monthly",
             "applies_to": "version-updates",
             "patterns": [
               "*"
             ],
             "exclude_patterns": [],
             "update_types": [
+              "major",
               "minor",
               "patch"
             ]

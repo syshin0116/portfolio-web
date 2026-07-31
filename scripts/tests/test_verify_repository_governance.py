@@ -2453,43 +2453,18 @@ runs:
             ),
         )
 
-    def test_dependabot_compatibility_surface_exclusions_are_exact(self) -> None:
+    def test_dependabot_monthly_rollups_include_each_ecosystem(self) -> None:
         document = governance.load_yaml_document(REPO_ROOT / ".github/dependabot.yml")
         groups = governance._normalized_dependabot_groups(document)
 
-        self.assertEqual(
-            sorted(
-                [
-                    "@assistant-ui/*",
-                    "@auth/*",
-                    "@langchain/*",
-                    "next",
-                    "next-auth",
-                    "react",
-                    "react-dom",
-                    "@types/react",
-                    "@types/react-dom",
-                ]
-            ),
-            groups["bun:/web:web-routine"]["exclude_patterns"],
-        )
-        self.assertEqual(
-            sorted(
-                [
-                    "aegra-*",
-                    "deepagents",
-                    "langchain",
-                    "langchain-*",
-                    "langgraph",
-                    "langgraph-*",
-                    "langsmith",
-                    "numpy",
-                    "openai",
-                    "quickjs-rs",
-                ]
-            ),
-            groups["uv:/:python-routine"]["exclude_patterns"],
-        )
+        for group in (
+            groups["bun:/web:web-monthly"],
+            groups["uv:/:python-monthly"],
+            groups["github-actions:/:actions-monthly"],
+        ):
+            self.assertEqual(["*"], group["patterns"])
+            self.assertEqual([], group["exclude_patterns"])
+            self.assertEqual(["major", "minor", "patch"], group["update_types"])
 
     def test_dependabot_group_pattern_mutation_is_rejected(self) -> None:
         policy = governance.load_policy()
@@ -2497,30 +2472,14 @@ runs:
         with tempfile.TemporaryDirectory() as directory:
             mutated = Path(directory) / "dependabot.yml"
             mutated.write_text(
-                original.replace('          - "@auth/*"\n', ""),
+                original.replace('          - "*"\n', "", 1),
                 encoding="utf-8",
             )
 
             errors = governance.validate_dependabot_grouping(mutated, policy)
 
         self.assertTrue(
-            any("@auth/*" in error and "web-routine" in error for error in errors)
-        )
-
-    def test_dependabot_quickjs_runtime_exclusion_removal_is_rejected(self) -> None:
-        policy = governance.load_policy()
-        original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
-        with tempfile.TemporaryDirectory() as directory:
-            mutated = Path(directory) / "dependabot.yml"
-            mutated.write_text(
-                original.replace('          - "quickjs-rs"\n', ""),
-                encoding="utf-8",
-            )
-
-            errors = governance.validate_dependabot_grouping(mutated, policy)
-
-        self.assertTrue(
-            any("quickjs-rs" in error and "python-routine" in error for error in errors)
+            any("patterns" in error and "web-monthly" in error for error in errors)
         )
 
     def test_dependabot_full_contract_field_mutations_are_rejected(self) -> None:
@@ -2530,10 +2489,9 @@ runs:
             ("version-removal", "version: 2\n", ""),
             (
                 "schedule-interval",
-                '      interval: "weekly"\n',
+                '      interval: "monthly"\n',
                 '      interval: "daily"\n',
             ),
-            ("schedule-day-removal", '      day: "monday"\n', ""),
             ("schedule-time", '      time: "04:00"\n', '      time: "05:00"\n'),
             (
                 "schedule-timezone",
@@ -2542,13 +2500,13 @@ runs:
             ),
             (
                 "open-limit-removal",
-                "    open-pull-requests-limit: 3\n",
+                "    open-pull-requests-limit: 1\n",
                 "",
             ),
             (
                 "open-limit-change",
-                "    open-pull-requests-limit: 3\n",
-                "    open-pull-requests-limit: 4\n",
+                "    open-pull-requests-limit: 1\n",
+                "    open-pull-requests-limit: 2\n",
             ),
             ("cooldown-removal", "      semver-major-days: 14\n", ""),
             (
@@ -2600,7 +2558,7 @@ runs:
                     1,
                 )
                 .replace('directory: "/web"', 'directory: "/extra"', 1)
-                .replace("web-routine:", "extra-routine:", 1)
+                .replace("web-monthly:", "extra-monthly:", 1)
                 + "\n"
             ),
             "identity-change": original.replace(
@@ -2632,7 +2590,7 @@ runs:
 
     def test_dependabot_group_removal_duplicate_and_extra_are_rejected(self) -> None:
         original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
-        groups_start = original.index("    groups:\n      web-routine:")
+        groups_start = original.index("    groups:\n      web-monthly:")
         npm_start = original.index('\n  - package-ecosystem: "npm"')
         group_block = original[groups_start + len("    groups:\n") : npm_start].rstrip()
         mutations = {
@@ -2645,7 +2603,7 @@ runs:
             "extra": (
                 original[:npm_start]
                 + "\n"
-                + group_block.replace("web-routine:", "web-extra:", 1)
+                + group_block.replace("web-monthly:", "web-extra:", 1)
                 + original[npm_start:]
             ),
         }

@@ -296,12 +296,11 @@ EXPECTED_DEPENDABOT = {
             "package_ecosystem": "bun",
             "directory": "/web",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:00",
                 "timezone": "Asia/Seoul",
             },
-            "open_pull_requests_limit": 3,
+            "open_pull_requests_limit": 1,
             "cooldown": {
                 "default_days": 7,
                 "semver_major_days": 14,
@@ -310,21 +309,11 @@ EXPECTED_DEPENDABOT = {
             },
             "groups": [
                 {
-                    "name": "web-routine",
+                    "name": "web-monthly",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
-                    "exclude_patterns": [
-                        "@assistant-ui/*",
-                        "@auth/*",
-                        "@langchain/*",
-                        "next",
-                        "next-auth",
-                        "react",
-                        "react-dom",
-                        "@types/react",
-                        "@types/react-dom",
-                    ],
-                    "update_types": ["minor", "patch"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
                 }
             ],
         },
@@ -332,8 +321,7 @@ EXPECTED_DEPENDABOT = {
             "package_ecosystem": "npm",
             "directory": "/web",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:10",
                 "timezone": "Asia/Seoul",
             },
@@ -345,12 +333,11 @@ EXPECTED_DEPENDABOT = {
             "package_ecosystem": "uv",
             "directory": "/",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:20",
                 "timezone": "Asia/Seoul",
             },
-            "open_pull_requests_limit": 3,
+            "open_pull_requests_limit": 1,
             "cooldown": {
                 "default_days": 7,
                 "semver_major_days": 14,
@@ -359,22 +346,11 @@ EXPECTED_DEPENDABOT = {
             },
             "groups": [
                 {
-                    "name": "python-routine",
+                    "name": "python-monthly",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
-                    "exclude_patterns": [
-                        "aegra-*",
-                        "deepagents",
-                        "langchain",
-                        "langchain-*",
-                        "langgraph",
-                        "langgraph-*",
-                        "langsmith",
-                        "numpy",
-                        "openai",
-                        "quickjs-rs",
-                    ],
-                    "update_types": ["minor", "patch"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
                 }
             ],
         },
@@ -382,22 +358,21 @@ EXPECTED_DEPENDABOT = {
             "package_ecosystem": "github-actions",
             "directory": "/",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:40",
                 "timezone": "Asia/Seoul",
             },
-            "open_pull_requests_limit": 3,
+            "open_pull_requests_limit": 1,
             "cooldown": {
                 "default_days": 7,
             },
             "groups": [
                 {
-                    "name": "actions-routine",
+                    "name": "actions-monthly",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
                     "exclude_patterns": [],
-                    "update_types": ["minor", "patch"],
+                    "update_types": ["major", "minor", "patch"],
                 }
             ],
         },
@@ -2157,9 +2132,16 @@ def _normalized_dependabot(document: YamlDocument) -> JsonObject:
                 f"{document.path}: duplicate Dependabot update {identity!r}"
             )
 
+        raw_schedule = update.get("schedule")
+        if not isinstance(raw_schedule, dict):
+            raise GovernanceError(f"{update_context} schedule must be a mapping")
+        schedule_interval = raw_schedule.get("interval")
+        schedule_keys = {"interval", "time", "timezone"}
+        if schedule_interval == "weekly":
+            schedule_keys.add("day")
         schedule = _require_exact_keys(
-            update.get("schedule"),
-            {"interval", "day", "time", "timezone"},
+            raw_schedule,
+            schedule_keys,
             context=f"{update_context} schedule",
         )
         if not all(isinstance(value, str) for value in schedule.values()):

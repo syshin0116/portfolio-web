@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-07-28"
+updated: "2026-07-31"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -20,17 +20,22 @@ refs:
   - ../adr/0004-adopt-aegra.md
   - ../adr/0005-adopt-assistant-ui.md
   - ../adr/0006-public-anonymous-chat-access.md
+  - ../runbooks/gcp-neon-foundation.md
+  - ../runbooks/cloud-run-delivery.md
+  - ../runbooks/web-auth.md
+  - ../runbooks/public-anonymous-chat.md
 template: plan
 ---
 
 # Plan: rebuild the agent on Aegra, get basic chat working, then evaluate
 
-> **Status: in progress.** The P0 native runtime mechanics, P1 owner-auth boundary,
-> repository-side Cloud Run delivery automation, and P3 native assistant-ui
-> implementation are implemented or in review. The external GCP/Neon bootstrap, first
-> live deployment, provider-backed Korean chat, evaluation, and public-access phases
-> remain. Phases are written to be dispatched to separate agents. Read
-> [How to dispatch](#how-to-dispatch) first.
+> **Status: in progress.** The repository-side runtime, retrieval layer, native UI,
+> deterministic evaluation harness, capability lab, and anonymous-safety controls are
+> implemented. The remaining gates are external deployment acceptance, provider-backed
+> evidence, owner-reviewed evaluation data, and the separately approved public launch.
+> The table below distinguishes merged code from live acceptance; neither deterministic CI
+> nor a checked-in Terraform plan is evidence that Cloud Run, Neon, OAuth, or a provider
+> works in production. Read [How to dispatch](#how-to-dispatch) first.
 
 > **Read [ADR-0008](../adr/0008-chatbot-is-a-rag-evaluation-testbed.md) before touching
 > anything here.** The purpose is comparing retrieval methods; the chat is an inspection
@@ -59,12 +64,32 @@ P0  Aegra spike (local)              gates everything
 P1  Rebuild the agent layer          retriever Protocol + correct BM25 + build-time mirror
 P2  Deploy a restricted preview      fail-closed owner auth; not public yet
 P3  assistant-ui, preview then cut over
-    ─────────────────────────────────  ✅ basic chat works end to end
+    ─────────────────────────────────  deterministic native path complete; live gate remains
 P4  Evaluation harness (eval/)       forks off P1's Protocol; can run in parallel from here
 P4.5 QuickJS + subagent capability lab independent axes first, then bounded combination
 P5  Public hardening                 anonymous identity, guard, GC, budget caps
 P6  Go public                        PUBLICATION GATE
 ```
+
+### Phase status as of 2026-07-31
+
+| Phase | Repository status | Exact remaining gate |
+|---|---|---|
+| P0 | Implemented: pinned Aegra runtime, AP v2 fixtures/codegen, PostgreSQL pool-recreation and isolation tests | Provider-backed two-turn Korean smoke against the deployed revision |
+| P1 | Implemented: shared retriever Protocol, 335-document published mirror, corrected fitted BM25, exact and field-weighted serving, native Deep Agents graph | No repository implementation gate remains; future methods extend the same contracts |
+| P2 | Delivery code implemented: immutable image, Terraform, WIF, migration/grant jobs, release and rollback workflows | Apply and verify the exact dedicated GCP/Neon foundation, real Neon grants, secrets, preview revision, restart, and owner smoke |
+| P3 | Implemented: native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe wire projection, deterministic AP v2 integration, and Playwright browser evidence | Full deployed owner-authenticated Korean journey against real Cloud Run, Neon, and the provider |
+| P4 | Harness implemented: the default provider-free sweep runs BM25, field-weighted BM25, character n-grams, and BM25/character RRF twice in CI and byte-compares the artifacts | First dense arm, `topic-smoke-v1`, owner-reviewed qrels, and a publication-qualified digest-pinned run |
+| P4.5 | Runtime and 2x2 harness implemented: bounded QuickJS and dynamic subagents share `RunBudget` and execute all four deterministic arms | A separately reviewed real-provider adapter and quality/cost result; synthetic evidence cannot enable either capability for guests |
+| P5 | Repository controls implemented: anonymous JWT/cookie, Turnstile bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secrets, and approved non-zero budget |
+| P6 | Disabled by design: all repository public flags and guest budget/model environment values remain fail-closed | Public-launch PR and live acceptance. The only accepted guest contract is `openai:gpt-5.6-luna`, which has no API Free tier, so a zero-spend requirement blocks launch |
+
+The operational source of truth for those live gates is the
+[GCP/Neon foundation](../runbooks/gcp-neon-foundation.md),
+[Cloud Run delivery](../runbooks/cloud-run-delivery.md),
+[web authentication](../runbooks/web-auth.md), and
+[public anonymous rollout](../runbooks/public-anonymous-chat.md) runbooks. A repository
+status update must not silently promote any unchecked live gate.
 
 **The old P1 "close three content leaks" is deleted, not rescheduled.** All three fixes
 patched files that P1 now deletes. Doing both would be the same work twice.
@@ -75,7 +100,7 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 
 | Package | Pin | Note |
 |---|---|---|
-| `aegra-api`, `aegra-cli` | `==0.9.24` | Latest release verified 2026-07-26; includes feature-flagged Agent Protocol v2 streaming via native v3. **Never `pip install aegra`** |
+| `aegra-api`, `aegra-cli` | `==0.9.24` | Latest release verified 2026-07-31; includes a feature-flagged draft Agent Protocol v2 dialect via native v3. **Never `pip install aegra`** |
 | `langgraph` | `==1.2.9` | Aegra's own lock resolves 1.2.6. Rollback pin documented |
 | `langgraph-sdk` | `==0.4.2` | `Auth`, `AuthContext`, `ServerRuntime` |
 | `langgraph-checkpoint-postgres` | `==3.1.0` | Above Aegra's locked 3.0.4, so untested by Aegra CI. Rollback: `==3.0.4` |
@@ -86,18 +111,27 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `@assistant-ui/react` | `0.15.0` | |
 | `@assistant-ui/react-langgraph` | `0.14.15` | native `useLangGraphRuntime`; **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
+| `@langchain/protocol` | `0.0.18` | Exact upstream schema/binding release recorded with its commit and hashes in the protocol lock |
+
+The anonymous model is a separate fail-closed runtime contract, not an install-time
+dependency. When anonymous access is eventually enabled it accepts only
+`openai:gpt-5.6-luna`, with `reasoning.effort=none`, provider storage disabled, and
+bounded token and micro-dollar reservations. The committed Cloud Run values keep
+anonymous access false and leave the guest model and budget empty. Luna has no API Free
+tier, so this contract does not authorize a public launch under a zero-spend constraint.
 
 **Already dropped:** `chromadb` (zero call sites).
 
-**Drop during the Aegra replacement:** direct `uvicorn`/`sse-starlette`, the `arq` extra,
-`@langchain/react`, and `@langchain/langgraph`. Retain FastAPI only for Aegra's supported
+**Dropped by the Aegra replacement:** direct `uvicorn`/`sse-starlette`, the `arq` extra,
+`@langchain/react`, and `@langchain/langgraph`. FastAPI remains only for Aegra's supported
 `http.app` extension; it owns no Agent Protocol endpoint.
 
-## Target AI project tree
+## Current AI project tree
 
-This is the target ownership map, not an exhaustive list of every test or retriever.
-Phase PRs may add files beneath these boundaries, but moving a boundary requires updating
-this tree first. Generated directories are shown for clarity and are never committed.
+This is the current ownership map, not an exhaustive list of every test helper. Moving a
+boundary requires updating this tree first. `protocol/generated/` is generated and
+committed because compatibility tests consume the exact bindings; `agent/.index/` and
+`eval/results/` are generated and never committed.
 
 ```text
 aegra.json                         # graph/auth/http registration
@@ -106,10 +140,12 @@ pyproject.toml                     # uv workspace: agent + eval
 uv.lock                            # one lock for the workspace
 protocol/
 ├── agent-protocol.lock.json       # upstream commit/schema hash + Aegra dialect/support matrix
-└── fixtures/                      # committed AP v2 event/replay/HITL streams
+├── fixtures/                      # committed AP v2 event/replay/HITL streams
+└── generated/                     # committed Python/TypeScript bindings for the locked schema
 scripts/
 ├── build_index.py                 # content/ -> published-only generated mirror
-└── smoke.py                       # local and deployed compatibility gate
+├── smoke.py                       # local and deployed compatibility gate
+└── verify_*.py / validate_*.py    # protocol, governance, release, and delivery gates
 agent/
 ├── pyproject.toml
 ├── skills/
@@ -126,36 +162,52 @@ agent/
 ├── src/agent/
 │   ├── graph.py                   # create_deep_agent entrypoint
 │   ├── auth.py                    # Aegra identity/auth hooks
+│   ├── identity.py                # authoritative owner/anonymous identity helpers
 │   ├── http.py                    # minimal native-route guard; no protocol facade
 │   ├── preflight.py               # fail-closed Aegra registration checks
 │   ├── migrate.py                 # one-shot Aegra + LangGraph DB setup
-│   ├── middleware.py              # identity, tier, budget/run policy
+│   ├── inspection.py              # bounded retrieval inspection events
+│   ├── public_wire.py             # guest-only state/history/SSE projection
+│   ├── guest_budget.py            # durable daily and per-run dollar reservations
+│   ├── guest_thread_lock.py       # guest same-thread serialization
+│   ├── quarantine.py              # orphaned guest execution fence
+│   ├── recovery.py                # bounded stale-run recovery
+│   ├── run_liveness.py            # execution heartbeat/liveness contract
+│   ├── maintenance.py             # retention, GC, and recovery job
+│   ├── neon_grant_probe.py        # real-Neon privilege acceptance entrypoint
 │   ├── capabilities/
 │   │   ├── quickjs.py             # bounded async CodeInterpreterMiddleware config
 │   │   ├── subagents.py           # named agents + dynamic dispatch policy
-│   │   └── budget.py              # shared model/tool/task reservations
+│   │   ├── budget.py              # shared model/tool/task reservations
+│   │   └── token_counting.py      # fixed Luna serialization and usage accounting
 │   ├── prompts.py
 │   ├── tools.py                   # thin tool adapters over Retriever
 │   └── retrieval/
 │       ├── protocol.py            # stdlib-only shared contract
 │       ├── registry.py            # servable methods only
 │       ├── corpus.py              # reads only agent/.index
+│       ├── corpus_build.py        # deterministic one-scan build implementation
 │       ├── bm25.py                # corrected baseline
-│       ├── graph.py
-│       ├── fusion.py
+│       ├── exact.py               # literal-match serving floor
+│       ├── field_weighted.py      # BM25F comparison arm
+│       ├── serving.py             # graph-facing retrieval adapter
 │       └── fingerprint.py         # method/config identity
 └── tests/
     ├── contract/                  # every registered Retriever
-    ├── security/                  # publication and identity boundaries
-    └── integration/               # Aegra graph/stream/restart smoke
+    ├── unit_tests/                # retrieval, security, capability, and guest boundaries
+    └── integration_tests/         # Aegra/PostgreSQL/pool-recreation/quarantine smoke
 web/
 └── components/assistant/
-    ├── chat-section.tsx           # owner-preview entry and configuration boundary
+    ├── chat-section.tsx           # owner/anonymous entry and configuration boundary
     ├── chat-shell.tsx             # assistant-ui primitives + responsive shell
     ├── agent-runtime-provider.tsx # native useLangGraphRuntime composition
+    ├── anonymous-chat-gate.tsx    # fail-closed Turnstile/cookie bootstrap
+    ├── turnstile-widget.tsx
     └── runtime/
         ├── native-client.ts        # official AP v2 ThreadStream + MessageAssembler
         ├── thread-adapter.ts       # official SDK metadata/state/history adapter
+        ├── thread-source.ts        # identity-scoped thread-list lifecycle
+        ├── anonymous-bootstrap.ts  # single-use challenge and cookie resume
         ├── inspection.ts           # bounded live-only retrieval projection
         ├── interrupt-projection.ts # bounded HITL UI schema
         ├── token-broker.ts         # identity-scoped token/cancellation lifecycle
@@ -166,24 +218,30 @@ eval/
 ├── pyproject.toml                 # uv workspace member; depends on agent
 ├── src/blogeval/
 │   ├── registry.py                # servable registry + lab extensions
+│   ├── cli.py
 │   ├── datasets.py
 │   ├── metrics.py
 │   ├── runner.py
 │   ├── report.py
 │   ├── capability_runner.py       # QuickJS/subagent factorial experiments
-│   └── lab/                       # torch/JVM/large-checkpoint methods
+│   ├── provenance.py
+│   ├── publication.py             # attested publication candidate verification
+│   └── methods/
+│       ├── char_ngram.py
+│       └── rrf.py
 ├── querysets/
 │   ├── known-item-alias-v1.json
-│   ├── topic-smoke-v1.json
 │   └── capability-tasks-v1.json
 ├── tests/
 └── results/                       # GENERATED/local system of record, gitignored
+infra/gcp/                          # staged, fail-closed Cloud Run/Neon delivery contract
 ```
 
-Explicitly deleted rather than carried forward: `agent/src/api/`, top-level `db.py`,
-`schemas.py`, and `worker.py`; ARQ/run-queue modules; legacy migration code; six one-tool
-skills; and superseded `agent/src/agent/lib/` implementations after their replacement
-tests pass. `content/` remains an immutable build input and is never moved under `agent/`.
+Not present yet, by design: serving graph expansion/fusion modules, heavyweight
+`eval/src/blogeval/lab/` methods, and `topic-smoke-v1.json`. They land only with their
+method implementation or owner-reviewed qrels. The superseded implementations under
+`agent/src/agent/lib/` are gone; one unused package marker remains for a later hygiene
+cleanup. `content/` remains an immutable build input and is never moved under `agent/`.
 
 ## CI/CD and release contract
 
@@ -193,41 +251,52 @@ workflow files and reusable-workflow boundaries are also reviewed delivery input
 
 ```text
 .github/workflows/
-├── ci.yml                    # web + agent + eval + index/security checks
+├── ci.yml                    # web + agent + native AP v2 + eval + infra aggregate
 ├── protocol-compat.yml       # AP v2 schema/codegen/fixture drift
+├── wiki-verify.yml           # immutable source/wiki contract
 ├── agent-image-build.yml     # reusable secretless isolated image builder
 ├── agent-release.yml         # reusable owner-gated release + pre-traffic smoke
 ├── preview-agent.yml         # same-repository PR caller -> fixed preview service
 ├── deploy-agent.yml          # reviewed main caller -> production or rollback
+├── eval-publication.yml      # manual main-only attested evaluation candidate
+├── vercel-production.yml     # canonical Vercel production observer/guard
 └── dependency-audit.yml      # scheduled latest-release/security report
 ```
 
 ### Pull requests
 
-- `ci/web` currently runs a frozen Bun install, generated-content prebuild, unit tests,
-  lint, typecheck, and the production build. P3 acceptance adds Playwright chat tests
-  against committed AP v2 fixtures and the Korean-IME journey; those browser gates are
-  not claimed by the current workflow.
+- `ci/web` runs a frozen Bun install, generated-content prebuild, unit tests, lint,
+  typecheck, the production build, pinned Chromium, and `bun run test:browser`. The
+  Playwright suite exercises the native AP v2 fixtures, Korean IME, reconnect/reload,
+  409/429 handling, Turnstile bootstrap, 320/390/768/1440 px layouts, reduced motion,
+  focus restoration, and Axe; CI uploads revision-bound browser evidence.
 - `ci/agent`: root `uv sync --frozen`, Ruff, unit/contract/security tests, and the
   published-only mirror build. Its PostgreSQL 17 service runs the host integration
   suite, then CI builds the real Linux amd64 image, runs that same image's
   `python -m agent.migrate` against the same database, boots the image, verifies `/live`
   and `/ready`, and requires an unauthenticated AP v2 command to return 401. This bounded
   container smoke never sends a provider or model request.
+- `ci/native-apv2`: the official JavaScript SDK talks to the real Aegra
+  application/runtime and isolated PostgreSQL 17, covering the locked event/command
+  dialect, persistence, HITL, inspection, reconnect, and the
+  `rawPrivateStateObserved=false` sentinel.
 - `ci/eval`: dataset-schema validation, deterministic metric fixtures, registry/fingerprint
-  contract, and a tiny no-provider-cost sweep. Full paid sweeps are never a PR requirement.
+  contract, then two byte-compared no-provider sweeps over the four default methods. Full
+  paid sweeps are never a PR requirement.
 - `protocol-compat`: fetch the Agent Protocol CDDL/OpenAPI revision recorded in
   `protocol/agent-protocol.lock.json`, regenerate bindings in a temporary directory, and
   fail on a diff. Replay committed content-block, tool, nested namespace, replay, error,
   and HITL fixtures through both Python and TypeScript consumers.
-- The lock records both upstream Agent Protocol and the Aegra tag. Aegra 0.9.24 implements
-  the current v2 event model as a draft dialect at
+- The lock records upstream `@langchain/protocol` 0.0.18 and Aegra 0.9.24 with exact
+  commits and artifact hashes. Aegra implements a tested subset of that draft AP v2
+  event model at
   `POST /threads/{thread_id}/stream/events`, while upstream documents
   `POST /threads/{thread_id}/stream`. This path difference is explicit compatibility data,
-  not hidden behind a misleading “fully conformant” label. Record wire differences too:
-  Aegra has no v2 WebSocket route, implements only `run.start` and `input.respond`
-  commands, and its HITL input event uses `value` where the pinned upstream binding expects
-  `payload`. Dialect translation happens in one tested transport boundary.
+  not hidden behind a misleading “fully conformant” label. The support matrix also records
+  that Aegra has no v2 WebSocket route, dispatches only `run.start` and `input.respond`,
+  ignores `input.respond` update/goto, lacks the other command families, and emits HITL
+  input under `value` where the pinned binding expects `payload`. Dialect translation
+  happens in one tested transport boundary; unsupported capabilities stay unsupported.
 - Path filters include root `pyproject.toml`, `uv.lock`, `aegra.json`, `Dockerfile`,
   `protocol/**`, `scripts/**`, `content/**`, `agent/**`, `eval/**`, and `web/**`. A
   `content/**` change must rebuild both the web artifacts and the agent mirror.
@@ -366,9 +435,9 @@ From scratch, native to deepagents 0.6.12. Absorbs the old leak-fix phase.
   compose without special cases.
 - `agent/src/agent/retrieval/registry.py`: `name -> factory` for **servable methods**.
   The chat reads this registry. The eval registry imports it, then adds heavyweight lab
-  methods from `eval/blogeval/lab/`. The two registries may enumerate different sets, but
-  a shared method ID must resolve to the same implementation/config fingerprint. CI checks
-  that invariant.
+  methods from `eval/src/blogeval/lab/` when one exists. The two registries may enumerate
+  different sets, but a shared method ID must resolve to the same implementation/config
+  fingerprint. CI checks that invariant.
 
 ### P1.2 The build-time published-only mirror
 - `scripts/build_index.py` copies **only published posts** into `agent/.index/posts/`, and
@@ -377,10 +446,10 @@ From scratch, native to deepagents 0.6.12. Absorbs the old leak-fix phase.
   Nuartz-published set has **335**: basename-leading `_` files are excluded, including
   `AI/pdf-parser/_index.md`. The mirror, catalogue, graph, dictionary, and every fitted
   index must all use the same 335-document set.
-- This is the draft boundary, and it is the whole reason it cannot be bypassed. Today the
-  boundary is a runtime predicate that three code paths must each remember; two forget and
-  the third is wrong. **In the rebuild a draft is not filtered, it is absent from the
-  image.**
+- This is the publication boundary, and it is the whole reason it cannot be bypassed. The
+  legacy agent relied on a runtime predicate that three code paths each had to remember;
+  two forgot and the third was wrong. **In the rebuilt image a draft is not filtered, it
+  is absent.**
 - Fail closed: `draft` and `private` must be booleans when present; either `true` excludes
   the document and cannot be overridden. `published: false` also excludes, but the
   existing date/date-like-string `published` values are legacy publication timestamps,
@@ -403,9 +472,9 @@ From scratch, native to deepagents 0.6.12. Absorbs the old leak-fix phase.
   the boundary auditable rather than aspirational.
 
 > The corpus currently has zero `draft: true`, `private`, or boolean `published` values,
-> but it already has one Nuartz-hidden `_index.md` that the Python agent indexes and three
-> public no-frontmatter legacy files. The boundary fixes a present 336-vs-335 drift as well
-> as future leaks.
+> but it has one Nuartz-hidden `_index.md` that the legacy Python agent indexed and three
+> public no-frontmatter legacy files. The current mirror fixes that 336-vs-335 drift and
+> fails closed on future leaks.
 
 ### P1.3 The corrected BM25 baseline `BLOCKER for everything in P4`
 A broken baseline invalidates every comparison drawn against it. Three independent fixes,
@@ -446,8 +515,9 @@ Also remove the `score / max(scores)` normalisation: it forces the top hit to ex
 for **any** query including nonsense.
 
 **Accept:** executable tests, not inspection, against a committed literal-term qrel
-manifest pinned to the corpus tree. On the published 335-document corpus, current
-`도커` recall@13 is 3/13 and the corrected method reaches 13/13; raw scores match
+manifest pinned to the corpus tree. On the published 335-document corpus, the legacy
+pre-fix tokenizer's `도커` recall@13 is 3/13 and the corrected current method reaches
+13/13; raw scores match
 `BM25Okapi` without normalisation, ties are stable by DocId, serialized/load-time results
 are identical, the fitted DB is byte-deterministic within the pinned build target, clean
 Linux registry runtime `VmHWM` stays below 550 MiB, and absent, zero-score, and
@@ -463,9 +533,9 @@ gate**. Add a macro gate only with owner-reviewed `topic-smoke-v1` in P4.
   **unconditionally**, whatever you pass as `tools=` - they are only dangerous if a backend
   route points them at content. Deleting the `/blog/` route removes the leak class.
 - **Mount `/skills/`** on a read-only FilesystemBackend and pass `skills=["/skills/"]`.
-  Skills have never loaded: an absolute host path goes into `SkillsMiddleware`, which
-  resolves *through the backend*, misses every route, and falls through to `StateBackend`.
-  Verified: mounting the route loads all six SKILL.md with zero warnings.
+  The legacy absolute host path went through `SkillsMiddleware`, missed every backend
+  route, and fell through to `StateBackend`. The mounted route now loads the consolidated
+  workflow skill with zero warnings.
 - **Collapse six SKILL.md files into one workflow skill.** Six files each restating one
   tool's docstring is duplication under the upstream model - skills are for task
   instructions too large for the prompt, discovered by progressive disclosure.
@@ -477,12 +547,13 @@ gate**. Add a macro gate only with owner-reviewed `topic-smoke-v1` in P4.
   overrides it and reaches another user's memory namespace. Better still,
   `runtime.server_info.user.identity` works inside middleware with no escape hatch. The
   static StoreBackend namespace callable reads this trusted runtime identity directly.
-- Add `agent/src/agent/auth.py` here with the existing owner token flow and a mandatory
-  `AGENT_AUTH_SECRET` length check. P1 authentication is fail-closed and owner-only; P5
-  extends it with the anonymous tier. Never deploy an Aegra graph with no auth file.
+- `agent/src/agent/auth.py` carries the owner token flow, the P5 anonymous extension, and a
+  mandatory `AGENT_AUTH_SECRET` length check. Never deploy an Aegra graph with no auth
+  file.
 - Disable native thread deletion with `@auth.on.threads.delete`. Aegra 0.9.24 deletes
   metadata without checkpoints and exposes no supported atomic extension, so there is no
-  honest user-facing delete operation yet. A later admin GC/retention job is separate.
+  honest user-facing delete operation. The implemented admin GC/retention job remains a
+  separate privileged operation.
 - Delete: `read_only_backend.py`, `result_formatter.py`, `ripgrep_search.py` (shells out
   for a 2.4 MB corpus while its own in-process fallback is correct), and 32 LOC of dead
   code in `prompts.py`.
@@ -502,6 +573,11 @@ IAM-token exchange. IAM and ingress restriction may be added where compatible, b
 unlisted URL is never an access-control boundary. Aegra without the registered auth file
 is fail-open under one shared `anonymous` identity, so deployment must refuse to proceed
 if auth registration or its secret is missing.
+
+**Repository status:** the image, Terraform stages, identity validators, migration and
+grant jobs, preview/production callers, pre-traffic smoke, and rollback path are
+implemented. This phase is not accepted until the exact external GCP/Neon foundation is
+applied and the real preview passes every gate below.
 
 - Dockerfile is greenfield - Aegra's own copies `libs/aegra-api/...` paths that do not
   exist here. `python:3.12-slim-bookworm`.
@@ -553,23 +629,28 @@ the process settings split the guard, or measured memory leaves inadequate headr
 
 ## P3 - assistant-ui `~3 days`
 
-Preview URL first. The native implementation is WEB-A owner-only until the WEB-B public
-state/input network boundary below is satisfied.
+Preview URL first. The native assistant-ui implementation and the WEB-B guest-only network
+projection are merged. The deployed surface remains WEB-A owner-only because all public
+flags are false until P5's live gates and P6's explicit launch approval pass.
 
 ### P3.1 UI contract
 
-The chatbot remains part of the home-page experience, but gets a full-height focused mode
-instead of trying to fit every control into the hero. Desktop uses a three-zone shell;
+The chatbot remains part of the home-page experience and now has a full-height focused
+mode instead of fitting every control into the hero. Desktop uses a three-zone shell;
 mobile uses one conversation surface with sheets for threads and run detail.
 
 ```text
 web/components/assistant/
-├── chat-section.tsx               # owner-preview gate
+├── chat-section.tsx               # owner/anonymous entry boundary
 ├── chat-shell.tsx                 # assistant-ui Thread/ThreadList primitives
 ├── agent-runtime-provider.tsx     # native runtime + thread adapter
+├── anonymous-chat-gate.tsx        # fail-closed Turnstile/cookie gate
+├── turnstile-widget.tsx
 └── runtime/
     ├── native-client.ts           # official SDK ThreadStream/MessageAssembler
     ├── thread-adapter.ts          # official SDK metadata/state/history
+    ├── thread-source.ts           # identity-scoped thread lifecycle
+    ├── anonymous-bootstrap.ts     # challenge exchange and cookie resume
     ├── inspection.ts              # exact syshin.rag.inspection.v1 projection
     ├── interrupt-projection.ts    # bounded HITL projection
     ├── token-broker.ts            # refresh, identity disposal, cancellation snapshot
@@ -578,20 +659,21 @@ web/components/assistant/
     └── error-state.ts
 ```
 
-- WEB-A signed-out view explains that the preview is owner-only. WEB-B later replaces this
-  with anonymous testing, example prompts, privacy/AI copy, and a clear new-conversation
-  action only after P5/P6 gates pass.
+- WEB-A signed-out view explains that the preview is owner-only. The WEB-B Turnstile,
+  cookie-resume, example-prompt, privacy/AI-copy, and new-conversation UI exists but is
+  reachable only when the server and browser public flags are deliberately enabled after
+  P5/P6.
 - Message answers render citations inline and a source list below. Retrieval method and
   corpus revision are visible in a compact run-details disclosure, not mixed into prose.
 - Tool activity collapses into a timeline by default. Retrieval shows the exact bounded
   query/method/hit/stage/source fields emitted by the server. QuickJS or subagent-specific
   cards appear only after a reviewed protocol event exists; generic tool/nested lifecycle
   must not be relabelled as a capability the run did not prove. Internal chain-of-thought
-  is never displayed. This is only a UI guarantee: root `messages` events may already
-  have carried reasoning/thinking blocks to the browser.
-- Capability controls reflect server-authorized tier. Anonymous users cannot reveal hidden
-  owner controls. Changing retrieval/capability settings creates explicit run config and
-  never injects a fake system message into checkpoint history.
+  is never displayed; guest response bytes additionally pass through the server-side
+  projection that drops reasoning/thinking blocks before the browser sees them.
+- Capability authorization is server-owned. The former skill-restriction chips and fake
+  checkpointed system messages are gone; client config cannot grant QuickJS, subagents, or
+  another model, and anonymous users cannot reveal hidden owner controls.
 - Required states: empty, token minting, ready, streaming, tool running, subagents in
   parallel, interrupted, reconnecting/replaying, stopped, rate-limited, busy-thread,
   expired anonymous thread, server error, and offline. Every state has Korean copy and a
@@ -623,15 +705,13 @@ web/components/assistant/
 - Use the official SDK client for cancellation, metadata, state, and history. Do not add a
   custom REST facade. Keep Edit/Regenerate/branch mutation/delete visibly disabled until
   the backend supports their required semantics.
-- **WEB-B network gate:** `threads.getState/getHistory` currently returns open checkpoint
-  state to browser JavaScript before local reduction. The SDK lifecycle watcher's wildcard
-  `input` can also carry a future sensitive nested interrupt payload. Root `messages` can
-  carry provider reasoning/thinking blocks before the local reducer hides them.
-  Owner-only WEB-A may accept these limitations; anonymous access may not. Before WEB-B,
-  require a server-side safe state/history projection plus a root-filterable watcher, or a
-  separately proven public endpoint whose graph-level HITL/state schemas are bounded;
-  also require upstream/server-side reasoning suppression/redaction or a separately proven
-  model path that emits no reasoning on the browser wire.
+- **WEB-B network boundary, implemented:** guest state/history/metadata/run/command JSON
+  and complete SSE frames pass through a fail-closed server projection before response
+  bytes leave the process. It validates the bounded public schemas, fixes the SDK input
+  watcher at root/depth zero, removes reasoning/system/tool arguments/tool output/raw
+  errors and unreviewed interrupts, and revalidates the inspection event. Owner responses
+  remain native and unprojected. This satisfies the repository network prerequisite; it
+  does not satisfy P5's deployed abuse, retention, spend, or browser gates.
 - In `load()`, read `state.interrupts` **first** - Aegra returns interrupts as a top-level
   field, so the quickstart's `state.tasks[0].interrupts` is the wrong read here.
 - Async `onRequest` token hook with a 60s margin. Capturing the token once at mount 401s
@@ -653,10 +733,11 @@ state-channel regression, not a general proof that future input payloads are pub
 or that chain-of-thought cannot traverse a root message event.
 Desktop, 768 px, 390 px, and 320 px browser evidence covers console/network/a11y,
 reduced-motion, focus restoration, and Korean IME. No production import or network call
-uses legacy `/runs/stream`; unsupported mutations are visibly disabled. WEB-B remains
-blocked on safe state/history, the input watcher, and reasoning-wire suppression or proof.
+uses legacy `/runs/stream`; unsupported mutations are visibly disabled. These deterministic
+fixtures and browser tests are implemented in CI. The first full deployed
+owner-authenticated Korean conversation remains the P2/P3 operational acceptance gate.
 
-### ✅ Basic chat works end to end here
+### ✅ Deterministic native chat path works here; live provider acceptance remains
 
 ---
 
@@ -666,7 +747,7 @@ The actual deliverable. Forks off P1's Protocol and can proceed alongside P2 and
 
 - **`eval/` as a uv workspace member** next to `agent/`. The split line is **servable vs
   not**: a method that could run on Cloud Run lives in `agent/src/agent/retrieval/`; a
-  method needing torch, a 2 GB checkpoint, or a JVM lives in `eval/blogeval/lab/`. Both
+  method needing torch, a 2 GB checkpoint, or a JVM belongs in `eval/src/blogeval/lab/`. Both
   satisfy the same Protocol. The eval registry extends the agent registry; the agent never
   imports `eval/`. Promoting a lab method means moving its implementation and registering
   the same method ID/fingerprint in the servable registry. This keeps the image slim
@@ -678,9 +759,10 @@ The actual deliverable. Forks off P1's Protocol and can proceed alongside P2 and
   LLM-generated queries.
 - Keep two versioned query-set contracts rather than mixing their metrics:
   `known-item-alias-v1` maps each alias to one target and headlines Hit@k and MRR;
-  `topic-smoke-v1` contains manually reviewed multi-document qrels and headlines recall@k.
-  Each committed manifest records its generator/version, corpus tree SHA, qrels, and
-  exclusions. The BM25 macro-recall regression uses `topic-smoke-v1`.
+  the future `topic-smoke-v1` will contain manually reviewed multi-document qrels and
+  headline recall@k. Each committed manifest records its generator/version, corpus tree
+  SHA, qrels, and exclusions. The BM25 macro-recall regression waits for
+  `topic-smoke-v1`.
 - Pin the corpus by **git tree sha of `content/`**. The harness never reads live `content/`.
 - **Report `coverage` alongside recall@k, always.** The published-corpus wikilink graph is
   sparse, so a graph method that declines to answer on most queries would otherwise look
@@ -695,6 +777,13 @@ The actual deliverable. Forks off P1's Protocol and can proceed alongside P2 and
   Docker qrel and synthetic tokenizer contracts are the P1.3 regression gates.
 - Emit a Markdown leaderboard and SVG plots, so results drop into a blog post without
   retyping. This matches the repo's existing `.mmd` → `.svg` diagram convention.
+
+**Implemented evidence (2026-07-31):** `eval/` is a root uv-workspace member and the
+default CLI sweep runs `bm25`, `bm25-field-weighted`, `char-ngram`, and
+`rrf-bm25-char-ngram`. CI generates and validates the 90-qrel known-item dataset, executes
+the four-method sweep twice on its frozen Linux runner, verifies each run, and
+byte-compares its JSON, Markdown, SVG, and manifest projections. This satisfies the
+harness construction gate, not the dense first experiment or publication gate.
 
 **Accept:** one full sweep over at least three methods produces a leaderboard, a
 per-query table, and plots, reproducibly, from a pinned corpus and a versioned query-set
@@ -771,12 +860,23 @@ capabilities, while anonymous access remains off until P5 budgets and P6 abuse t
 This run-local finalization evidence does not replace P5's lower guest policy,
 per-identity/global daily dollar ledger, rate limit, or provider-side spend cap.
 
+**Implemented evidence (2026-07-31):** the owner graph can exercise native bounded
+QuickJS and native Deep Agents `task`; the exact off/on x off/on experiment compiles the
+production graph in all four arms with fresh identities and one shared finalized budget.
+Its evidence tier remains `synthetic-provider-free`. There is deliberately no paid
+provider adapter, CLI, credential path, or quality/cost conclusion, and guests remain
+server-side denied both capabilities.
+
 ---
 
 ## P5 - Public hardening `~2 days` `GATE for P6`
 
 Nothing here is optional. Full detail in
 [`public-exposure.md`](../research/public-exposure.md).
+
+**Repository status:** the code controls below are implemented and covered by unit,
+PostgreSQL, protocol, and browser fixtures. They do not authorize public traffic. Real
+Cloud Run/Neon/provider proofs and the paid launch decision remain mandatory.
 
 - **The governing constraint:** authorization must not depend on `@auth.on.*` dispatch.
   Legacy streaming paths skip handlers, and AP v2 thread-stream/commands coverage must be
@@ -794,9 +894,14 @@ Nothing here is optional. Full detail in
 - Tier differences go in **the model instance and backend routes**, never the middleware
   list - Aegra requires identical topology across access contexts. `wrap_model_call` adds
   no nodes, so anything expressible there is free to vary.
-- `/admin/gc` plus Cloud Scheduler. **Deleting a thread does not delete its checkpoints** -
-  sweep children before parents. Neon free has no `pg_cron`.
-- Provider spend cap, per-run call limits, a dollar budget middleware (LangChain ships none).
+- `/admin/gc` plus the dedicated maintenance job, quarantine, stale-run recovery, and
+  Terraform-owned Cloud Scheduler. **Deleting a thread does not delete its checkpoints** -
+  sweep children before parents. Neon free has no `pg_cron`; Scheduler stays paused until
+  a separately approved launch and recurring-cost change.
+- Per-run model/token limits and a durable UTC-day micro-dollar ledger are implemented for
+  the fixed `openai:gpt-5.6-luna` guest contract. The public flags, model, budgets, and
+  OpenAI secret remain absent/disabled; Luna has no API Free tier. Provider-account spend
+  protection and an approved non-zero ceiling remain live launch gates.
 - Public capability policy is evidence-based: retrieval is always available; QuickJS and
   dynamic subagents remain owner-only unless P4.5 shows a material quality gain and the
   deployed anonymous abuse tests prove the shared budget cannot be bypassed. If enabled
@@ -814,11 +919,12 @@ Nothing here is optional. Full detail in
   exceeding the rate limit from a browser and firing two concurrent submits on one thread.
 - Confirm the separate administrative retention/GC job measurably reduces orphaned
   checkpoint row count; it does not enable user-facing thread deletion.
-- Add a stale-run sweep: with `REDIS_BROKER_ENABLED=false` there is no lease reaper, so an
-  instance killed mid-run leaves a thread busy forever.
+- Verify the implemented quarantine, heartbeat, and stale-run recovery on the deployed
+  revision: with `REDIS_BROKER_ENABLED=false` there is no upstream lease reaper, so the
+  repository-owned fence must recover an instance killed mid-run without double execution.
 - Decide LangSmith tracing **before**, not after - traces carry full prompts and full
   retrieved content.
-- Watch Anthropic spend daily for week one.
+- Watch OpenAI guest spend and Anthropic owner spend separately every day for week one.
 
 ---
 
@@ -826,39 +932,48 @@ Nothing here is optional. Full detail in
 
 | | Risk | Mitigation |
 |---|---|---|
-| `HIGH` | **Same-thread run serialization is lost.** Aegra parses `multitask_strategy` and never reads it. This reverses the 2026-07-11 decision | P5's busy set. Honest limits: in-process, correct only at `--max-instances 1`, a check rather than a lock |
+| `HIGH` | **Same-thread run serialization is lost.** Aegra parses `multitask_strategy` and never reads it. This reverses the 2026-07-11 decision | The implemented guest busy set, quarantine, and recovery fence remain valid only with one application worker and `max-instances=1`; verify both on the deployed revision |
 | `HIGH` | Auth dispatch differs across legacy and AP v2 streaming/commands paths | Protocol fixtures test every production endpoint; SQL identity predicate plus outer ASGI guard is the boundary. Pin `aegra-api >= 0.9.7` |
-| `HIGH` | Client-supplied `configurable.user_id` wins over the server's | Read `langgraph_auth_user`. Fix in P1, before anything deploys |
+| `HIGH` | Client-supplied `configurable.user_id` wins over the server's | The graph reads the authoritative server runtime identity; PostgreSQL isolation tests retain a forged field and prove it cannot cross namespaces |
 | `HIGH` | Aegra thread deletion strands checkpoints and cannot commit both stores atomically | Native DELETE is fail-closed with 403. Do not expose a faux-safe route; design admin GC separately |
-| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra lists rate limiting as "Not yet planned" | Anthropic org spend cap is the only provider-enforced hard stop |
-| `MED` | **Evaluating with a broken baseline.** Every number produced against it is invalid, not merely pessimistic | P1.3 is a blocker for P4, with executable acceptance tests |
-| `MED` | Pre-1.0 churn. `aegra-api` shipped three releases in three weeks; four `unstable_` assistant-ui APIs on the happy path | Exact pins, committed lockfiles, `smoke.py` as the bump gate |
+| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | Public flags and guest secret/model/budgets stay fail-closed; the implemented ledger and guard plus a separately verified OpenAI account cap are all required. Luna has no Free tier |
+| `MED` | **Regressing the corrected baseline.** A tokenizer or fitted-artifact change would invalidate every comparison | P1.3 executable literal-term, raw-score, determinism, memory, and registry tests remain required |
+| `MED` | Pre-1.0 churn. Aegra and assistant-ui compatibility can change between patch releases; three `unstable_` assistant-ui options remain on the happy path | Exact pins, committed lockfiles, protocol/browser replay, and `smoke.py` as the bump gate |
 | `MED` | Eval cost creep - embedding N models × M queries × K retrievers plus judge calls | Cache embeddings by fingerprint; local results as system of record; `upload_results=False` while iterating |
 | `MED` | The eval and the chat drift onto different retriever contracts | The Protocol and method fingerprint contract live in `agent/`; eval extends, rather than replaces, the servable registry |
 
-## Decisions needed
+## Resolved decisions
 
-1. **Cloud Run region.** Seoul (next to you) or a US region (next to Anthropic and, per
-   ADR-0007, next to the relocated Neon)? The DB has no Korean client, so the US pairing
-   looks right, but the SSE leg is browser-to-Cloud-Run direct.
-2. **Guest model tier** once public: same model for everyone, or a cheaper one for guests?
-   The largest cost lever, and it changes perceived quality for exactly the new audience.
-3. **Guest thread persistence**: httpOnly cookie (durable, pseudonymous identifier on a
-   site with no cookie banner) or stateless runs with history client-side?
-4. **Version policy**: adopt `langgraph==1.2.9` / `checkpoint-postgres==3.1.0` (above what
-   Aegra's CI tests), or match Aegra's lock at 1.2.6 / 3.0.4 for the first deploy?
-5. **The skill-restriction chips** in the current UI: rebuild as run config, or drop? Today
-   they inject a fake system message that lands in checkpointed history and replays.
+1. **Region:** dedicated GCP project and Cloud Run use `us-east4`; each Neon project must
+   be created in the matching reviewed US region.
+2. **Guest model:** the only accepted contract is `openai:gpt-5.6-luna`, distinct from the
+   Anthropic owner model. It is disabled and cannot satisfy a zero-spend launch because it
+   has no API Free tier.
+3. **Guest persistence:** an httpOnly anonymous-session cookie resumes the pseudonymous
+   subject; the single-use Turnstile token is never retained.
+4. **Version policy:** use the repository-tested exact pins, including
+   `langgraph==1.2.9` and `langgraph-checkpoint-postgres==3.1.0`, with rollback pins and
+   compatibility tests documented.
+5. **Client controls:** the old skill-restriction chips and fake system messages are
+   dropped. Retrieval/capability/model authorization is server-owned, and client config
+   cannot grant a capability.
+6. **Web authentication:** keep Auth.js with GitHub/Google OAuth on Neon Postgres; Neon
+   Auth is not part of the authentication boundary.
 
-## Open questions
+## Open decisions and live gates
 
-- Does Aegra issue #468 reproduce? P0 answers it.
-- How does the assistant-ui adapter surface 409 and 429 - a usable error state, or a
-  generic stream failure?
-- Cold-start-to-first-token for this image. Decides whether `min-instances=1` is worth it.
-- PR #462 (multitask) and #385 (stream auth) - if either merges, part of P5 becomes dead
-  weight. Watch rather than design around permanently.
-- Which embedding model for the first dense arm. Pending the Korean model comparison.
+- Which Korean-capable embedding model becomes the first dense arm, and what exact
+  fingerprint/cache contract it uses.
+- Whether a genuinely free guest provider path will replace Luna or the owner will approve
+  a non-zero public budget; no current code path permits a free Luna launch.
+- Cold-start-to-first-token and full-image memory on the real revision. Those measurements
+  decide whether `min-instances=1` is worth recurring cost.
+- Whether public LangSmith tracing is enabled; traces contain full prompts and retrieved
+  content, so this must land before—not after—public launch.
+- Real GCP/Neon/OAuth/provider acceptance, including the signed company-admin foundation
+  evidence, remains an operational gate rather than a repository decision.
+- Continue watching Aegra multitask/stream-auth changes; delete local guards only after a
+  pinned release passes the same protocol, isolation, browser, and recovery suites.
 
 ## How to dispatch
 

@@ -2453,18 +2453,90 @@ runs:
             ),
         )
 
-    def test_dependabot_monthly_rollups_include_each_ecosystem(self) -> None:
+    def test_dependabot_monthly_rollups_isolate_compatibility_surfaces(self) -> None:
         document = governance.load_yaml_document(REPO_ROOT / ".github/dependabot.yml")
         groups = governance._normalized_dependabot_groups(document)
 
-        for group in (
-            groups["bun:/web:web-monthly"],
-            groups["uv:/:python-monthly"],
-            groups["github-actions:/:actions-monthly"],
-        ):
-            self.assertEqual(["*"], group["patterns"])
+        focused_patterns = {
+            "bun:/web:web-assistant-ui": ["@assistant-ui/*"],
+            "bun:/web:web-agent-protocol": ["@langchain/protocol"],
+            "bun:/web:web-langgraph": [
+                "@langchain/core",
+                "@langchain/langgraph*",
+            ],
+            "bun:/web:web-auth": ["@auth/*", "next-auth"],
+            "bun:/web:web-next": ["eslint-config-next", "next"],
+            "bun:/web:web-react": [
+                "@types/react",
+                "@types/react-dom",
+                "react",
+                "react-dom",
+            ],
+            "uv:/:python-aegra-protocol": ["aegra-*"],
+            "uv:/:python-langgraph": ["langgraph", "langgraph-*"],
+            "uv:/:python-deepagents": ["deepagents"],
+            "uv:/:python-quickjs": ["langchain-quickjs", "quickjs-rs"],
+            "uv:/:python-openai": ["langchain-openai", "openai"],
+            "uv:/:python-langchain": [
+                "langchain",
+                "langchain-anthropic",
+                "langchain-core",
+                "langsmith",
+            ],
+            "uv:/:python-numpy": ["numpy"],
+        }
+        for key, patterns in focused_patterns.items():
+            group = groups[key]
+            self.assertEqual(sorted(patterns), group["patterns"])
             self.assertEqual([], group["exclude_patterns"])
             self.assertEqual(["major", "minor", "patch"], group["update_types"])
+
+        self.assertEqual(
+            sorted(
+                [
+                    "@assistant-ui/*",
+                    "@auth/*",
+                    "@langchain/*",
+                    "@types/react",
+                    "@types/react-dom",
+                    "eslint-config-next",
+                    "next",
+                    "next-auth",
+                    "react",
+                    "react-dom",
+                ]
+            ),
+            groups["bun:/web:web-monthly"]["exclude_patterns"],
+        )
+        self.assertEqual(
+            sorted(
+                [
+                    "aegra-*",
+                    "deepagents",
+                    "langchain",
+                    "langchain-*",
+                    "langgraph",
+                    "langgraph-*",
+                    "langsmith",
+                    "numpy",
+                    "openai",
+                    "quickjs-rs",
+                ]
+            ),
+            groups["uv:/:python-monthly"]["exclude_patterns"],
+        )
+        for key in (
+            "bun:/web:web-monthly",
+            "uv:/:python-monthly",
+            "github-actions:/:actions-monthly",
+        ):
+            self.assertEqual(["*"], groups[key]["patterns"])
+            self.assertEqual(["major", "minor", "patch"], groups[key]["update_types"])
+
+        updates = governance._normalized_dependabot(document)["updates"]
+        self.assertEqual(7, updates["bun:/web"]["open_pull_requests_limit"])
+        self.assertEqual(8, updates["uv:/"]["open_pull_requests_limit"])
+        self.assertEqual(1, updates["github-actions:/"]["open_pull_requests_limit"])
 
     def test_dependabot_group_pattern_mutation_is_rejected(self) -> None:
         policy = governance.load_policy()
@@ -2500,13 +2572,13 @@ runs:
             ),
             (
                 "open-limit-removal",
-                "    open-pull-requests-limit: 1\n",
+                "    open-pull-requests-limit: 7\n",
                 "",
             ),
             (
                 "open-limit-change",
-                "    open-pull-requests-limit: 1\n",
-                "    open-pull-requests-limit: 2\n",
+                "    open-pull-requests-limit: 7\n",
+                "    open-pull-requests-limit: 6\n",
             ),
             ("cooldown-removal", "      semver-major-days: 14\n", ""),
             (
@@ -2590,7 +2662,7 @@ runs:
 
     def test_dependabot_group_removal_duplicate_and_extra_are_rejected(self) -> None:
         original = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
-        groups_start = original.index("    groups:\n      web-monthly:")
+        groups_start = original.index("    groups:\n      web-assistant-ui:")
         npm_start = original.index('\n  - package-ecosystem: "npm"')
         group_block = original[groups_start + len("    groups:\n") : npm_start].rstrip()
         mutations = {
@@ -2603,7 +2675,7 @@ runs:
             "extra": (
                 original[:npm_start]
                 + "\n"
-                + group_block.replace("web-monthly:", "web-extra:", 1)
+                + group_block.replace("web-assistant-ui:", "web-extra:", 1)
                 + original[npm_start:]
             ),
         }

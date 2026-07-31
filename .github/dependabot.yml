@@ -6,17 +6,85 @@ updates:
       interval: "monthly"
       time: "04:00"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 1
+    # One routine rollup plus focused compatibility PRs. Security updates do
+    # not count against this limit.
+    open-pull-requests-limit: 7
     cooldown:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
+    # Each focused stack still needs its own protocol/UI compatibility evidence.
     groups:
+      web-assistant-ui:
+        applies-to: "version-updates"
+        patterns:
+          - "@assistant-ui/*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      web-agent-protocol:
+        applies-to: "version-updates"
+        patterns:
+          - "@langchain/protocol"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      web-langgraph:
+        applies-to: "version-updates"
+        patterns:
+          - "@langchain/core"
+          - "@langchain/langgraph*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      web-auth:
+        applies-to: "version-updates"
+        patterns:
+          - "@auth/*"
+          - "next-auth"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      web-next:
+        applies-to: "version-updates"
+        patterns:
+          - "eslint-config-next"
+          - "next"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      web-react:
+        applies-to: "version-updates"
+        patterns:
+          - "@types/react"
+          - "@types/react-dom"
+          - "react"
+          - "react-dom"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       web-monthly:
         applies-to: "version-updates"
         patterns:
           - "*"
+        exclude-patterns:
+          - "@assistant-ui/*"
+          - "@auth/*"
+          - "@langchain/*"
+          - "@types/react"
+          - "@types/react-dom"
+          - "eslint-config-next"
+          - "next"
+          - "next-auth"
+          - "react"
+          - "react-dom"
         update-types:
           - "major"
           - "minor"
@@ -39,17 +107,93 @@ updates:
       interval: "monthly"
       time: "04:20"
       timezone: "Asia/Seoul"
-    open-pull-requests-limit: 1
+    # One routine rollup plus focused compatibility PRs. Security updates do
+    # not count against this limit.
+    open-pull-requests-limit: 8
     cooldown:
       default-days: 7
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 3
+    # Each focused stack still needs its own protocol/runtime compatibility evidence.
     groups:
+      python-aegra-protocol:
+        applies-to: "version-updates"
+        patterns:
+          - "aegra-*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      python-langgraph:
+        applies-to: "version-updates"
+        patterns:
+          - "langgraph"
+          - "langgraph-*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      python-deepagents:
+        applies-to: "version-updates"
+        patterns:
+          - "deepagents"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      python-quickjs:
+        applies-to: "version-updates"
+        patterns:
+          - "langchain-quickjs"
+          - "quickjs-rs"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      python-openai:
+        applies-to: "version-updates"
+        patterns:
+          - "langchain-openai"
+          - "openai"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      python-langchain:
+        applies-to: "version-updates"
+        patterns:
+          - "langchain"
+          - "langchain-anthropic"
+          - "langchain-core"
+          - "langsmith"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+      python-numpy:
+        applies-to: "version-updates"
+        patterns:
+          - "numpy"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       python-monthly:
         applies-to: "version-updates"
         patterns:
           - "*"
+        exclude-patterns:
+          - "aegra-*"
+          - "deepagents"
+          - "langchain"
+          - "langchain-*"
+          - "langgraph"
+          - "langgraph-*"
+          - "langsmith"
+          - "numpy"
+          - "openai"
+          - "quickjs-rs"
         update-types:
           - "major"
           - "minor"

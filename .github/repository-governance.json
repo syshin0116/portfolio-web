@@ -238,7 +238,7 @@
           "time": "04:00",
           "timezone": "Asia/Seoul"
         },
-        "open_pull_requests_limit": 1,
+        "open_pull_requests_limit": 7,
         "cooldown": {
           "default_days": 7,
           "semver_major_days": 14,
@@ -247,12 +247,107 @@
         },
         "groups": [
           {
+            "name": "web-assistant-ui",
+            "applies_to": "version-updates",
+            "patterns": [
+              "@assistant-ui/*"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "web-agent-protocol",
+            "applies_to": "version-updates",
+            "patterns": [
+              "@langchain/protocol"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "web-langgraph",
+            "applies_to": "version-updates",
+            "patterns": [
+              "@langchain/core",
+              "@langchain/langgraph*"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "web-auth",
+            "applies_to": "version-updates",
+            "patterns": [
+              "@auth/*",
+              "next-auth"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "web-next",
+            "applies_to": "version-updates",
+            "patterns": [
+              "eslint-config-next",
+              "next"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "web-react",
+            "applies_to": "version-updates",
+            "patterns": [
+              "@types/react",
+              "@types/react-dom",
+              "react",
+              "react-dom"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
             "name": "web-monthly",
             "applies_to": "version-updates",
             "patterns": [
               "*"
             ],
-            "exclude_patterns": [],
+            "exclude_patterns": [
+              "@assistant-ui/*",
+              "@auth/*",
+              "@langchain/*",
+              "@types/react",
+              "@types/react-dom",
+              "eslint-config-next",
+              "next",
+              "next-auth",
+              "react",
+              "react-dom"
+            ],
             "update_types": [
               "major",
               "minor",
@@ -281,7 +376,7 @@
           "time": "04:20",
           "timezone": "Asia/Seoul"
         },
-        "open_pull_requests_limit": 1,
+        "open_pull_requests_limit": 8,
         "cooldown": {
           "default_days": 7,
           "semver_major_days": 14,
@@ -290,12 +385,120 @@
         },
         "groups": [
           {
+            "name": "python-aegra-protocol",
+            "applies_to": "version-updates",
+            "patterns": [
+              "aegra-*"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "python-langgraph",
+            "applies_to": "version-updates",
+            "patterns": [
+              "langgraph",
+              "langgraph-*"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "python-deepagents",
+            "applies_to": "version-updates",
+            "patterns": [
+              "deepagents"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "python-quickjs",
+            "applies_to": "version-updates",
+            "patterns": [
+              "langchain-quickjs",
+              "quickjs-rs"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "python-openai",
+            "applies_to": "version-updates",
+            "patterns": [
+              "langchain-openai",
+              "openai"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "python-langchain",
+            "applies_to": "version-updates",
+            "patterns": [
+              "langchain",
+              "langchain-anthropic",
+              "langchain-core",
+              "langsmith"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
+            "name": "python-numpy",
+            "applies_to": "version-updates",
+            "patterns": [
+              "numpy"
+            ],
+            "exclude_patterns": [],
+            "update_types": [
+              "major",
+              "minor",
+              "patch"
+            ]
+          },
+          {
             "name": "python-monthly",
             "applies_to": "version-updates",
             "patterns": [
               "*"
             ],
-            "exclude_patterns": [],
+            "exclude_patterns": [
+              "aegra-*",
+              "deepagents",
+              "langchain",
+              "langchain-*",
+              "langgraph",
+              "langgraph-*",
+              "langsmith",
+              "numpy",
+              "openai",
+              "quickjs-rs"
+            ],
             "update_types": [
               "major",
               "minor",

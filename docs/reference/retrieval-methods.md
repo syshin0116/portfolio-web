@@ -32,10 +32,15 @@ invites re-implementing it in six months.
 |---|---|
 | `planned` | On the list, not written |
 | `building` | In progress |
-| `implemented` | Works, not yet evaluated |
-| `evaluated` | Has numbers in an eval run |
+| `implemented` | Works and passes its repository contracts; deterministic synthetic/CI evidence may exist, but no accepted publication result is claimed |
+| `evaluated` | Has retained numbers from an accepted, publication-qualified run against the named dataset/corpus/method fingerprints |
 | `rejected` | Tried or assessed and dropped - **the reason is the point** |
 | `blocked` | Waiting on something named |
+
+The distinction is deliberate. PR CI runs provider-free sweeps to prove reproducibility,
+metrics, and report generation, but those numbers do not promote a method to `evaluated`.
+Promotion requires the repository's publication gate, including acceptable label status,
+attested Linux image/source provenance, and a retained result digest.
 
 ## Prerequisites
 
@@ -67,9 +72,9 @@ matter:
    [below](#aliased-wikilinks---free-known-item-ground-truth).
 2. **Mixed script.** Korean prose with English technical terms is where sparse and dense
    methods diverge most sharply, and it is under-tested in English-only benchmarks.
-3. **The link graph** - but it is thinner than it looks (63% of files are isolated), so it
-   supports expansion stages rather than standalone graph retrieval. Measured numbers are
-   [below](#graph-and-link-structure).
+3. **The link graph** - but it is thinner than it looks (**65.67%** of files are
+   isolated), so it supports expansion stages rather than standalone graph retrieval.
+   Measured numbers are [below](#graph-and-link-structure).
 
 An earlier draft of this file claimed the link topology was the headline differentiator
 and should be over-represented. Measurement said otherwise, and the aliases hiding inside
@@ -115,9 +120,10 @@ publication-qualified score exists yet.
 | Reciprocal rank fusion (BM25 + character n-grams) | `implemented` | A provider-free fusion control that proves composition and fingerprints before a dense method lands |
 | Weighted score fusion | `planned` | Whether score-level fusion beats rank-level once normalisation is done correctly |
 
-> **Normalisation is a trap here.** The existing BM25 forces the top hit to 1.0 for *any*
-> query, including nonsense, which destroys score-level fusion silently. Any fusion entry
-> must state how it normalises and be tested with a query that should return nothing.
+> **Normalisation is a trap here.** The deleted legacy BM25 forced the top hit to 1.0 for
+> *any* non-empty query, including nonsense, which destroyed score-level fusion silently.
+> The corrected methods retain raw native scores. Any future score-fusion entry must state
+> how it normalises and be tested with a query that should return nothing.
 
 ### Graph and link structure
 
@@ -132,15 +138,15 @@ publication-qualified score exists yet.
 > Two consequences, both binding. **A graph method is a `Stage` over a first-stage
 > retriever, never a standalone retriever** - on two-thirds of queries it has nothing to
 > say. And **`coverage` is a mandatory reported metric** alongside recall@k, or a method
-> that declines to answer on 63% of the corpus looks strong on the third where it fires.
+> that declines to answer on 65.67% of the corpus looks strong on the third where it fires.
 
 | Method | Status | Meant to teach |
 |---|---|---|
 | Wikilink one-hop expansion (as a `Stage`) | `planned` | Whether one hop from a good hit beats ranking deeper - the cheapest graph method, and the only one whose coverage limit is tolerable |
-| Link-weighted reranking (PageRank-ish) | `planned` | Whether "well-connected" predicts "relevant". With 8 non-singleton components and a 94-node giant, expect this to be mostly a prior on one cluster |
+| Link-weighted reranking (PageRank-ish) | `planned` | Whether "well-connected" predicts "relevant". With 9 non-singleton components and a 48-node largest component, expect this to be mostly a prior on one cluster |
 | Bidirectional traversal (links + backlinks) | `planned` | Whether backlinks carry different signal from forward links |
 | Hierarchical summarisation (RAPTOR-style) | `planned` | Whether a synthesised tree beats the author's hand-made links. **Now more interesting than before**, because the hand-made graph turns out to cover only a third of the corpus |
-| GraphRAG-style entity graph | `planned` | Whether an inferred entity graph beats an explicit link graph that is 63% empty. A likely-positive result rather than the likely-negative one assumed earlier |
+| GraphRAG-style entity graph | `planned` | Whether an inferred entity graph beats an explicit link graph that is 65.67% empty. A likely-positive result rather than the likely-negative one assumed earlier |
 
 ### Aliased wikilinks - free known-item ground truth
 
@@ -161,13 +167,13 @@ seed set for the qrels *and* a retrieval signal in its own right.
 
 ### Chunking (an axis, not a method)
 
-Chunking may matter more than retriever choice on long-form technical posts. Every
-retriever above is evaluated against a chunking choice, which makes this a cross-cutting
-dimension rather than a row.
+Chunking may matter more than retriever choice on long-form technical posts. Every run
+must record its chunking choice, which makes this a cross-cutting dimension rather than a
+retrieval method. All current implementations use one whole published document per hit.
 
 | Strategy | Status | Meant to teach |
 |---|---|---|
-| Whole document | `planned` | The baseline. 336 documents is small enough that this is viable, unlike most corpora |
+| Whole document | `implemented` | The current baseline over 335 published documents; hits and qrels resolve to content-relative document IDs |
 | Markdown-header-aware | `planned` | Whether the author's own structure is the right unit |
 | Fixed-size with overlap | `planned` | The generic default, as a control |
 | Semantic / embedding-based | `planned` | Whether inferred boundaries beat authored ones |
@@ -253,7 +259,7 @@ containing the literal term as the qrel:
 
 | Variant | `도커` recall@13 | raw top score |
 |---|---:|---:|
-| current implementation | **3 / 13** | ≈ 0.9698 |
+| legacy pre-fix tokenizer | **3 / 13** | ≈ 0.9698 |
 | explicit `도커` dictionary entry | **13 / 13** | 7.397427 |
 | plus `VV`/`VA` removal | **13 / 13** | 7.407296 |
 | reviewed seeds + namespaced surface channel + pinned CoNg config | **13 / 13** | ≈ 14.908 |
@@ -271,10 +277,10 @@ leak into the ranking, while the top result is still an unrelated coding-test po
 versioned queryset or qrels exist yet. Do not use it as a gate until `topic-smoke-v1`
 lands with owner-reviewed relevance labels.
 
-Score normalisation remains a separate bug: `score / max(scores)` forces every non-empty
-query's top result to 1.000 and destroys method-native magnitude. Do not normalise inside
-a retriever - `rank` is authoritative, `score` stays raw, and an absent nonsense term
-should produce no hit.
+Score normalisation was a separate legacy bug: `score / max(scores)` forced every
+non-empty query's top result to 1.000 and destroyed method-native magnitude. The corrected
+implementations do not normalise inside a retriever: `rank` is authoritative, `score`
+stays raw, and an absent nonsense term produces no hit.
 
 The corrected implementation fits `rank-bm25` exactly once during the one-scan corpus
 build, then stores document lengths, first-seen-order IDFs, and sparse postings in a

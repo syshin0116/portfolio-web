@@ -296,12 +296,11 @@ EXPECTED_DEPENDABOT = {
             "package_ecosystem": "bun",
             "directory": "/web",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:00",
                 "timezone": "Asia/Seoul",
             },
-            "open_pull_requests_limit": 3,
+            "open_pull_requests_limit": 7,
             "cooldown": {
                 "default_days": 7,
                 "semver_major_days": 14,
@@ -310,30 +309,77 @@ EXPECTED_DEPENDABOT = {
             },
             "groups": [
                 {
-                    "name": "web-routine",
+                    "name": "web-assistant-ui",
+                    "applies_to": "version-updates",
+                    "patterns": ["@assistant-ui/*"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "web-agent-protocol",
+                    "applies_to": "version-updates",
+                    "patterns": ["@langchain/protocol"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "web-langgraph",
+                    "applies_to": "version-updates",
+                    "patterns": ["@langchain/core", "@langchain/langgraph*"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "web-auth",
+                    "applies_to": "version-updates",
+                    "patterns": ["@auth/*", "next-auth"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "web-next",
+                    "applies_to": "version-updates",
+                    "patterns": ["eslint-config-next", "next"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "web-react",
+                    "applies_to": "version-updates",
+                    "patterns": [
+                        "@types/react",
+                        "@types/react-dom",
+                        "react",
+                        "react-dom",
+                    ],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "web-monthly",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
                     "exclude_patterns": [
                         "@assistant-ui/*",
                         "@auth/*",
                         "@langchain/*",
+                        "@types/react",
+                        "@types/react-dom",
+                        "eslint-config-next",
                         "next",
                         "next-auth",
                         "react",
                         "react-dom",
-                        "@types/react",
-                        "@types/react-dom",
                     ],
-                    "update_types": ["minor", "patch"],
-                }
+                    "update_types": ["major", "minor", "patch"],
+                },
             ],
         },
         {
             "package_ecosystem": "npm",
             "directory": "/web",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:10",
                 "timezone": "Asia/Seoul",
             },
@@ -345,12 +391,11 @@ EXPECTED_DEPENDABOT = {
             "package_ecosystem": "uv",
             "directory": "/",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:20",
                 "timezone": "Asia/Seoul",
             },
-            "open_pull_requests_limit": 3,
+            "open_pull_requests_limit": 8,
             "cooldown": {
                 "default_days": 7,
                 "semver_major_days": 14,
@@ -359,7 +404,61 @@ EXPECTED_DEPENDABOT = {
             },
             "groups": [
                 {
-                    "name": "python-routine",
+                    "name": "python-aegra-protocol",
+                    "applies_to": "version-updates",
+                    "patterns": ["aegra-*"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "python-langgraph",
+                    "applies_to": "version-updates",
+                    "patterns": ["langgraph", "langgraph-*"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "python-deepagents",
+                    "applies_to": "version-updates",
+                    "patterns": ["deepagents"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "python-quickjs",
+                    "applies_to": "version-updates",
+                    "patterns": ["langchain-quickjs", "quickjs-rs"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "python-openai",
+                    "applies_to": "version-updates",
+                    "patterns": ["langchain-openai", "openai"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "python-langchain",
+                    "applies_to": "version-updates",
+                    "patterns": [
+                        "langchain",
+                        "langchain-anthropic",
+                        "langchain-core",
+                        "langsmith",
+                    ],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "python-numpy",
+                    "applies_to": "version-updates",
+                    "patterns": ["numpy"],
+                    "exclude_patterns": [],
+                    "update_types": ["major", "minor", "patch"],
+                },
+                {
+                    "name": "python-monthly",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
                     "exclude_patterns": [
@@ -374,30 +473,29 @@ EXPECTED_DEPENDABOT = {
                         "openai",
                         "quickjs-rs",
                     ],
-                    "update_types": ["minor", "patch"],
-                }
+                    "update_types": ["major", "minor", "patch"],
+                },
             ],
         },
         {
             "package_ecosystem": "github-actions",
             "directory": "/",
             "schedule": {
-                "interval": "weekly",
-                "day": "monday",
+                "interval": "monthly",
                 "time": "04:40",
                 "timezone": "Asia/Seoul",
             },
-            "open_pull_requests_limit": 3,
+            "open_pull_requests_limit": 1,
             "cooldown": {
                 "default_days": 7,
             },
             "groups": [
                 {
-                    "name": "actions-routine",
+                    "name": "actions-monthly",
                     "applies_to": "version-updates",
                     "patterns": ["*"],
                     "exclude_patterns": [],
-                    "update_types": ["minor", "patch"],
+                    "update_types": ["major", "minor", "patch"],
                 }
             ],
         },
@@ -2157,9 +2255,16 @@ def _normalized_dependabot(document: YamlDocument) -> JsonObject:
                 f"{document.path}: duplicate Dependabot update {identity!r}"
             )
 
+        raw_schedule = update.get("schedule")
+        if not isinstance(raw_schedule, dict):
+            raise GovernanceError(f"{update_context} schedule must be a mapping")
+        schedule_interval = raw_schedule.get("interval")
+        schedule_keys = {"interval", "time", "timezone"}
+        if schedule_interval == "weekly":
+            schedule_keys.add("day")
         schedule = _require_exact_keys(
-            update.get("schedule"),
-            {"interval", "day", "time", "timezone"},
+            raw_schedule,
+            schedule_keys,
             context=f"{update_context} schedule",
         )
         if not all(isinstance(value, str) for value in schedule.values()):

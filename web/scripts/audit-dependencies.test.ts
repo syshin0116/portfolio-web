@@ -180,6 +180,32 @@ describe("dependency audit exception policy", () => {
   })
 
   test.each([
+    "@auth/neon-adapter",
+    "@neondatabase/serverless",
+  ])("rejects a non-exact auth database manifest pin for %s", (name) => {
+    const candidate = evidence()
+    const manifest = JSON.parse(candidate.packageJson)
+    manifest.dependencies[name] = `^${manifest.dependencies[name]}`
+    candidate.packageJson = JSON.stringify(manifest)
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      `auth database dependency ${name} must be pinned exactly`,
+    )
+  })
+
+  test("rejects reintroducing the generic PostgreSQL Auth.js adapter", () => {
+    const candidate = evidence()
+    const manifest = JSON.parse(candidate.packageJson)
+    delete manifest.dependencies["@auth/neon-adapter"]
+    manifest.dependencies["@auth/pg-adapter"] = "1.11.3"
+    candidate.packageJson = JSON.stringify(manifest)
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "auth database dependency @auth/neon-adapter must be pinned exactly",
+    )
+  })
+
+  test.each([
     ["@assistant-ui/react", "0.15.0", "0.14.28"],
     ["@assistant-ui/react-langgraph", "0.14.15", "0.14.13"],
     ["@langchain/langgraph-sdk", "1.9.28", "1.9.27"],

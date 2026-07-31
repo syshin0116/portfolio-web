@@ -8,7 +8,7 @@ when_to_read: >
   variables, or the Auth.js Neon branch.
 tags: [operations, authjs, oauth, postgres, neon, vercel]
 status: stable
-updated: "2026-07-30"
+updated: "2026-07-31"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0007-postgres-on-neon-split-projects.md
@@ -20,15 +20,23 @@ template: spec
 
 ## Contract
 
-The web keeps Auth.js v5 with the official PostgreSQL adapter. Neon supplies PostgreSQL;
+The web keeps Auth.js v5 with the official `@auth/neon-adapter`. Neon supplies PostgreSQL;
 Neon Auth is not part of the authentication boundary. Each database URL is parsed once
 into a narrow typed pool configuration; drivers receive explicit credentials, host,
 port, database, TLS, fixed search path, and timeouts rather than the raw URL. Vercel
 request handling creates a fresh bounded `@neondatabase/serverless` Pool inside
 NextAuth's lazy configuration, forces its node-postgres-compatible WebSocket path, and
-awaits `pool.end()` when that auth operation succeeds or fails. The migration CLI, exact
-verifier, and PostgreSQL 17 integration suite use the same typed target contract with
-the adapter's official `pg` peer independently.
+awaits `pool.end()` when that auth operation succeeds or fails. The adapter and Neon
+driver are pinned exactly and share their native Pool type without a cross-driver cast.
+Because the committed schema safely widened `accounts.expires_at` to `bigint` while the
+official Neon adapter returns that field as text, the runtime boundary accepts only
+canonical non-negative safe-integer text (or an already safe integer), converts it back
+to Auth.js's numeric account contract, and fails closed on every other value.
+The migration CLI and exact verifier keep `pg` because they own multi-statement
+transactions. The PostgreSQL 17 integration suite executes the official Neon adapter
+through a real Neon Pool HTTP-query surface whose test-only fetch boundary targets only
+its isolated loopback PostgreSQL database; the PostgreSQL 18 catalog simulations remain
+on that same real schema-verifier path.
 
 The checked-in schema contract is `web/db/auth/0001_authjs.sql`. It:
 
@@ -182,10 +190,11 @@ constraint failures, adapter user/account/session lifecycle, request-pool cleanu
 string token subjects against PostgreSQL 17. It also injects PostgreSQL 18-style
 relation `NOT NULL` catalog rows into the verifier's real PostgreSQL 17 catalog path and
 proves that duplicate, unvalidated, inherited, and extra relation constraints fail while
-an unexpected `CHECK` constraint still fails. The pinned adapter/Neon driver cast
-remains a reviewed compatibility boundary; preview must run the same adapter lifecycle
-against an actual Neon branch before promotion. Real provider callbacks remain an
-operational acceptance gate because CI does not own provider accounts or secrets.
+an unexpected `CHECK` constraint still fails. The adapter lifecycle now crosses the
+official Neon adapter and actual Neon Pool surface without a driver-type cast; preview
+must still run that lifecycle against an actual Neon branch before promotion. Real
+provider callbacks remain an operational acceptance gate because CI does not own
+provider accounts or secrets.
 
 ## Rollback
 

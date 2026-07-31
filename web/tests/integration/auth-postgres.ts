@@ -1,11 +1,15 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import PostgresAdapter from "@auth/pg-adapter"
+import {
+  neonConfig,
+  Pool as NeonPool,
+} from "@neondatabase/serverless"
 import { Pool, type PoolClient } from "pg"
 import {
   type AuthPostgresPoolConfig,
   parseAuthPostgresPoolConfig,
 } from "../../lib/auth-config"
+import { authTesting } from "../../lib/auth"
 import {
   AuthSchemaVerificationError,
   inspectAuthSchema,
@@ -182,6 +186,119 @@ function testBasePoolConfig(
   )
   assert.equal(config.ssl, false)
   return config
+}
+
+const NEON_ERROR_FIELDS = [
+  "severity",
+  "code",
+  "detail",
+  "hint",
+  "position",
+  "internalPosition",
+  "internalQuery",
+  "where",
+  "schema",
+  "table",
+  "column",
+  "dataType",
+  "constraint",
+  "file",
+  "line",
+  "routine",
+] as const
+
+function errorField(error: unknown, field: string): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined
+  const value = Reflect.get(error, field)
+  return typeof value === "string" ? value : undefined
+}
+
+function neonRawText(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  if (value instanceof Date) {
+    return value.toISOString().replace("T", " ").replace("Z", "+00")
+  }
+  if (Buffer.isBuffer(value)) return `\\x${value.toString("hex")}`
+  if (typeof value === "object") {
+    return JSON.stringify(value) ?? String(value)
+  }
+  return String(value)
+}
+
+type NeonTestFetch = (
+  input: string | URL | Request,
+  init?: RequestInit
+) => Promise<Response>
+
+function localPostgresFetch(pool: Pool): NeonTestFetch {
+  return async (_input, init) => {
+    try {
+      const body = init?.body
+      if (typeof body !== "string") {
+        throw new Error("Neon test transport requires a JSON string body")
+      }
+      const request: unknown = JSON.parse(body)
+      assert.ok(
+        typeof request === "object" &&
+          request !== null &&
+          !Array.isArray(request)
+      )
+      const query = Reflect.get(request, "query")
+      const params = Reflect.get(request, "params")
+      assert.equal(typeof query, "string")
+      assert.ok(Array.isArray(params))
+
+      const result = await pool.query<Record<string, unknown>>(
+        query,
+        params
+      )
+      return Response.json({
+        command: result.command,
+        fields: result.fields.map((field) => ({
+          name: field.name,
+          dataTypeID: field.dataTypeID,
+        })),
+        rowCount: result.rowCount ?? result.rows.length,
+        rows: result.rows.map((row) =>
+          result.fields.map((field) => neonRawText(row[field.name]))
+        ),
+      })
+    } catch (error) {
+      const payload: Record<string, string> = {
+        message:
+          error instanceof Error ? error.message : "PostgreSQL query failed",
+      }
+      for (const field of NEON_ERROR_FIELDS) {
+        const value = errorField(error, field)
+        if (value !== undefined) payload[field] = value
+      }
+      return Response.json(payload, { status: 400 })
+    }
+  }
+}
+
+async function withLocalPostgresNeonAdapter<T>(
+  pool: Pool,
+  run: (
+    adapter: ReturnType<typeof authTesting.createNeonAuthAdapter>
+  ) => Promise<T>
+): Promise<T> {
+  const previousFetchFunction = neonConfig.fetchFunction
+  const previousPoolQueryViaFetch = neonConfig.poolQueryViaFetch
+  neonConfig.fetchFunction = localPostgresFetch(pool)
+  neonConfig.poolQueryViaFetch = true
+
+  const adapterPool = new NeonPool({ ...testBasePoolConfig() })
+  try {
+    return await run(authTesting.createNeonAuthAdapter(adapterPool))
+  } finally {
+    try {
+      await adapterPool.end()
+    } finally {
+      neonConfig.fetchFunction = previousFetchFunction
+      neonConfig.poolQueryViaFetch = previousPoolQueryViaFetch
+    }
+  }
 }
 
 function databaseName(label: string): string {
@@ -361,110 +478,115 @@ async function migrationAndAdapterLifecycle(): Promise<void> {
       null
     )
 
-    const adapter = PostgresAdapter(pool)
-    assert.ok(adapter.createUser)
-    assert.ok(adapter.linkAccount)
-    assert.ok(adapter.getUserByAccount)
-    assert.ok(adapter.createSession)
-    assert.ok(adapter.getSessionAndUser)
-    assert.ok(adapter.createVerificationToken)
-    assert.ok(adapter.useVerificationToken)
+    const createdUserId = await withLocalPostgresNeonAdapter(
+      pool,
+      async (adapter) => {
+        assert.ok(adapter.createUser)
+        assert.ok(adapter.linkAccount)
+        assert.ok(adapter.getUserByAccount)
+        assert.ok(adapter.createSession)
+        assert.ok(adapter.getSessionAndUser)
+        assert.ok(adapter.createVerificationToken)
+        assert.ok(adapter.useVerificationToken)
 
-    const createdUser = await adapter.createUser({
-      id: "adapter-supplied-id-is-not-persisted",
-      name: "Adapter User",
-      email: "adapter@example.com",
-      emailVerified: null,
-      image: null,
-    })
-    assert.equal(typeof createdUser.id, "string")
-    assert.match(
-      createdUser.id,
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
-    )
+        const createdUser = await adapter.createUser({
+          id: "adapter-supplied-id-is-not-persisted",
+          name: "Adapter User",
+          email: "adapter@example.com",
+          emailVerified: null,
+          image: null,
+        })
+        assert.equal(typeof createdUser.id, "string")
+        assert.match(
+          createdUser.id,
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+        )
 
-    const linkedAccount = await adapter.linkAccount({
-      userId: createdUser.id,
-      type: "oauth",
-      provider: "github",
-      providerAccountId: "adapter-provider-id",
-      access_token: "access-token",
-      expires_at: 1_900_000_000,
-      refresh_token: "refresh-token",
-      id_token: "id-token",
-      scope: "read:user user:email",
-      session_state: null,
-      token_type: "bearer",
-    })
-    assert.ok(linkedAccount)
-    assert.equal(linkedAccount.userId, createdUser.id)
-    assert.equal(linkedAccount.expires_at, 1_900_000_000)
-
-    const accountUser = await adapter.getUserByAccount({
-      provider: "github",
-      providerAccountId: "adapter-provider-id",
-    })
-    assert.equal(accountUser?.id, createdUser.id)
-
-    const expires = new Date("2099-01-01T00:00:00.000Z")
-    const createdSession = await adapter.createSession({
-      sessionToken: "adapter-session-token",
-      userId: createdUser.id,
-      expires,
-    })
-    assert.equal(createdSession.userId, createdUser.id)
-    assert.equal(
-      typeof (createdSession as { id?: unknown }).id,
-      "string"
-    )
-
-    const sessionAndUser = await adapter.getSessionAndUser(
-      "adapter-session-token"
-    )
-    assert.equal(sessionAndUser?.user.id, createdUser.id)
-    assert.equal(
-      sessionAndUser?.session.sessionToken,
-      "adapter-session-token"
-    )
-
-    await assert.rejects(
-      async () => {
-        await adapter.linkAccount!({
-          userId: legacy.userId,
+        const linkedAccount = await adapter.linkAccount({
+          userId: createdUser.id,
           type: "oauth",
           provider: "github",
           providerAccountId: "adapter-provider-id",
+          access_token: "access-token",
+          expires_at: 1_900_000_000,
+          refresh_token: "refresh-token",
+          id_token: "id-token",
+          scope: "read:user user:email",
+          session_state: null,
+          token_type: "bearer",
         })
-      },
-      (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "23505"
+        assert.ok(linkedAccount)
+        assert.equal(linkedAccount.userId, createdUser.id)
+        assert.equal(linkedAccount.expires_at, 1_900_000_000)
+
+        const accountUser = await adapter.getUserByAccount({
+          provider: "github",
+          providerAccountId: "adapter-provider-id",
+        })
+        assert.equal(accountUser?.id, createdUser.id)
+
+        const expires = new Date("2099-01-01T00:00:00.000Z")
+        const createdSession = await adapter.createSession({
+          sessionToken: "adapter-session-token",
+          userId: createdUser.id,
+          expires,
+        })
+        assert.equal(createdSession.userId, createdUser.id)
+        assert.equal(
+          typeof (createdSession as { id?: unknown }).id,
+          "string"
+        )
+
+        const sessionAndUser = await adapter.getSessionAndUser(
+          "adapter-session-token"
+        )
+        assert.equal(sessionAndUser?.user.id, createdUser.id)
+        assert.equal(
+          sessionAndUser?.session.sessionToken,
+          "adapter-session-token"
+        )
+
+        await assert.rejects(
+          async () => {
+            await adapter.linkAccount!({
+              userId: legacy.userId,
+              type: "oauth",
+              provider: "github",
+              providerAccountId: "adapter-provider-id",
+            })
+          },
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "23505"
+        )
+
+        const verification = {
+          identifier: "adapter@example.com",
+          expires,
+          token: "adapter-verification-token",
+        }
+        await adapter.createVerificationToken(verification)
+        assert.deepEqual(
+          await adapter.useVerificationToken({
+            identifier: verification.identifier,
+            token: verification.token,
+          }),
+          verification
+        )
+        assert.equal(
+          await adapter.useVerificationToken({
+            identifier: verification.identifier,
+            token: verification.token,
+          }),
+          null
+        )
+        return createdUser.id
+      }
     )
 
-    const verification = {
-      identifier: "adapter@example.com",
-      expires,
-      token: "adapter-verification-token",
-    }
-    await adapter.createVerificationToken(verification)
-    assert.deepEqual(
-      await adapter.useVerificationToken({
-        identifier: verification.identifier,
-        token: verification.token,
-      }),
-      verification
-    )
-    assert.equal(
-      await adapter.useVerificationToken({
-        identifier: verification.identifier,
-        token: verification.token,
-      }),
-      null
-    )
-
-    await client.query("DELETE FROM users WHERE id = $1", [createdUser.id])
+    await client.query("DELETE FROM users WHERE id = $1", [createdUserId])
     const cascaded = await client.query<{
       accounts: string
       sessions: string
@@ -474,7 +596,7 @@ async function migrationAndAdapterLifecycle(): Promise<void> {
           (SELECT count(*) FROM accounts WHERE "userId" = $1) AS accounts,
           (SELECT count(*) FROM sessions WHERE "userId" = $1) AS sessions
       `,
-      [createdUser.id]
+      [createdUserId]
     )
     assert.deepEqual(cascaded.rows[0], {
       accounts: "0",

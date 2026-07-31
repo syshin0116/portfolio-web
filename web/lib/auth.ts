@@ -1,12 +1,12 @@
-import PostgresAdapter from "@auth/pg-adapter"
+import NeonAdapter from "@auth/neon-adapter"
 import { Pool as NeonPool } from "@neondatabase/serverless"
 import NextAuth, {
   type NextAuthConfig,
   type Session,
 } from "next-auth"
+import type { AdapterAccount } from "next-auth/adapters"
 import GitHub from "next-auth/providers/github"
 import Google from "next-auth/providers/google"
-import type { Pool as PgPool } from "pg"
 import { isAllowedEmail } from "@/lib/allowed-user"
 import {
   assertNoPostgresEnvironmentFallback,
@@ -18,17 +18,67 @@ import {
 import { canonicalAuthSubject } from "@/lib/auth-subject"
 import { hasVerifiedProviderEmail } from "@/lib/oauth-email"
 
-export type AuthPoolFactory = (config: AuthPostgresPoolConfig) => PgPool
+export type AuthPoolFactory = (
+  config: AuthPostgresPoolConfig
+) => NeonPool
 export type ProviderEmailVerifier = typeof hasVerifiedProviderEmail
 type NextAuthInstance = ReturnType<typeof NextAuth>
 type LazyAuthConfig = () => NextAuthConfig
 
+function normalizeNeonExpiresAt(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined
+  const normalized =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^(?:0|[1-9]\d*)$/u.test(value)
+        ? Number(value)
+        : Number.NaN
+  if (!Number.isSafeInteger(normalized) || normalized < 0) {
+    throw new AuthRuntimeConfigurationError(
+      "The Auth.js Neon adapter returned an invalid expires_at"
+    )
+  }
+  return normalized
+}
+
+function createNeonAuthAdapter(
+  pool: NeonPool
+): ReturnType<typeof NeonAdapter> {
+  // The pinned Neon adapter shares the PostgreSQL adapter SQL but omits its
+  // bigint-to-number linkAccount mapping. Keep Auth.js's numeric contract.
+  const adapter = NeonAdapter(pool)
+  const linkAccount = adapter.linkAccount
+  if (linkAccount === undefined) {
+    throw new AuthRuntimeConfigurationError(
+      "The Auth.js Neon adapter is missing linkAccount"
+    )
+  }
+  return {
+    ...adapter,
+    async linkAccount(
+      account
+    ): Promise<AdapterAccount | null | undefined> {
+      const linked = await linkAccount(account)
+      if (linked === null) return null
+      if (typeof linked !== "object") {
+        if (linked === undefined) return undefined
+        throw new AuthRuntimeConfigurationError(
+          "The Auth.js Neon adapter returned an invalid account"
+        )
+      }
+      const rawExpiresAt: unknown = Reflect.get(linked, "expires_at")
+      return {
+        ...linked,
+        expires_at: normalizeNeonExpiresAt(rawExpiresAt),
+      }
+    },
+  }
+}
+
 function createNeonRequestPool(
   config: AuthPostgresPoolConfig
-): PgPool {
+): NeonPool {
   assertNoPostgresEnvironmentFallback(process.env)
-  // @auth/pg-adapter consumes the node-postgres-compatible pool surface
-  // implemented by the pinned Neon driver.
   const pool = new NeonPool({
     ...config,
   })
@@ -54,7 +104,7 @@ export function createAuthOptions(
 
   return {
     secret: config.authSecret,
-    adapter: PostgresAdapter(createPool(config.database)),
+    adapter: createNeonAuthAdapter(createPool(config.database)),
     providers: [
       GitHub({
         clientId: config.githubId,
@@ -103,7 +153,9 @@ export function createAuthOptions(
   }
 }
 
-async function closeAuthPools(pools: readonly PgPool[]): Promise<void> {
+async function closeAuthPools(
+  pools: readonly NeonPool[]
+): Promise<void> {
   const outcomes = await Promise.allSettled(
     pools.map(async (pool) => pool.end())
   )
@@ -119,7 +171,7 @@ export async function withAuthPoolLifecycle<T>(
   environment: Readonly<Record<string, unknown>> = process.env,
   createPool: AuthPoolFactory = createNeonRequestPool
 ): Promise<T> {
-  const pools: PgPool[] = []
+  const pools: NeonPool[] = []
   const lazyConfig = () =>
     createAuthOptions(environment, (databaseConfig) => {
       const pool = createPool(databaseConfig)
@@ -190,5 +242,7 @@ export async function auth(): Promise<Session | null> {
 }
 
 export const authTesting = {
+  createNeonAuthAdapter,
   createNeonRequestPool,
+  normalizeNeonExpiresAt,
 }

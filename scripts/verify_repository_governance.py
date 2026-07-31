@@ -205,7 +205,7 @@ AGENT_DOCKER_UV_IMAGE = (
 AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
 AGENT_CI_JOB = "agent"
 AGENT_CI_JOB_AST_SHA256 = (
-    "72666ed578d9bc559bd6009fb396093d0395ec1e85c165dd1b24e9d40d4acea5"
+    "9033845cf4855fdb77b98afa979ea099e40e05f30666fc70e4e800ce4284983d"
 )
 AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
@@ -244,6 +244,21 @@ AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
 VERCEL_CONFIG = "web/vercel.json"
 EXPECTED_VERCEL_AUTODEPLOY_CONFIG = {
     "$schema": "https://openapi.vercel.sh/vercel.json",
+}
+VERCEL_PRODUCTION_WORKFLOW = ".github/workflows/vercel-production.yml"
+VERCEL_PRODUCTION_WORKFLOW_AST_SHA256 = (
+    "bd6a476e618c7afb08d7b4461741b3298476da164ea170b8045c3373ad2ce525"
+)
+VERCEL_PRODUCTION_OBSERVER_FILES_SHA256 = {
+    "scripts/verify_vercel_production.py": (
+        "8c73f701f3dc0d13052b4ad6f11691a12c70477bcee3f5a2710cb81bb38b6a15"
+    ),
+    "web/app/api/deployment-revision/route.ts": (
+        "978f0f3190b6a5ff988a42a992773f5dff3e054e2607322bd684a8030a58bdde"
+    ),
+    "web/lib/vercel-production-revision.ts": (
+        "1884e7160fe064415205da0451763fd0a7168864a63b10dc4b3e71eb6147f65f"
+    ),
 }
 DEPENDENCY_WEB_AUDIT_COMMAND = "bun run audit:security"
 UPSTREAM_VERSION_AUDIT_SCRIPT = "scripts/upstream_version_audit.py"
@@ -1285,6 +1300,43 @@ def validate_vercel_git_autodeploy_contract(root: Path) -> list[str]:
         f"actual={actual!r}, expected={EXPECTED_VERCEL_AUTODEPLOY_CONFIG!r}, "
         f"git_override_present={'git' in config}"
     ]
+
+
+def validate_vercel_production_observer_contract(
+    root: Path,
+    documents: dict[Path, YamlDocument],
+) -> list[str]:
+    """Pin the credential-free canonical-domain observer and runtime boundary."""
+    errors: list[str] = []
+    repository_root = root.resolve()
+    workflow_path = (repository_root / VERCEL_PRODUCTION_WORKFLOW).resolve()
+    document = documents.get(workflow_path)
+    if document is None:
+        errors.append(
+            "Vercel production observer workflow is missing or invalid: "
+            f"{VERCEL_PRODUCTION_WORKFLOW}"
+        )
+    else:
+        actual_digest = _canonical_ast_sha256(_node_to_data(document.root))
+        if actual_digest != VERCEL_PRODUCTION_WORKFLOW_AST_SHA256:
+            errors.append(
+                f"{VERCEL_PRODUCTION_WORKFLOW}: exact workflow AST differs; "
+                f"expected_sha256={VERCEL_PRODUCTION_WORKFLOW_AST_SHA256}, "
+                f"actual_sha256={actual_digest}"
+            )
+
+    for relative, expected_digest in VERCEL_PRODUCTION_OBSERVER_FILES_SHA256.items():
+        path = repository_root / relative
+        try:
+            actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            actual_digest = None
+        if not path.is_file() or path.is_symlink() or actual_digest != expected_digest:
+            errors.append(
+                f"{relative}: must match the exact reviewed credential-free "
+                "Vercel production observer contract"
+            )
+    return errors
 
 
 def validate_dependency_audit_agent_setup(document: YamlDocument) -> list[str]:
@@ -2572,6 +2624,10 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         errors.append(f"local: invalid eval workflow contract: {exc}")
     errors.extend(
         f"local: {error}" for error in validate_vercel_git_autodeploy_contract(root)
+    )
+    errors.extend(
+        f"local: {error}"
+        for error in validate_vercel_production_observer_contract(root, documents)
     )
     errors.extend(
         f"local: {error}" for error in validate_publication_docker_context(root)

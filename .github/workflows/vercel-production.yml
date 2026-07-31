@@ -1,0 +1,61 @@
+name: Vercel production verification
+
+on:
+  deployment_status:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{
+      github.event_name == 'deployment_status'
+      && github.event.deployment.environment
+      || github.ref
+    }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: vercel/production
+    if: >-
+      github.event_name != 'deployment_status'
+      || (
+        github.event.deployment_status.state == 'success'
+        && github.event.deployment.environment == 'Production'
+        && github.event.deployment.creator.login == 'vercel[bot]'
+        && github.event.deployment_status.creator.login == 'vercel[bot]'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the canonical domain serves the exact main deployment
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_DEPLOYMENT_URL: >-
+            ${{ github.event.deployment_status.environment_url || '' }}
+          EXPECTED_SHA: ${{ github.event.deployment.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "deployment_status" ]]; then
+            test "$GITHUB_REF" = "refs/heads/main"
+          fi
+          args=(
+            --expected-sha "$EXPECTED_SHA"
+            --attempts 60
+            --interval-seconds 10
+            --timeout-seconds 10
+          )
+          if [[ "$EVENT_NAME" == "deployment_status" ]]; then
+            test -n "$EXPECTED_DEPLOYMENT_URL"
+            args+=(--expected-deployment-url "$EXPECTED_DEPLOYMENT_URL")
+          fi
+          python3 scripts/verify_vercel_production.py "${args[@]}"

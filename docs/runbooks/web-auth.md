@@ -8,7 +8,7 @@ when_to_read: >
   variables, or the Auth.js Neon branch.
 tags: [operations, authjs, oauth, postgres, neon, vercel]
 status: stable
-updated: "2026-07-29"
+updated: "2026-07-30"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0007-postgres-on-neon-split-projects.md
@@ -140,6 +140,14 @@ The callbacks currently usable on the deployed Vercel domain are:
 
 - GitHub: `https://syshin0116.vercel.app/api/auth/callback/github`
 - Google: `https://syshin0116.vercel.app/api/auth/callback/google`
+
+`syshin0116.vercel.app` is the canonical verified Vercel Production project domain.
+Keep automatic Production-domain assignment enabled; a successful build that remains
+staged does not update this OAuth origin and can leave an older Auth.js implementation
+serving traffic. The tokenless `vercel/production` observer compares the public
+runtime's Git SHA and unique deployment URL with the exact GitHub/Vercel deployment
+event after each `main` merge. Treat a mismatch as a deployment-routing failure before
+changing OAuth credentials or the Neon schema.
 
 Add the exact Vercel Preview origin with the same callback paths to the preview provider
 configuration. GitHub OAuth apps support one callback root, so use separate apps for

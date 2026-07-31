@@ -64,6 +64,11 @@ const EXPECTED_NATIVE_AGENT_PINS = new Map([
   ["@langchain/protocol", "0.0.18"],
 ])
 
+const EXPECTED_REACT_TYPE_OVERRIDES = new Map([
+  ["@types/react", "19.2.17"],
+  ["@types/react-dom", "19.2.3"],
+])
+
 const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@axe-core/playwright", "@axe-core/playwright@4.12.1"],
   ["@eslint/compat", "@eslint/compat@2.1.0"],
@@ -94,8 +99,8 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@types/d3", "@types/d3@7.4.3"],
   ["@types/node", "@types/node@26.1.1"],
   ["@types/pg", "@types/pg@8.20.0"],
-  ["@types/react", "@types/react@19.1.16"],
-  ["@types/react-dom", "@types/react-dom@19.1.9"],
+  ["@types/react", "@types/react@19.2.17"],
+  ["@types/react-dom", "@types/react-dom@19.2.3"],
   ["@vercel/analytics", "@vercel/analytics@2.0.1"],
   ["@vercel/speed-insights", "@vercel/speed-insights@2.0.0"],
   ["class-variance-authority", "class-variance-authority@0.7.1"],
@@ -112,8 +117,8 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["nuartz", "nuartz@0.2.0"],
   ["pagefind", "pagefind@1.4.0"],
   ["radix-ui", "radix-ui@1.4.3"],
-  ["react", "react@19.1.1"],
-  ["react-dom", "react-dom@19.1.1"],
+  ["react", "react@19.2.8"],
+  ["react-dom", "react-dom@19.2.8"],
   ["react-icons", "react-icons@5.5.0"],
   ["react-markdown", "react-markdown@10.1.0"],
   ["remark-breaks", "remark-breaks@4.0.0"],
@@ -363,6 +368,15 @@ function requireDevOnlyException(packageJson: string, bunLock: string): void {
   }
   if (overrides.postcss !== "8.5.23" || overrides.sharp !== "0.35.3") {
     fail("reviewed production override versions drifted")
+  }
+  for (const [name, version] of EXPECTED_REACT_TYPE_OVERRIDES) {
+    if (overrides[name] !== version) {
+      fail(
+        `reviewed React type override ${name} drifted; ` +
+          `actual=${JSON.stringify(overrides[name])}, ` +
+          `expected=${JSON.stringify(version)}`,
+      )
+    }
   }
 
   const records = packageRecords(bunLock)

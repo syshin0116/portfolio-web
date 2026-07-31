@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { neonConfig } from "@neondatabase/serverless"
+import {
+  neonConfig,
+  Pool as NeonPool,
+} from "@neondatabase/serverless"
 import { readFile } from "node:fs/promises"
-import type { Pool as PgPool } from "pg"
 import {
   type AuthPostgresPoolConfig,
   readAuthRuntimeConfig,
@@ -24,16 +26,40 @@ const VALID_ENV = {
   AUTH_GOOGLE_SECRET: "google-client-secret",
 }
 
-function poolWithEnd(end: () => Promise<void>): PgPool {
-  return { end } as unknown as PgPool
+function unconnectedNeonPool(): NeonPool {
+  return new NeonPool({
+    ...readAuthRuntimeConfig(VALID_ENV).database,
+  })
+}
+
+function lifecycleEnd(
+  operation: () => Promise<void>
+): NeonPool["end"] {
+  function end(): Promise<void>
+  function end(callback: () => void): void
+  function end(callback?: () => void): Promise<void> | void {
+    const result = operation()
+    if (callback === undefined) return result
+    void result.then(callback)
+  }
+  return end
+}
+
+function poolWithEnd(end: () => Promise<void>): NeonPool {
+  const pool = unconnectedNeonPool()
+  pool.end = lifecycleEnd(end)
+  return pool
 }
 
 describe("Auth.js request-scoped Neon pool contract", () => {
-  test("creates a fresh adapter pool for every lazy configuration call", () => {
+  test("creates a fresh adapter pool for every lazy configuration call", async () => {
     const poolConfigs: AuthPostgresPoolConfig[] = []
-    const createPool = (config: AuthPostgresPoolConfig): PgPool => {
+    const pools: NeonPool[] = []
+    const createPool = (config: AuthPostgresPoolConfig): NeonPool => {
       poolConfigs.push(config)
-      return {} as PgPool
+      const pool = new NeonPool({ ...config })
+      pools.push(pool)
+      return pool
     }
 
     const first = createAuthOptions(VALID_ENV, createPool)
@@ -56,13 +82,15 @@ describe("Auth.js request-scoped Neon pool contract", () => {
     expect(first.adapter).toBeDefined()
     expect(second.adapter).toBeDefined()
     expect(first.adapter).not.toBe(second.adapter)
+    await Promise.all(pools.map(async (pool) => pool.end()))
   })
 
   test("wires allowlist and verified-provider checks into sign-in", async () => {
     const verifiedInputs: unknown[] = []
+    const pool = unconnectedNeonPool()
     const options = createAuthOptions(
       VALID_ENV,
-      () => ({}) as PgPool,
+      () => pool,
       async (input) => {
         verifiedInputs.push(input)
         return true
@@ -112,10 +140,12 @@ describe("Auth.js request-scoped Neon pool contract", () => {
         profile: { login: "owner" },
       },
     ])
+    await pool.end()
   })
 
   test("projects only a canonical adapter id into the session", async () => {
-    const options = createAuthOptions(VALID_ENV, () => ({}) as PgPool)
+    const pool = unconnectedNeonPool()
+    const options = createAuthOptions(VALID_ENV, () => pool)
     const session = options.callbacks?.session
     expect(session).toBeDefined()
 
@@ -141,6 +171,7 @@ describe("Auth.js request-scoped Neon pool contract", () => {
       } as unknown as SessionInput
     )
     expect(projected.user?.id).toBe("42")
+    await pool.end()
   })
 
   test("closes every request pool after a successful operation", async () => {
@@ -209,7 +240,7 @@ describe("Auth.js request-scoped Neon pool contract", () => {
         { ...VALID_ENV, AUTH_SECRET: "" },
         () => {
           createCalls += 1
-          return {} as PgPool
+          return unconnectedNeonPool()
         }
       )
     ).rejects.toThrow("AUTH_SECRET is required")
@@ -236,16 +267,32 @@ describe("Auth.js request-scoped Neon pool contract", () => {
         "-c search_path=pg_catalog,public"
       )
       expect(pool.options).not.toHaveProperty("connectionString")
-      expect(
-        (
-          pool as unknown as {
-            hasFetchUnsupportedListeners: boolean
-          }
-        ).hasFetchUnsupportedListeners
-      ).toBe(true)
+      expect(pool.hasFetchUnsupportedListeners).toBe(true)
       await pool.end()
     } finally {
       neonConfig.poolQueryViaFetch = previousPoolQueryViaFetch
+    }
+  })
+
+  test("normalizes Neon bigint expiry text and rejects invalid adapter output", () => {
+    expect(authTesting.normalizeNeonExpiresAt("1900000000")).toBe(
+      1_900_000_000
+    )
+    expect(authTesting.normalizeNeonExpiresAt(1_900_000_000)).toBe(
+      1_900_000_000
+    )
+    expect(authTesting.normalizeNeonExpiresAt(null)).toBeUndefined()
+    for (const invalid of [
+      "1900000000junk",
+      "01900000000",
+      "00",
+      "-1",
+      "9007199254740992",
+      Number.NaN,
+    ]) {
+      expect(() => authTesting.normalizeNeonExpiresAt(invalid)).toThrow(
+        "The Auth.js Neon adapter returned an invalid expires_at"
+      )
     }
   })
 

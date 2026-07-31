@@ -1,4 +1,5 @@
-import type { PoolConfig } from "pg"
+import type { PoolConfig as NeonPoolConfig } from "@neondatabase/serverless"
+import type { PoolConfig as PgPoolConfig } from "pg"
 
 const MINIMUM_AUTH_SECRET_BYTES = 32
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u
@@ -361,7 +362,7 @@ export function parseAuthPostgresPoolConfig(
     max: 1,
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 5_000,
-  } as const satisfies PoolConfig
+  } as const satisfies NeonPoolConfig & PgPoolConfig
   return config
 }
 

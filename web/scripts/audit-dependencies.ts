@@ -45,10 +45,11 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
     "@assistant-ui/react-langgraph",
     "@assistant-ui/react-langgraph@0.14.15",
   ],
-  ["@auth/pg-adapter", "@auth/pg-adapter@1.11.3"],
+  ["@auth/neon-adapter", "@auth/neon-adapter@1.11.3"],
   ["@langchain/core", "@langchain/core@1.2.3"],
   ["@langchain/langgraph-sdk", "@langchain/langgraph-sdk@1.9.28"],
   ["@langchain/protocol", "@langchain/protocol@0.0.18"],
+  ["@neondatabase/serverless", "@neondatabase/serverless@1.1.0"],
   ["eslint-config-next", "eslint-config-next@16.2.12"],
   ["mermaid", "mermaid@11.16.0"],
   ["next", "next@16.2.12"],
@@ -64,6 +65,11 @@ const EXPECTED_NATIVE_AGENT_PINS = new Map([
   ["@langchain/protocol", "0.0.18"],
 ])
 
+const EXPECTED_AUTH_DATABASE_PINS = new Map([
+  ["@auth/neon-adapter", "1.11.3"],
+  ["@neondatabase/serverless", "1.1.0"],
+])
+
 const EXPECTED_REACT_TYPE_OVERRIDES = new Map([
   ["@types/react", "19.2.17"],
   ["@types/react-dom", "19.2.3"],
@@ -73,7 +79,6 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@axe-core/playwright", "@axe-core/playwright@4.12.1"],
   ["@eslint/compat", "@eslint/compat@2.1.0"],
   ["@giscus/react", "@giscus/react@3.1.0"],
-  ["@neondatabase/serverless", "@neondatabase/serverless@1.0.2"],
   ["@playwright/test", "@playwright/test@1.62.0"],
   ["@radix-ui/react-accordion", "@radix-ui/react-accordion@1.2.20"],
   ["@radix-ui/react-avatar", "@radix-ui/react-avatar@1.2.6"],
@@ -330,6 +335,28 @@ function requireNativeAgentPins(
   }
 }
 
+function requireAuthDatabasePins(
+  records: Map<string, { resolved: string; line: string }>,
+  dependencies: Record<string, unknown>,
+): void {
+  for (const [name, version] of EXPECTED_AUTH_DATABASE_PINS) {
+    if (dependencies[name] !== version) {
+      fail(
+        `auth database dependency ${name} must be pinned exactly; ` +
+          `actual=${JSON.stringify(dependencies[name])}, ` +
+          `expected=${JSON.stringify(version)}`,
+      )
+    }
+    if (records.get(name)?.resolved !== `${name}@${version}`) {
+      fail(
+        `auth database lock resolution ${name} drifted; ` +
+          `actual=${JSON.stringify(records.get(name)?.resolved)}, ` +
+          `expected=${JSON.stringify(`${name}@${version}`)}`,
+      )
+    }
+  }
+}
+
 function requireDevOnlyException(packageJson: string, bunLock: string): void {
   let manifest: unknown
   try {
@@ -381,6 +408,7 @@ function requireDevOnlyException(packageJson: string, bunLock: string): void {
 
   const records = packageRecords(bunLock)
   requireNativeAgentPins(records, dependencies)
+  requireAuthDatabasePins(records, dependencies)
   requireExactRecords(
     records,
     EXPECTED_BRACE_RECORDS,

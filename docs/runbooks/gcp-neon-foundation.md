@@ -176,7 +176,8 @@ state and must not be presented as live inventory.
 What is verified in this repository is the authentication architecture:
 
 - `web/` uses Auth.js v5 (`next-auth` v5 beta);
-- `@auth/pg-adapter` stores Auth.js tables in Postgres through `DATABASE_URL`;
+- `@auth/neon-adapter` stores Auth.js tables through the request-scoped Neon Pool and
+  `DATABASE_URL`;
 - GitHub and Google remain the OAuth providers;
 - Neon supplies Postgres only. **Neon Auth is not being adopted.**
 
@@ -295,7 +296,7 @@ required secret has exactly one intended enabled version without reading its pay
 
 ## Web/Auth.js cutover
 
-Keep Auth.js v5 and `@auth/pg-adapter`; only its Postgres endpoint changes.
+Keep Auth.js v5 and `@auth/neon-adapter`; only its Postgres endpoint changes.
 
 The committed, idempotent Auth.js schema and exact verifier are operated through
 `bun run auth:migrate` and `bun run auth:verify` from `web/`. Follow the

@@ -3,7 +3,8 @@ import Footer from "@/components/footer";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { GithubIcon, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { FaGithub } from "react-icons/fa";
 import Link from "next/link";
 import { Metadata } from "next";
 
@@ -56,7 +57,7 @@ export default function AboutPage() {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <GithubIcon className="h-4 w-4 mr-2" />
+                  <FaGithub aria-hidden="true" className="h-4 w-4 mr-2" />
                   GitHub
                 </Link>
               </Button>

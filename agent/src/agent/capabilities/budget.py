@@ -1022,6 +1022,7 @@ def _openai_provider_token_usage(
     input_tokens_total = 0
     output_tokens_total = 0
     cache_read_total = 0
+    cache_write_total = 0
     for message in messages:
         response_metadata = getattr(message, "response_metadata", None)
         response_model = (
@@ -1065,21 +1066,22 @@ def _openai_provider_token_usage(
         reasoning = output_details.get("reasoning")
         if (
             not _is_non_negative_integer(cache_read)
-            or cache_creation != 0
+            or not _is_non_negative_integer(cache_creation)
             or reasoning != 0
-            or cache_read > input_tokens
+            or cache_read + cache_creation > input_tokens
         ):
             return None
 
-        input_tokens_total += input_tokens - cache_read
+        input_tokens_total += input_tokens - cache_read - cache_creation
         output_tokens_total += output_tokens
         cache_read_total += cache_read
+        cache_write_total += cache_creation
 
     return _ProviderTokenUsage(
         input_tokens=input_tokens_total,
         output_tokens=output_tokens_total,
         cache_read_input_tokens=cache_read_total,
-        cache_write_input_tokens=0,
+        cache_write_input_tokens=cache_write_total,
     )
 
 

@@ -706,7 +706,7 @@ async def test_anthropic_usage_tracks_exact_provider_pricing_buckets(
 
 @pytest.mark.parametrize(
     "response_model",
-    ["gpt-5.4-nano", "gpt-5.4-nano-2026-03-17"],
+    ["gpt-5.6-luna"],
 )
 async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model):
     budget = RunBudget()
@@ -721,7 +721,7 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
         allowed_subagents=frozenset(),
         input_token_counter=exact_input_tokens,
         model_provider="openai",
-        expected_response_models=frozenset({"gpt-5.4-nano", "gpt-5.4-nano-2026-03-17"}),
+        expected_response_models=frozenset({"gpt-5.6-luna"}),
     )
     request = ModelRequest(
         model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
@@ -744,7 +744,7 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
                         "total_tokens": 140,
                         "input_token_details": {
                             "cache_read": 40,
-                            "cache_creation": 0,
+                            "cache_creation": 20,
                         },
                         "output_token_details": {"reasoning": 0},
                     },
@@ -761,7 +761,7 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
         snapshot.provider_output_tokens,
         snapshot.provider_cache_read_input_tokens,
         snapshot.provider_cache_write_input_tokens,
-    ) == (80, 20, 40, 0)
+    ) == (60, 20, 40, 20)
     assert snapshot.charged_tokens == 140
 
 
@@ -769,7 +769,7 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
     ("metadata", "input_details", "output_details"),
     [
         (
-            {"model_provider": "anthropic", "model_name": "gpt-5.4-nano"},
+            {"model_provider": "anthropic", "model_name": "gpt-5.6-luna"},
             {"cache_read": 40, "cache_creation": 0},
             {"reasoning": 0},
         ),
@@ -784,22 +784,22 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
+            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
             {"cache_read": 40},
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
-            {"cache_read": 40, "cache_creation": 1},
+            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
+            {"cache_read": 100, "cache_creation": 21},
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
+            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
             {"cache_read": 40, "cache_creation": 0},
             {"reasoning": 1},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.4-nano"},
+            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
             {"cache_read": 40, "cache_creation": 0},
             {"reasoning": 0, "audio": 0},
         ),
@@ -809,7 +809,7 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
         "wrong-model",
         "non-string-model",
         "missing-cache-creation",
-        "cache-creation",
+        "cache-buckets-exceed-input",
         "reasoning",
         "unknown-output-bucket",
     ],
@@ -827,7 +827,7 @@ async def test_openai_usage_drift_fails_the_run_closed(
         allowed_subagents=frozenset(),
         input_token_counter=_zero_input_tokens,
         model_provider="openai",
-        expected_response_models=frozenset({"gpt-5.4-nano"}),
+        expected_response_models=frozenset({"gpt-5.6-luna"}),
     )
     request = ModelRequest(
         model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
@@ -877,7 +877,7 @@ async def test_openai_provider_input_must_equal_the_exact_precount():
         allowed_subagents=frozenset(),
         input_token_counter=_zero_input_tokens,
         model_provider="openai",
-        expected_response_models=frozenset({"gpt-5.4-nano"}),
+        expected_response_models=frozenset({"gpt-5.6-luna"}),
     )
     request = ModelRequest(
         model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
@@ -892,7 +892,7 @@ async def test_openai_provider_input_must_equal_the_exact_precount():
                     content="must not escape settlement",
                     response_metadata={
                         "model_provider": "openai",
-                        "model_name": "gpt-5.4-nano",
+                        "model_name": "gpt-5.6-luna",
                     },
                     usage_metadata={
                         "input_tokens": 1_000,

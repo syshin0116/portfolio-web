@@ -175,7 +175,7 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
         tmp_path,
         VALID_CONFIG,
         AGENT_ANONYMOUS_ACCESS_ENABLED="true",
-        GUEST_MODEL="openai:gpt-5.4-nano",
+        GUEST_MODEL="openai:gpt-5.6-luna",
         GUEST_DAILY_BUDGET_MICRO_USD="500000",
         GUEST_RUN_RESERVATION_MICRO_USD="25000",
         OPENAI_API_KEY="test-openai-runtime-key",
@@ -216,7 +216,7 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
         (
             {
                 "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
-                "GUEST_MODEL": "openai:gpt-5.4-nano",
+                "GUEST_MODEL": "openai:gpt-5.6-luna",
                 "GUEST_DAILY_BUDGET_MICRO_USD": "",
                 "GUEST_RUN_RESERVATION_MICRO_USD": "",
                 "OPENAI_API_KEY": "test-openai-runtime-key",
@@ -226,7 +226,7 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
         (
             {
                 "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
-                "GUEST_MODEL": "openai:gpt-5.4-nano",
+                "GUEST_MODEL": "openai:gpt-5.6-luna",
                 "GUEST_DAILY_BUDGET_MICRO_USD": "25000",
                 "GUEST_RUN_RESERVATION_MICRO_USD": "25001",
                 "OPENAI_API_KEY": "test-openai-runtime-key",
@@ -236,7 +236,7 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
         (
             {
                 "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
-                "GUEST_MODEL": "openai:gpt-5.4-nano",
+                "GUEST_MODEL": "openai:gpt-5.6-luna",
                 "GUEST_DAILY_BUDGET_MICRO_USD": "500000",
                 "GUEST_RUN_RESERVATION_MICRO_USD": "25000",
                 "OPENAI_API_KEY": "",
@@ -246,7 +246,7 @@ def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_
         (
             {
                 "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
-                "GUEST_MODEL": "openai:gpt-5.4-nano",
+                "GUEST_MODEL": "openai:gpt-5.6-luna",
                 "GUEST_DAILY_BUDGET_MICRO_USD": "500000",
                 "GUEST_RUN_RESERVATION_MICRO_USD": "25000",
                 "OPENAI_API_KEY": " ",

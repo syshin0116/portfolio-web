@@ -9,7 +9,7 @@ when_to_read: >
 tags:
   [operations, dependencies, github-actions, aegra, agent-protocol, langgraph, quickjs]
 status: stable
-updated: "2026-07-28"
+updated: "2026-07-31"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/workflows/dependency-audit.yml
@@ -53,9 +53,11 @@ oversized, pagination, and schema errors fail closed.
 
 ### OpenAI serialization pins
 
-The guest Responses payload is serialized by exact `langchain-openai==1.3.5`
-and `openai==2.50.0` pins, so both are required manifest/lock audit targets and
-isolated from routine grouped Dependabot updates. `langchain-openai` is audited
+The GPT-5.6 Luna guest Responses payload, including its explicit
+`reasoning.context=current_turn` override, is serialized by exact
+`langchain-openai==1.3.5` and `openai==2.50.0` pins. Both dependencies remain
+required manifest/lock audit targets and isolated from routine grouped
+Dependabot updates. `langchain-openai` is audited
 against the latest stable release below the reviewed exclusive `1.4.0`
 compatibility ceiling: 1.4.x requires `langchain-core>=1.5.1`, while this
 repository remains on 1.4.9. The report exposes that ceiling explicitly.

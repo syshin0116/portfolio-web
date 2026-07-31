@@ -57,10 +57,12 @@ from agent.capabilities.token_counting import (
     OPENAI_GUEST_MODEL_NAME,
     OPENAI_GUEST_MODEL_SPEC,
     OPENAI_GUEST_RESPONSE_MODEL_NAMES,
+    OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH,
     OPENAI_GUEST_TIMEOUT_SECONDS,
     InputTokenCounter,
     count_anthropic_input_tokens,
     count_openai_input_tokens,
+    openai_guest_safety_identifier,
     require_openai_api_key,
 )
 from agent.inspection import InspectionEventTransformer
@@ -222,11 +224,20 @@ def _bounded_model(model_spec: str) -> BaseChatModel:
     return model
 
 
-@lru_cache(maxsize=1)
-def _bounded_guest_model(model_spec: str) -> BaseChatModel:
+@lru_cache(maxsize=256)
+def _bounded_guest_model(
+    model_spec: str,
+    safety_identifier: str,
+) -> BaseChatModel:
     """Create the anonymous tier client with a lower hard output ceiling."""
     if model_spec != OPENAI_GUEST_MODEL_SPEC:
         raise RuntimeError(f"GUEST_MODEL must be exactly {OPENAI_GUEST_MODEL_SPEC!r}")
+    if (
+        not isinstance(safety_identifier, str)
+        or not safety_identifier.startswith("guest_")
+        or len(safety_identifier) != OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH
+    ):
+        raise RuntimeError("guest safety identifier is invalid")
     model = ChatOpenAI(
         model=OPENAI_GUEST_MODEL_NAME,
         api_key=require_openai_api_key(),
@@ -235,10 +246,11 @@ def _bounded_guest_model(model_spec: str) -> BaseChatModel:
         timeout=MODEL_TIMEOUT_SECONDS,
         use_responses_api=True,
         output_version="responses/v1",
-        reasoning={"effort": "none"},
+        reasoning={"context": "current_turn", "effort": "none"},
         store=False,
         truncation="disabled",
         cache=False,
+        extra_body={"safety_identifier": safety_identifier},
     )
     if not isinstance(model, BaseChatModel):
         raise RuntimeError("GUEST_MODEL resolved to a runtime-configurable wrapper")
@@ -269,7 +281,12 @@ def create_graph(
     )
     _disable_general_purpose_subagent(model_spec)
     selected_model = model or (
-        _bounded_guest_model(model_spec) if is_guest else _bounded_model(model_spec)
+        _bounded_guest_model(
+            model_spec,
+            openai_guest_safety_identifier(getattr(runtime.user, "identity", None)),
+        )
+        if is_guest
+        else _bounded_model(model_spec)
     )
     if is_guest and budget is not None and budget.policy != GUEST_RUN_BUDGET_POLICY:
         raise ValueError("guest graph requires the anonymous run budget policy")

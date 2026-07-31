@@ -67,7 +67,7 @@ class _Session:
         ("100000", "0", "canonical positive integer"),
         ("100000", "01", "canonical positive integer"),
         ("100000", "100001", "cannot exceed"),
-        ("100000", "6700", "generation floor"),
+        ("100000", "6891", "generation floor"),
     ],
 )
 def test_required_guest_budget_configuration_fails_closed(
@@ -101,7 +101,7 @@ def test_optional_guest_budget_is_absent_or_exact(monkeypatch):
 
 
 def test_guest_generation_floor_uses_exact_integer_ceiling():
-    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 6_701
+    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 6_892
     assert (
         minimum_guest_generation_cost_micro_usd(
             max_model_calls=4,

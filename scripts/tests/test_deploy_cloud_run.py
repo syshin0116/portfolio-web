@@ -905,7 +905,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "timeout": {"FAKE_RUNTIME_TIMEOUT": "301s"},
             "plain_environment": {"FAKE_ENV_MODE": "PREVIEW"},
             "anonymous_access": {"FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED": "true"},
-            "guest_model": {"FAKE_GUEST_MODEL": "openai:gpt-5.4-nano"},
+            "guest_model": {"FAKE_GUEST_MODEL": "openai:gpt-5.6-luna"},
             "guest_daily_budget": {"FAKE_GUEST_DAILY_BUDGET_MICRO_USD": "500000"},
             "guest_run_reservation": {"FAKE_GUEST_RUN_RESERVATION_MICRO_USD": "25000"},
             "background_retry_budget": {"FAKE_BG_JOB_MAX_RETRIES": "3"},

@@ -54,7 +54,7 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
   ["next", "next@16.2.12"],
   ["next-auth", "next-auth@5.0.0-beta.32"],
   ["pg", "pg@8.22.0"],
-  ["postcss", "postcss@8.5.23"],
+  ["postcss", "postcss@8.5.24"],
 ])
 
 const EXPECTED_NATIVE_AGENT_PINS = new Map([
@@ -75,29 +75,29 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@giscus/react", "@giscus/react@3.1.0"],
   ["@neondatabase/serverless", "@neondatabase/serverless@1.0.2"],
   ["@playwright/test", "@playwright/test@1.62.0"],
-  ["@radix-ui/react-accordion", "@radix-ui/react-accordion@1.2.12"],
-  ["@radix-ui/react-avatar", "@radix-ui/react-avatar@1.1.11"],
-  ["@radix-ui/react-checkbox", "@radix-ui/react-checkbox@1.3.3"],
-  ["@radix-ui/react-collapsible", "@radix-ui/react-collapsible@1.1.12"],
-  ["@radix-ui/react-dialog", "@radix-ui/react-dialog@1.1.15"],
+  ["@radix-ui/react-accordion", "@radix-ui/react-accordion@1.2.20"],
+  ["@radix-ui/react-avatar", "@radix-ui/react-avatar@1.2.6"],
+  ["@radix-ui/react-checkbox", "@radix-ui/react-checkbox@1.3.11"],
+  ["@radix-ui/react-collapsible", "@radix-ui/react-collapsible@1.1.20"],
+  ["@radix-ui/react-dialog", "@radix-ui/react-dialog@1.1.23"],
   [
     "@radix-ui/react-dropdown-menu",
-    "@radix-ui/react-dropdown-menu@2.1.16",
+    "@radix-ui/react-dropdown-menu@2.1.24",
   ],
-  ["@radix-ui/react-hover-card", "@radix-ui/react-hover-card@1.1.15"],
+  ["@radix-ui/react-hover-card", "@radix-ui/react-hover-card@1.1.23"],
   [
     "@radix-ui/react-navigation-menu",
-    "@radix-ui/react-navigation-menu@1.2.14",
+    "@radix-ui/react-navigation-menu@1.2.22",
   ],
-  ["@radix-ui/react-popover", "@radix-ui/react-popover@1.1.15"],
-  ["@radix-ui/react-slot", "@radix-ui/react-slot@1.2.4"],
-  ["@radix-ui/react-toggle", "@radix-ui/react-toggle@1.1.10"],
-  ["@radix-ui/react-toggle-group", "@radix-ui/react-toggle-group@1.1.11"],
-  ["@radix-ui/react-tooltip", "@radix-ui/react-tooltip@1.2.8"],
-  ["@tailwindcss/postcss", "@tailwindcss/postcss@4.1.17"],
+  ["@radix-ui/react-popover", "@radix-ui/react-popover@1.1.23"],
+  ["@radix-ui/react-slot", "@radix-ui/react-slot@1.3.3"],
+  ["@radix-ui/react-toggle", "@radix-ui/react-toggle@1.1.18"],
+  ["@radix-ui/react-toggle-group", "@radix-ui/react-toggle-group@1.1.19"],
+  ["@radix-ui/react-tooltip", "@radix-ui/react-tooltip@1.2.16"],
+  ["@tailwindcss/postcss", "@tailwindcss/postcss@4.3.3"],
   ["@types/bun", "@types/bun@1.3.14"],
   ["@types/d3", "@types/d3@7.4.3"],
-  ["@types/node", "@types/node@26.1.1"],
+  ["@types/node", "@types/node@26.1.2"],
   ["@types/pg", "@types/pg@8.20.0"],
   ["@types/react", "@types/react@19.2.17"],
   ["@types/react-dom", "@types/react-dom@19.2.3"],
@@ -109,30 +109,30 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["d3", "d3@7.9.0"],
   ["embla-carousel-react", "embla-carousel-react@8.6.0"],
   ["eslint", "eslint@10.8.0"],
-  ["framer-motion", "framer-motion@12.23.25"],
+  ["framer-motion", "framer-motion@12.42.2"],
   ["lucide-react", "lucide-react@0.556.0"],
   ["marked", "marked@18.0.7"],
   ["medium-zoom", "medium-zoom@1.1.0"],
   ["next-themes", "next-themes@0.4.6"],
   ["nuartz", "nuartz@0.2.0"],
-  ["pagefind", "pagefind@1.4.0"],
-  ["radix-ui", "radix-ui@1.4.3"],
+  ["pagefind", "pagefind@1.5.2"],
+  ["radix-ui", "radix-ui@1.6.7"],
   ["react", "react@19.2.8"],
   ["react-dom", "react-dom@19.2.8"],
-  ["react-icons", "react-icons@5.5.0"],
+  ["react-icons", "react-icons@5.7.0"],
   ["react-markdown", "react-markdown@10.1.0"],
   ["remark-breaks", "remark-breaks@4.0.0"],
   ["remark-gfm", "remark-gfm@4.0.1"],
   ["shiki", "shiki@4.3.1"],
-  ["tailwind-merge", "tailwind-merge@3.4.0"],
-  ["tailwindcss", "tailwindcss@4.1.17"],
+  ["tailwind-merge", "tailwind-merge@3.6.0"],
+  ["tailwindcss", "tailwindcss@4.3.3"],
   ["tailwindcss-animate", "tailwindcss-animate@1.0.7"],
   ["typescript", "typescript@5.9.3"],
-  ["use-stick-to-bottom", "use-stick-to-bottom@1.1.1"],
+  ["use-stick-to-bottom", "use-stick-to-bottom@1.1.6"],
 ])
 
 const EXPECTED_PRODUCTION_OVERRIDE_RECORDS = [
-  new Map([["postcss", "postcss@8.5.23"]]),
+  new Map([["postcss", "postcss@8.5.24"]]),
   new Map([["sharp", "sharp@0.35.3"]]),
 ]
 
@@ -366,7 +366,7 @@ function requireDevOnlyException(packageJson: string, bunLock: string): void {
   ) {
     fail("package.json override set drifted")
   }
-  if (overrides.postcss !== "8.5.23" || overrides.sharp !== "0.35.3") {
+  if (overrides.postcss !== "8.5.24" || overrides.sharp !== "0.35.3") {
     fail("reviewed production override versions drifted")
   }
   for (const [name, version] of EXPECTED_REACT_TYPE_OVERRIDES) {

@@ -117,8 +117,8 @@ describe("dependency audit exception policy", () => {
   test("rejects production override resolution drift", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
+      '"postcss": ["postcss@8.5.24"',
       '"postcss": ["postcss@8.5.23"',
-      '"postcss": ["postcss@8.5.22"',
     )
 
     expect(() => validateAuditPolicy(candidate)).toThrow(
@@ -143,8 +143,8 @@ describe("dependency audit exception policy", () => {
   test("rejects unrelated direct resolution drift outside the security allowlist", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
-      '"framer-motion": ["framer-motion@12.23.25"',
       '"framer-motion": ["framer-motion@12.42.2"',
+      '"framer-motion": ["framer-motion@12.23.25"',
     )
 
     expect(() => validateAuditPolicy(candidate)).toThrow(

@@ -126,6 +126,20 @@ describe("dependency audit exception policy", () => {
     )
   })
 
+  test.each([
+    ["@types/react", "19.1.16"],
+    ["@types/react-dom", "19.1.9"],
+  ])("rejects a stale React type override for %s", (name, staleVersion) => {
+    const candidate = evidence()
+    const manifest = JSON.parse(candidate.packageJson)
+    manifest.overrides[name] = staleVersion
+    candidate.packageJson = JSON.stringify(manifest)
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      `reviewed React type override ${name} drifted`,
+    )
+  })
+
   test("rejects unrelated direct resolution drift outside the security allowlist", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from collections.abc import Awaitable, Callable
@@ -16,14 +17,16 @@ from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 
-OPENAI_GUEST_MODEL_NAME = "gpt-5.4-nano"
+from agent.identity import is_anonymous_identity
+
+OPENAI_GUEST_MODEL_NAME = "gpt-5.6-luna"
 OPENAI_GUEST_MODEL_SPEC = f"openai:{OPENAI_GUEST_MODEL_NAME}"
-OPENAI_GUEST_RESPONSE_MODEL_NAMES = frozenset(
-    {
-        OPENAI_GUEST_MODEL_NAME,
-        "gpt-5.4-nano-2026-03-17",
-    }
-)
+OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX = "guest_"
+OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH = 64
+# The official catalogue currently publishes only this alias for Luna. Add a
+# snapshot here only after OpenAI publishes one and its response metadata is
+# captured by a separately reviewed provider-backed test.
+OPENAI_GUEST_RESPONSE_MODEL_NAMES = frozenset({OPENAI_GUEST_MODEL_NAME})
 OPENAI_GUEST_MAX_OUTPUT_TOKENS = 1_024
 OPENAI_GUEST_TIMEOUT_SECONDS = 60.0
 
@@ -35,6 +38,7 @@ _OPENAI_GUEST_MODEL_FIELDS_SET = frozenset(
         "async_client",
         "cache",
         "client",
+        "extra_body",
         "max_retries",
         "max_tokens",
         "metadata",
@@ -74,6 +78,7 @@ _OPENAI_INPUT_TOKEN_FIELDS = frozenset(
 _OPENAI_GENERATION_ONLY_FIELDS = frozenset(
     {
         "max_output_tokens",
+        "safety_identifier",
         "store",
         "stream",
     }
@@ -85,6 +90,29 @@ class InputTokenCountError(RuntimeError):
 
 
 type InputTokenCounter = Callable[[ModelRequest[Any]], Awaitable[int]]
+
+
+def openai_guest_safety_identifier(identity: object) -> str:
+    """Derive one stable, non-identifying OpenAI abuse-monitoring subject."""
+    if not is_anonymous_identity(identity):
+        raise ValueError("canonical anonymous identity is required")
+    digest = hashlib.sha256(
+        f"syshin0116-openai-safety-v1\0{identity}".encode()
+    ).hexdigest()
+    digest_length = OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH - len(
+        OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX
+    )
+    return f"{OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX}{digest[:digest_length]}"
+
+
+def _is_openai_guest_safety_identifier(value: object) -> bool:
+    prefix_length = len(OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX)
+    return bool(
+        isinstance(value, str)
+        and value.startswith(OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX)
+        and len(value) == OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH
+        and all(character in "0123456789abcdef" for character in value[prefix_length:])
+    )
 
 
 def require_openai_api_key() -> str:
@@ -162,7 +190,11 @@ class _OpenAIRequestCapture:
                 ],
                 "parallel_tool_calls": True,
                 "previous_response_id": None,
-                "reasoning": {"effort": "none", "summary": None},
+                "reasoning": {
+                    "context": "current_turn",
+                    "effort": "none",
+                    "summary": None,
+                },
                 "store": False,
                 "temperature": None,
                 "text": {"format": {"type": "text"}},
@@ -197,7 +229,7 @@ def _require_exact_openai_guest_model(model: object) -> ChatOpenAI:
         or model.max_retries != 0
         or model.request_timeout != OPENAI_GUEST_TIMEOUT_SECONDS
         or model.use_responses_api is not True
-        or model.reasoning != {"effort": "none"}
+        or model.reasoning != {"context": "current_turn", "effort": "none"}
         or model.store is not False
         or model.streaming is not False
         or model.model_fields_set != _OPENAI_GUEST_MODEL_FIELDS_SET
@@ -210,7 +242,11 @@ def _require_exact_openai_guest_model(model: object) -> ChatOpenAI:
         or model.truncation != "disabled"
         or model.include is not None
         or model.context_management is not None
-        or model.extra_body is not None
+        or not isinstance(model.extra_body, dict)
+        or set(model.extra_body) != {"safety_identifier"}
+        or not _is_openai_guest_safety_identifier(
+            model.extra_body.get("safety_identifier")
+        )
         or model.model_kwargs != {}
         or model.openai_api_base is not None
         or model.openai_organization is not None
@@ -241,6 +277,7 @@ def _openai_capture_model(
         store=model.store,
         truncation=model.truncation,
         cache=model.cache,
+        extra_body=dict(model.extra_body),
         http_client=sync_client,
         http_async_client=async_client,
     )
@@ -311,10 +348,14 @@ def _openai_input_count_payload(
     if (
         generation_payload.get("model") != OPENAI_GUEST_MODEL_NAME
         or generation_payload.get("max_output_tokens") != OPENAI_GUEST_MAX_OUTPUT_TOKENS
-        or generation_payload.get("reasoning") != {"effort": "none"}
+        or generation_payload.get("reasoning")
+        != {"context": "current_turn", "effort": "none"}
         or generation_payload.get("store") is not False
         or generation_payload.get("stream") is not False
         or generation_payload.get("truncation") != "disabled"
+        or not _is_openai_guest_safety_identifier(
+            generation_payload.get("safety_identifier")
+        )
         or "input" not in generation_payload
         or "conversation" in generation_payload
         or "previous_response_id" in generation_payload
@@ -430,8 +471,11 @@ __all__ = [
     "OPENAI_GUEST_MODEL_NAME",
     "OPENAI_GUEST_RESPONSE_MODEL_NAMES",
     "OPENAI_GUEST_MODEL_SPEC",
+    "OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH",
+    "OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX",
     "OPENAI_GUEST_TIMEOUT_SECONDS",
     "count_anthropic_input_tokens",
     "count_openai_input_tokens",
+    "openai_guest_safety_identifier",
     "require_openai_api_key",
 ]

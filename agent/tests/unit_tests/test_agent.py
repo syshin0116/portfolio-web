@@ -60,6 +60,7 @@ from agent.capabilities.token_counting import (
     OPENAI_GUEST_MODEL_SPEC,
     OPENAI_GUEST_RESPONSE_MODEL_NAMES,
     _require_exact_openai_guest_model,
+    openai_guest_safety_identifier,
 )
 from agent.graph import (
     DEFAULT_MODEL,
@@ -199,7 +200,7 @@ def _openai_final_message(content: str) -> AIMessage:
         content=content,
         response_metadata={
             "model_provider": "openai",
-            "model_name": "gpt-5.4-nano",
+            "model_name": "gpt-5.6-luna",
         },
         usage_metadata={
             "input_tokens": 1,
@@ -760,27 +761,37 @@ def test_bounded_provider_model_disables_retries_and_runtime_configuration(monke
 
 def test_bounded_guest_model_uses_the_lower_nonconfigurable_output_limit(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-guest-construction-key")
+    safety_identifier = openai_guest_safety_identifier(
+        "anon:00000000-0000-4000-8000-000000000001"
+    )
     _bounded_guest_model.cache_clear()
     try:
-        resolved = _bounded_guest_model(OPENAI_GUEST_MODEL_SPEC)
-        cached = _bounded_guest_model(OPENAI_GUEST_MODEL_SPEC)
+        resolved = _bounded_guest_model(
+            OPENAI_GUEST_MODEL_SPEC,
+            safety_identifier,
+        )
+        cached = _bounded_guest_model(
+            OPENAI_GUEST_MODEL_SPEC,
+            safety_identifier,
+        )
     finally:
         _bounded_guest_model.cache_clear()
 
     assert isinstance(resolved, ChatOpenAI)
     assert cached is resolved
-    assert resolved.model_name == "gpt-5.4-nano"
+    assert resolved.model_name == "gpt-5.6-luna"
     assert resolved.max_tokens == GUEST_MODEL_MAX_OUTPUT_TOKENS
     assert resolved.max_retries == 0
     assert resolved.request_timeout == MODEL_TIMEOUT_SECONDS
     assert resolved.use_responses_api is True
     assert resolved.output_version == "responses/v1"
-    assert resolved.reasoning == {"effort": "none"}
+    assert resolved.reasoning == {"context": "current_turn", "effort": "none"}
     assert resolved.store is False
     assert resolved.truncation == "disabled"
     assert resolved.streaming is False
     assert "streaming" not in resolved.model_fields_set
     assert resolved.cache is False
+    assert resolved.extra_body == {"safety_identifier": safety_identifier}
     assert _require_exact_openai_guest_model(resolved) is resolved
 
 
@@ -829,7 +840,7 @@ def test_guest_and_owner_graphs_route_distinct_server_owned_counters(monkeypatch
     ("configured_model", "expected"),
     [
         (OPENAI_GUEST_MODEL_SPEC, OPENAI_GUEST_MODEL_SPEC),
-        ("openai/gpt-5.4-nano", OPENAI_GUEST_MODEL_SPEC),
+        ("openai/gpt-5.6-luna", OPENAI_GUEST_MODEL_SPEC),
     ],
 )
 def test_guest_model_is_explicit_and_canonical(monkeypatch, configured_model, expected):

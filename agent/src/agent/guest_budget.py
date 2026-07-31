@@ -15,7 +15,9 @@ GUEST_RUN_RESERVATION_ENV = "GUEST_RUN_RESERVATION_MICRO_USD"
 MAX_GUEST_BUDGET_MICRO_USD = 1_000_000_000
 _MICRO_USD_PER_USD = 1_000_000
 _OPENAI_GUEST_INPUT_USD_MICROS_PER_MILLION_TOKENS = 200_000
-_OPENAI_GUEST_OUTPUT_USD_MICROS_PER_MILLION_TOKENS = 1_250_000
+_OPENAI_GUEST_CACHED_INPUT_USD_MICROS_PER_MILLION_TOKENS = 20_000
+_OPENAI_GUEST_CACHE_WRITE_USD_MICROS_PER_MILLION_TOKENS = 250_000
+_OPENAI_GUEST_OUTPUT_USD_MICROS_PER_MILLION_TOKENS = 1_200_000
 _OPENAI_GUEST_MAX_MODEL_CALLS = 4
 _OPENAI_GUEST_MAX_OUTPUT_TOKENS_PER_CALL = 1_024
 _OPENAI_GUEST_MAX_TOTAL_TOKENS = 12_000
@@ -91,7 +93,7 @@ def minimum_guest_generation_cost_micro_usd(
     max_output_tokens: int,
     max_total_tokens: int,
 ) -> int:
-    """Return the conservative gpt-5.4-nano generation cost for one run."""
+    """Return the conservative gpt-5.6-luna generation cost for one run."""
     values = (max_model_calls, max_output_tokens, max_total_tokens)
     if any(not isinstance(value, int) or isinstance(value, bool) for value in values):
         raise TypeError("guest generation limits must be integers")
@@ -100,9 +102,18 @@ def minimum_guest_generation_cost_micro_usd(
     output_tokens = max_model_calls * max_output_tokens
     if output_tokens > max_total_tokens:
         raise ValueError("guest output reservation exceeds the total-token budget")
+    # Price every possible input token at the most expensive input bucket.
+    # GPT-5.6 implicit cache writes cost 1.25x uncached input. Cache reads may
+    # lower actual cost, but neither outcome can lower a pre-dispatch
+    # worst-case reservation.
     input_tokens = max_total_tokens - output_tokens
+    input_rate = max(
+        _OPENAI_GUEST_INPUT_USD_MICROS_PER_MILLION_TOKENS,
+        _OPENAI_GUEST_CACHED_INPUT_USD_MICROS_PER_MILLION_TOKENS,
+        _OPENAI_GUEST_CACHE_WRITE_USD_MICROS_PER_MILLION_TOKENS,
+    )
     numerator = (
-        input_tokens * _OPENAI_GUEST_INPUT_USD_MICROS_PER_MILLION_TOKENS
+        input_tokens * input_rate
         + output_tokens * _OPENAI_GUEST_OUTPUT_USD_MICROS_PER_MILLION_TOKENS
     )
     return (numerator + _MICRO_USD_PER_USD - 1) // _MICRO_USD_PER_USD
@@ -155,7 +166,7 @@ def guest_budget_config(*, required: bool) -> GuestBudgetConfig | None:
     if reservation < GUEST_MIN_RUN_RESERVATION_MICRO_USD:
         raise GuestBudgetConfigurationError(
             "guest per-run spend reservation is below the reviewed "
-            "gpt-5.4-nano generation floor"
+            "gpt-5.6-luna generation floor"
         )
     return GuestBudgetConfig(
         daily_limit_micro_usd=daily,

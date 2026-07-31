@@ -26,6 +26,7 @@ from agent.capabilities.token_counting import (
     OPENAI_GUEST_MAX_OUTPUT_TOKENS,
     OPENAI_GUEST_MODEL_NAME,
     OPENAI_GUEST_RESPONSE_MODEL_NAMES,
+    OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH,
     OPENAI_GUEST_TIMEOUT_SECONDS,
     InputTokenCountError,
     _capture_openai_generation_payload,
@@ -33,7 +34,11 @@ from agent.capabilities.token_counting import (
     _openai_input_count_payload,
     count_anthropic_input_tokens,
     count_openai_input_tokens,
+    openai_guest_safety_identifier,
 )
+
+_GUEST_IDENTITY = "anon:00000000-0000-4000-8000-000000000001"
+_GUEST_SAFETY_IDENTIFIER = openai_guest_safety_identifier(_GUEST_IDENTITY)
 
 
 @tool
@@ -51,13 +56,26 @@ def _openai_guest_model(**overrides) -> ChatOpenAI:
         "timeout": OPENAI_GUEST_TIMEOUT_SECONDS,
         "use_responses_api": True,
         "output_version": "responses/v1",
-        "reasoning": {"effort": "none"},
+        "reasoning": {"context": "current_turn", "effort": "none"},
         "store": False,
         "truncation": "disabled",
         "cache": False,
+        "extra_body": {"safety_identifier": _GUEST_SAFETY_IDENTIFIER},
     }
     settings.update(overrides)
     return ChatOpenAI(**settings)
+
+
+def test_openai_guest_safety_identifier_is_stable_private_and_scoped():
+    other_identity = "anon:00000000-0000-4000-8000-000000000002"
+
+    assert openai_guest_safety_identifier(_GUEST_IDENTITY) == _GUEST_SAFETY_IDENTIFIER
+    assert openai_guest_safety_identifier(other_identity) != _GUEST_SAFETY_IDENTIFIER
+    assert _GUEST_SAFETY_IDENTIFIER.startswith("guest_")
+    assert len(_GUEST_SAFETY_IDENTIFIER) == OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH
+    assert _GUEST_IDENTITY not in _GUEST_SAFETY_IDENTIFIER
+    with pytest.raises(ValueError, match="canonical anonymous identity"):
+        openai_guest_safety_identifier("owner@example.com")
 
 
 async def test_openai_official_counter_receives_final_stateless_payload(
@@ -86,6 +104,7 @@ async def test_openai_official_counter_receives_final_stateless_payload(
     count = await count_openai_input_tokens(request)
 
     assert count == 321
+    assert "safety_identifier" not in observed["payload"]
     assert observed["payload"] == {
         "input": [
             {
@@ -116,7 +135,7 @@ async def test_openai_official_counter_receives_final_stateless_payload(
             },
         ],
         "model": OPENAI_GUEST_MODEL_NAME,
-        "reasoning": {"effort": "none"},
+        "reasoning": {"context": "current_turn", "effort": "none"},
         "tool_choice": "required",
         "tools": [
             {
@@ -201,7 +220,7 @@ async def test_openai_counter_sdk_boundary_is_exact_and_has_no_retry(monkeypatch
     payload = {
         "input": [{"type": "message", "role": "user", "content": "count me"}],
         "model": OPENAI_GUEST_MODEL_NAME,
-        "reasoning": {"effort": "none"},
+        "reasoning": {"context": "current_turn", "effort": "none"},
         "truncation": "disabled",
     }
     requests: list[httpx.Request] = []
@@ -287,7 +306,11 @@ def _stream_response_fixture() -> dict:
         ],
         "parallel_tool_calls": True,
         "previous_response_id": None,
-        "reasoning": {"effort": "none", "summary": None},
+        "reasoning": {
+            "context": "current_turn",
+            "effort": "none",
+            "summary": None,
+        },
         "store": False,
         "temperature": None,
         "text": {"format": {"type": "text"}},
@@ -298,7 +321,7 @@ def _stream_response_fixture() -> dict:
         "usage": {
             "input_tokens": 3,
             "input_tokens_details": {
-                "cache_write_tokens": 0,
+                "cache_write_tokens": 1,
                 "cached_tokens": 0,
             },
             "output_tokens": 2,
@@ -406,7 +429,7 @@ async def test_openai_native_stream_and_capture_have_identical_token_payloads():
         "output_tokens": 2,
         "total_tokens": 5,
         "input_token_details": {
-            "cache_creation": 0,
+            "cache_creation": 1,
             "cache_read": 0,
         },
         "output_token_details": {"reasoning": 0},
@@ -416,6 +439,7 @@ async def test_openai_native_stream_and_capture_have_identical_token_payloads():
         chunks[-1].response_metadata["model_name"] in OPENAI_GUEST_RESPONSE_MODEL_NAMES
     )
     assert captured_payload["stream"] is False
+    assert captured_payload["safety_identifier"] == _GUEST_SAFETY_IDENTIFIER
     assert streamed_payload["stream"] is True
     assert set(captured_payload) == set(streamed_payload)
     assert {
@@ -454,7 +478,7 @@ async def test_openai_native_stream_and_capture_have_identical_token_payloads():
         snapshot.provider_output_tokens,
         snapshot.provider_cache_read_input_tokens,
         snapshot.provider_cache_write_input_tokens,
-    ) == (3, 2, 0, 0)
+    ) == (2, 2, 0, 1)
 
 
 @pytest.mark.parametrize("result", [-1, True, "321"])
@@ -524,6 +548,8 @@ async def test_openai_invalid_counter_key_fails_before_provider_boundary(
     "model_override",
     [
         {"model": "gpt-5.4-mini"},
+        {"reasoning": {"effort": "none"}},
+        {"reasoning": {"context": "all_turns", "effort": "none"}},
         {"use_previous_response_id": True},
         {"max_tokens": OPENAI_GUEST_MAX_OUTPUT_TOKENS + 1},
         {"streaming": False},
@@ -532,6 +558,7 @@ async def test_openai_invalid_counter_key_fails_before_provider_boundary(
         {"stream_usage": False},
         {"seed": 7},
         {"organization": "unreviewed-organization"},
+        {"extra_body": {"safety_identifier": "guest_invalid"}},
     ],
 )
 async def test_openai_server_model_contract_drift_fails_before_counter(
@@ -565,7 +592,8 @@ def test_openai_stateful_generation_payload_drift_fails_closed(payload_drift):
         "input": [{"type": "message", "role": "user", "content": "question"}],
         "max_output_tokens": OPENAI_GUEST_MAX_OUTPUT_TOKENS,
         "model": OPENAI_GUEST_MODEL_NAME,
-        "reasoning": {"effort": "none"},
+        "reasoning": {"context": "current_turn", "effort": "none"},
+        "safety_identifier": _GUEST_SAFETY_IDENTIFIER,
         "store": False,
         "stream": False,
         "truncation": "disabled",
@@ -581,7 +609,8 @@ def test_openai_unreviewed_generation_field_fails_closed():
         "input": [{"type": "message", "role": "user", "content": "question"}],
         "max_output_tokens": OPENAI_GUEST_MAX_OUTPUT_TOKENS,
         "model": OPENAI_GUEST_MODEL_NAME,
-        "reasoning": {"effort": "none"},
+        "reasoning": {"context": "current_turn", "effort": "none"},
+        "safety_identifier": _GUEST_SAFETY_IDENTIFIER,
         "store": False,
         "stream": False,
         "truncation": "disabled",

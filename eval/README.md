@@ -74,8 +74,8 @@ uv run --frozen --package syshin0116-dev-eval blogeval verify-run \
   --run-directory "$run_directory"
 ```
 
-The default sweep runs `bm25`, `char-ngram`, and `rrf-bm25-char-ngram`, with no model,
-embedding, network, or provider cost. It writes:
+The default sweep runs `bm25`, `bm25-field-weighted`, `char-ngram`, and
+`rrf-bm25-char-ngram`, with no model, embedding, network, or provider cost. It writes:
 
 ```text
 results/<content-tree-sha>/<run-id>/

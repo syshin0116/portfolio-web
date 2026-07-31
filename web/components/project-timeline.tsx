@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Building2, Code, ChevronRight, Github, ExternalLink } from "lucide-react";
+import { Building2, Code, ChevronRight, ExternalLink } from "lucide-react";
+import { FaGithub } from "react-icons/fa";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -100,10 +101,11 @@ function ProjectCard({ project }: { project: ProjectTimeline }) {
                                   href={project.github}
                                   target="_blank"
                                   rel="noopener noreferrer"
+                                  aria-label={`Open ${project.title} on GitHub`}
                                   onClick={(e) => e.stopPropagation()}
                                   className="text-muted-foreground hover:text-foreground transition-colors"
                                 >
-                                  <Github className="w-3.5 h-3.5" />
+                                  <FaGithub aria-hidden="true" className="w-3.5 h-3.5" />
                                 </a>
                               </TooltipTrigger>
                               <TooltipContent>GitHub</TooltipContent>

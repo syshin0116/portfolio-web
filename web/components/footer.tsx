@@ -1,4 +1,4 @@
-import { GithubIcon } from "lucide-react";
+import { FaGithub } from "react-icons/fa";
 import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 
@@ -34,9 +34,10 @@ const Footer = () => {
               href="https://github.com/syshin0116"
               target="_blank"
               rel="noopener noreferrer"
+              aria-label="GitHub profile"
               className="hover:text-foreground transition-colors"
             >
-              <GithubIcon className="h-5 w-5" />
+              <FaGithub aria-hidden="true" className="h-5 w-5" />
             </Link>
           </div>
         </div>

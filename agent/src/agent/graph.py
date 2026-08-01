@@ -35,6 +35,7 @@ from langgraph_sdk.runtime import ServerRuntime
 
 from agent.auth import ANONYMOUS_PERMISSION, is_anonymous_identity
 from agent.capabilities.budget import (
+    TASK_TOOL_NAME,
     RunBudget,
     RunBudgetMiddleware,
     RunBudgetPolicy,
@@ -45,14 +46,15 @@ from agent.capabilities.quickjs import (
     quickjs_allowed,
 )
 from agent.capabilities.subagents import (
-    NATIVE_SUBAGENT_SYSTEM_PROMPT,
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
     build_subagents,
     dynamic_subagents_allowed,
+    native_subagent_system_prompt,
     validate_capability_config,
 )
 from agent.capabilities.token_counting import (
+    OPENAI_API_BASE_URL,
     OPENAI_GUEST_MAX_OUTPUT_TOKENS,
     OPENAI_GUEST_MODEL_NAME,
     OPENAI_GUEST_MODEL_SPEC,
@@ -63,6 +65,8 @@ from agent.capabilities.token_counting import (
     count_anthropic_input_tokens,
     count_openai_input_tokens,
     openai_guest_safety_identifier,
+    require_exact_openai_guest_model,
+    require_official_openai_routing,
     require_openai_api_key,
 )
 from agent.inspection import InspectionEventTransformer
@@ -238,9 +242,12 @@ def _bounded_guest_model(
         or len(safety_identifier) != OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH
     ):
         raise RuntimeError("guest safety identifier is invalid")
+    require_official_openai_routing()
     model = ChatOpenAI(
         model=OPENAI_GUEST_MODEL_NAME,
         api_key=require_openai_api_key(),
+        base_url=OPENAI_API_BASE_URL,
+        stream_usage=True,
         max_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
         max_retries=0,
         timeout=MODEL_TIMEOUT_SECONDS,
@@ -254,7 +261,7 @@ def _bounded_guest_model(
     )
     if not isinstance(model, BaseChatModel):
         raise RuntimeError("GUEST_MODEL resolved to a runtime-configurable wrapper")
-    return model
+    return require_exact_openai_guest_model(model)
 
 
 def create_graph(
@@ -264,9 +271,13 @@ def create_graph(
     budget: RunBudget | None = None,
     model: BaseChatModel | None = None,
     input_token_counter: InputTokenCounter | None = None,
+    model_provider: str | None = None,
+    expected_response_models: frozenset[str] | None = None,
     dynamic_subagents_enabled: bool | None = None,
     quickjs_enabled: bool | None = None,
     quickjs_middleware: BoundedQuickJSMiddleware | None = None,
+    root_tool_allowlist: frozenset[str] | None = None,
+    experiment_subagent_allowlist: frozenset[str] | None = None,
 ):
     """Compile one topology-stable Deep Agent around a run-local budget.
 
@@ -276,8 +287,37 @@ def create_graph(
     """
     validate_capability_config(config)
     is_guest = _runtime_is_guest(runtime)
+    if model_provider is not None and model is None:
+        raise ValueError("model_provider override requires an injected model")
+    if expected_response_models is not None and model is None:
+        raise ValueError("expected_response_models override requires an injected model")
+    if is_guest and (
+        model_provider is not None or expected_response_models is not None
+    ):
+        raise ValueError("guest provider contract cannot be overridden")
+    usage_model_provider = model_provider or ("openai" if is_guest else "anthropic")
+    usage_response_models = (
+        expected_response_models
+        if expected_response_models is not None
+        else (OPENAI_GUEST_RESPONSE_MODEL_NAMES if is_guest else frozenset())
+    )
+    if usage_model_provider not in {"anthropic", "openai"}:
+        raise ValueError("model_provider must be anthropic or openai")
+    if (usage_model_provider == "openai") is not bool(usage_response_models):
+        raise ValueError("OpenAI provider contract requires exact response models")
+    if (
+        usage_model_provider == "openai"
+        and usage_response_models != OPENAI_GUEST_RESPONSE_MODEL_NAMES
+    ):
+        raise ValueError("OpenAI provider contract requires exact response models")
     model_spec = (
-        _normalized_guest_model_spec() if is_guest else _normalized_model_spec()
+        _normalized_guest_model_spec()
+        if is_guest
+        else (
+            OPENAI_GUEST_MODEL_SPEC
+            if model is not None and usage_model_provider == "openai"
+            else _normalized_model_spec()
+        )
     )
     _disable_general_purpose_subagent(model_spec)
     selected_model = model or (
@@ -313,6 +353,38 @@ def create_graph(
         runtime,
         server_enabled=quickjs_enabled,
     )
+    if root_tool_allowlist is not None:
+        expected_root_tools = frozenset(
+            tool_name
+            for tool_name, enabled in (
+                (QUICKJS_TOOL_NAME, allow_quickjs),
+                (TASK_TOOL_NAME, allow_subagents),
+            )
+            if enabled
+        )
+        if (
+            model is None
+            or is_guest
+            or not isinstance(root_tool_allowlist, frozenset)
+            or root_tool_allowlist != expected_root_tools
+        ):
+            raise ValueError(
+                "experiment root tool allowlist must exactly match server capabilities"
+            )
+    if experiment_subagent_allowlist is not None and (
+        model is None
+        or is_guest
+        or root_tool_allowlist is None
+        or not isinstance(experiment_subagent_allowlist, frozenset)
+        or not experiment_subagent_allowlist
+        or not experiment_subagent_allowlist <= SUBAGENT_NAMES
+    ):
+        raise ValueError(
+            "experiment subagent allowlist must be a non-empty server-declared "
+            "frozenset on an injected experiment graph"
+        )
+    selected_subagents = experiment_subagent_allowlist or SUBAGENT_NAMES
+    selected_native_subagent_prompt = native_subagent_system_prompt(selected_subagents)
     if quickjs_middleware is None:
         quickjs_middleware = BoundedQuickJSMiddleware(enabled=allow_quickjs)
     elif (
@@ -336,21 +408,23 @@ def create_graph(
                 run_budget,
                 depth=0,
                 allow_subagents=allow_subagents,
-                allowed_subagents=SUBAGENT_NAMES,
+                allowed_subagents=selected_subagents,
                 input_token_counter=exact_input_counter,
-                model_provider="openai" if is_guest else "anthropic",
-                expected_response_models=(
-                    OPENAI_GUEST_RESPONSE_MODEL_NAMES if is_guest else frozenset()
-                ),
-                native_subagent_prompt=NATIVE_SUBAGENT_SYSTEM_PROMPT,
+                model_provider=usage_model_provider,
+                expected_response_models=usage_response_models,
+                native_subagent_prompt=selected_native_subagent_prompt,
                 quickjs_tool_name=QUICKJS_TOOL_NAME,
                 allow_quickjs=allow_quickjs,
+                root_tool_allowlist=root_tool_allowlist,
             ),
         ],
         subagents=build_subagents(
             model=selected_model,
             budget=run_budget,
             input_token_counter=exact_input_counter,
+            model_provider=usage_model_provider,
+            expected_response_models=usage_response_models,
+            allowed_subagents=selected_subagents,
         ),
         backend=_build_backend(persistent_memory=not is_guest),
         skills=["/skills/"],
@@ -476,6 +550,7 @@ def _validate_aegra_registration() -> None:
     if os.environ.get("AGENT_ANONYMOUS_ACCESS_ENABLED", "false") == "true":
         guest_model = _normalized_guest_model_spec()
         if guest_model == OPENAI_GUEST_MODEL_SPEC:
+            require_official_openai_routing()
             require_openai_api_key()
 
 

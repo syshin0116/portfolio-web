@@ -42,6 +42,7 @@ from pydantic import Field
 
 from agent.capabilities.budget import (
     CapabilityDeniedError,
+    InvalidDelegationError,
     RunBudget,
     RunBudgetMiddleware,
 )
@@ -55,10 +56,14 @@ from agent.capabilities.subagents import (
     NATIVE_SUBAGENT_SYSTEM_PROMPT,
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
+    native_subagent_system_prompt,
 )
 from agent.capabilities.token_counting import (
+    OPENAI_API_BASE_URL,
     OPENAI_GUEST_MODEL_SPEC,
     OPENAI_GUEST_RESPONSE_MODEL_NAMES,
+    OPENAI_ROUTING_ENVIRONMENT_VARIABLES,
+    InputTokenCountError,
     _require_exact_openai_guest_model,
     openai_guest_safety_identifier,
 )
@@ -93,7 +98,16 @@ from agent.tools import TOOLS
 class ToolCapableFakeModel(FakeMessagesListChatModel):
     """Deterministic model that records each bound tool surface."""
 
+    model_name: str = "claude-sonnet-4-6"
     bound_tool_names: list[frozenset[str]] = Field(default_factory=list)
+
+    def _get_ls_params(self, stop=None, **kwargs):
+        del stop, kwargs
+        return {
+            "ls_model_type": "chat",
+            "ls_model_name": self.model_name,
+            "ls_provider": "anthropic",
+        }
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         del tool_choice, kwargs
@@ -760,6 +774,8 @@ def test_bounded_provider_model_disables_retries_and_runtime_configuration(monke
 
 
 def test_bounded_guest_model_uses_the_lower_nonconfigurable_output_limit(monkeypatch):
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-guest-construction-key")
     safety_identifier = openai_guest_safety_identifier(
         "anon:00000000-0000-4000-8000-000000000001"
@@ -792,7 +808,46 @@ def test_bounded_guest_model_uses_the_lower_nonconfigurable_output_limit(monkeyp
     assert "streaming" not in resolved.model_fields_set
     assert resolved.cache is False
     assert resolved.extra_body == {"safety_identifier": safety_identifier}
+    assert resolved.openai_api_base == OPENAI_API_BASE_URL
+    assert str(resolved.root_client.base_url) == f"{OPENAI_API_BASE_URL}/"
+    assert str(resolved.root_async_client.base_url) == f"{OPENAI_API_BASE_URL}/"
     assert _require_exact_openai_guest_model(resolved) is resolved
+
+
+def test_bounded_guest_model_rejects_ambient_routing_before_credential_read(
+    monkeypatch,
+):
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv(
+        "OPENAI_CUSTOM_HEADERS",
+        "Authorization: Bearer attacker\nOpenAI-Project: attacker-project",
+    )
+    credential_reads = 0
+
+    def unexpected_credential_read() -> str:
+        nonlocal credential_reads
+        credential_reads += 1
+        raise AssertionError("ambient routing reached credential access")
+
+    monkeypatch.setattr(
+        "agent.graph.require_openai_api_key",
+        unexpected_credential_read,
+    )
+    safety_identifier = openai_guest_safety_identifier(
+        "anon:00000000-0000-4000-8000-000000000001"
+    )
+    _bounded_guest_model.cache_clear()
+    try:
+        with pytest.raises(
+            InputTokenCountError,
+            match="ambient OpenAI routing configuration is forbidden",
+        ):
+            _bounded_guest_model(OPENAI_GUEST_MODEL_SPEC, safety_identifier)
+    finally:
+        _bounded_guest_model.cache_clear()
+
+    assert credential_reads == 0
 
 
 def test_guest_and_owner_graphs_route_distinct_server_owned_counters(monkeypatch):
@@ -954,6 +1009,65 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     assert snapshot.policy_id == "anonymous-public-v1"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
+
+
+async def test_eval_injected_openai_contract_uses_provider_native_settlement(
+    monkeypatch,
+):
+    monkeypatch.setenv("MODEL", OPENAI_GUEST_MODEL_SPEC)
+    model = ToolCapableFakeModel(responses=[_openai_final_message("eval answer")])
+    budget = RunBudget()
+    compiled = create_graph(
+        runtime=_server_runtime(["eval"]),
+        config={"configurable": {"thread_id": "openai-eval-provider"}},
+        model=model,
+        budget=budget,
+        input_token_counter=_exact_openai_test_input_tokens,
+        model_provider="openai",
+        expected_response_models=frozenset({"gpt-5.6-luna"}),
+        dynamic_subagents_enabled=False,
+        quickjs_enabled=False,
+    )
+
+    result = await compiled.ainvoke(
+        {"messages": [{"role": "user", "content": "bounded local eval"}]},
+        {"configurable": {"thread_id": "openai-eval-provider"}},
+    )
+
+    assert result["messages"][-1].content == "eval answer"
+    snapshot = budget.finalize()
+    assert snapshot.provider_usage_complete is True
+    assert snapshot.provider_input_tokens == 1
+    assert snapshot.provider_output_tokens == 9
+    assert snapshot.charged_tokens == 10
+
+
+def test_provider_contract_override_requires_an_injected_exact_model():
+    with pytest.raises(ValueError, match="requires an injected model"):
+        create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "provider-without-model"}},
+            model_provider="openai",
+            expected_response_models=frozenset({"gpt-5.6-luna"}),
+        )
+
+    with pytest.raises(ValueError, match="requires exact response models"):
+        create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "provider-without-model-name"}},
+            model=ToolCapableFakeModel(responses=[_final_message("unused")]),
+            model_provider="openai",
+            expected_response_models=frozenset(),
+        )
+
+    with pytest.raises(ValueError, match="requires exact response models"):
+        create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "provider-wrong-model-name"}},
+            model=ToolCapableFakeModel(responses=[_final_message("unused")]),
+            model_provider="openai",
+            expected_response_models=frozenset({"gpt-5.4-mini"}),
+        )
 
 
 def test_guest_runtime_rejects_an_owner_budget_override(monkeypatch):
@@ -1205,6 +1319,19 @@ async def test_server_capability_axes_have_exact_prompt_and_tool_order(
     assert (native_prompt in system_text) is subagents_enabled
     assert (quickjs_prompt in system_text) is quickjs_enabled
     if subagents_enabled:
+        task_tools = [
+            tool
+            for tool in counted.tools
+            if (tool.get("name") if isinstance(tool, dict) else tool.name) == "task"
+        ]
+        assert len(task_tools) == 1
+        task_description = (
+            task_tools[0].get("description")
+            if isinstance(task_tools[0], dict)
+            else task_tools[0].description
+        )
+        assert isinstance(task_description, str)
+        assert all(f"- {name}:" in task_description for name in SUBAGENT_NAMES)
         assert system_text.count(root_prompt) == 1
         assert system_text.count(native_prompt) == 1
         assert system_text.index(root_prompt) < system_text.index(native_prompt)
@@ -1212,6 +1339,134 @@ async def test_server_capability_axes_have_exact_prompt_and_tool_order(
         assert system_text.count(quickjs_prompt) == 1
     if subagents_enabled and quickjs_enabled:
         assert system_text.index(native_prompt) < system_text.index(quickjs_prompt)
+
+
+async def test_experiment_subagent_allowlist_rejects_other_specialists_before_reservation():
+    thread_id = "experiment-evidence-checker-only"
+    description = """\
+Question:
+Verify one supplied claim.
+Allowed corpus/method scope:
+Use only the supplied published DocId.
+Expected output schema:
+One supported or unsupported verdict.
+Stopping condition:
+Stop after one verdict.
+"""
+    model = PayloadRecordingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {
+                            "description": description,
+                            "subagent_type": "general-purpose",
+                        },
+                        "id": "forged-general-purpose",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            )
+        ]
+    )
+    budget = RunBudget()
+    counted_requests = []
+
+    async def capture_exact_payload(request):
+        counted_requests.append(request)
+        return 1
+
+    quickjs_middleware = BoundedQuickJSMiddleware(enabled=False)
+    compiled = create_graph(
+        runtime=_server_runtime(["eval"]),
+        config={"configurable": {"thread_id": thread_id}},
+        model=model,
+        budget=budget,
+        input_token_counter=capture_exact_payload,
+        dynamic_subagents_enabled=True,
+        quickjs_enabled=False,
+        quickjs_middleware=quickjs_middleware,
+        root_tool_allowlist=frozenset({"task"}),
+        experiment_subagent_allowlist=frozenset({"evidence-checker"}),
+    )
+
+    try:
+        with pytest.raises(InvalidDelegationError, match="server-declared"):
+            await compiled.ainvoke(
+                {"messages": [{"role": "user", "content": "delegate once"}]},
+                {"configurable": {"thread_id": thread_id}},
+            )
+    finally:
+        await quickjs_middleware.aclose()
+
+    system_text = "\n".join(
+        block["text"]
+        for block in model.invoked_messages[0][0].content_blocks
+        if block["type"] == "text"
+    )
+    eval_native_prompt = native_subagent_system_prompt(frozenset({"evidence-checker"}))
+    assert eval_native_prompt in system_text
+    assert NATIVE_SUBAGENT_SYSTEM_PROMPT not in system_text
+    assert len(counted_requests) == 1
+    task_tools = [
+        tool
+        for tool in counted_requests[0].tools
+        if (tool.get("name") if isinstance(tool, dict) else tool.name) == "task"
+    ]
+    assert len(task_tools) == 1
+    task_description = (
+        task_tools[0].get("description")
+        if isinstance(task_tools[0], dict)
+        else task_tools[0].description
+    )
+    assert isinstance(task_description, str)
+    assert "- evidence-checker:" in task_description
+    assert all(
+        f"- {name}:" not in task_description
+        for name in SUBAGENT_NAMES - {"evidence-checker"}
+    )
+    assert budget.snapshot().task_calls == 0
+
+
+def test_openai_experiment_compiles_only_the_evidence_checker_task_inventory(
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-eval-construction-key")
+    safety_identifier = openai_guest_safety_identifier(
+        "anon:00000000-0000-4000-8000-000000000001"
+    )
+    _bounded_guest_model.cache_clear()
+    try:
+        model = _bounded_guest_model(OPENAI_GUEST_MODEL_SPEC, safety_identifier)
+        compiled = create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "openai-evidence-inventory"}},
+            model=model,
+            budget=RunBudget(),
+            input_token_counter=_exact_openai_test_input_tokens,
+            model_provider="openai",
+            expected_response_models=OPENAI_GUEST_RESPONSE_MODEL_NAMES,
+            dynamic_subagents_enabled=True,
+            quickjs_enabled=False,
+            root_tool_allowlist=frozenset({"task"}),
+            experiment_subagent_allowlist=frozenset({"evidence-checker"}),
+        )
+    finally:
+        _bounded_guest_model.cache_clear()
+
+    task_tool = compiled.nodes["tools"].bound._tools_by_name["task"]
+    assert "- evidence-checker:" in task_tool.description
+    assert all(
+        f"- {name}:" not in task_tool.description
+        for name in SUBAGENT_NAMES - {"evidence-checker"}
+    )
 
 
 @pytest.mark.parametrize("invalid", [1, 0, "true", [], object()])

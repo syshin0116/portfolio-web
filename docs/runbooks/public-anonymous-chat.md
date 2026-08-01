@@ -64,6 +64,15 @@ provider boundary.
 This is a generation-only floor, not a claim about the count endpoint's currently
 undocumented billing.
 
+Both generation and input-count SDK clients are pinned to
+`https://api.openai.com/v1` and must have no organization, project, custom header, or
+OpenAI-specific proxy route. The runtime fails before reading `OPENAI_API_KEY` when any
+of `OPENAI_ADMIN_KEY`, `OPENAI_API_BASE`, `OPENAI_BASE_URL`,
+`OPENAI_CUSTOM_HEADERS`, `OPENAI_ORGANIZATION`, `OPENAI_ORG_ID`,
+`OPENAI_PROJECT_ID`, or `OPENAI_PROXY` is present, including an empty value. Keep all
+eight absent from Cloud Run; standard platform HTTPS proxy policy remains a separate
+infrastructure decision.
+
 The serialization boundary is pinned to `langchain-openai==1.3.5` and
 `openai==2.50.0`; the dependency audit isolates both and keeps
 `langchain-openai` below the reviewed exclusive 1.4.0 compatibility ceiling

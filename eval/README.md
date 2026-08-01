@@ -251,10 +251,11 @@ P4.5. It contains structured direct-answer, ranked-list transform, stateless evi
 and combined tasks. It is not a retrieval query-set and is never accepted by `sweep` or
 rendered into `leaderboard.md`. Its v1 label status is `synthetic-only`; it proves the
 harness and capability boundaries but is not owner-reviewed evidence for public
-enablement. Every current run and artifact is additionally fixed to
-`synthetic-provider-free`: this PR is a harness foundation, does not satisfy the P4.5
-acceptance or standalone/combined quality gates, and cannot justify enabling either
-capability for visitors.
+enablement. The runner recognizes two non-public evidence tiers:
+`synthetic-provider-free` for the deterministic fixture and
+`provider-backed-local-unattested` for a bounded local OpenAI Responses run. Neither can
+be relabelled as signed publication evidence or justify enabling a capability for
+visitors.
 
 `blogeval.capability_runner.run_capability_experiment` owns the exact four arms:
 QuickJS off/on × subagents off/on. A provider adapter implements `CapabilityExecutor`
@@ -263,33 +264,62 @@ deterministic per-attempt seed, fresh attempt/thread/graph-run identities, an or
 Aegra run config with no capability override, and one real non-serializable `RunBudget`.
 `build_capability_graph` compiles the native Deep Agents graph from that context. The
 server selection may remove an otherwise authorized capability; client config still
-cannot grant one.
+cannot grant one. Production owner runs retain all four server-declared specialists,
+while this evaluation path compiles only `evidence-checker`; the native system prompt,
+bound `task` tool description, execution allowlist, and recorded subtype therefore share
+the same one-specialist inventory.
 
 Each sweep requires a fresh UUIDv4 execution ID. A deterministic four-row Williams
 schedule counterbalances arm position per task while artifacts retain one canonical arm
 and task order. Every zero-spend preflight retry receives a different attempt, thread,
 graph-run ID, and seed; a failure after any model/tool/capability spend is never retried
-or omitted from cost. `max_attempts` is bounded to three. The run boundary measures
+or omitted from generation-token accounting. `max_attempts` is bounded to three. The run boundary measures
 `HEAD:content` from the required local workspace, rejects tracked, staged, or untracked
 `content/` drift, and requires the measured tree to equal both the dataset and executor
-identity. It also caps the task set and every `RunBudgetPolicy` field, and rejects the
+identity. The paid adapter additionally requires the verified published-index manifest
+tree to equal the task-set tree before provider identity or credentials are touched. It
+also caps the task set and every `RunBudgetPolicy` field, and rejects the
 experiment before its first executor call unless a conservative four-arm worst-case
-token cost fits the explicit micro-dollar ceiling.
+generation-token cost fits the explicit micro-dollar ceiling. OpenAI does not document
+whether `/responses/input_tokens` requests are billed, so those bounded auxiliary calls
+are not represented as part of a provider-wide dollar ceiling. Run schema v5 records
+this as `cost_accounting.scope=generation-token-usage-only` and lists the endpoint,
+undocumented billing status, exclusion flag, and maximum request count structurally.
 
 The executor returns only a redacted structured outcome plus verified-empty persistence
 and the exact recorded cache mode. It cannot report tokens or cost. The runner wraps the
 entire executor in the remaining run deadline, atomically calls `RunBudget.finalize()`,
 and accepts only a terminal snapshot with no model, QuickJS, or task reservation in
-flight. Every model call must have complete normalized Anthropic usage metadata. The
+flight. Every model call must have complete normalized provider usage metadata. The
+fixture exercises the Anthropic shape; the local adapter requires the exact OpenAI
+Responses model identity and pricing buckets. The
 canonical token and cost fields come only from the finalized uncached-input, output,
 cache-read-input, and cache-write-input buckets; their exact sum must equal the ledger
 charge. Cost applies the four recorded integer micro-US-dollar rates and rounds up once
 per task.
 
 The runner rejects usage in a disabled arm and derives task-level capability evidence
-from the same ledger. A task tagged `quickjs` or `combined` must execute QuickJS whenever
-that arm enables it, and a task tagged `subagents` or `combined` must execute `task`
-whenever that arm enables it. Unexpected capability use is rejected as well. Missing,
+from the same ledger. Server activation is task-scoped: an enabled arm exposes QuickJS or
+`task` only when the canonical task requires it and every required peer is present. A
+fully available task must execute each required capability; a task missing a required
+peer receives no tool surface and must stop with the exact `capability_unavailable`
+result. Every required subagent task must delegate exactly once to `evidence-checker`;
+the actual subtype sequence is recorded per task in `run.json`, and another specialist,
+no delegation, or a second delegation fails closed. Unexpected capability use and false
+availability claims are rejected. Each task also records the ordered root `AIMessage`
+call and matching `ToolMessage` completion boundaries, including their root-message
+indexes and call IDs. A required QuickJS task must contain exactly one completed `eval`
+pair; a task that does not require QuickJS must contain none. The combined cell must be
+exactly `eval call → eval completion → task call → task completion`, with the `task`
+request in a later model turn. This proves that the QuickJS completion was available
+before delegation; it does not claim that a trace can prove semantic use of the returned
+value. The root trace call count must equal `quickjs_calls + task_calls`. Run schema v5
+also records the non-negative derived child count
+`delegated_tool_calls = tool_calls - quickjs_calls - task_calls`; it must be zero when
+there was no `task`, while every delegated evidence-checker must spend at least one call
+on its exact compiled child tool surface. The deterministic proof uses the assigned-skill
+call for that boundary. Any external root call still fails closed.
+Missing,
 duplicate, reordered, nonterminal, unsettled, cache-drifted, persistence-contaminated,
 provider-incomplete, or otherwise malformed data aborts the sweep. Latency uses monotonic
 elapsed nanoseconds rounded to the nearest millisecond.
@@ -310,23 +340,66 @@ are byte-stable for the same complete observations. A same-ID rerun with differe
 is rejected, making nondeterministic provider output explicit instead of silently
 replacing a result.
 
-PR CI does not call a paid model. There is deliberately no capability CLI, provider
-executor, credential lookup, workflow, or supported paid execution path in this
-foundation. `CapabilityExecutor` is only an internal protocol exercised by tests; its
-declared model, cache, and prices are not yet provider-derived evidence.
+PR CI does not call a paid model. The deterministic path remains provider-free, and
 `tests/test_capability_runner.py` substitutes only a
 deterministic provider-free chat model with exact normalized Anthropic metadata, then
 executes the production `create_graph` topology in all four arms. It runs native QuickJS
 and native Deep Agents `task`, verifies fresh empty in-memory persistence, proves that the
 QuickJS-only root has no task surface, proves the combined task executes both
-capabilities, and proves the child has no QuickJS, task, filesystem, environment, or
-network surface.
+capabilities in the required completed-root-call chronology, and proves the child has no
+QuickJS, task, filesystem, environment, or network surface.
 
-A later, separately reviewed paid-adapter PR must derive rather than accept or echo the
-exact Anthropic model spec, cache mode, versioned pricing rates, fresh execution UUID,
-measured content tree, and explicit spend cap. It must add a new evidence tier and retain
-the synthetic banner on old artifacts. Until that adapter and a real reviewed result
-land, no P4.5 quality/cost conclusion exists.
+The local-only adapter fixes `gpt-5.6-luna`, OpenAI Responses, no reasoning, no provider
+storage, the reviewed SDK versions, and the current uncached/cache-read/cache-write/output
+rates of `$0.20/$0.02/$0.25/$1.20` per million tokens. It derives rather than accepts the
+provider identity, versioned rates, cache mode, fresh execution UUID, and measured content
+tree. Its exact input-token counter replays the final LangChain request through a
+no-network transport and calls the provider count endpoint before each reserved
+generation. Both generation and count clients pin `https://api.openai.com/v1`, require
+empty organization/project/custom-header routing, and validate the SDK's actual sync and
+async root clients before a provider request. Provider response metadata then settles the
+same shared ledger.
+
+Failed adapter attempts emit only a fixed phase, an allowlisted reason code, finalized
+model/tool/QuickJS/task counters, and root events mapped to `eval`, `task`, or `other`.
+Provider bodies, prompt/message content, tool arguments, call IDs, credentials, and raw
+exception chains are discarded at that boundary. QuickJS cleanup cannot replace a
+primary graph failure or cancellation. Failure finalization permits unavailable provider
+usage buckets solely for this non-artifact diagnostic; successful observations and every
+stored run still require complete exact provider-native usage.
+
+The paid path is intentionally manual and local. It requires an existing
+`OPENAI_API_KEY`, an explicit generation-token micro-dollar ceiling, acknowledgement
+that Luna is paid, and a separate acknowledgement that official input-token-count
+request pricing is undocumented. The request count remains bounded by the model-call
+policy, but only a provider-side account limit can cap any undocumented charge. There is
+no paid CI workflow or public-enablement side effect:
+
+Before running, unset `OPENAI_ADMIN_KEY`, `OPENAI_API_BASE`, `OPENAI_BASE_URL`,
+`OPENAI_CUSTOM_HEADERS`, `OPENAI_ORGANIZATION`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, and
+`OPENAI_PROXY`. Presence is rejected even when the value is empty, before the API key is
+read or an SDK client is constructed; the run never inherits alternate host, credential,
+organization, project, header, or OpenAI-specific proxy routing.
+
+```bash
+uv run --env-file agent/.env --frozen --package syshin0116-dev-eval \
+  blogeval capability-openai \
+  --dataset eval/querysets/capability-tasks-v1.json \
+  --index-root agent/.index \
+  --workspace-root . \
+  --output-root /tmp/syshin-capability-results \
+  --max-generation-token-cost-usd-micros 1000000 \
+  --random-seed 20260801 \
+  --accept-paid-openai-run \
+  --accept-unpriced-input-token-counting
+```
+
+Luna has no API Free tier. The command rejects either omitted acknowledgement, an incomplete
+or content-tree-mismatched index, dependency-version drift, content drift, a worst-case
+generation-token cost above the supplied cap, incomplete provider usage, or a partial
+four-arm result. Its artifacts remain
+`provider-backed-local-unattested`; a signed publication and owner-reviewed task labels
+are still required before any public quality or launch conclusion.
 
 ## Development gates
 

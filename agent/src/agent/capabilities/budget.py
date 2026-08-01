@@ -1169,6 +1169,7 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         native_subagent_prompt: str | None = None,
         quickjs_tool_name: str | None = None,
         allow_quickjs: bool = False,
+        root_tool_allowlist: frozenset[str] | None = None,
     ) -> None:
         super().__init__()
         if quickjs_tool_name is not None and (
@@ -1179,6 +1180,17 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             raise TypeError("allow_quickjs must be a boolean")
         if allow_quickjs and quickjs_tool_name is None:
             raise ValueError("allow_quickjs requires quickjs_tool_name")
+        if root_tool_allowlist is not None and (
+            depth != 0
+            or not isinstance(root_tool_allowlist, frozenset)
+            or any(
+                not isinstance(tool_name, str) or not tool_name
+                for tool_name in root_tool_allowlist
+            )
+        ):
+            raise ValueError(
+                "root_tool_allowlist must be a root-only frozenset of tool names"
+            )
         if model_provider not in {"anthropic", "openai"}:
             raise ValueError("model_provider must be anthropic or openai")
         if (
@@ -1205,6 +1217,7 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         )
         self._quickjs_tool_name = quickjs_tool_name
         self._allow_quickjs = allow_quickjs
+        self._root_tool_allowlist = root_tool_allowlist
 
     def _remove_unauthorized_subagent_surface(
         self,
@@ -1288,6 +1301,14 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
                     if _tool_name(tool) != self._quickjs_tool_name
                 ]
             )
+        if self._root_tool_allowlist is not None:
+            request = request.override(
+                tools=[
+                    tool
+                    for tool in request.tools
+                    if _tool_name(tool) in self._root_tool_allowlist
+                ]
+            )
 
         async def count_then_generate(
             final_request: ModelRequest[Any],
@@ -1338,6 +1359,13 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         ],
     ) -> ToolMessage | Command[Any]:
         tool_name = request.tool_call.get("name")
+        if (
+            self._root_tool_allowlist is not None
+            and tool_name not in self._root_tool_allowlist
+        ):
+            raise CapabilityDeniedError(
+                "root tool is outside the server-owned experiment allowlist"
+            )
         if self._quickjs_tool_name is not None and tool_name == self._quickjs_tool_name:
             if not self._allow_quickjs:
                 raise CapabilityDeniedError(

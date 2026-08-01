@@ -16,6 +16,7 @@ from agent.capabilities.subagents import (
     SUBAGENT_SKILLS,
     build_subagents,
     dynamic_subagents_allowed,
+    native_subagent_system_prompt,
     validate_capability_config,
 )
 
@@ -182,6 +183,22 @@ async def test_compiled_subagents_enforce_real_state_and_backend_isolation():
 
     snapshot = budget.snapshot()
     assert (snapshot.model_calls, snapshot.charged_tokens) == (4, 40)
+
+
+def test_eval_inventory_compiles_and_advertises_only_the_evidence_checker():
+    specs = build_subagents(
+        model=_model(),
+        budget=RunBudget(),
+        input_token_counter=lambda _request: 1,
+        allowed_subagents=frozenset({"evidence-checker"}),
+    )
+
+    assert [spec["name"] for spec in specs] == ["evidence-checker"]
+    prompt = native_subagent_system_prompt(frozenset({"evidence-checker"}))
+    assert "- evidence-checker:" in prompt
+    assert all(
+        f"- {name}:" not in prompt for name in SUBAGENT_NAMES - {"evidence-checker"}
+    )
 
 
 @pytest.mark.parametrize("permission", ["admin", "eval"])

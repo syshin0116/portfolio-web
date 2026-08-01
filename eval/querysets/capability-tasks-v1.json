@@ -55,6 +55,13 @@
             "text": "Docker 기본 개념 문서는 관련 근거다."
           }
         ],
+        "output_schema": {
+          "bm25_hit_at_2": "boolean",
+          "char_ngram_hit_at_2": "boolean",
+          "supported_claim_ids": [
+            "string"
+          ]
+        },
         "rankings": {
           "bm25": [
             "AI/LangGraph.md",
@@ -92,6 +99,12 @@
         ]
       },
       "inputs": {
+        "output_schema": {
+          "jaccard_basis_points": "integer",
+          "overlap_doc_ids": [
+            "content-relative DocId string"
+          ]
+        },
         "rankings": {
           "bm25": [
             "Study/Docker/2023-12-23-Docker.md",

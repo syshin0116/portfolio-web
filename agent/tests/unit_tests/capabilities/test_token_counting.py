@@ -20,25 +20,37 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from openai.resources.responses.input_tokens import AsyncInputTokens
 
+import agent.capabilities.token_counting as token_counting
 from agent.capabilities.budget import RunBudget
 from agent.capabilities.token_counting import (
     _OPENAI_INPUT_TOKEN_FIELDS,
+    OPENAI_API_BASE_URL,
     OPENAI_GUEST_MAX_OUTPUT_TOKENS,
     OPENAI_GUEST_MODEL_NAME,
     OPENAI_GUEST_RESPONSE_MODEL_NAMES,
     OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH,
     OPENAI_GUEST_TIMEOUT_SECONDS,
+    OPENAI_ROUTING_ENVIRONMENT_VARIABLES,
     InputTokenCountError,
+    OpenAIResponsesInputTokenContract,
     _capture_openai_generation_payload,
     _count_openai_responses_input_tokens,
     _openai_input_count_payload,
     count_anthropic_input_tokens,
     count_openai_input_tokens,
     openai_guest_safety_identifier,
+    openai_responses_input_token_counter,
+    require_exact_openai_guest_model,
 )
 
 _GUEST_IDENTITY = "anon:00000000-0000-4000-8000-000000000001"
 _GUEST_SAFETY_IDENTIFIER = openai_guest_safety_identifier(_GUEST_IDENTITY)
+
+
+@pytest.fixture(autouse=True)
+def _clear_openai_routing_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
 
 
 @tool
@@ -51,6 +63,8 @@ def _openai_guest_model(**overrides) -> ChatOpenAI:
     settings = {
         "model": OPENAI_GUEST_MODEL_NAME,
         "api_key": "test-provider-token-count-key",
+        "base_url": OPENAI_API_BASE_URL,
+        "stream_usage": True,
         "max_tokens": OPENAI_GUEST_MAX_OUTPUT_TOKENS,
         "max_retries": 0,
         "timeout": OPENAI_GUEST_TIMEOUT_SECONDS,
@@ -64,6 +78,100 @@ def _openai_guest_model(**overrides) -> ChatOpenAI:
     }
     settings.update(overrides)
     return ChatOpenAI(**settings)
+
+
+def test_openai_guest_model_pins_exact_sync_and_async_sdk_routing() -> None:
+    model = _openai_guest_model()
+
+    assert require_exact_openai_guest_model(model) is model
+    assert model.openai_api_base == OPENAI_API_BASE_URL
+    assert "openai_api_base" in model.model_fields_set
+    assert "stream_usage" in model.model_fields_set
+    for client in (model.root_client, model.root_async_client):
+        assert str(client.base_url) == f"{OPENAI_API_BASE_URL}/"
+        assert client.organization is None
+        assert client.project is None
+        assert client._custom_headers == {}
+        assert client.auth_headers == {
+            "Authorization": "Bearer test-provider-token-count-key"
+        }
+
+
+@pytest.mark.parametrize(
+    ("client_name", "attribute", "value"),
+    [
+        ("root_client", "base_url", httpx.URL("https://attacker.invalid/v1/")),
+        ("root_async_client", "organization", "attacker-organization"),
+        ("root_client", "project", "attacker-project"),
+        (
+            "root_async_client",
+            "_custom_headers",
+            {
+                "Authorization": "Bearer attacker",
+                "OpenAI-Project": "attacker-project",
+            },
+        ),
+    ],
+)
+def test_openai_model_rejects_actual_root_client_routing_drift(
+    client_name: str,
+    attribute: str,
+    value: object,
+) -> None:
+    model = _openai_guest_model()
+    setattr(getattr(model, client_name), attribute, value)
+
+    with pytest.raises(
+        InputTokenCountError,
+        match="SDK client left the official host and credential contract",
+    ):
+        require_exact_openai_guest_model(model)
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("OPENAI_ADMIN_KEY", "attacker-admin"),
+        ("OPENAI_API_BASE", ""),
+        ("OPENAI_BASE_URL", "https://attacker.invalid/v1"),
+        (
+            "OPENAI_CUSTOM_HEADERS",
+            "Authorization: Bearer attacker\nOpenAI-Project: attacker-project",
+        ),
+        ("OPENAI_ORGANIZATION", "attacker-organization"),
+        ("OPENAI_ORG_ID", "attacker-organization"),
+        ("OPENAI_PROJECT_ID", "attacker-project"),
+        ("OPENAI_PROXY", "http://attacker.invalid:8080"),
+    ],
+)
+async def test_openai_count_rejects_ambient_routing_before_credential_read(
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+    value: str,
+) -> None:
+    credential_reads = 0
+
+    def unexpected_credential_read() -> str:
+        nonlocal credential_reads
+        credential_reads += 1
+        raise AssertionError("ambient routing reached credential access")
+
+    monkeypatch.setenv(variable, value)
+    monkeypatch.setattr(
+        token_counting,
+        "require_openai_api_key",
+        unexpected_credential_read,
+    )
+
+    with pytest.raises(
+        InputTokenCountError,
+        match="ambient OpenAI routing configuration is forbidden",
+    ):
+        await _count_openai_responses_input_tokens(
+            {"input": "never transmit", "model": OPENAI_GUEST_MODEL_NAME}
+        )
+
+    assert credential_reads == 0
 
 
 def test_openai_guest_safety_identifier_is_stable_private_and_scoped():
@@ -156,6 +264,43 @@ async def test_openai_official_counter_receives_final_stateless_payload(
     }
 
 
+async def test_openai_counter_can_bind_one_exact_local_luna_contract(monkeypatch):
+    owner_safety_identifier = "owner_" + "1" * 58
+    contract = OpenAIResponsesInputTokenContract(
+        model_name=OPENAI_GUEST_MODEL_NAME,
+        max_output_tokens=256,
+        timeout_seconds=OPENAI_GUEST_TIMEOUT_SECONDS,
+        safety_identifier=owner_safety_identifier,
+    )
+    counter = openai_responses_input_token_counter(contract)
+    observed = {}
+
+    async def official_count(_self, **payload):
+        observed["payload"] = payload
+        return SimpleNamespace(input_tokens=17)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
+    monkeypatch.setattr(AsyncInputTokens, "count", official_count)
+    request = ModelRequest(
+        model=_openai_guest_model(
+            max_tokens=256,
+            extra_body={"safety_identifier": owner_safety_identifier},
+        ),
+        messages=[HumanMessage(content="bounded local evaluation")],
+        tools=[],
+    )
+
+    assert await counter(request) == 17
+    assert observed["payload"]["model"] == OPENAI_GUEST_MODEL_NAME
+    assert "safety_identifier" not in observed["payload"]
+
+    mismatched_request = request.override(
+        model=_openai_guest_model(max_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS)
+    )
+    with pytest.raises(InputTokenCountError, match="exact request contract"):
+        await counter(mismatched_request)
+
+
 async def test_openai_counter_preserves_the_complete_stateless_tool_transcript(
     monkeypatch,
 ):
@@ -232,6 +377,8 @@ async def test_openai_counter_sdk_boundary_is_exact_and_has_no_retry(monkeypatch
         assert request.headers.get("authorization") == (
             "Bearer test-provider-token-count-key"
         )
+        assert "openai-project" not in request.headers
+        assert "openai-organization" not in request.headers
         assert json.loads(request.content) == payload
         assert set(request.extensions["timeout"].values()) == {
             OPENAI_GUEST_TIMEOUT_SECONDS

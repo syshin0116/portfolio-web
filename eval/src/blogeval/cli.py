@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import subprocess
 import sys
@@ -157,6 +158,43 @@ def _parser() -> argparse.ArgumentParser:
     publication.add_argument("--dataset", type=Path, required=True)
     publication.add_argument("--expected-commit", required=True)
     publication.add_argument("--workspace-root", type=Path, required=True)
+
+    capability_openai = subparsers.add_parser(
+        "capability-openai",
+        help="run the paid, bounded local Luna QuickJS x subagent sweep",
+    )
+    capability_openai.add_argument("--dataset", type=Path, required=True)
+    capability_openai.add_argument("--index-root", type=Path, required=True)
+    capability_openai.add_argument("--workspace-root", type=Path, required=True)
+    capability_openai.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("results"),
+    )
+    capability_openai.add_argument(
+        "--max-generation-token-cost-usd-micros",
+        dest="max_generation_cost_usd_micros",
+        type=int,
+        required=True,
+        help=(
+            "generation-token accounting ceiling in millionths of one US dollar; "
+            "the provider does not document pricing for input-token count requests"
+        ),
+    )
+    capability_openai.add_argument("--random-seed", type=int, default=20260801)
+    capability_openai.add_argument(
+        "--accept-paid-openai-run",
+        action="store_true",
+        help="required acknowledgement that Luna has no API Free tier",
+    )
+    capability_openai.add_argument(
+        "--accept-unpriced-input-token-counting",
+        action="store_true",
+        help=(
+            "required acknowledgement that official input-token count request "
+            "billing is undocumented and is outside the generation-token ceiling"
+        ),
+    )
     return parser
 
 
@@ -524,6 +562,46 @@ def _verify_publication(args: argparse.Namespace) -> int:
     return 0
 
 
+def _capability_openai(args: argparse.Namespace) -> int:
+    if args.accept_paid_openai_run is not True:
+        raise ValueError(
+            "capability-openai requires --accept-paid-openai-run because Luna is paid"
+        )
+    if args.accept_unpriced_input_token_counting is not True:
+        raise ValueError(
+            "capability-openai requires --accept-unpriced-input-token-counting "
+            "because OpenAI does not document pricing for count requests"
+        )
+    from blogeval.capability_openai import run_openai_capability_sweep
+    from blogeval.capability_runner import load_capability_taskset
+
+    dataset = load_capability_taskset(args.dataset)
+    artifacts = asyncio.run(
+        run_openai_capability_sweep(
+            dataset=dataset,
+            workspace_root=args.workspace_root,
+            index_root=args.index_root,
+            output_root=args.output_root,
+            max_generation_cost_usd_micros=args.max_generation_cost_usd_micros,
+            random_seed=args.random_seed,
+            paid_run_accepted=args.accept_paid_openai_run,
+            unpriced_counting_accepted=args.accept_unpriced_input_token_counting,
+        )
+    )
+    print(
+        json.dumps(
+            {
+                "directory": str(artifacts.directory),
+                "evidence_status": "provider-backed-local-unattested",
+                "result_digest": artifacts.result_digest,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -545,6 +623,8 @@ def main(argv: list[str] | None = None) -> int:
             return _verify_run(args)
         if args.command == "verify-publication":
             return _verify_publication(args)
+        if args.command == "capability-openai":
+            return _capability_openai(args)
         raise AssertionError(f"unhandled command: {args.command}")
     except (DatasetError, EvaluationError, OSError, ValueError) as exc:
         print(f"blogeval failed: {exc}", file=sys.stderr)

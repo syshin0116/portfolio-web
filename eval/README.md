@@ -97,6 +97,76 @@ then replays every canonical qrel through that implementation at the largest cut
 requires an exact ranking match. A staging directory plus an exclusive lock makes
 concurrent identical writers converge on one complete immutable result directory.
 
+## Opt-in first dense experiment
+
+The first dense arm is `dense-multilingual-e5-small`: an exact in-memory cosine scan of
+the frozen published corpus using `intfloat/multilingual-e5-small` at commit
+`d1d99a1efae6779390caba937d92c54b5bc70e51`. Its runtime is an optional eval-only
+dependency and never enters the agent image:
+
+```bash
+uv sync --frozen --package syshin0116-dev-eval --extra dense --all-groups
+```
+
+The dense extra pins `torch==2.13.0` to PyTorch's explicit CPU-only wheel index and
+`transformers==5.14.1` to the reviewed runtime. Linux must not resolve the CUDA/Triton
+wheel graph for this CPU experiment.
+
+Model loading is deliberately offline-only (`local_files_only=true`) and fails closed
+unless that exact revision is already present in the Hugging Face cache. Cache population
+is a separate, explicit operator action; `blogeval` never downloads a model. This bounded
+command fetches only the files needed by the PyTorch sentence-transformers path at the
+immutable revision (roughly 500 MB), excluding the repository's ONNX, OpenVINO, and
+duplicate PyTorch-bin weights:
+
+```bash
+uv run --frozen --package syshin0116-dev-eval --extra dense python - <<'PY'
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="intfloat/multilingual-e5-small",
+    revision="d1d99a1efae6779390caba937d92c54b5bc70e51",
+    allow_patterns=(
+        "1_Pooling/config.json",
+        "config.json",
+        "config_sentence_transformers.json",
+        "model.safetensors",
+        "modules.json",
+        "sentence_bert_config.json",
+        "sentencepiece.bpe.model",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ),
+)
+PY
+```
+
+E5's exact `query: ` and `passage: ` prefixes, 384 dimensions, 512-token truncation,
+CPU float32 runtime, exact NumPy/sentence-transformers/Torch/Transformers versions, model
+revision, and normalization policy are all part of the retriever fingerprint. The
+335-document scale does not justify adding a vector database before measurements show a
+need.
+
+After caching the pinned snapshot, run the planned three-arm comparison explicitly:
+
+```bash
+uv run --frozen --package syshin0116-dev-eval --extra dense blogeval sweep \
+  --index-root agent/.index \
+  --content-tree-sha "$content_tree_sha" \
+  --dataset eval/querysets/known-item-alias-v1.json \
+  --output-root eval/results \
+  --method bm25 \
+  --method dense-multilingual-e5-small \
+  --method rrf-bm25-dense-multilingual-e5-small
+```
+
+The same optional environment can execute a cache-only real-model smoke with
+`BLOGEVAL_REAL_DENSE_SMOKE=1`; the test still refuses network access. The ordinary test
+suite uses deterministic fake embeddings so CI remains free of model downloads and
+provider cost. An opt-in local result is still publication-ineligible and does not
+promote either dense method to `evaluated`.
+
 ## Publication boundary
 
 Every local process is publication-ineligible, including Linux x86_64 and any process

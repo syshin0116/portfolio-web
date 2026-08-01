@@ -18,6 +18,14 @@ RRF_CONFIG: dict[str, object] = {
     "minimum_candidates": 50,
     "rrf_k": 60,
 }
+DENSE_RRF_METHOD_ID = "rrf-bm25-dense-multilingual-e5-small"
+DENSE_RRF_IMPLEMENTATION_ID = "blogeval.methods.rrf:create_bm25_dense_rrf@1"
+DENSE_RRF_CONFIG: dict[str, object] = {
+    "candidate_multiplier": 4,
+    "components": ["bm25", "dense-multilingual-e5-small"],
+    "minimum_candidates": 50,
+    "rrf_k": 60,
+}
 
 
 class ReciprocalRankFusionRetriever:
@@ -29,6 +37,8 @@ class ReciprocalRankFusionRetriever:
         corpus: Corpus,
         components: Sequence[tuple[str, str, Retriever]],
         config: Mapping[str, object],
+        method_id: str = RRF_METHOD_ID,
+        implementation_id: str = RRF_IMPLEMENTATION_ID,
     ) -> None:
         if len(components) < 2:
             raise ValueError("RRF requires at least two component retrievers")
@@ -36,6 +46,8 @@ class ReciprocalRankFusionRetriever:
         if len(method_ids) != len(set(method_ids)):
             raise ValueError("RRF component method IDs must be unique")
         self._corpus = corpus
+        self._method_id = method_id
+        self._implementation_id = implementation_id
         self._components = tuple(components)
         self._config = json.loads(canonical_config(config))
         self._identity = {
@@ -53,8 +65,8 @@ class ReciprocalRankFusionRetriever:
     @property
     def fingerprint(self) -> str:
         return retriever_fingerprint(
-            method_id=RRF_METHOD_ID,
-            implementation_id=RRF_IMPLEMENTATION_ID,
+            method_id=self._method_id,
+            implementation_id=self._implementation_id,
             config=self._identity,
             corpus_fingerprint=self._corpus.fingerprint,
         )
@@ -108,6 +120,9 @@ class ReciprocalRankFusionRetriever:
 
 
 __all__ = [
+    "DENSE_RRF_CONFIG",
+    "DENSE_RRF_IMPLEMENTATION_ID",
+    "DENSE_RRF_METHOD_ID",
     "RRF_CONFIG",
     "RRF_IMPLEMENTATION_ID",
     "RRF_METHOD_ID",

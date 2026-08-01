@@ -8,7 +8,7 @@ when_to_read: >
   or when looking for what has already been tried and what it scored.
 tags: [reference, retrieval, rag, evaluation, registry]
 status: draft
-updated: "2026-07-31"
+updated: "2026-08-01"
 owners: ["@syshin0116"]
 refs: [../adr/0008-chatbot-is-a-rag-evaluation-testbed.md, ../plans/rag-restack.md]
 template: reference
@@ -108,15 +108,34 @@ publication-qualified score exists yet.
 
 | Method | Status | Meant to teach |
 |---|---|---|
-| Dense retrieval, open multilingual embeddings | `planned` | The headline sparse-vs-dense comparison on Korean technical text. Model choice pending research |
+| `dense-multilingual-e5-small` (open multilingual embeddings) | `implemented` | The headline sparse-vs-dense comparison on Korean technical text, using one pinned provider-free arm |
 | Dense retrieval, hosted embeddings | `planned` | Whether paying for embeddings buys anything over open models here |
 | Late interaction (ColBERT family) | `planned` | Whether token-level matching helps mixed-script content, and whether it is affordable at this scale |
+
+The first dense arm pins
+[`intfloat/multilingual-e5-small`](https://huggingface.co/intfloat/multilingual-e5-small)
+to immutable revision
+[`d1d99a1efae6779390caba937d92c54b5bc70e51`](https://huggingface.co/intfloat/multilingual-e5-small/tree/d1d99a1efae6779390caba937d92c54b5bc70e51).
+Its fingerprint fixes the E5 `query: ` / `passage: ` asymmetric prefixes,
+384-dimensional normalized embeddings, 512-token truncation, CPU float32 execution,
+exact NumPy/sentence-transformers/Torch/Transformers versions, PyTorch's CPU-only wheel
+source, and an offline-only local-cache policy. The frozen 335-document corpus is embedded
+once per retriever instance and searched by exact in-memory cosine similarity; there is
+no vector database whose index policy could become an accidental second experimental
+variable. Torch and the model runtime remain an optional `eval/` extra and never enter the
+serving agent package.
+
+Deterministic fake-embedding contracts cover ordering, ties, normalization, malformed
+vectors, prompt prefixes, and model-loader policy. A separately opt-in smoke exercises
+the already-cached real checkpoint without network access. This is repository evidence
+for `implemented`, not a retained quality result: no accepted dense sweep or
+publication-qualified result digest exists yet.
 
 ### Fusion
 
 | Method | Status | Meant to teach |
 |---|---|---|
-| Reciprocal rank fusion (sparse + dense) | `planned` | The standard hybrid. Expected to win; the interesting part is by how much and where |
+| `rrf-bm25-dense-multilingual-e5-small` (BM25 + dense) | `implemented` | The standard hybrid; its exact component fingerprints make the first three-arm experiment executable without comparing incompatible raw scores |
 | Reciprocal rank fusion (BM25 + character n-grams) | `implemented` | A provider-free fusion control that proves composition and fingerprints before a dense method lands |
 | Weighted score fusion | `planned` | Whether score-level fusion beats rank-level once normalisation is done correctly |
 

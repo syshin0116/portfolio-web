@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
 import {
-  TEMPORARY_ADVISORY,
   type AuditCommandResult,
   validateAuditPolicy,
 } from "./audit-dependencies"
@@ -29,10 +28,10 @@ const reviewedAudit: AuditCommandResult = {
   stdout: JSON.stringify({
     "brace-expansion": [
       {
-        id: TEMPORARY_ADVISORY.id,
-        url: `https://github.com/advisories/${TEMPORARY_ADVISORY.ghsa}`,
-        severity: TEMPORARY_ADVISORY.severity,
-        vulnerable_versions: TEMPORARY_ADVISORY.vulnerableVersions,
+        id: 1130588,
+        url: "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+        severity: "high",
+        vulnerable_versions: "<1.1.17",
       },
     ],
   }),
@@ -149,6 +148,18 @@ describe("dependency audit exception policy", () => {
 
     expect(() => validateAuditPolicy(candidate)).toThrow(
       "unrelated direct resolution framer-motion drifted",
+    )
+  })
+
+  test("rejects rolling lucide-react back from the reviewed resolution", () => {
+    const candidate = evidence()
+    candidate.bunLock = candidate.bunLock.replace(
+      '"lucide-react": ["lucide-react@1.26.0"',
+      '"lucide-react": ["lucide-react@1.25.0"',
+    )
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "unrelated direct resolution lucide-react drifted",
     )
   })
 

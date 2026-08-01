@@ -4,10 +4,10 @@ import { resolve } from "node:path"
 export const TEMPORARY_ADVISORY = {
   cve: "CVE-2026-14257",
   ghsa: "GHSA-mh99-v99m-4gvg",
-  id: 1124334,
+  id: 1130588,
   packageName: "brace-expansion",
   severity: "high",
-  vulnerableVersions: "<=5.0.7",
+  vulnerableVersions: "<1.1.17",
   expiresAfter: "2026-08-31",
 } as const
 
@@ -115,7 +115,7 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["embla-carousel-react", "embla-carousel-react@8.6.0"],
   ["eslint", "eslint@10.8.0"],
   ["framer-motion", "framer-motion@12.42.2"],
-  ["lucide-react", "lucide-react@1.25.0"],
+  ["lucide-react", "lucide-react@1.26.0"],
   ["marked", "marked@18.0.7"],
   ["medium-zoom", "medium-zoom@1.1.0"],
   ["next-themes", "next-themes@0.4.6"],

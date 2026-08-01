@@ -71,7 +71,7 @@ P5  Public hardening                 anonymous identity, guard, GC, budget caps
 P6  Go public                        PUBLICATION GATE
 ```
 
-### Phase status as of 2026-07-31
+### Phase status as of 2026-08-01
 
 | Phase | Repository status | Exact remaining gate |
 |---|---|---|
@@ -79,7 +79,7 @@ P6  Go public                        PUBLICATION GATE
 | P1 | Implemented: shared retriever Protocol, 335-document published mirror, corrected fitted BM25, exact and field-weighted serving, native Deep Agents graph | No repository implementation gate remains; future methods extend the same contracts |
 | P2 | Delivery code implemented: immutable image, Terraform, WIF, migration/grant jobs, release and rollback workflows | Apply and verify the exact dedicated GCP/Neon foundation, real Neon grants, secrets, preview revision, restart, and owner smoke |
 | P3 | Implemented: native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe wire projection, deterministic AP v2 integration, and Playwright browser evidence | Full deployed owner-authenticated Korean journey against real Cloud Run, Neon, and the provider |
-| P4 | Harness implemented: the default provider-free sweep runs BM25, field-weighted BM25, character n-grams, and BM25/character RRF twice in CI and byte-compares the artifacts | First dense arm, `topic-smoke-v1`, owner-reviewed qrels, and a publication-qualified digest-pinned run |
+| P4 | Harness and first dense arm implemented: the default provider-free sweep remains model-free, while pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods | Retain the three-arm dense result, create `topic-smoke-v1`, owner-review qrels, and complete a publication-qualified digest-pinned run |
 | P4.5 | Runtime and 2x2 harness implemented: bounded QuickJS and dynamic subagents share `RunBudget` and execute all four deterministic arms | A separately reviewed real-provider adapter and quality/cost result; synthetic evidence cannot enable either capability for guests |
 | P5 | Repository controls implemented: anonymous JWT/cookie, Turnstile bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secrets, and approved non-zero budget |
 | P6 | Disabled by design: all repository public flags and guest budget/model environment values remain fail-closed | Public-launch PR and live acceptance. The only accepted guest contract is `openai:gpt-5.6-luna`, which has no API Free tier, so a zero-spend requirement blocks launch |
@@ -778,12 +778,15 @@ The actual deliverable. Forks off P1's Protocol and can proceed alongside P2 and
 - Emit a Markdown leaderboard and SVG plots, so results drop into a blog post without
   retyping. This matches the repo's existing `.mmd` → `.svg` diagram convention.
 
-**Implemented evidence (2026-07-31):** `eval/` is a root uv-workspace member and the
+**Implemented evidence (2026-08-01):** `eval/` is a root uv-workspace member and the
 default CLI sweep runs `bm25`, `bm25-field-weighted`, `char-ngram`, and
 `rrf-bm25-char-ngram`. CI generates and validates the 90-qrel known-item dataset, executes
 the four-method sweep twice on its frozen Linux runner, verifies each run, and
 byte-compares its JSON, Markdown, SVG, and manifest projections. This satisfies the
-harness construction gate, not the dense first experiment or publication gate.
+harness construction gate. The opt-in `dense-multilingual-e5-small` and
+`rrf-bm25-dense-multilingual-e5-small` methods now make the first experiment executable
+with an exact cached model revision, but no dense result has been accepted and the
+publication gate remains open.
 
 **Accept:** one full sweep over at least three methods produces a leaderboard, a
 per-query table, and plots, reproducibly, from a pinned corpus and a versioned query-set
@@ -962,8 +965,9 @@ Cloud Run/Neon/provider proofs and the paid launch decision remain mandatory.
 
 ## Open decisions and live gates
 
-- Which Korean-capable embedding model becomes the first dense arm, and what exact
-  fingerprint/cache contract it uses.
+- Retain and qualify the pinned multilingual-E5 first experiment; selecting,
+  fingerprinting, and locally replaying the model path are complete, but no local result
+  can substitute for the owner-reviewed, publication-qualified evidence gate.
 - Whether a genuinely free guest provider path will replace Luna or the owner will approve
   a non-zero public budget; no current code path permits a free Luna launch.
 - Cold-start-to-first-token and full-image memory on the real revision. Those measurements

@@ -2,6 +2,15 @@ name: Evaluation publication candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      dataset:
+        description: Reviewed evaluation dataset to execute
+        required: true
+        default: known-item-alias-v1
+        type: choice
+        options:
+          - known-item-alias-v1
+          - topic-smoke-v1
 
 permissions:
   contents: read
@@ -20,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: Evaluation Publication
+    env:
+      EVAL_DATASET_ID: ${{ inputs.dataset }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,6 +44,10 @@ jobs:
           test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
           test "$GITHUB_WORKFLOW_REF" = \
             "$GITHUB_REPOSITORY/.github/workflows/eval-publication.yml@$GITHUB_REF"
+          case "$EVAL_DATASET_ID" in
+            known-item-alias-v1|topic-smoke-v1) ;;
+            *) exit 1 ;;
+          esac
           git diff --no-ext-diff --quiet HEAD --
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Build and derive the immutable Linux amd64 image identity
@@ -40,9 +55,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          eval_build_args=()
+          if [[ "$EVAL_DATASET_ID" = "topic-smoke-v1" ]]; then
+            eval_build_args=(--build-arg EVAL_DENSE=1)
+          fi
           docker build \
             --file eval/Dockerfile.publication \
             --platform linux/amd64 \
+            "${eval_build_args[@]}" \
             --tag "blogeval-candidate:$GITHUB_SHA" \
             .
           image_digest="$(
@@ -67,6 +87,7 @@ jobs:
           mkdir -p "$candidate_root"
           docker run --rm --platform linux/amd64 \
             --mount "type=bind,src=$candidate_root,dst=/candidate" \
+            --env "EVAL_DATASET_ID=$EVAL_DATASET_ID" \
             "$IMAGE_DIGEST" \
             bash -euo pipefail -c '
               python scripts/build_index.py \
@@ -75,19 +96,54 @@ jobs:
               content_tree_sha="$(
                 python -c "import json; print(json.load(open(\"/tmp/eval-index/manifest.json\"))[\"content_git_tree_sha\"])"
               )"
-              blogeval generate-known-item \
-                --index-root /tmp/eval-index \
-                --content-tree-sha "$content_tree_sha" \
-                --output eval/querysets/known-item-alias-v1.json \
-                --check
+              dataset_path="eval/querysets/$EVAL_DATASET_ID.json"
+              sweep_method_args=()
+              test -f "$dataset_path"
+              case "$EVAL_DATASET_ID" in
+                known-item-alias-v1)
+                  blogeval generate-known-item \
+                    --index-root /tmp/eval-index \
+                    --content-tree-sha "$content_tree_sha" \
+                    --output "$dataset_path" \
+                    --check
+                  ;;
+                topic-smoke-v1)
+                  seed_path="eval/querysets/topic-smoke-v1.seed.json"
+                  review_path="eval/querysets/topic-smoke-v1.review.json"
+                  test -f "$seed_path"
+                  test -f "$review_path"
+                  blogeval validate-topic-review \
+                    --index-root /tmp/eval-index \
+                    --content-tree-sha "$content_tree_sha" \
+                    --seed "$seed_path" \
+                    --review "$review_path"
+                  blogeval finalize-topic-review \
+                    --index-root /tmp/eval-index \
+                    --content-tree-sha "$content_tree_sha" \
+                    --seed "$seed_path" \
+                    --review "$review_path" \
+                    --output "$dataset_path" \
+                    --check
+                  sweep_method_args=(
+                    --method bm25
+                    --method bm25-field-weighted
+                    --method char-ngram
+                    --method dense-multilingual-e5-small
+                    --method rrf-bm25-char-ngram
+                    --method rrf-bm25-dense-multilingual-e5-small
+                  )
+                  ;;
+                *) exit 1 ;;
+              esac
               blogeval validate \
                 --index-root /tmp/eval-index \
                 --content-tree-sha "$content_tree_sha" \
-                --dataset eval/querysets/known-item-alias-v1.json
+                --dataset "$dataset_path"
               blogeval sweep \
                 --index-root /tmp/eval-index \
                 --content-tree-sha "$content_tree_sha" \
-                --dataset eval/querysets/known-item-alias-v1.json \
+                --dataset "$dataset_path" \
+                "${sweep_method_args[@]}" \
                 --output-root /tmp/results
               run_json="$(find /tmp/results -name run.json -type f)"
               test -n "$run_json"
@@ -96,7 +152,7 @@ jobs:
               blogeval verify-run \
                 --index-root /tmp/eval-index \
                 --content-tree-sha "$content_tree_sha" \
-                --dataset eval/querysets/known-item-alias-v1.json \
+                --dataset "$dataset_path" \
                 --run-directory "$run_directory"
               cp -R "$run_directory" /candidate/result
             '
@@ -137,12 +193,14 @@ jobs:
           candidate = {
               "commit_sha": os.environ["GITHUB_SHA"],
               "content_git_tree_sha": expected_content_tree,
+              "dataset_checksum": run["dataset"]["checksum"],
+              "dataset_id": run["dataset"]["dataset_id"],
               "dataset_label_status": run["dataset"]["label_status"],
               "execution_image_digest": os.environ["IMAGE_DIGEST"],
               "publication_status": "candidate-awaiting-external-verification",
               "result_digest": manifest["result_digest"],
               "run_id": run["run_id"],
-              "schema": "blogeval-publication-candidate-v1",
+              "schema": "blogeval-publication-candidate-v2",
               "workflow_identity": os.environ["GITHUB_WORKFLOW_REF"],
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
           }
@@ -170,7 +228,7 @@ jobs:
       - name: Upload the non-published candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: blogeval-publication-candidate-${{ github.sha }}
+          name: blogeval-publication-candidate-${{ inputs.dataset }}-${{ github.sha }}
           path: ${{ runner.temp }}/blogeval-candidate.tar.gz
           if-no-files-found: error
           retention-days: 30

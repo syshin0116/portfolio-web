@@ -107,12 +107,14 @@ def _candidate_archive(
     candidate = {
         "commit_sha": EXPECTED_COMMIT,
         "content_git_tree_sha": reviewed.corpus.git_tree_sha,
+        "dataset_checksum": reviewed.checksum,
+        "dataset_id": reviewed.dataset_id,
         "dataset_label_status": "owner-reviewed",
         "execution_image_digest": "sha256:" + "d" * 64,
         "publication_status": "candidate-awaiting-external-verification",
         "result_digest": artifacts.result_digest,
         "run_id": run.run_id,
-        "schema": "blogeval-publication-candidate-v1",
+        "schema": "blogeval-publication-candidate-v2",
         "workflow_identity": PUBLICATION_WORKFLOW_IDENTITY,
         "workflow_run_id": "123456",
     }
@@ -431,18 +433,31 @@ def test_publication_verifier_rejects_unreviewed_dataset_before_promotion(
     assert not called
 
 
+@pytest.mark.parametrize(
+    ("metadata_mutation", "error_pattern"),
+    (
+        (
+            ("workflow_identity", "attacker/workflow@refs/heads/main"),
+            "workflow_identity",
+        ),
+        (("dataset_id", "different-topic-v1"), "dataset_id"),
+        (("dataset_checksum", "sha256:" + "f" * 64), "dataset_checksum"),
+    ),
+)
 def test_publication_verifier_rejects_attested_candidate_metadata_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     memory_corpus: MemoryCorpus,
     known_dataset,
+    metadata_mutation: tuple[str, object],
+    error_pattern: str,
 ) -> None:
     archive, reviewed = _candidate_archive(
         tmp_path,
         monkeypatch,
         memory_corpus,
         known_dataset,
-        metadata_mutation=("workflow_identity", "attacker/workflow@refs/heads/main"),
+        metadata_mutation=metadata_mutation,
     )
     monkeypatch.setattr(
         publication_module.subprocess,
@@ -450,7 +465,7 @@ def test_publication_verifier_rejects_attested_candidate_metadata_drift(
         _successful_external_command,
     )
 
-    with pytest.raises(PublicationError, match="workflow_identity"):
+    with pytest.raises(PublicationError, match=error_pattern):
         verify_publication_candidate(
             archive,
             corpus=memory_corpus,

@@ -79,7 +79,7 @@ P6  Go public                        PUBLICATION GATE
 | P1 | Implemented: shared retriever Protocol, 335-document published mirror, corrected fitted BM25, exact and field-weighted serving, native Deep Agents graph | No repository implementation gate remains; future methods extend the same contracts |
 | P2 | Delivery code implemented: immutable image, Terraform, WIF, migration/grant jobs, release and rollback workflows | Apply and verify the exact dedicated GCP/Neon foundation, real Neon grants, secrets, preview revision, restart, and owner smoke |
 | P3 | Implemented: native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe wire projection, deterministic AP v2 integration, and Playwright browser evidence | Full deployed owner-authenticated Korean journey against real Cloud Run, Neon, and the provider |
-| P4 | Harness and first dense arm implemented: the default provider-free sweep remains model-free, while pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods | Retain the three-arm dense result, create `topic-smoke-v1`, owner-review qrels, and complete a publication-qualified digest-pinned run |
+| P4 | Harness, first dense arm, and topic-review tooling implemented: the default provider-free sweep remains model-free; pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods; a versioned topic seed, deterministic blind pool, checksum seal, finalizer, and dataset-selectable publication gate are present | Owner completion/sealing of `topic-smoke-v1` qrels and a publication-qualified digest-pinned run |
 | P4.5 | Runtime and 2x2 harness implemented: bounded QuickJS and dynamic subagents share `RunBudget` and execute all four deterministic arms | A separately reviewed real-provider adapter and quality/cost result; synthetic evidence cannot enable either capability for guests |
 | P5 | Repository controls implemented: anonymous JWT/cookie, Turnstile bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secrets, and approved non-zero budget |
 | P6 | Disabled by design: all repository public flags and guest budget/model environment values remain fail-closed | Public-launch PR and live acceptance. The only accepted guest contract is `openai:gpt-5.6-luna`, which has no API Free tier, so a zero-spend requirement blocks launch |
@@ -231,15 +231,17 @@ eval/
 │       └── rrf.py
 ├── querysets/
 │   ├── known-item-alias-v1.json
-│   └── capability-tasks-v1.json
+│   ├── capability-tasks-v1.json
+│   └── topic-smoke-v1.seed.json   # queries + exact pool policy; no relevance labels
 ├── tests/
 └── results/                       # GENERATED/local system of record, gitignored
 infra/gcp/                          # staged, fail-closed Cloud Run/Neon delivery contract
 ```
 
 Not present yet, by design: serving graph expansion/fusion modules, heavyweight
-`eval/src/blogeval/lab/` methods, and `topic-smoke-v1.json`. They land only with their
-method implementation or owner-reviewed qrels. The superseded implementations under
+`eval/src/blogeval/lab/` methods, and the reviewed `topic-smoke-v1.review.json` plus
+`topic-smoke-v1.json`. They land only with their method implementation or real owner
+judgements. The superseded implementations under
 `agent/src/agent/lib/` are gone; one unused package marker remains for a later hygiene
 cleanup. `content/` remains an immutable build input and is never moved under `agent/`.
 
@@ -759,10 +761,12 @@ The actual deliverable. Forks off P1's Protocol and can proceed alongside P2 and
   LLM-generated queries.
 - Keep two versioned query-set contracts rather than mixing their metrics:
   `known-item-alias-v1` maps each alias to one target and headlines Hit@k and MRR;
-  the future `topic-smoke-v1` will contain manually reviewed multi-document qrels and
-  headline recall@k. Each committed manifest records its generator/version, corpus tree
-  SHA, qrels, and exclusions. The BM25 macro-recall regression waits for
-  `topic-smoke-v1`.
+  `topic-smoke-v1` will contain manually reviewed multi-document qrels and headline
+  recall@k. Its committed seed contains queries and the exact sparse/dense/fusion pool
+  policy, but no labels. The blind-pool manifest records the generator/version, exact
+  method fingerprints, corpus tree, and pending-vs-reviewed state; only an exact
+  checksum-sealed owner review can materialize the ordinary query-set manifest. The BM25
+  macro-recall regression waits for that reviewed dataset.
 - Pin the corpus by **git tree sha of `content/`**. The harness never reads live `content/`.
 - **Report `coverage` alongside recall@k, always.** The published-corpus wikilink graph is
   sparse, so a graph method that declines to answer on most queries would otherwise look
@@ -782,10 +786,14 @@ The actual deliverable. Forks off P1's Protocol and can proceed alongside P2 and
 default CLI sweep runs `bm25`, `bm25-field-weighted`, `char-ngram`, and
 `rrf-bm25-char-ngram`. CI generates and validates the 90-qrel known-item dataset, executes
 the four-method sweep twice on its frozen Linux runner, verifies each run, and
-byte-compares its JSON, Markdown, SVG, and manifest projections. This satisfies the
-harness construction gate. The opt-in `dense-multilingual-e5-small` and
-`rrf-bm25-dense-multilingual-e5-small` methods now make the first experiment executable
-with an exact cached model revision, but no dense result has been accepted and the
+byte-compares its JSON, Markdown, SVG, and manifest projections. The opt-in
+`dense-multilingual-e5-small` and `rrf-bm25-dense-multilingual-e5-small` methods make the
+first experiment executable with an exact cached model revision. The topic-review CLI
+separately generates the seed-pinned deterministic blind candidate pool, replays registry
+fingerprints, refuses incomplete owner decisions, checksum-seals explicit review
+provenance, and only then finalizes `blogeval-queryset-v3` topic qrels with exact pooling
+provenance. Publication candidate schema v2 binds a closed dataset choice plus the exact
+dataset ID/checksum. No owner judgements or dense result are committed, so the
 publication gate remains open.
 
 **Accept:** one full sweep over at least three methods produces a leaderboard, a

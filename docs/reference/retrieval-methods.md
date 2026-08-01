@@ -292,9 +292,12 @@ artifacts are built and evaluated in the pinned Linux x86_64 deployment image.
 
 The former 0/13 baseline was not reproducible on the pinned tree: three literal matches
 leak into the ranking, while the top result is still an unrelated coding-test post about
-`큰 수`. The former macro recall 0.323 → 0.605 is also not reproducible because no
-versioned queryset or qrels exist yet. Do not use it as a gate until `topic-smoke-v1`
-lands with owner-reviewed relevance labels.
+`큰 수`. The former macro recall 0.323 → 0.605 is also not reproducible. A versioned
+`topic-smoke-v1` query seed and fail-closed owner-review workflow now exist. The seed
+pins the exact sparse, dense, and fusion candidate methods so agents cannot silently
+change the judgement pool, but no reviewed query-set or qrels exist. Do not use the old
+number as a gate until the owner seals the relevance labels and the final dataset passes
+publication qualification.
 
 Score normalisation was a separate legacy bug: `score / max(scores)` forced every
 non-empty query's top result to 1.000 and destroyed method-native magnitude. The corrected

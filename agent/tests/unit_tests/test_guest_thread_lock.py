@@ -10,6 +10,8 @@ from agent import guest_thread_lock
 from agent.guest_thread_lock import (
     GuestThreadLockUnavailableError,
     guest_thread_advisory_lock,
+    guest_thread_create_advisory_lock,
+    guest_thread_create_lock_key,
     guest_thread_lock_key,
 )
 
@@ -88,6 +90,44 @@ def test_guest_thread_lock_key_is_stable_domain_separated_signed_bigint():
     )
     with pytest.raises(ValueError, match="thread_id"):
         guest_thread_lock_key("")
+    assert guest_thread_create_lock_key() == -5093011419793604021
+    assert guest_thread_create_lock_key() not in {
+        guest_thread_lock_key("guest-thread"),
+        guest_thread_lock_key("guest-thread-2"),
+    }
+
+
+async def test_guest_thread_create_lock_exposes_its_dedicated_connection_until_exit(
+    monkeypatch,
+):
+    events = []
+    transaction = _Transaction(events)
+    connection = _Connection(events, transaction)
+    engine = _Engine(events, connection)
+    monkeypatch.setattr(guest_thread_lock, "_create_lock_engine", lambda: engine)
+
+    async with guest_thread_create_advisory_lock(
+        timeout_seconds=1,
+    ) as locked_connection:
+        assert locked_connection is connection
+        events.append("body")
+
+    assert events == [
+        "connect",
+        "begin",
+        "try-lock",
+        "body",
+        "rollback-start",
+        "rollback-complete",
+        "close-connection",
+        "dispose-engine",
+    ]
+    assert connection.lock_parameters == [
+        (
+            "SELECT pg_try_advisory_xact_lock(:lock_key)",
+            {"lock_key": -5093011419793604021},
+        )
+    ]
 
 
 async def test_guest_thread_lock_uses_one_transaction_until_context_exit(

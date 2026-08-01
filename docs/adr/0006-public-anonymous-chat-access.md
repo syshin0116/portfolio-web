@@ -12,7 +12,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-29"
+updated: "2026-08-02"
 owners: ["@syshin0116"]
 refs: [../research/public-exposure.md, ../plans/rag-restack.md, 0004-adopt-aegra.md, 0007-postgres-on-neon-split-projects.md]
 template: adr
@@ -20,10 +20,10 @@ template: adr
 
 # ADR-0006: The chatbot is public, with Turnstile-gated anonymous subjects
 
-> **status: accepted for the access model; the hardening it requires is not yet built.**
-> The decision to go public is made. Going public **before** plan phase P3 lands would
-> ship two known content leaks and no rate limiting - the ADR is accepted, the rollout
-> is gated.
+> **status: accepted; the application hardening is implemented, but public rollout is
+> still gated.** The production guest flags and recurring retention Scheduler remain
+> disabled until the launch, billing, browser, and exact-project operational gates in the
+> public rollout runbook pass.
 
 ## Context
 
@@ -78,13 +78,64 @@ Capabilities are tiered:
 | Dynamic subagents | off by default; bounded tier only after P4.5/P5 gates | owner/eval experiment first | bounded |
 | Thread retention | ~14 days, GC'd | persistent | persistent |
 
+The anonymous root model is bound, in literal order, to exactly
+`keyword_search`, `semantic_search`, `metadata_filter`, `graph_traverse`, `list_posts`,
+and `read_post`. Startup and every graph creation assert that this list is unique and
+unchanged; adding a seventh root tool fails closed. The guest prompt carries the complete
+retrieval workflow inline and mounts no skill. Deep Agents' filesystem, todo, skills,
+QuickJS, and `task` schemas are removed from the guest model request, and the same
+middleware rejects a forged or hallucinated call before tool execution. Hiding a schema
+alone is not treated as an authorization boundary.
+
+The production HTTP stack is pinned outer-to-inner as `GuestIngressGuard ->
+NativeThreadGuard -> GuestRunGuard`. After authentication, the outer boundary charges
+every guest request before route lookup, query parsing, body parsing, or a database read:
+exact `POST /threads` uses the process-local creation bucket (6 per identity and 60
+globally per hour), while every other path uses the request bucket (30 per identity and
+180 globally per minute). Invalid, malformed, and unknown requests therefore consume
+cheap ingress capacity. Only a valid paid command that survives Native ownership/status
+checks reaches the inner paid bucket (4 per identity and 24 globally per minute) and
+durable daily ledger. A valid foreign-thread command returns the hidden 404 after spending
+only its outer request token; it spends neither a paid token nor ledger reservation.
+Non-spending requests never reserve the paid ledger, and exhausting one class cannot
+consume or reset another.
+
+All process-local identity state uses only a SHA-256 digest of the canonical subject and
+is bounded to 1,024 entries. At the cardinality boundary, an entry is prunable only when
+it has no active stream lease, has been inactive for at least the longest configured
+identity window, and every bucket it ever used is fully replenished. Guest SSE subscriptions
+hold a `finally`-released process-local lease for their entire downstream response, capped
+at two per identity and four globally. Owner traffic bypasses these guest controls.
+
+Thread creation additionally has a durable storage admission boundary: at most six stored
+canonical guest threads per identity and 256 globally. One domain-separated global
+PostgreSQL transaction advisory lock covers the existing-owner lookup, exact canonical
+`anon:<uuid>` regex counts, and the complete downstream `POST /threads` response, so a
+concurrent process observes the first committed row before deciding. Retention-expired
+rows continue to count until checkpoint-first GC actually removes the parent. Reusing an
+existing owned ID is idempotent even at a cap; a foreign collision is hidden as 404. A
+lock or count failure returns 503 instead of admitting optimistically.
+
+`run.start` accepts exactly one client-supplied `user` message. Its content is either one
+non-empty bounded UTF-8 string or one to eight exact assistant-ui
+`{"type":"text","text":"..."}` blocks with a 16 KiB aggregate text ceiling. Client
+assistant/tool history, tool-call fields, system roles, files, images, and every other
+content-part shape are rejected before paid rate, spend, or dispatch (after the cheap
+outer ingress charge). The server replaces the accepted client message ID with a unique
+checkpoint ID for every submission, while state and SSE public projection restore the
+original safe client ID so assistant-ui correlation remains native. Server checkpoint
+state remains the only source of prior conversation history. Bodyless guest reads and
+run-cancel routes reject any actual payload bytes, including bodies sent without a
+`Content-Length` header.
+
 Both paid guest methods pass the strict guest wire validator before taking a mutation
-claim. Native-valid but guest-invalid `run.start` and `input.respond` bodies therefore
-reach the canonical guest 400 after the foreign-thread hiding check, without consuming
-capacity, rate, or budget and without reading graph state or dispatching. Valid guest
-commands require an already-created owned thread; a command waiting behind retention GC
-cannot resurrect the deleted identifier as a new thread. Owner commands keep Aegra's
-native behavior and do not take the guest lock.
+claim. Native-valid but guest-invalid `run.start` and `input.respond` bodies reach the
+canonical guest 400 after the foreign-thread hiding check, without consuming the paid
+bucket or budget and without reading graph state or dispatching; the already-consumed
+outer request token bounds repeated database ownership reads. Valid guest commands
+require an already-created owned thread; a command waiting behind retention GC cannot
+resurrect the deleted identifier as a new thread. Owner commands keep Aegra's native
+behavior and do not take the guest lock.
 
 Each valid guest command opens a dedicated, unpooled PostgreSQL transaction and takes a
 deterministic per-thread transaction-scoped advisory lock before ownership, status, and
@@ -126,7 +177,10 @@ Once accepted, the guest guard canonicalizes the request, consumes the process-l
 rate token, reserves the durable worst-case amount, and calls Aegra immediately;
 post-dispatch failures remain intentionally charged.
 
-**Rollout is gated on plan phase P3.** Nothing in that phase is optional.
+**Rollout remains gated.** The code boundary does not activate guest flags, inject an
+OpenAI credential, approve a paid budget, or unpause recurring GC. The Scheduler must be
+reviewed and proven active before anonymous token issuance is enabled; leaving it paused
+is a launch blocker, not an alternative retention policy.
 
 ## Consequences
 
@@ -221,10 +275,11 @@ post-dispatch failures remain intentionally charged.
       with published-corpus retrieval (P3.1).
 - [x] Add draft-exclusion regression tests through all six tools (P3.2) - the existing
       security tests never covered this, which is why the bugs survived.
-- [ ] Turnstile-gated anonymous token minting (P3.3).
-- [ ] `anon` scope route allowlist; strip `configurable.model`; force
+- [x] Turnstile-gated anonymous token minting (P3.3; launch flags remain off).
+- [x] `anon` scope route allowlist; strip `configurable.model`; force
       `multitask_strategy="reject"`; fix the seeded default model (P3.4).
-- [ ] Rate limiting registered at or before `main.py:102`, plus provider spend caps (P3.5).
+- [x] Outer ingress, inner paid rate limiting, SSE leases, durable storage admission,
+      and provider spend caps (P3.5; paid public launch remains separately gated).
 - [x] `expires_at` + bounded GC that calls `checkpointer.adelete_thread` first,
       including session-fenced stale Redis-off guest-run reconciliation (P3.6).
 - [x] Deterministic 16 KiB UTF-8 `read_post` truncation with an explicit marker
@@ -264,3 +319,13 @@ post-dispatch failures remain intentionally charged.
   recovery/drain quarantine, added exact thread-lock and row-lock rechecks, bounded
   owner/poll races and proof-writer connections, and capped cross-instance guest graph
   execution with four PostgreSQL session-advisory slots.
+- 2026-08-01: bounded thread creation and all other non-spending guest routes in
+  independent identity/global buckets, reduced `run.start` to one exact user-text wire,
+  and enforced the six-tool guest model allowlist at both binding and execution.
+- 2026-08-02: pinned the three-layer production middleware order, charged malformed and
+  unknown traffic at the cheap outer ingress, moved paid charging behind native ownership,
+  added 2/identity and 4/global SSE leases, and added globally serialized durable stored
+  thread caps of 6/identity and 256/canonical guests. Also pinned the literal ordered
+  six-tool surface, inline guest retrieval prompt, and server-unique checkpoint message
+  IDs with assistant-ui correlation projection. Recurring GC and public flags remain
+  launch gates rather than being activated by this application change.

@@ -38,7 +38,7 @@ from starlette.responses import JSONResponse
 from agent import http as http_extension
 from agent.auth import AGENT_AUTH_SECRET, TOKEN_AUDIENCE, TOKEN_ISSUER
 from agent.graph import graph
-from agent.http import GuestRunGuard, NativeThreadGuard
+from agent.http import GuestIngressGuard, GuestRunGuard, NativeThreadGuard
 from agent.inspection import INSPECTION_EVENT_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -183,18 +183,27 @@ async def test_custom_http_app_guard_wraps_native_v2_command_route(monkeypatch):
     assert any(
         middleware.cls is NativeThreadGuard for middleware in app.user_middleware
     )
+    assert any(
+        middleware.cls is GuestIngressGuard for middleware in app.user_middleware
+    )
     assert any(middleware.cls is GuestRunGuard for middleware in app.user_middleware)
     assert [
         middleware.cls
         for middleware in app.user_middleware
-        if middleware.cls in {GuestRunGuard, NativeThreadGuard}
-    ] == [NativeThreadGuard, GuestRunGuard]
+        if middleware.cls in {GuestIngressGuard, GuestRunGuard, NativeThreadGuard}
+    ] == [GuestIngressGuard, NativeThreadGuard, GuestRunGuard]
     guest_middleware = next(
         middleware
         for middleware in app.user_middleware
         if middleware.cls is GuestRunGuard
     )
+    guest_ingress_middleware = next(
+        middleware
+        for middleware in app.user_middleware
+        if middleware.cls is GuestIngressGuard
+    )
     assert guest_middleware.kwargs == {"enforce_daily_budget": True}
+    assert guest_ingress_middleware.kwargs == {}
     assert response.status_code == 409
     assert response.json() == {
         "error": "conflict",

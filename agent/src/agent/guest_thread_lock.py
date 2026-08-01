@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 COMMAND_GUEST_THREAD_LOCK_TIMEOUT_SECONDS = 5.0
 _LOCK_DOMAIN = b"syshin0116.dev:guest-thread-lock:v1\0"
+_CREATE_LOCK_DOMAIN = b"syshin0116.dev:guest-thread-create-lock:v1\0"
 _LOCK_POLL_SECONDS = 0.025
 _TRY_LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(:lock_key)")
 
@@ -36,6 +37,13 @@ def guest_thread_lock_key(thread_id: str) -> int:
     if not isinstance(thread_id, str) or not thread_id:
         raise ValueError("thread_id must be a non-empty string")
     digest = hashlib.sha256(_LOCK_DOMAIN + thread_id.encode("utf-8")).digest()
+    unsigned = int.from_bytes(digest[:8], "big")
+    return unsigned if unsigned < 2**63 else unsigned - 2**64
+
+
+def guest_thread_create_lock_key() -> int:
+    """Return the one domain-separated key serializing public thread creation."""
+    digest = hashlib.sha256(_CREATE_LOCK_DOMAIN).digest()
     unsigned = int.from_bytes(digest[:8], "big")
     return unsigned if unsigned < 2**63 else unsigned - 2**64
 
@@ -68,7 +76,7 @@ class _GuestThreadTransactionLock:
     @classmethod
     async def acquire(
         cls,
-        thread_id: str,
+        lock_key: int,
         *,
         timeout_seconds: float,
     ) -> _GuestThreadTransactionLock:
@@ -80,7 +88,8 @@ class _GuestThreadTransactionLock:
         ):
             raise ValueError("timeout_seconds must be positive and finite")
 
-        lock_key = guest_thread_lock_key(thread_id)
+        if type(lock_key) is not int or not -(2**63) <= lock_key < 2**63:
+            raise ValueError("lock_key must be a signed PostgreSQL bigint")
         try:
             engine = _create_lock_engine()
         except Exception as error:
@@ -144,6 +153,11 @@ class _GuestThreadTransactionLock:
             )
         await _drain_cleanup_task(self._close_task)
 
+    @property
+    def connection(self) -> AsyncConnection:
+        """Expose only the connection whose transaction owns the advisory lock."""
+        return self._connection
+
 
 async def _drain_cleanup_task(cleanup: asyncio.Task[None]) -> None:
     """Wait through repeated cancellation until one DB cleanup task is terminal."""
@@ -198,7 +212,7 @@ async def guest_thread_advisory_lock(
 ) -> AsyncIterator[None]:
     """Hold one dedicated PostgreSQL transaction lock for the context lifetime."""
     lock = await _GuestThreadTransactionLock.acquire(
-        thread_id,
+        guest_thread_lock_key(thread_id),
         timeout_seconds=timeout_seconds,
     )
     try:
@@ -207,9 +221,27 @@ async def guest_thread_advisory_lock(
         await lock.aclose()
 
 
+@asynccontextmanager
+async def guest_thread_create_advisory_lock(
+    *,
+    timeout_seconds: float,
+) -> AsyncIterator[AsyncConnection]:
+    """Hold the dedicated global creation lock and expose its read transaction."""
+    lock = await _GuestThreadTransactionLock.acquire(
+        guest_thread_create_lock_key(),
+        timeout_seconds=timeout_seconds,
+    )
+    try:
+        yield lock.connection
+    finally:
+        await lock.aclose()
+
+
 __all__ = [
     "COMMAND_GUEST_THREAD_LOCK_TIMEOUT_SECONDS",
     "GuestThreadLockUnavailableError",
     "guest_thread_advisory_lock",
+    "guest_thread_create_advisory_lock",
+    "guest_thread_create_lock_key",
     "guest_thread_lock_key",
 ]

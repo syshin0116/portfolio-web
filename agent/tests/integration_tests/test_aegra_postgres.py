@@ -60,7 +60,14 @@ from agent.guest_budget import (
     GuestDailyBudgetExhaustedError,
     PostgresGuestSpendLedger,
 )
-from agent.guest_thread_lock import guest_thread_advisory_lock
+from agent.guest_thread_admission import (
+    GuestThreadCreateDecision,
+    admit_guest_thread_creation,
+)
+from agent.guest_thread_lock import (
+    guest_thread_advisory_lock,
+    guest_thread_create_advisory_lock,
+)
 from agent.http import GuestRunGuard, NativeThreadGuard
 from agent.inspection import INSPECTION_EVENT_NAME
 from agent.maintenance import (
@@ -2007,6 +2014,157 @@ async def test_cancelled_guest_command_releases_real_postgres_thread_lock(
                 "DELETE FROM thread WHERE thread_id = %s",
                 (thread_id,),
             )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_real_postgres_guest_creation_lock_observes_committed_cap_and_owner():
+    """The second cold-start admission must count the first committed create."""
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    prefix = f"guest-admission-{unique}"
+    guest_id = f"anon:{uuid4()}"
+    foreign_id = f"anon:{uuid4()}"
+    existing_ids = [f"{prefix}-seed-{index}" for index in range(5)]
+    first_created_id = f"{prefix}-first"
+    capped_id = f"{prefix}-capped"
+    create_committed = asyncio.Event()
+    release_first_response = asyncio.Event()
+    first_task: asyncio.Task[GuestThreadCreateDecision] | None = None
+    second_task: asyncio.Task[GuestThreadCreateDecision] | None = None
+
+    metadata = json.dumps(
+        {
+            "graph_id": "agent",
+            "guest_expires_at": "2000-01-01T00:00:00Z",
+            "guest_retention_policy": GUEST_RETENTION_POLICY,
+        }
+    )
+
+    async def insert_thread(thread_id: str) -> None:
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                """
+                INSERT INTO thread (thread_id, status, metadata_json, user_id)
+                VALUES (%s, 'idle', %s::jsonb, %s)
+                """,
+                (thread_id, metadata, guest_id),
+            )
+
+    async def first_create() -> GuestThreadCreateDecision:
+        async with admit_guest_thread_creation(
+            thread_id=first_created_id,
+            identity=guest_id,
+        ) as decision:
+            assert decision == GuestThreadCreateDecision.NEW
+            # This models Aegra's downstream POST /threads transaction. Its response
+            # cannot leave the admission context until the row has committed.
+            await insert_thread(first_created_id)
+            create_committed.set()
+            await release_first_response.wait()
+            return decision
+
+    async def second_create() -> GuestThreadCreateDecision:
+        async with admit_guest_thread_creation(
+            thread_id=capped_id,
+            identity=guest_id,
+        ) as decision:
+            return decision
+
+    try:
+        await migrate_database()
+        for thread_id in existing_ids:
+            await insert_thread(thread_id)
+
+        first_task = asyncio.create_task(first_create())
+        await asyncio.wait_for(create_committed.wait(), timeout=5)
+        second_task = asyncio.create_task(second_create())
+        await asyncio.sleep(0.05)
+        assert second_task.done() is False
+
+        release_first_response.set()
+        assert await asyncio.wait_for(first_task, timeout=5) == (
+            GuestThreadCreateDecision.NEW
+        )
+        assert await asyncio.wait_for(second_task, timeout=5) == (
+            GuestThreadCreateDecision.IDENTITY_LIMIT
+        )
+
+        # Existing IDs remain idempotent at the cap and foreign collisions remain
+        # hidden even though every row is already retention-expired.
+        async with admit_guest_thread_creation(
+            thread_id=first_created_id,
+            identity=guest_id,
+        ) as decision:
+            assert decision == GuestThreadCreateDecision.EXISTING_OWNED
+        async with admit_guest_thread_creation(
+            thread_id=first_created_id,
+            identity=foreign_id,
+        ) as decision:
+            assert decision == GuestThreadCreateDecision.FOREIGN
+    finally:
+        release_first_response.set()
+        pending = [task for task in (first_task, second_task) if task is not None]
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        async with await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection:
+            await connection.execute(
+                "DELETE FROM thread WHERE thread_id LIKE %s",
+                (f"{prefix}%",),
+            )
+        await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_cancelled_real_postgres_creation_lock_releases_distinct_domain():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+    entered = asyncio.Event()
+    holder: asyncio.Task[None] | None = None
+
+    async def hold_creation_lock() -> None:
+        async with guest_thread_create_advisory_lock(timeout_seconds=5):
+            entered.set()
+            await asyncio.Event().wait()
+
+    try:
+        holder = asyncio.create_task(hold_creation_lock())
+        await asyncio.wait_for(entered.wait(), timeout=5)
+
+        # A create-wide lock must never alias an arbitrary per-thread lock.
+        async with guest_thread_advisory_lock(
+            f"creation-domain-proof-{uuid4().hex}",
+            timeout_seconds=1,
+        ):
+            pass
+
+        holder.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await holder
+
+        reacquired = False
+        async with guest_thread_create_advisory_lock(timeout_seconds=1):
+            reacquired = True
+        assert reacquired is True
+    finally:
+        if holder is not None and not holder.done():
+            holder.cancel()
+            await asyncio.gather(holder, return_exceptions=True)
         await db_manager.close()
         aegra_orm.async_session_maker = None
         settings.db.DATABASE_URL = previous_url

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 
 import {
+  AGENT_TOKEN_INTENT_HEADER,
+  ANONYMOUS_AGENT_TOKEN_INTENT,
+} from "@/lib/agent-token-intent"
+import {
   AgentAuthenticationError,
   AgentTokenBroker,
   TOKEN_REFRESH_MARGIN_SECONDS,
@@ -108,6 +112,57 @@ describe("AgentTokenBroker", () => {
     expect(mintCalls).toBe(2)
   })
 
+  test("retains anonymous intent across expiry and forced 401 remints", async () => {
+    let now = 1_000
+    let mintCalls = 0
+    let agentCalls = 0
+    const mintIntents: Array<string | null> = []
+    const broker = new AgentTokenBroker("anon:user-1", {
+      agentOrigin: "https://agent.example",
+      nowSeconds: () => now,
+      tokenIntent: ANONYMOUS_AGENT_TOKEN_INTENT,
+      fetch: async (input, init) => {
+        if (String(input) === "/api/agent-token") {
+          mintCalls += 1
+          mintIntents.push(
+            new Headers(init?.headers).get(AGENT_TOKEN_INTENT_HEADER)
+          )
+          return jsonResponse({
+            token: token(
+              mintCalls === 1 ? 1_120 : 1_400 + mintCalls,
+              "anon:user-1"
+            ),
+          })
+        }
+        agentCalls += 1
+        return new Response(null, {
+          status: agentCalls === 1 ? 401 : 200,
+        })
+      },
+    })
+    const signal = new AbortController().signal
+
+    await broker.get(signal)
+    now = 1_060
+    await broker.get(signal)
+    const authorized = await broker.onRequest(
+      new URL("https://agent.example/state"),
+      { signal }
+    )
+    const response = await broker.fetchWithAuthRetry(
+      "https://agent.example/state",
+      authorized
+    )
+
+    expect(response.status).toBe(200)
+    expect(mintCalls).toBe(3)
+    expect(mintIntents).toEqual([
+      "anonymous",
+      "anonymous",
+      "anonymous",
+    ])
+  })
+
   test("partitions tokens by identity and aborts the previous refresh", async () => {
     let observedSignal: AbortSignal | undefined
     let resolveFetch: ((response: Response) => void) | undefined
@@ -155,6 +210,7 @@ describe("AgentTokenBroker", () => {
 
   test("retries a 401 exactly once with a forced fresh token", async () => {
     const calls: Array<{ url: string; authorization: string | null }> = []
+    const mintIntents: Array<string | null> = []
     let minted = 0
     const broker = new AgentTokenBroker("user-1", {
       agentOrigin: "https://agent.example",
@@ -163,6 +219,9 @@ describe("AgentTokenBroker", () => {
         const url = String(input)
         if (url === "/api/agent-token") {
           minted += 1
+          mintIntents.push(
+            new Headers(init?.headers).get(AGENT_TOKEN_INTENT_HEADER)
+          )
           return jsonResponse({ token: token(2_000 + minted, "user-1") })
         }
         calls.push({
@@ -184,6 +243,7 @@ describe("AgentTokenBroker", () => {
     expect(response.status).toBe(401)
     expect(calls).toHaveLength(2)
     expect(minted).toBe(2)
+    expect(mintIntents).toEqual([null, null])
     expect(calls[0]!.authorization).not.toBe(calls[1]!.authorization)
   })
 
@@ -482,6 +542,7 @@ describe("AgentTokenBroker", () => {
   test("refreshes the restricted cancellation credential at its expiry margin", async () => {
     let now = 1_000
     let mintCalls = 0
+    const mintIntents: Array<string | null> = []
     const requests: Array<{
       authorization: string | null
       url: string
@@ -491,10 +552,14 @@ describe("AgentTokenBroker", () => {
     const broker = new AgentTokenBroker("old-user", {
       agentOrigin: "https://agent.example",
       nowSeconds: () => now,
+      tokenIntent: ANONYMOUS_AGENT_TOKEN_INTENT,
       fetch: async (input, init) => {
         const url = String(input)
         if (url === "/api/agent-token") {
           mintCalls += 1
+          mintIntents.push(
+            new Headers(init?.headers).get(AGENT_TOKEN_INTENT_HEADER)
+          )
           return jsonResponse({
             token: mintCalls === 1 ? first : refreshed,
           })
@@ -526,6 +591,7 @@ describe("AgentTokenBroker", () => {
       ).status
     ).toBe(204)
     expect(mintCalls).toBe(2)
+    expect(mintIntents).toEqual(["anonymous", "anonymous"])
     expect(requests).toEqual([
       {
         authorization: `Bearer ${refreshed}`,
@@ -538,12 +604,17 @@ describe("AgentTokenBroker", () => {
     let mintCalls = 0
     let cancellationCalls = 0
     const authorizations: Array<string | null> = []
+    const mintIntents: Array<string | null> = []
     const broker = new AgentTokenBroker("old-user", {
       agentOrigin: "https://agent.example",
       nowSeconds: () => 1_000,
+      tokenIntent: ANONYMOUS_AGENT_TOKEN_INTENT,
       fetch: async (input, init) => {
         if (String(input) === "/api/agent-token") {
           mintCalls += 1
+          mintIntents.push(
+            new Headers(init?.headers).get(AGENT_TOKEN_INTENT_HEADER)
+          )
           return jsonResponse({
             token: token(2_000 + mintCalls, "old-user"),
           })
@@ -579,6 +650,7 @@ describe("AgentTokenBroker", () => {
       mintCalls: 2,
     })
     expect(authorizations[0]).not.toBe(authorizations[1])
+    expect(mintIntents).toEqual(["anonymous", "anonymous"])
   })
 
   test("rejects a second cancellation 401 without exposing the response body", async () => {

@@ -8,14 +8,15 @@ const encode = (value: object) =>
 
 function fixtureToken(
   identity: string,
-  extraClaims: Record<string, unknown> = {}
+  extraClaims: Record<string, unknown> = {},
+  expiresAt = FIXTURE_TOKEN_EXPIRES_AT
 ): string {
   return `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
-    exp: FIXTURE_TOKEN_EXPIRES_AT,
+    exp: expiresAt,
     sub: identity,
     iss: "syshin0116.dev",
     aud: "agent-api",
-    iat: FIXTURE_TOKEN_EXPIRES_AT - 300,
+    iat: expiresAt - 300,
     ...extraClaims,
   })}.fixture-signature`
 }
@@ -25,7 +26,8 @@ export function fixtureOwnerToken(): string {
 }
 
 export function fixtureAnonymousToken(
-  identity = FIXTURE_ANONYMOUS_IDENTITY
+  identity = FIXTURE_ANONYMOUS_IDENTITY,
+  expiresAt = FIXTURE_TOKEN_EXPIRES_AT
 ): string {
-  return fixtureToken(identity, { scope: "anon" })
+  return fixtureToken(identity, { scope: "anon" }, expiresAt)
 }

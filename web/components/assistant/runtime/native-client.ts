@@ -18,6 +18,7 @@ import type {
   LangGraphMessagesEvent,
   LangGraphStreamCallback,
 } from "@assistant-ui/react-langgraph"
+import type { AgentTokenIntent } from "@/lib/agent-token-intent"
 
 import {
   AgentLifecycleError,
@@ -96,6 +97,7 @@ export interface NativeAgentClientOptions {
   identity: string
   initialToken?: string
   onAuthenticationExpired?: () => void
+  tokenIntent?: AgentTokenIntent
   tokenBroker?: AgentTokenBroker
   client?: Client
   getSourceGeneration?: () => number
@@ -1644,6 +1646,7 @@ export class NativeAgentClient {
         agentOrigin: options.apiUrl,
         initialToken: options.initialToken,
         onAuthenticationExpired: options.onAuthenticationExpired,
+        tokenIntent: options.tokenIntent,
       })
     this.client =
       options.client ??

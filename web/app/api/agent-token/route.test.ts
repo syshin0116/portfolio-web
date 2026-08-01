@@ -20,6 +20,7 @@ const SESSION_SECRET = "test-anonymous-session-secret-more-than-32-bytes"
 const TURNSTILE_SECRET = "test-turnstile-secret"
 const HOSTNAME = "syshin0116.dev"
 const ACTION = "agent-token"
+const ANONYMOUS_INTENT_HEADER = "X-Agent-Token-Intent"
 const CHALLENGE_TS = new Date(NOW * 1_000).toISOString()
 
 const VALID_ENV = {
@@ -77,10 +78,14 @@ function request(options: {
   body?: string
   contentType?: string
   cookie?: string
+  intent?: string
 } = {}): NextRequest {
   const headers = new Headers()
   if (options.contentType) headers.set("content-type", options.contentType)
   if (options.cookie) headers.set("cookie", options.cookie)
+  if (options.intent !== undefined) {
+    headers.set(ANONYMOUS_INTENT_HEADER, options.intent)
+  }
   return new NextRequest("https://syshin0116.dev/api/agent-token", {
     method: "POST",
     headers,
@@ -93,6 +98,15 @@ function anonymousRequest(cookie?: string): NextRequest {
     body: JSON.stringify({ turnstileToken: "client-turnstile-token" }),
     contentType: "application/json",
     cookie,
+  })
+}
+
+function explicitAnonymousRequest(cookie?: string): NextRequest {
+  return request({
+    body: JSON.stringify({ turnstileToken: "client-turnstile-token" }),
+    contentType: "application/json",
+    cookie,
+    intent: "anonymous",
   })
 }
 
@@ -254,7 +268,7 @@ describe("POST /api/agent-token signed-in precedence", () => {
     expect(response.headers.get("cache-control")).toBe("no-store")
   })
 
-  test("fails closed when session lookup is unavailable", async () => {
+  test("keeps an unmarked owner request fail-closed when session lookup is unavailable", async () => {
     const handler = createAgentTokenPostHandler(
       dependencies({
         authenticate: async () => {
@@ -271,6 +285,26 @@ describe("POST /api/agent-token signed-in precedence", () => {
     })
     expect(response.headers.get("cache-control")).toBe("no-store")
   })
+
+  test.each(["", "Anonymous", "anonymous-v2", "owner"])(
+    "keeps an unrecognized token intent fail-closed when session lookup is unavailable: %s",
+    async (intent) => {
+      const handler = createAgentTokenPostHandler(
+        dependencies({
+          authenticate: async () => {
+            throw new Error("database connection details")
+          },
+        })
+      )
+
+      const response = await handler(request({ intent }))
+
+      expect(response.status).toBe(503)
+      expect(await responseBody(response)).toEqual({
+        error: "Authentication is unavailable",
+      })
+    }
+  )
 
   test("preserves the configured-authentication failure response", async () => {
     const session: Session = {
@@ -302,6 +336,34 @@ describe("POST /api/agent-token signed-in precedence", () => {
 })
 
 describe("POST /api/agent-token disabled and preflight behavior", () => {
+  test("keeps an explicitly marked anonymous request closed while the flag is disabled", async () => {
+    let authenticateCalls = 0
+    let siteverifyCalls = 0
+    const handler = createAgentTokenPostHandler(
+      dependencies({
+        authenticate: async () => {
+          authenticateCalls += 1
+          throw new Error("owner auth must not select the public branch")
+        },
+        env: {
+          ...VALID_ENV,
+          AGENT_ANONYMOUS_TOKEN_ENABLED: "false",
+        },
+        fetchImpl: async () => {
+          siteverifyCalls += 1
+          return successResponse()
+        },
+      })
+    )
+
+    const response = await handler(explicitAnonymousRequest())
+
+    expect(response.status).toBe(403)
+    expect(await responseBody(response)).toEqual({ error: "Forbidden" })
+    expect(authenticateCalls).toBe(0)
+    expect(siteverifyCalls).toBe(0)
+  })
+
   test.each([
     [undefined, "missing"],
     ["false", "false"],
@@ -401,6 +463,65 @@ describe("POST /api/agent-token disabled and preflight behavior", () => {
 })
 
 describe("POST /api/agent-token anonymous bootstrap", () => {
+  test("mints after a valid challenge without consulting unavailable owner auth", async () => {
+    let authenticateCalls = 0
+    const handler = createAgentTokenPostHandler(
+      dependencies({
+        authenticate: async () => {
+          authenticateCalls += 1
+          throw new Error("database connection details")
+        },
+      })
+    )
+
+    const response = await handler(explicitAnonymousRequest())
+    const body = await responseBody(response)
+    const payload = jwtPayload(body.token as string)
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({
+      sub: `anon:${UUID}`,
+      scope: "anon",
+    })
+    expect(authenticateCalls).toBe(0)
+  })
+
+  test("remints a valid cookie without consulting unavailable owner auth", async () => {
+    const existingSubject = `anon:${SECOND_UUID}`
+    const existing = createAnonymousSessionCookie(
+      existingSubject,
+      SESSION_SECRET,
+      NOW - 60
+    )
+    let authenticateCalls = 0
+    let siteverifyCalls = 0
+    const handler = createAgentTokenPostHandler(
+      dependencies({
+        authenticate: async () => {
+          authenticateCalls += 1
+          throw new Error("database connection details")
+        },
+        fetchImpl: async () => {
+          siteverifyCalls += 1
+          return successResponse()
+        },
+      })
+    )
+
+    const response = await handler(
+      request({
+        cookie: `${ANONYMOUS_COOKIE_NAME}=${existing.value}`,
+        intent: "anonymous",
+      })
+    )
+    const payload = jwtPayload((await responseBody(response)).token as string)
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({ sub: existingSubject, scope: "anon" })
+    expect(authenticateCalls).toBe(0)
+    expect(siteverifyCalls).toBe(0)
+  })
+
   test("requests a challenge without treating an empty cookie resume as an error", async () => {
     let fetched = false
     const handler = createAgentTokenPostHandler(

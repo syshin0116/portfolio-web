@@ -460,6 +460,7 @@ def _dataset(corpus: PublishedCorpus):
             "source_artifacts": [],
             "source_occurrence_count": 1,
         },
+        "pooling": None,
         "qrels": [
             {
                 "evidence": [
@@ -475,7 +476,7 @@ def _dataset(corpus: PublishedCorpus):
                 "relevant_doc_ids": ["AI/a-title.md"],
             }
         ],
-        "schema": "blogeval-queryset-v2",
+        "schema": "blogeval-queryset-v3",
     }
     payload = canonical_json_bytes(value)
     return parse_queryset(value, checksum=json_checksum(payload))

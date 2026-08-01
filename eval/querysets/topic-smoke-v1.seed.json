@@ -1,0 +1,41 @@
+{
+  "candidate_generation": {
+    "candidate_limit_per_method": 20,
+    "method_ids": [
+      "bm25",
+      "bm25-field-weighted",
+      "char-ngram",
+      "dense-multilingual-e5-small",
+      "rrf-bm25-char-ngram",
+      "rrf-bm25-dense-multilingual-e5-small"
+    ]
+  },
+  "dataset_id": "topic-smoke-v1",
+  "queries": [
+    {
+      "query": "LLM 에이전트 아키텍처 비교",
+      "query_id": "topic-llm-agent-architecture"
+    },
+    {
+      "query": "PDF에서 텍스트 추출하는 방법",
+      "query_id": "topic-pdf-text-extraction"
+    },
+    {
+      "query": "RAG 파이프라인 구축",
+      "query_id": "topic-rag-pipeline"
+    },
+    {
+      "query": "agent 만들기",
+      "query_id": "topic-agent-build"
+    },
+    {
+      "query": "embedding model comparison",
+      "query_id": "topic-embedding-model-comparison"
+    },
+    {
+      "query": "벡터 DB 성능 차이",
+      "query_id": "topic-vector-db-performance"
+    }
+  ],
+  "schema": "blogeval-topic-seed-v1"
+}

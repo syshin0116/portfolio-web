@@ -33,7 +33,7 @@ PUBLICATION_SIGNER_WORKFLOW = (
 PUBLICATION_WORKFLOW_IDENTITY = (
     f"{PUBLICATION_REPOSITORY}/.github/workflows/eval-publication.yml@refs/heads/main"
 )
-PUBLICATION_CANDIDATE_SCHEMA = "blogeval-publication-candidate-v1"
+PUBLICATION_CANDIDATE_SCHEMA = "blogeval-publication-candidate-v2"
 PUBLICATION_CANDIDATE_STATUS = "candidate-awaiting-external-verification"
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -43,6 +43,8 @@ _CANDIDATE_KEYS = frozenset(
     {
         "commit_sha",
         "content_git_tree_sha",
+        "dataset_checksum",
+        "dataset_id",
         "dataset_label_status",
         "execution_image_digest",
         "publication_status",
@@ -259,6 +261,8 @@ def verify_publication_candidate(
         exact_values = {
             "commit_sha": expected_commit,
             "content_git_tree_sha": dataset.corpus.git_tree_sha,
+            "dataset_checksum": dataset.checksum,
+            "dataset_id": dataset.dataset_id,
             "dataset_label_status": "owner-reviewed",
             "publication_status": PUBLICATION_CANDIDATE_STATUS,
             "schema": PUBLICATION_CANDIDATE_SCHEMA,

@@ -21,9 +21,14 @@ and query-set identity must all agree on the same full Git tree SHA.
   self-links, or unresolved targets). Its label status is
   `generated-owner-authored`, not `owner-reviewed`; it is useful for comparisons but
   cannot be published as relevance gold.
-- A `topic-smoke-v1` gold set is deliberately not committed yet. Topic recall is a
-  separate contract and requires owner-reviewed multi-document qrels. The synthetic
-  `tests/fixtures/topic-contract-v1.json` exercises its schema and metrics without
+- `querysets/topic-smoke-v1.seed.json` contains six versioned topic and cross-lingual
+  queries transcribed from the owner's published experiment plan and pins the exact
+  sparse, dense, and fusion candidate methods plus per-method limit, but contains no
+  relevance labels. The deterministic blind-pool, validation, owner seal, and
+  finalization workflow is documented in `docs/runbooks/topic-qrel-review.md`. The
+  review and final gold files remain deliberately absent until the owner judges every
+  candidate and attests pool completeness. The synthetic
+  `tests/fixtures/topic-contract-v1.json` exercises the topic schema and metrics without
   claiming relevance gold or enabling a macro gate.
 
 Each source artifact records its canonical SHA-256 checksum and upstream data
@@ -33,7 +38,11 @@ stale checksum or review metadata on an unreviewed set.
 
 Methods declare their own namespaced data dependencies. Every run and report classifies
 each comparison as `oracle-overlap` (the method reads a qrel source artifact),
-`in-sample-overlap` (it reads an ancestor of that artifact), or `clean-holdout`.
+`in-sample-overlap` (it reads an ancestor of that artifact),
+`candidate-pool-overlap` (the exact method fingerprint contributed documents to a topic
+judgement pool), or `clean-holdout`. Query-set schema v3 retains the blind-pool method
+fingerprints and sealed review/seed checksums so a pooled method cannot be mislabeled as
+a clean holdout after finalization.
 
 Known-item reports headline Hit@k, MRR@k, and coverage. Topic reports headline recall@k
 and coverage. The report generator does not calculate a headline nDCG score.
@@ -175,12 +184,19 @@ therefore always fails locally after first rejecting synthetic or unreviewed lab
 process cannot prove which container launched it.
 
 `.github/workflows/eval-publication.yml` is the only candidate-producing boundary. It is
-manual, main-only, gated by the dedicated `Evaluation Publication` environment, builds a
-pinned Linux amd64 image, derives its immutable image ID from Docker, executes by that
-exact ID, compares the image-built content tree to `HEAD:content`, verifies the result,
-and attests the sealed candidate archive with GitHub OIDC. The uploaded archive remains
-explicitly non-published. This environment is deliberately separate from `Production`,
-whose OIDC identity can reach GCP deployment resources.
+manual, main-only, gated by the dedicated `Evaluation Publication` environment, and has
+an exact choice between `known-item-alias-v1` and `topic-smoke-v1`. The latter fails
+closed until both the sealed owner review and its deterministically finalized query-set
+exist. The workflow builds a pinned Linux amd64 image, derives its immutable image ID
+from Docker, executes by that exact ID, compares the image-built content tree to
+`HEAD:content`, verifies the result, and attests the sealed candidate archive with GitHub
+OIDC. The topic path installs all eval extras and explicitly evaluates the six seed-pinned
+sparse/dense/fusion arms; the normal CI default stays at four lightweight provider-free
+methods. It remains intentionally blocked until the dense-method PR or a follow-up binds
+the exact pinned E5 snapshot into that immutable image—an ephemeral Actions cache is not
+accepted. Candidate schema v2 binds the dataset ID and checksum, and the uploaded archive
+remains explicitly non-published. This environment is deliberately separate from
+`Production`, whose OIDC identity can reach GCP deployment resources.
 
 Promotion into the retrieval-method catalogue requires all of these external checks:
 
@@ -193,9 +209,11 @@ Promotion into the retrieval-method catalogue requires all of these external che
    never logs inventory entries; it only validates that both `total_count` and the
    returned list length are zero.
 2. The reviewer approves the manual workflow for the intended main commit.
-3. Download the `blogeval-publication-candidate-<sha>` artifact. In a clean worktree
+3. Download the
+   `blogeval-publication-candidate-<dataset-id>-<sha>` artifact. In a clean worktree
    checked out at that exact main commit, rebuild the verified corpus index before
-   running the verifier:
+   running the verifier (the example below uses the currently committed known-item
+   dataset; select `topic-smoke-v1.json` for a reviewed topic run):
 
    ```bash
    expected_commit=<40-character-main-commit>
@@ -223,8 +241,8 @@ Promotion into the retrieval-method catalogue requires all of these external che
 4. Only after that command succeeds may its result digest be copied into the catalogue.
 
 The currently committed 90-query set intentionally fails step 3 until its qrels receive
-an explicit owner review. As of 2026-07-28, the manual publication workflow has not been
-dispatched and no evaluation result is claimed as published gold.
+an explicit owner review. `topic-smoke-v1` cannot reach the workflow at all until its
+owner review is sealed and finalized. No evaluation result is claimed as published gold.
 
 ## QuickJS × dynamic-subagent capability experiment
 

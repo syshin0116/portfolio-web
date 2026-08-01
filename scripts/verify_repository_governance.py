@@ -217,7 +217,7 @@ EVAL_CI_JOB_AST_SHA256 = (
 )
 EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
 EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
-    "88dd92e98edaeb66d0f24f067ec8439759995fac6539e913bff8020d574218e8"
+    "215e5b5d8aea9648264cc78b541f58ededb00541967e563e6d32e1961245fb02"
 )
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (

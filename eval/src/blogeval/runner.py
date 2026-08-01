@@ -174,6 +174,9 @@ def _run_id(
 def _data_relation(
     dependencies: tuple[str, ...],
     dataset: QuerySet,
+    *,
+    method_id: str,
+    fingerprint: str,
 ) -> tuple[str, tuple[str, ...]]:
     if not dependencies:
         raise EvaluationError(
@@ -190,6 +193,11 @@ def _data_relation(
     in_sample_overlap = tuple(sorted(set(dependencies) & ancestors))
     if in_sample_overlap:
         return "in-sample-overlap", in_sample_overlap
+    if dataset.pooling is not None and any(
+        method.method_id == method_id and method.fingerprint == fingerprint
+        for method in dataset.pooling.methods
+    ):
+        return "candidate-pool-overlap", (f"retriever:{method_id}@{fingerprint}",)
     return "clean-holdout", ()
 
 
@@ -312,6 +320,8 @@ def run_evaluation(
         evaluation_relation, overlap_sources = _data_relation(
             dependencies,
             dataset,
+            method_id=method_id,
+            fingerprint=resolved.fingerprint,
         )
         identities.append(
             {
@@ -519,7 +529,12 @@ def _parse_recorded_run(
                 f"{location}.data_lineage.dependencies differ from the "
                 "reviewed registration"
             )
-        relation, overlap = _data_relation(dependencies, dataset)
+        relation, overlap = _data_relation(
+            dependencies,
+            dataset,
+            method_id=method_id,
+            fingerprint=fingerprint,
+        )
         if lineage["evaluation_relation"] != relation:
             raise EvaluationError(f"{location}.data_lineage relation is incorrect")
         if lineage["overlap_sources"] != list(overlap):

@@ -29,7 +29,7 @@ from blogeval.jsonio import (
     write_bytes_atomic,
 )
 
-QUERYSET_SCHEMA = "blogeval-queryset-v2"
+QUERYSET_SCHEMA = "blogeval-queryset-v3"
 ALIAS_GENERATOR = "blogeval.wikilink-aliases"
 ALIAS_GENERATOR_VERSION = 1
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -42,6 +42,7 @@ _ROOT_KEYS = frozenset(
         "dataset_kind",
         "exclusions",
         "labels",
+        "pooling",
         "provenance",
         "qrels",
         "schema",
@@ -60,6 +61,15 @@ _PROVENANCE_KEYS = frozenset(
 _SOURCE_ARTIFACT_KEYS = frozenset({"derived_from", "path", "schema", "sha256"})
 _LABEL_KEYS = frozenset({"review", "reviewed_qrels_checksum", "status"})
 _REVIEW_KEYS = frozenset({"review_ref", "reviewed_at", "reviewer"})
+_POOLING_KEYS = frozenset(
+    {
+        "candidate_limit_per_method",
+        "methods",
+        "review_manifest_checksum",
+        "seed_checksum",
+    }
+)
+_POOLING_METHOD_KEYS = frozenset({"fingerprint", "method_id"})
 _QREL_KEYS = frozenset({"evidence", "query", "query_id", "relevant_doc_ids"})
 _EVIDENCE_KEYS = frozenset({"kind", "occurrences", "source_doc_id", "target"})
 _EXCLUSION_KEYS = frozenset(
@@ -213,11 +223,37 @@ class Provenance:
 
 
 @dataclass(frozen=True, slots=True)
+class PoolingMethod:
+    method_id: str
+    fingerprint: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {"fingerprint": self.fingerprint, "method_id": self.method_id}
+
+
+@dataclass(frozen=True, slots=True)
+class PoolingContract:
+    candidate_limit_per_method: int
+    methods: tuple[PoolingMethod, ...]
+    review_manifest_checksum: str
+    seed_checksum: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "candidate_limit_per_method": self.candidate_limit_per_method,
+            "methods": [method.as_dict() for method in self.methods],
+            "review_manifest_checksum": self.review_manifest_checksum,
+            "seed_checksum": self.seed_checksum,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class QuerySet:
     dataset_id: str
     kind: DatasetKind
     corpus: CorpusIdentity
     labels: LabelContract
+    pooling: PoolingContract | None
     provenance: Provenance
     qrels: tuple[Qrel, ...]
     exclusions: tuple[Exclusion, ...]
@@ -230,6 +266,7 @@ class QuerySet:
             "dataset_kind": self.kind.value,
             "exclusions": [item.as_dict() for item in self.exclusions],
             "labels": self.labels.as_dict(),
+            "pooling": self.pooling.as_dict() if self.pooling is not None else None,
             "provenance": self.provenance.as_dict(),
             "qrels": [item.as_dict() for item in self.qrels],
             "schema": QUERYSET_SCHEMA,
@@ -480,6 +517,63 @@ def _parse_labels(value: object, *, qrels: Sequence[Qrel]) -> LabelContract:
     return LabelContract(status, checksum_value, review)
 
 
+def _parse_pooling_method(value: object, *, index: int) -> PoolingMethod:
+    location = f"pooling.methods[{index}]"
+    raw = _mapping(value, location=location)
+    _exact_keys(raw, _POOLING_METHOD_KEYS, location=location)
+    fingerprint = _text(raw["fingerprint"], location=f"{location}.fingerprint")
+    if _SHA256_RE.fullmatch(fingerprint) is None:
+        raise DatasetError(f"{location}.fingerprint must be a sha256 checksum")
+    return PoolingMethod(
+        method_id=_text(raw["method_id"], location=f"{location}.method_id"),
+        fingerprint=fingerprint,
+    )
+
+
+def _parse_pooling(value: object) -> PoolingContract | None:
+    if value is None:
+        return None
+    raw = _mapping(value, location="pooling")
+    _exact_keys(raw, _POOLING_KEYS, location="pooling")
+    methods = tuple(
+        _parse_pooling_method(item, index=index)
+        for index, item in enumerate(_array(raw["methods"], location="pooling.methods"))
+    )
+    if not methods:
+        raise DatasetError("pooling.methods must not be empty")
+    if methods != tuple(sorted(methods, key=lambda item: item.method_id)):
+        raise DatasetError("pooling.methods must be sorted by method_id")
+    if len({method.method_id for method in methods}) != len(methods):
+        raise DatasetError("pooling.methods contains duplicate method IDs")
+    candidate_limit = _count(
+        raw["candidate_limit_per_method"],
+        location="pooling.candidate_limit_per_method",
+        positive=True,
+    )
+    if candidate_limit > 100:
+        raise DatasetError("pooling.candidate_limit_per_method cannot exceed 100")
+    review_checksum = _text(
+        raw["review_manifest_checksum"],
+        location="pooling.review_manifest_checksum",
+    )
+    seed_checksum = _text(
+        raw["seed_checksum"],
+        location="pooling.seed_checksum",
+    )
+    for location, checksum in (
+        ("pooling.review_manifest_checksum", review_checksum),
+        ("pooling.seed_checksum", seed_checksum),
+    ):
+        if _SHA256_RE.fullmatch(checksum) is None:
+            raise DatasetError(f"{location} must be a sha256 checksum")
+    return PoolingContract(
+        candidate_limit_per_method=candidate_limit,
+        methods=methods,
+        review_manifest_checksum=review_checksum,
+        seed_checksum=seed_checksum,
+    )
+
+
 def _parse_evidence(value: object, *, location: str) -> Evidence:
     raw = _mapping(value, location=location)
     _exact_keys(raw, _EVIDENCE_KEYS, location=location)
@@ -621,11 +715,25 @@ def parse_queryset(value: object, *, checksum: str) -> QuerySet:
                 "known-item source occurrences must equal included evidence plus "
                 "recorded exclusions"
             )
+    labels = _parse_labels(raw["labels"], qrels=qrels)
+    pooling = _parse_pooling(raw["pooling"])
+    if kind is DatasetKind.KNOWN_ITEM and pooling is not None:
+        raise DatasetError("known-item query-sets cannot carry topic pooling metadata")
+    if kind is DatasetKind.TOPIC:
+        if labels.status is LabelStatus.OWNER_REVIEWED and pooling is None:
+            raise DatasetError(
+                "owner-reviewed topic query-sets require exact pooling metadata"
+            )
+        if labels.status is not LabelStatus.OWNER_REVIEWED and pooling is not None:
+            raise DatasetError(
+                "unreviewed topic query-sets cannot carry reviewed pooling metadata"
+            )
     return QuerySet(
         dataset_id=_text(raw["dataset_id"], location="dataset_id"),
         kind=kind,
         corpus=corpus,
-        labels=_parse_labels(raw["labels"], qrels=qrels),
+        labels=labels,
+        pooling=pooling,
         provenance=provenance,
         qrels=qrels,
         exclusions=exclusions,
@@ -908,6 +1016,7 @@ def generate_known_item_alias_queryset(
             "reviewed_qrels_checksum": None,
             "status": LabelStatus.GENERATED_OWNER_AUTHORED.value,
         },
+        "pooling": None,
         "provenance": {
             "generator": ALIAS_GENERATOR,
             "generator_version": ALIAS_GENERATOR_VERSION,
@@ -949,6 +1058,8 @@ __all__ = [
     "Exclusion",
     "LabelContract",
     "LabelStatus",
+    "PoolingContract",
+    "PoolingMethod",
     "Provenance",
     "Qrel",
     "QUERYSET_SCHEMA",

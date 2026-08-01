@@ -888,6 +888,24 @@ class LocalGovernanceTests(unittest.TestCase):
                     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                 ),
             ),
+            "free-form-dataset": (
+                (
+                    "        type: choice\n",
+                    "        type: string\n",
+                ),
+            ),
+            "skip-topic-owner-review": (
+                (
+                    "                  blogeval finalize-topic-review \\\n",
+                    "                  blogeval validate-topic-review \\\n",
+                ),
+            ),
+            "skip-topic-dense-arm": (
+                (
+                    "                    --method dense-multilingual-e5-small\n",
+                    "",
+                ),
+            ),
         }
         for label, replacements in mutations.items():
             with self.subTest(label=label):

@@ -19,7 +19,12 @@ COPY scripts/build_index.py scripts/build_index.py
 COPY content content
 COPY eval/querysets eval/querysets
 
+ARG EVAL_DENSE=0
 RUN uv sync --frozen --package syshin0116-dev-agent --all-extras --dev \
-    && uv sync --frozen --package syshin0116-dev-eval --all-groups
+    && case "$EVAL_DENSE" in \
+        0) uv sync --frozen --package syshin0116-dev-eval --all-groups ;; \
+        1) uv sync --frozen --package syshin0116-dev-eval --extra dense --all-groups ;; \
+        *) echo "EVAL_DENSE must be 0 or 1" >&2; exit 1 ;; \
+    esac
 
 CMD ["blogeval", "--help"]

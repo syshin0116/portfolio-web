@@ -236,6 +236,7 @@
     "reviewed_qrels_checksum": null,
     "status": "generated-owner-authored"
   },
+  "pooling": null,
   "provenance": {
     "generator": "blogeval.wikilink-aliases",
     "generator_version": 1,
@@ -1844,5 +1845,5 @@
       ]
     }
   ],
-  "schema": "blogeval-queryset-v2"
+  "schema": "blogeval-queryset-v3"
 }

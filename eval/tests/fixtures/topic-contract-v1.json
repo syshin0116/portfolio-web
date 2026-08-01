@@ -12,6 +12,7 @@
     "reviewed_qrels_checksum": null,
     "status": "synthetic-only"
   },
+  "pooling": null,
   "provenance": {
     "generator": "synthetic-contract-fixture",
     "generator_version": 1,
@@ -37,5 +38,5 @@
       ]
     }
   ],
-  "schema": "blogeval-queryset-v2"
+  "schema": "blogeval-queryset-v3"
 }

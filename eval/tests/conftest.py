@@ -94,6 +94,7 @@ def known_dataset(memory_corpus: MemoryCorpus):
             "reviewed_qrels_checksum": None,
             "status": "synthetic-only",
         },
+        "pooling": None,
         "provenance": {
             "generator": "contract-fixture",
             "generator_version": 1,
@@ -136,7 +137,7 @@ def known_dataset(memory_corpus: MemoryCorpus):
                 "relevant_doc_ids": ["AI/beta.md"],
             },
         ],
-        "schema": "blogeval-queryset-v2",
+        "schema": "blogeval-queryset-v3",
     }
     payload = canonical_json_bytes(value)
     return parse_queryset(value, checksum=json_checksum(payload))

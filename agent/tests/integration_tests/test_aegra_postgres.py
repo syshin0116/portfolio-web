@@ -856,7 +856,63 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
             "agent_guest_daily_budget",
             "agent_guest_execution_quarantine",
         } <= tables
-        assert len(versions) == 1
+        assert versions == ["b88bb61be638"]
+
+        large_assistant_id = f"large-config-{unique}"
+        large_config = {
+            "configurable": {
+                "system_prompt": "large-aegra-config-" * 1_024,
+            }
+        }
+        async with (
+            await psycopg.AsyncConnection.connect(POSTGRES_URL) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND tablename = 'assistant'
+                  AND indexname = 'idx_assistant_user_graph_config'
+                """
+            )
+            index_row = await cursor.fetchone()
+            assert index_row is not None
+            assert "md5((config)::text)" in "".join(index_row[0].lower().split())
+
+            await cursor.execute(
+                """
+                INSERT INTO assistant (
+                    assistant_id,
+                    name,
+                    graph_id,
+                    config,
+                    context,
+                    user_id,
+                    metadata
+                )
+                VALUES (%s, %s, %s, %s::jsonb, '{}'::jsonb, %s, '{}'::jsonb)
+                """,
+                (
+                    large_assistant_id,
+                    "large config migration proof",
+                    f"large-config-graph-{unique}",
+                    json.dumps(large_config),
+                    f"large-config-owner-{unique}",
+                ),
+            )
+            await cursor.execute(
+                "SELECT config FROM assistant WHERE assistant_id = %s",
+                (large_assistant_id,),
+            )
+            inserted_config = await cursor.fetchone()
+            assert inserted_config is not None
+            assert inserted_config[0] == large_config
+            await cursor.execute(
+                "DELETE FROM assistant WHERE assistant_id = %s",
+                (large_assistant_id,),
+            )
 
         await db_manager.initialize()
 

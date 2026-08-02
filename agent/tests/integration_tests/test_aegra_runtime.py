@@ -9,15 +9,19 @@ import time
 from copy import deepcopy
 from importlib.metadata import version
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import httpx
 import jwt
 import pytest
 import uvicorn
+from aegra_api.api import runs as aegra_runs
 from aegra_api.core.orm import get_session
+from aegra_api.core.serializers.general import GeneralSerializer
 from aegra_api.core.sse import format_sse_message, get_sse_headers
 from aegra_api.main import app
+from aegra_api.models import RunCreate, User
 from aegra_api.services.event_streaming.capabilities import (
     _probe_runtime_symbols,
     get_v2_capabilities,
@@ -25,9 +29,11 @@ from aegra_api.services.event_streaming.capabilities import (
 from aegra_api.services.event_streaming.native_stream import stream_native_v3_events
 from aegra_api.services.event_streaming.protocol import build_event
 from aegra_api.services.event_streaming.session import ThreadEventSession
+from aegra_api.services.graph_streaming import stream_graph_events
 from aegra_api.services.thread_state_service import ThreadStateService
 from aegra_api.settings import settings
 from aegra_api.utils.assistants import resolve_assistant_id
+from fastapi import HTTPException
 from langchain_core._api import LangChainBetaWarning
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -97,18 +103,20 @@ def test_runtime_dependencies_are_the_spike_versions():
             "langgraph-checkpoint-postgres",
             "langgraph-sdk",
             "langsmith",
+            "openai",
             "uvicorn",
         )
     } == {
-        "aegra-api": "0.9.24",
-        "aegra-cli": "0.9.24",
+        "aegra-api": "0.9.25",
+        "aegra-cli": "0.9.25",
         "deepagents": "0.6.12",
         "langchain": "1.3.14",
         "langchain-core": "1.4.9",
-        "langgraph": "1.2.9",
+        "langgraph": "1.2.10",
         "langgraph-checkpoint-postgres": "3.1.0",
         "langgraph-sdk": "0.4.2",
         "langsmith": "0.10.10",
+        "openai": "2.52.0",
         "uvicorn": "0.51.0",
     }
     assert (
@@ -158,6 +166,119 @@ def test_pinned_runtime_supports_aegra_v2_dialect(monkeypatch):
     assert "/threads/{thread_id}/stream/events" in route_paths
     assert "/threads/{thread_id}/commands" in route_paths
     assert "/threads/{thread_id}/stream" not in route_paths
+
+
+@pytest.mark.parametrize(
+    "endpoint_name",
+    ("create_and_stream_run", "wait_for_run"),
+)
+async def test_legacy_run_entrypoints_fail_closed_through_create_run_auth(
+    monkeypatch,
+    endpoint_name,
+):
+    session = AsyncMock()
+    session.scalar.return_value = None
+    session_context = MagicMock()
+    session_context.__aenter__ = AsyncMock(return_value=session)
+    session_context.__aexit__ = AsyncMock(return_value=None)
+    session_maker = MagicMock(return_value=session_context)
+    auth_handler = AsyncMock(
+        side_effect=HTTPException(status_code=403, detail="fixture denied")
+    )
+    prepare_run = AsyncMock()
+    monkeypatch.setattr(aegra_runs, "_get_session_maker", lambda: session_maker)
+    monkeypatch.setattr(aegra_runs, "handle_event", auth_handler)
+    monkeypatch.setattr(aegra_runs, "_prepare_run", prepare_run)
+
+    endpoint = getattr(aegra_runs, endpoint_name)
+    request = RunCreate(assistant_id="agent", input={})
+    user = User(identity="legacy-owner", scopes=[])
+
+    with pytest.raises(HTTPException, match="fixture denied") as exc_info:
+        await endpoint("legacy-thread", request, user)
+
+    assert exc_info.value.status_code == 403
+    auth_handler.assert_awaited_once()
+    context, value = auth_handler.call_args.args
+    assert context.resource == "threads"
+    assert context.action == "create_run"
+    assert value["thread_id"] == "legacy-thread"
+    prepare_run.assert_not_awaited()
+
+
+def test_aegra_serializes_tool_returned_command_structurally():
+    command = Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    "updated",
+                    tool_call_id="call-runtime-patch",
+                    name="write_todos",
+                )
+            ],
+            "todos": [{"content": "verify", "status": "in_progress"}],
+        },
+        resume=False,
+    )
+
+    serialized = GeneralSerializer().serialize(command)
+
+    assert set(serialized) == {"graph", "update", "resume", "goto"}
+    assert serialized["graph"] is None
+    assert serialized["resume"] is False
+    assert serialized["goto"] == []
+    assert serialized["update"]["messages"][0]["tool_call_id"] == ("call-runtime-patch")
+    assert serialized["update"]["todos"][0]["status"] == "in_progress"
+
+
+async def test_aegra_forwards_run_interrupts_to_both_streaming_paths():
+    class RecordingGraph:
+        output_channels = None
+
+        def __init__(self):
+            self.astream_kwargs = None
+            self.astream_events_kwargs = None
+
+        async def astream(self, _input, _config, **kwargs):
+            self.astream_kwargs = kwargs
+            yield "values", {"done": True}
+
+        async def astream_events(self, _input, _config, **kwargs):
+            self.astream_events_kwargs = kwargs
+            yield {
+                "event": "on_chain_stream",
+                "run_id": "run-runtime-patch",
+                "data": {"chunk": ("values", {"done": True})},
+            }
+
+    config = {
+        "configurable": {"run_id": "run-runtime-patch"},
+        "metadata": {"run_attempt": 1},
+        "interrupt_before": ["*"],
+        "interrupt_after": ["tools"],
+    }
+
+    standard = RecordingGraph()
+    async for _mode, _payload in stream_graph_events(
+        standard,
+        {"messages": []},
+        config,
+        stream_mode=["values"],
+    ):
+        pass
+    assert standard.astream_kwargs["interrupt_before"] == "*"
+    assert standard.astream_kwargs["interrupt_after"] == ["tools"]
+
+    events = RecordingGraph()
+    async for _mode, _payload in stream_graph_events(
+        events,
+        {"messages": []},
+        config,
+        stream_mode=["events"],
+    ):
+        pass
+    assert events.astream_events_kwargs["interrupt_before"] == "*"
+    assert events.astream_events_kwargs["interrupt_after"] == ["tools"]
 
 
 async def test_custom_http_app_guard_wraps_native_v2_command_route(monkeypatch):
@@ -479,7 +600,7 @@ async def test_guest_public_wire_projects_pinned_aegra_thread_state(
         and event["params"]["data"]["event"] == "interrupted"
         for event in root_events
     )
-    # Aegra 0.9.24 records the nested copy of this interrupt before namespace
+    # Aegra 0.9.25 records the nested copy of this interrupt before namespace
     # filtering and then suppresses the root copy as a duplicate.
     assert not any(event["method"] == "input.requested" for event in root_events)
 
@@ -646,7 +767,7 @@ async def test_uvicorn_serves_and_stops_the_aegra_app():
             response = await client.get("/info")
 
         assert response.status_code == 200
-        assert response.json()["version"] == "0.9.24"
+        assert response.json()["version"] == "0.9.25"
     finally:
         server.should_exit = True
         await asyncio.wait_for(server_task, timeout=5)

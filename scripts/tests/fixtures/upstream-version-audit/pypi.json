@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "aegra-api",
-    "version": "0.9.24"
+    "version": "0.9.25"
   },
   "releases": {
     "0.9.23": [
@@ -10,6 +10,11 @@
       }
     ],
     "0.9.24": [
+      {
+        "yanked": false
+      }
+    ],
+    "0.9.25": [
       {
         "yanked": false
       }

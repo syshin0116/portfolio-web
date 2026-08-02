@@ -197,7 +197,7 @@ async def probe_runtime_grants() -> None:
     """Require setup/DML while rejecting cross-schema and role administration."""
     _require_direct_database_url()
     try:
-        # Aegra 0.9.24 calls saver/store setup during every runtime lifespan.
+        # Aegra 0.9.25 calls saver/store setup during every runtime lifespan.
         # Successful initialization is therefore the exact temporary DDL allow-gate.
         await db_manager.initialize()
         engine = db_manager.get_engine()

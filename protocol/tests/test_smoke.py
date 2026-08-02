@@ -66,7 +66,7 @@ class SmokeArgumentTests(unittest.TestCase):
             smoke.parse_args(["--base-url", "http://127.0.0.1:8000"])
 
     def test_aegra_profile_uses_verified_runtime_path(self) -> None:
-        profile = smoke._profiles(load_lock())["aegra-0.9.24"]
+        profile = smoke._profiles(load_lock())["aegra-0.9.25"]
         self.assertEqual(
             "/threads/{thread_id}/stream/events",
             profile.stream_path,
@@ -104,7 +104,7 @@ class SSEParserTests(unittest.IsolatedAsyncioTestCase):
 class AuthenticatedLogRedactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_success_never_prints_server_visible_text(self) -> None:
         args = argparse.Namespace(
-            profile="aegra-0.9.24",
+            profile="aegra-0.9.25",
             token_env="TEST_LIVE_TOKEN",
             hitl_response='{"action":"approve"}',
             base_url="https://agent.example.invalid",

@@ -1,6 +1,6 @@
 {
   "fixture_version": 1,
-  "name": "Aegra 0.9.24 HITL dialect translation",
+  "name": "Aegra 0.9.25 HITL dialect translation",
   "description": "The raw Aegra value field is translated once into the official generated payload field.",
   "protocol_commit": "0ff7cd3962e8b4b3e347b76203be7dfeba003928",
   "wire_profile": "official-generated-snake-case",

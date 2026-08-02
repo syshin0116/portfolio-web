@@ -18,7 +18,7 @@ members = [
 
 [[package]]
 name = "aegra-api"
-version = "0.9.24"
+version = "0.9.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
@@ -44,14 +44,14 @@ dependencies = [
     { name = "structlog" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/ce/94ae06d5856889ffc74e821a2350c878d35a92e77591c564cfb5f7a9c461/aegra_api-0.9.24.tar.gz", hash = "sha256:074070291f98a05a55b5d1f506a9c8aa946b775bb4a15ad5e847f690009ff010", size = 416433, upload-time = "2026-07-05T13:04:48.275Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/d3/aa93ff33242e0995e1b7f74076eb0eb4d0cf56cf1515391d91cb91a808e6/aegra_api-0.9.25.tar.gz", hash = "sha256:e2a7a37da87a74a3f8397b17541ed382bf1ca0ae829dae1b09f40e3aa8023e61", size = 431973, upload-time = "2026-08-02T10:45:30.173Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/44/5400d606e0262a026884aa8b53400421b8a7f933da7e8c66025b5821a079/aegra_api-0.9.24-py3-none-any.whl", hash = "sha256:8b556a396545406ab63dbbc8aa10c5468fa7d34c3296feed3c8cc491582655a6", size = 219550, upload-time = "2026-07-05T13:04:46.896Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/4d/91344fcb35b9d342110e609f2e91a52fdc1e67694c744b9eb6dd9c9a4b51/aegra_api-0.9.25-py3-none-any.whl", hash = "sha256:bd18cf7b58ce390fed511b751d90a748718a4a144301429e6e60da2d30143b01", size = 224397, upload-time = "2026-08-02T10:45:28.855Z" },
 ]
 
 [[package]]
 name = "aegra-cli"
-version = "0.9.24"
+version = "0.9.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aegra-api" },
@@ -60,9 +60,9 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ff/eb/dc5191fc430a76afa1a9481e31530ac525c494267ebf2d252969282ae9aa/aegra_cli-0.9.24.tar.gz", hash = "sha256:a648a6b0f6a286b68fccc6e2446f584169f9c606e45a165df60e0aee17c99ab4", size = 37157, upload-time = "2026-07-05T13:06:07.863Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/a7/9e4a7120377998b146da4efec19e9b8f3febfeffa9d5d549f42ebecd44ee/aegra_cli-0.9.25.tar.gz", hash = "sha256:de1155757cab809256f4705bf69610fd24b47b7c28b8b9c02c68d069c626c90a", size = 37256, upload-time = "2026-08-02T10:49:20.968Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/53/a617b6cf39ae7521522f4c1ebf4feed95ee3382c80fba1a45cfc8abe2eb8/aegra_cli-0.9.24-py3-none-any.whl", hash = "sha256:f904fe89d60962b3d2839fe159658586d1157b559838abe805f3ce7ea94a54d7", size = 33565, upload-time = "2026-07-05T13:06:06.814Z" },
+    { url = "https://files.pythonhosted.org/packages/46/56/5252359175bc0e3c4a4e9f9396ffdf68be799ac61f5700fbc0d7246925f5/aegra_cli-0.9.25-py3-none-any.whl", hash = "sha256:9b0478c4e42640cb8f21ece39cc4981e50e0ee672fb1f21b38d10b951a04215e", size = 33565, upload-time = "2026-08-02T10:49:19.788Z" },
 ]
 
 [[package]]
@@ -1106,7 +1106,7 @@ wheels = [
 
 [[package]]
 name = "langgraph"
-version = "1.2.9"
+version = "1.2.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
@@ -1116,9 +1116,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/4b/0d1130e26b41a99dcc88353bbe7162a1f255c4db746bd94024268e6af27b/langgraph-1.2.9.tar.gz", hash = "sha256:385f87bc1802c35af7e0aa479278ecba8582d103515eb48256cb2ddcd42d0bd4", size = 722869, upload-time = "2026-07-10T01:30:14.985Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/1d/a32f3caf4b3d60651656c0d64976b48d168653e81c71bb7512e9a31541aa/langgraph-1.2.10.tar.gz", hash = "sha256:05a183a746ed570a06c7c1b879920163509a75df9e44e92dd2238218d677fd37", size = 723404, upload-time = "2026-07-28T18:33:51.441Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/16/0b8dc48823f1326f3e0c8012a3c07a40da6f194299e2ec080df236287baf/langgraph-1.2.9-py3-none-any.whl", hash = "sha256:c2d98ad94333937922ba04148641c1da2bfe45b5b8e55d7b6dcb0bb2df809e76", size = 247473, upload-time = "2026-07-10T01:30:13.733Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/4d/3fc3e2535ee2c731130d71371848ebc6d4a9d2e8ae6060b11987ba134951/langgraph-1.2.10-py3-none-any.whl", hash = "sha256:52c48bd42fa31a1de0e1c0f0ebfe342e11ca2957b8b3563f83dbd60d8e30f921", size = 247753, upload-time = "2026-07-28T18:33:50.028Z" },
 ]
 
 [[package]]
@@ -1414,7 +1414,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "2.50.0"
+version = "2.52.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1426,9 +1426,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/f5/e7735f2af272ee179a287911a698b3cbdb59d7a4ac4874571363adf1e4de/openai-2.50.0.tar.gz", hash = "sha256:5128f7caf4a6b01aefd6e7e93efe170a2c3427b8de286b9af5cdff3aa47e02c8", size = 1081965, upload-time = "2026-07-28T22:16:31.674Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/5a/c45fa035cd72c70ebe67c6e079e3adf871492382634f69e3dff62c43597d/openai-2.52.0.tar.gz", hash = "sha256:7c736d592f81471ce1f734838390983c4d8c8aecff23dcd36e600a58e5032d9c", size = 1098876, upload-time = "2026-07-31T15:13:03.228Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/ca/db315b3bb748c26c644a3f85b7d509e774354d6518d47080b1446005ee41/openai-2.50.0-py3-none-any.whl", hash = "sha256:90bdddcc5a2fa529b350fac9c5780d87e5c361dcc6090ab57b0d470b0d7af7fa", size = 1650721, upload-time = "2026-07-28T22:16:29.48Z" },
+    { url = "https://files.pythonhosted.org/packages/a1/ac/ceb40c995df49533ad4dcff6c37f0d85cf14446a212363fc9d2f927e60b4/openai-2.52.0-py3-none-any.whl", hash = "sha256:f97e231d9a8fa69ab55897df1080f02d99913fb0a30e3ee56ea16a1eb6c2d434", size = 1659569, upload-time = "2026-07-31T15:13:01.145Z" },
 ]
 
 [[package]]
@@ -2574,8 +2574,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aegra-api", specifier = "==0.9.24" },
-    { name = "aegra-cli", specifier = "==0.9.24" },
+    { name = "aegra-api", specifier = "==0.9.25" },
+    { name = "aegra-cli", specifier = "==0.9.25" },
     { name = "deepagents", specifier = "==0.6.12" },
     { name = "fastapi", specifier = ">=0.139.2" },
     { name = "httpx", specifier = "==0.28.1" },
@@ -2586,11 +2586,11 @@ requires-dist = [
     { name = "langchain-core", specifier = "==1.4.9" },
     { name = "langchain-openai", specifier = "==1.3.5" },
     { name = "langchain-quickjs", specifier = "==0.3.4" },
-    { name = "langgraph", specifier = "==1.2.9" },
+    { name = "langgraph", specifier = "==1.2.10" },
     { name = "langgraph-sdk", specifier = "==0.4.2" },
     { name = "langsmith", specifier = "==0.10.10" },
     { name = "numpy", specifier = "==2.4.4" },
-    { name = "openai", specifier = "==2.50.0" },
+    { name = "openai", specifier = "==2.52.0" },
     { name = "pyjwt", specifier = "==2.13.0" },
     { name = "quickjs-rs", specifier = "==0.2.5" },
     { name = "rank-bm25", specifier = "==0.2.2" },

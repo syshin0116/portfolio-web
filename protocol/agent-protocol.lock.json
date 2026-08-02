@@ -1,6 +1,6 @@
 {
   "lockVersion": 1,
-  "lockedAt": "2026-07-26",
+  "lockedAt": "2026-08-03",
   "protocol": {
     "repository": "https://github.com/langchain-ai/agent-protocol",
     "tag": "langchain-protocol==0.0.18",
@@ -73,14 +73,14 @@
   },
   "aegra": {
     "repository": "https://github.com/ibbybuilds/aegra",
-    "tag": "v0.9.24",
-    "commit": "51cb5a61f0b5e709d423e3d14978619a2a7c3960",
-    "commitDate": "2026-07-05T17:10:15+05:00",
+    "tag": "v0.9.25",
+    "commit": "1f0076a69bc7cdf5f61b5487bc17d112ee64eb0c",
+    "commitDate": "2026-08-01T12:56:58Z",
     "streamingImplementationCommit": "9e1707c766cb96dffebe5da5bc1200d45704f87c",
     "artifacts": {
       "openapi": {
         "upstreamPath": "docs/openapi.json",
-        "sha256": "39f3c625c642ab0d04ffb59a674f9146f4cf8df891c5c37a47f3ef96387620fb"
+        "sha256": "599fc2645280743e0c87987e977394ce41724b78f95dfdbf81451017a064044c"
       },
       "route": {
         "upstreamPath": "libs/aegra-api/src/aegra_api/api/event_streaming.py",
@@ -116,7 +116,7 @@
         "status": "path-divergence",
         "required": "POST /threads/{thread_id}/stream",
         "actual": "POST /threads/{thread_id}/stream/events",
-        "consequence": "Use the explicit aegra-0.9.24 smoke profile; the locked upstream transport path must remain visible as a compatibility gap."
+        "consequence": "Use the explicit aegra-0.9.25 smoke profile; the locked upstream transport path must remain visible as a compatibility gap."
       },
       {
         "capability": "WebSocket thread stream",
@@ -138,13 +138,13 @@
         "capability": "input.respond update and goto",
         "status": "ignored",
         "required": "Agent Protocol 0.0.18 InputRespondOne/InputRespondMany update and goto fields",
-        "actual": "Aegra 0.9.24 builds only Command(resume=...) and does not forward update or goto.",
+        "actual": "Aegra 0.9.25 builds only Command(resume=...) and does not forward update or goto.",
         "consequence": "Do not advertise atomic resume+update or directed resume until an Aegra version passes a live fixture for both fields."
       },
       {
         "capability": "input.inject, state.*, agent.getTree, subscription.*",
         "status": "unsupported",
-        "consequence": "Aegra 0.9.24 command dispatch implements only run.start and input.respond."
+        "consequence": "Aegra 0.9.25 command dispatch implements only run.start and input.respond."
       },
       {
         "capability": "Replay after sequence",

@@ -17,10 +17,10 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import upstream_version_audit as audit  # noqa: E402
 
 CORE_PYTHON_VERSIONS = {
-    "aegra-api": "0.9.24",
-    "aegra-cli": "0.9.24",
+    "aegra-api": "0.9.25",
+    "aegra-cli": "0.9.25",
     "deepagents": "0.6.12",
-    "langgraph": "1.2.9",
+    "langgraph": "1.2.10",
     "langgraph-sdk": "0.4.2",
 }
 QUICKJS_VERSIONS = {
@@ -29,7 +29,7 @@ QUICKJS_VERSIONS = {
 }
 OPENAI_VERSIONS = {
     "langchain-openai": "1.3.5",
-    "openai": "2.50.0",
+    "openai": "2.52.0",
 }
 PYTHON_VERSIONS = {
     **CORE_PYTHON_VERSIONS,
@@ -182,7 +182,7 @@ def write_base_repository(root: Path) -> None:
         },
         "aegra": {
             "repository": audit.CANONICAL_AEGRA_REPOSITORY,
-            "tag": "v0.9.24",
+            "tag": "v0.9.25",
         },
     }
     (root / audit.PROTOCOL_LOCK).write_text(
@@ -286,7 +286,7 @@ class OfficialShapeTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual("0.9.24", release.version.text)
+        self.assertEqual("0.9.25", release.version.text)
 
     def test_quickjs_pypi_fixtures_ignore_prerelease_and_yanked_releases(
         self,
@@ -394,7 +394,7 @@ class OfficialShapeTests(unittest.TestCase):
         releases = payload["releases"]
         if not isinstance(releases, dict):
             self.fail("invalid fixture")
-        files = releases["0.9.24"]
+        files = releases["0.9.25"]
         if not isinstance(files, list) or not isinstance(files[0], dict):
             self.fail("invalid fixture")
         files[0]["yanked"] = 0
@@ -677,8 +677,8 @@ class RepositoryAuditTests(unittest.TestCase):
         self.assertEqual("1.3.5", langchain_openai["latest"])
         self.assertEqual("1.4.0", langchain_openai["stableVersionCeiling"])
         openai = target(document, "openai-python")
-        self.assertEqual("2.50.0", openai["installed"])
-        self.assertEqual("2.50.0", openai["latest"])
+        self.assertEqual("2.52.0", openai["installed"])
+        self.assertEqual("2.52.0", openai["latest"])
 
     def test_assistant_ui_activation_requires_and_audits_complete_exact_group(
         self,
@@ -901,8 +901,8 @@ class RepositoryAuditTests(unittest.TestCase):
         lock = self.root / audit.PYTHON_LOCK
         lock.write_text(
             lock.read_text(encoding="utf-8").replace(
+                'name = "langgraph"\nversion = "1.2.10"',
                 'name = "langgraph"\nversion = "1.2.9"',
-                'name = "langgraph"\nversion = "1.2.8"',
             ),
             encoding="utf-8",
         )

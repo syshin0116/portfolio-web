@@ -74,7 +74,7 @@ OPENAI_CAPABILITY_PROVIDER_CONTRACT = (
     "openai-responses:gpt-5.6-luna@2026-08-02:"
     "reasoning-none-current-turn:store-false:"
     "official-api-openai-v1:no-ambient-routing:"
-    "langchain-openai-1.3.5:openai-2.50.0"
+    "langchain-openai-1.3.5:openai-2.52.0"
 )
 OPENAI_CAPABILITY_CACHE_MODE = "openai-implicit-recorded"
 OPENAI_CAPABILITY_MAX_ATTEMPTS = 1

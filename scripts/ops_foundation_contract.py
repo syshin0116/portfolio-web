@@ -45,7 +45,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
 }
 EXPECTED_PINNED_READINESS_FILES = {
     "scripts/gcp_project_readiness_contract.json": (
-        "40a7244d0d2266985a2aaaf8072346cb4852a6e72226a1bc701c66e860b4711c"
+        "e1bdcf7e7b412f3769fe65d1ad196c2d8986e1cbeb8116836e6af2d7310655a8"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(

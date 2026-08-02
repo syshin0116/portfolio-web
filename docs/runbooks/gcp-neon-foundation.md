@@ -86,6 +86,10 @@ the project identity and direct IAM, enabled APIs, custom delivery role, both re
 and their direct IAM, state-bucket and state-object metadata, exact-project service
 accounts and user-managed keys, Secret Manager metadata and direct IAM, WIF, Cloud Run
 services/jobs and their direct IAM, and the maintenance Scheduler.
+For anonymous runtime drift, Production must expose exactly
+`openai:gpt-5.6-luna / 500000 / 18892`; Preview must remain disabled with blank guest
+model, daily budget, and run reservation. This verifies deployed direct state only and
+does not authorize public launch or claim a provider-side hard spend stop.
 
 The live verifier never reads a secret payload or Terraform state contents, executes a
 job, inspects logs, mutates a resource, follows or queries an organization/folder/

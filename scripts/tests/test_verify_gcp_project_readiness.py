@@ -32,6 +32,7 @@ from scripts.verify_gcp_project_readiness import (
     PREVIEW_RUNTIME_SA,
     PRODUCTION_DEPLOYER_SA,
     PRODUCTION_MIGRATOR_SA,
+    PRODUCTION_RUNTIME_ENV,
     PRODUCTION_RUNTIME_SA,
     PROJECT_ID,
     PROJECT_NUMBER,
@@ -617,6 +618,21 @@ class ExactProjectCommandBoundaryTests(unittest.TestCase):
             },
         ):
             with self.assertRaisesRegex(ReadinessError, "literal oracle"):
+                validate_readiness_source_contract()
+
+    def test_literal_oracle_rejects_old_production_guest_reservation(self) -> None:
+        from scripts import verify_gcp_project_readiness as readiness
+
+        self.assertEqual(
+            "18892", PRODUCTION_RUNTIME_ENV["GUEST_RUN_RESERVATION_MICRO_USD"]
+        )
+        with patch.object(
+            readiness,
+            "PRODUCTION_RUNTIME_ENV",
+            readiness.PRODUCTION_RUNTIME_ENV
+            | {"GUEST_RUN_RESERVATION_MICRO_USD": "6892"},
+        ):
+            with self.assertRaisesRegex(ReadinessError, "anonymous runtime"):
                 validate_readiness_source_contract()
 
     def test_catalog_accepts_only_the_exact_project_read(self) -> None:

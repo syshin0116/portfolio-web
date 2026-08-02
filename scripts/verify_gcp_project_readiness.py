@@ -48,7 +48,7 @@ READINESS_CONTRACT_PATH = Path(__file__).with_name(
     "gcp_project_readiness_contract.json"
 )
 READINESS_CONTRACT_SHA256 = (
-    "40a7244d0d2266985a2aaaf8072346cb4852a6e72226a1bc701c66e860b4711c"
+    "e1bdcf7e7b412f3769fe65d1ad196c2d8986e1cbeb8116836e6af2d7310655a8"
 )
 
 PRODUCTION_RUNTIME_SA = f"agent-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
@@ -139,7 +139,7 @@ PRODUCTION_RUNTIME_ENV = COMMON_RUNTIME_ENV | {
     "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
     "GUEST_DAILY_BUDGET_MICRO_USD": "500000",
     "GUEST_MODEL": "openai:gpt-5.6-luna",
-    "GUEST_RUN_RESERVATION_MICRO_USD": "6892",
+    "GUEST_RUN_RESERVATION_MICRO_USD": "18892",
 }
 PREVIEW_RUNTIME_SECRETS = {
     "AGENT_AUTH_SECRET": "agent-preview-auth-secret",
@@ -589,6 +589,7 @@ def validate_readiness_source_contract() -> None:
         "secretOperations",
         "fixedSingletonCommands",
         "dynamicServiceAccountKeyCommand",
+        "anonymousRuntimeContract",
     }
     if set(document) != expected_keys or document.get("schemaVersion") != 1:
         _fail("readiness contract manifest schema drifted")
@@ -615,6 +616,32 @@ def validate_readiness_source_contract() -> None:
         for key, expected in inventory_contract.items()
     ):
         _fail("readiness source resource inventory drifted")
+    anonymous_runtime = _object(
+        document.get("anonymousRuntimeContract"),
+        "anonymous runtime contract",
+    )
+    expected_anonymous_runtime = {
+        "preview": {
+            key: PREVIEW_RUNTIME_ENV[key]
+            for key in (
+                "AGENT_ANONYMOUS_ACCESS_ENABLED",
+                "GUEST_DAILY_BUDGET_MICRO_USD",
+                "GUEST_MODEL",
+                "GUEST_RUN_RESERVATION_MICRO_USD",
+            )
+        },
+        "production": {
+            key: PRODUCTION_RUNTIME_ENV[key]
+            for key in (
+                "AGENT_ANONYMOUS_ACCESS_ENABLED",
+                "GUEST_DAILY_BUDGET_MICRO_USD",
+                "GUEST_MODEL",
+                "GUEST_RUN_RESERVATION_MICRO_USD",
+            )
+        },
+    }
+    if anonymous_runtime != expected_anonymous_runtime:
+        _fail("readiness source anonymous runtime contract drifted")
     operation_contract = {
         "repositoryOperations": ("describe", "get-iam-policy"),
         "serviceOperations": ("describe", "get-iam-policy"),

@@ -179,6 +179,36 @@ function collectDiagnostics(page: Page): BrowserDiagnostics {
 }
 
 test.describe.serial("native assistant-ui production journey", () => {
+  test("keeps remote thread-list and composer notifications live under StrictMode", async ({
+    page,
+  }, testInfo) => {
+    const diagnostics = collectDiagnostics(page)
+    await resetFixture(page)
+    await page.goto("/")
+    await expect(
+      page.getByTestId("production-native-runtime-fixture")
+    ).toBeVisible()
+
+    const fixtureThread = page.getByRole("button", {
+      name: /브라우저 테스트 대화/,
+    })
+    await expect(fixtureThread).toBeVisible()
+    await fixtureThread.click()
+
+    const composer = page.getByRole("textbox", {
+      name: "AI에게 보낼 메시지",
+    })
+    await expect(composer).toBeEnabled()
+    await composer.fill("StrictMode 알림 회귀 검증")
+    await expect(composer).toHaveValue("StrictMode 알림 회귀 검증")
+    await expect
+      .poll(async () => (await fixtureState(page)).commands.length)
+      .toBe(0)
+
+    await attachEvidence(page, testInfo, "strict-mode-notifications")
+    await expectNoBrowserErrors(page, diagnostics)
+  })
+
   test("uses exact APv2 filters and survives nested HITL rejection/retry", async ({
     page,
   }, testInfo) => {

@@ -1,5 +1,14 @@
+import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
+
+export const ASSISTANT_UI_STORE_PATCH = {
+  target: "@assistant-ui/store@0.3.2",
+  path: "patches/@assistant-ui%2Fstore@0.3.2.patch",
+  sha256: "1d4abb63ce388971ec8fc1e28668c98c58748b3bfa816bb467e0772925657609",
+  // Exact NotificationManager fix merged upstream in assistant-ui PR #5411.
+  upstreamCommit: "90b3003b943e083fa6cd81e30181bf5b88904361",
+} as const
 
 export const TEMPORARY_ADVISORY = {
   cve: "CVE-2026-14257",
@@ -40,10 +49,10 @@ const EXPECTED_ESLINT_PLUGIN_RECORDS = new Map([
 ])
 
 const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
-  ["@assistant-ui/react", "@assistant-ui/react@0.15.0"],
+  ["@assistant-ui/react", "@assistant-ui/react@0.15.1"],
   [
     "@assistant-ui/react-langgraph",
-    "@assistant-ui/react-langgraph@0.14.15",
+    "@assistant-ui/react-langgraph@0.14.17",
   ],
   ["@auth/neon-adapter", "@auth/neon-adapter@1.11.3"],
   ["@langchain/core", "@langchain/core@1.2.3"],
@@ -59,8 +68,8 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
 ])
 
 const EXPECTED_NATIVE_AGENT_PINS = new Map([
-  ["@assistant-ui/react", "0.15.0"],
-  ["@assistant-ui/react-langgraph", "0.14.15"],
+  ["@assistant-ui/react", "0.15.1"],
+  ["@assistant-ui/react-langgraph", "0.14.17"],
   ["@langchain/langgraph-sdk", "1.9.28"],
   ["@langchain/protocol", "0.0.18"],
 ])
@@ -153,6 +162,7 @@ export interface AuditPolicyEvidence {
   ignored: AuditCommandResult
   packageJson: string
   bunLock: string
+  assistantUiStorePatch: string
   now: Date
 }
 
@@ -357,7 +367,68 @@ function requireAuthDatabasePins(
   }
 }
 
-function requireDevOnlyException(packageJson: string, bunLock: string): void {
+function requireExactAssistantUiStorePatch(
+  manifest: Record<string, unknown>,
+  records: Map<string, { resolved: string; line: string }>,
+  bunLock: string,
+  patch: string,
+): void {
+  const patchedDependencies = manifest.patchedDependencies
+  if (!isRecord(patchedDependencies)) {
+    fail("package.json must contain one patchedDependencies object")
+  }
+  const manifestEntries = Object.entries(patchedDependencies)
+  const expectedEntry = [
+    ASSISTANT_UI_STORE_PATCH.target,
+    ASSISTANT_UI_STORE_PATCH.path,
+  ]
+  if (
+    manifestEntries.length !== 1 ||
+    JSON.stringify(manifestEntries[0]) !== JSON.stringify(expectedEntry)
+  ) {
+    fail(
+      `assistant-ui store patch target drifted; ` +
+        `actual=${JSON.stringify(manifestEntries)}, ` +
+        `expected=${JSON.stringify([expectedEntry])}`,
+    )
+  }
+
+  const lockSections = [
+    ...bunLock.matchAll(
+      /^  "patchedDependencies": \{\r?\n([\s\S]*?)^  \},$/gmu,
+    ),
+  ]
+  const expectedLockLine =
+    `    "${ASSISTANT_UI_STORE_PATCH.target}": ` +
+    `"${ASSISTANT_UI_STORE_PATCH.path}",`
+  if (
+    lockSections.length !== 1 ||
+    lockSections[0]?.[1]?.trim() !== expectedLockLine.trim()
+  ) {
+    fail("bun.lock assistant-ui store patchedDependencies entry drifted")
+  }
+  if (
+    records.get("@assistant-ui/store")?.resolved !==
+    ASSISTANT_UI_STORE_PATCH.target
+  ) {
+    fail("assistant-ui store patch must apply only to resolved store 0.3.2")
+  }
+
+  const actualSha256 = createHash("sha256").update(patch).digest("hex")
+  if (actualSha256 !== ASSISTANT_UI_STORE_PATCH.sha256) {
+    fail(
+      `assistant-ui store patch content drifted from upstream commit ` +
+        `${ASSISTANT_UI_STORE_PATCH.upstreamCommit}; ` +
+        `actual=${actualSha256}`,
+    )
+  }
+}
+
+function requireDevOnlyException(
+  packageJson: string,
+  bunLock: string,
+  assistantUiStorePatch: string,
+): void {
   let manifest: unknown
   try {
     manifest = JSON.parse(packageJson)
@@ -407,6 +478,12 @@ function requireDevOnlyException(packageJson: string, bunLock: string): void {
   }
 
   const records = packageRecords(bunLock)
+  requireExactAssistantUiStorePatch(
+    manifest,
+    records,
+    bunLock,
+    assistantUiStorePatch,
+  )
   requireNativeAgentPins(records, dependencies)
   requireAuthDatabasePins(records, dependencies)
   requireExactRecords(
@@ -503,7 +580,11 @@ export function validateAuditPolicy(evidence: AuditPolicyEvidence): void {
   requireEmptySuccessfulAudit(evidence.production, "production")
   requireExactTemporaryAdvisory(evidence.complete)
   requireUnexpiredException(evidence.now)
-  requireDevOnlyException(evidence.packageJson, evidence.bunLock)
+  requireDevOnlyException(
+    evidence.packageJson,
+    evidence.bunLock,
+    evidence.assistantUiStorePatch,
+  )
   requireSuccessfulIgnoredAudit(evidence.ignored)
 }
 
@@ -534,6 +615,10 @@ async function main(): Promise<void> {
     ], false),
     packageJson: await readFile(resolve(webRoot, "package.json"), "utf8"),
     bunLock: await readFile(resolve(webRoot, "bun.lock"), "utf8"),
+    assistantUiStorePatch: await readFile(
+      resolve(webRoot, ASSISTANT_UI_STORE_PATCH.path),
+      "utf8",
+    ),
     now: new Date(),
   }
   validateAuditPolicy(evidence)

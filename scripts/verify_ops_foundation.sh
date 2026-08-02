@@ -43,6 +43,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 readonly REPO_ROOT
 readonly TERRAFORM_DIR="${REPO_ROOT}/infra/gcp"
 readonly CONTRACT_SCRIPT="${REPO_ROOT}/scripts/ops_foundation_contract.py"
+readonly LIVE_GCP_VERIFIER="${REPO_ROOT}/scripts/verify_gcp_project_readiness.py"
 readonly GOVERNANCE_MANIFEST="${REPO_ROOT}/.github/repository-governance.json"
 readonly GOVERNANCE_VERIFIER="${REPO_ROOT}/scripts/verify_repository_governance.py"
 
@@ -84,6 +85,8 @@ verify_disk_contract() {
 
 verify_static_contract() {
   require_command uv
+  [[ -f "$LIVE_GCP_VERIFIER" && ! -L "$LIVE_GCP_VERIFIER" ]] ||
+    fail "exact-project live verifier must be a regular non-symlink file"
   uv run --frozen --package syshin0116-dev-agent \
     python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
 
@@ -148,6 +151,8 @@ verify_state_bucket_metadata() {
 }
 
 verify_canonical_repository_governance() {
+  local required="${1:-false}"
+
   if [[ -f "$GOVERNANCE_MANIFEST" && -f "$GOVERNANCE_VERIFIER" ]]; then
     require_command uv
     require_command gh
@@ -158,6 +163,8 @@ verify_canonical_repository_governance() {
     )
   elif [[ -e "$GOVERNANCE_MANIFEST" || -e "$GOVERNANCE_VERIFIER" ]]; then
     fail "canonical repository-governance manifest and verifier must land together"
+  elif [[ "$required" == "true" ]]; then
+    fail "canonical repository-governance manifest and verifier are required for live readiness"
   else
     printf '%s\n' \
       "INFO: canonical repository-governance files are not present on this branch; GitHub environment policy is intentionally not claimed here."
@@ -165,8 +172,12 @@ verify_canonical_repository_governance() {
 }
 
 verify_live_contract() {
-  verify_offline_admin_evidence_structure
-  fail "BLOCKED: trusted company-admin attestation is not configured"
+  verify_static_contract
+  require_command python3
+  python3 -E -s "$LIVE_GCP_VERIFIER"
+  verify_canonical_repository_governance true
+  printf '%s\n' \
+    "OK: exact GCP-project direct state and canonical GitHub governance verified; public launch, spend safety, project parent, and inherited IAM are not claimed."
 }
 
 usage() {

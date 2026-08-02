@@ -257,20 +257,26 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    Reject a plan that leaves the schedule paused or changes its reviewed 15-minute/OAuth
    contract. Apply only after both environments' migration, grant probe, and maintenance
    job passed. Keep both web public flags disabled, verify the schedule is active, and
-   require its first bounded execution to succeed. Do not enable delivery yet.
-   `scripts/verify_ops_foundation.sh --live` is intentionally blocked
-   because the repository has no pinned company-admin attestation key; the script
-   contains no GCP request implementation to reactivate. Its unsigned v1 input can
-   validate structure only and cannot approve this stage. A separate reviewed signed-v2
-   trust and live-read change is a prerequisite to live acceptance,
-   GitHub-environment activation, and setting
-   `AGENT_CLOUD_RUN_ENABLED=true`.
+   require its first bounded execution to succeed. Do not enable delivery yet. Select the
+   reviewed local account and require the exact-project direct-state plus canonical
+   GitHub governance gate to pass before GitHub-environment activation or setting
+   `AGENT_CLOUD_RUN_ENABLED=true`:
 
-   Missing, stale, future-dated, malformed, duplicate-key, or unsafe unsigned structure
-   fails before the attestation blocker, but valid structure still does not authenticate
-   company-admin origin or project-parent linkage. The verifier never collects policy by
-   traversing company folders or the organization; see
+   ```sh
+   export OPS_FOUNDATION_GCLOUD_ACCOUNT='<reviewed local account>'
+   scripts/verify_ops_foundation.sh --live
+   ```
+
+   The gate permits only fixed reads against `festive-ally-503605-v7`; it does not read
+   secret payloads or Terraform state contents, execute workloads, mutate resources, or
+   query organizations, folders, ancestors, project parentage, or another project. The
+   optional unsigned v1 structure check is not a prerequisite and never authenticates
+   company-admin origin or inherited-policy completeness. See
    [the foundation runbook](gcp-neon-foundation.md#evidence-and-target-state).
+
+   Keep both web public flags disabled after this gate. A pass does not settle Luna
+   input-count billing, prove a pre-provider upper bound, authorize anonymous issuance,
+   or prove bounded or zero spend.
 
 After bootstrap, every Terraform plan must explicitly retain `stage=services`, both
 current exact digests, and the complete eleven-key numeric version map. Omitting them
@@ -334,10 +340,10 @@ production policies as a dry run:
    `cleanup_policy_dry_run=false`. Only then apply the saved plan. The new empty preview
    repository can start with its active 14-day/20-version policy, but it must pass the
    same candidate review before any later retention change.
-5. Do not use the current `--live` result as cleanup acceptance: it has no repository
-   metadata reader and always stops at the missing trusted-attestation gate. Keep cleanup
-   activation and public delivery blocked until a separate signed-v2 implementation can
-   verify the exact repository policy, cleanup scope/age/count, and cross-write state.
+5. Require `--live` to confirm the exact repository policy, cleanup scope/age/count,
+   direct IAM, and cross-write state after apply. That metadata check does not inspect
+   dry-run deletion candidates or make deletion recoverable, so it never replaces steps
+   1–4 and cannot by itself authorize cleanup activation or public delivery.
 
 Artifact Registry cleanup runs periodically and policy changes take about a day. Deletion
 is irreversible, while a keep policy takes precedence over deletion:
@@ -571,11 +577,13 @@ Restore a prior secret version only as a separately reviewed operation.
 ## External gates that remain
 
 - Terraform has not been applied by this repository change.
-- No GCP or Neon resource/payload has been created or changed.
-- The real Neon runtime and migration credentials still need grant/denial acceptance.
+- No GCP resource or payload has been created or changed by this repository change.
+- The agent Neon project/branch isolation and least-privileged runtime-role denials are
+  recorded in the foundation runbook; the deployed migration, grant, and maintenance
+  jobs still need to prove those contracts from their exact runtime identities.
 - GitHub `Agent Preview` / `Agent Production` environments, their reviewer policy, zero
-  variable inventory, and sole `AGENT_SMOKE_BEARER_TOKEN` secret still need external
-  configuration and read-only live verification.
+  variable inventory, and sole `AGENT_SMOKE_BEARER_TOKEN` secret must pass the canonical
+  live governance check again after the exact-project resource gate.
 - The first provider-backed Korean two-turn APv2 smoke is still a live deployment gate.
 - The real-Neon grant/denial result, provider-backed smoke, browser journey, and
   capability-policy evidence remain P2/P3 operational gates; the PostgreSQL 17 PR
@@ -585,3 +593,6 @@ Restore a prior secret version only as a separately reviewed operation.
   preview build never becomes the public guest path.
 - The production Scheduler's active repository contract still needs an exact-project
   plan, apply, and verified first bounded execution before either web public flag changes.
+- Luna input-count billing for accepted, rejected, and oversized requests and a proven
+  pre-provider upper bound remain unresolved; the configured ledger/reservation tuple is
+  not a provider-wide hard spend guarantee.

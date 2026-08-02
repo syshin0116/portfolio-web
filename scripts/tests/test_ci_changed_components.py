@@ -138,10 +138,12 @@ class PathClassificationTests(unittest.TestCase):
             "scripts/tests/test_deploy_cloud_run.py",
             "scripts/tests/test_ops_foundation_contract.py",
             "scripts/tests/test_validate_agent_release_candidate.py",
+            "scripts/tests/test_verify_gcp_project_readiness.py",
             "scripts/verify_ops_foundation.sh",
             "scripts/tests/test_verify_ops_foundation.py",
             "scripts/validate_agent_release_candidate.py",
             "scripts/validate_agent_delivery_identity.sh",
+            "scripts/verify_gcp_project_readiness.py",
         ):
             with self.subTest(path=path):
                 self.assertEqual(

@@ -34,6 +34,7 @@ FIXTURE_FILES = (
     "infra/gcp/tests/foundation.tftest.hcl",
     "infra/gcp/variables.tf",
     "infra/gcp/versions.tf",
+    "scripts/verify_gcp_project_readiness.py",
 )
 DISABLED_PREVIEW_CONDITION_LINE = (
     "  disabled_preview_wif_attribute_condition = "
@@ -1570,28 +1571,26 @@ exit "$source_status"
             result.stderr,
         )
 
-    def test_live_verifier_contains_no_gcp_execution_surface(self) -> None:
+    def test_live_dispatch_preserves_shell_boundary_and_order(self) -> None:
         verifier = (REPO_ROOT / "scripts/verify_ops_foundation.sh").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("gcloud", verifier.casefold())
-        self.assertNotIn("CLOUDSDK_", verifier)
-        self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", verifier)
-        self.assertNotIn("GOOGLE_CLOUD_PROJECT", verifier)
-        self.assertNotIn("OPS_FOUNDATION_GCLOUD_ACCOUNT", verifier)
         self.assertNotIn("OPS_FOUNDATION_TEST_ONLY_SOURCE", verifier)
         self.assertNotIn("resolve_gcloud_binary", verifier)
         self.assertNotIn("is_allowed_gcloud_command", verifier)
-        self.assertNotIn("verify_cloud_run_service", verifier)
-        self.assertNotIn(
-            "verify_project_has_no_user_managed_service_account_keys", verifier
-        )
         self.assertEqual(
             1,
             verifier.count(
                 "verify_live_contract() {\n"
-                "  verify_offline_admin_evidence_structure\n"
-                '  fail "BLOCKED: trusted company-admin attestation is not configured"\n'
+                "  verify_static_contract\n"
+                "  require_command python3\n"
+                '  python3 -E -s "$LIVE_GCP_VERIFIER"\n'
+                "  verify_canonical_repository_governance true\n"
+                "  printf '%s\\n' \\\n"
+                '    "OK: exact GCP-project direct state and canonical GitHub '
+                "governance verified; public launch, spend safety, project parent, "
+                'and inherited IAM are not claimed."\n'
                 "}\n"
             ),
         )
@@ -1695,29 +1694,20 @@ exec "$VERIFIER" --live
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", log)
         self.assertFalse(hostile_marker.exists())
-        self.assertNotIn("OK:", result.stdout + result.stderr)
-        self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
-        self.assertIn(
-            "BLOCKED: trusted company-admin attestation is not configured",
-            result.stderr,
-        )
+        self.assertNotIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
+        self.assertIn("repository-pinned identity", result.stderr)
 
-    def test_explicit_live_validates_structure_then_blocks_without_gcloud(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = self._write_unsigned_live_structure(directory)
-            result, log = self._run_with_fake_gcloud_marker(
-                "--live",
-                extra_env={"OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence)},
-            )
+    def test_explicit_live_no_longer_requires_unsigned_evidence(
+        self,
+    ) -> None:
+        result, log = self._run_with_fake_gcloud_marker(
+            "--live",
+        )
 
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", log)
-        self.assertNotIn("OK:", result.stdout + result.stderr)
-        self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
-        self.assertIn(
-            "BLOCKED: trusted company-admin attestation is not configured",
-            result.stderr,
-        )
+        self.assertNotIn("ADMIN_EVIDENCE_FILE", result.stderr)
+        self.assertIn("repository-pinned identity", result.stderr)
 
     def test_structure_only_mode_never_claims_authentication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1732,21 +1722,20 @@ exec "$VERIFIER" --live
         self.assertNotIn("OK:", result.stdout + result.stderr)
         self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
 
-    def test_live_missing_evidence_blocks_before_any_gcloud_marker(self) -> None:
+    def test_live_missing_pinned_account_blocks_before_any_gcloud_marker(self) -> None:
         result, log = self._run_with_fake_gcloud_marker("--live")
 
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", log)
-        self.assertIn("ADMIN_EVIDENCE_FILE is required", result.stderr)
+        self.assertIn("repository-pinned identity", result.stderr)
 
-    def test_live_malformed_or_public_evidence_blocks_before_any_gcloud_marker(
+    def test_live_does_not_treat_unsigned_structure_as_approval_or_prerequisite(
         self,
     ) -> None:
-        cases = {
-            "malformed": ('{"schemaVersion":', 0o600, "valid UTF-8 JSON"),
-            "public_mode": ("{}", 0o644, "no group or other permissions"),
-        }
-        for name, (content, mode, expected_error) in cases.items():
+        for name, (content, mode) in {
+            "malformed": ('{"schemaVersion":', 0o600),
+            "public_mode": ("{}", 0o644),
+        }.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 evidence = Path(directory) / "admin-evidence.json"
                 evidence.write_text(content, encoding="utf-8")
@@ -1758,7 +1747,8 @@ exec "$VERIFIER" --live
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertEqual("", log)
-                self.assertIn(expected_error, result.stderr)
+                self.assertNotIn("ADMIN_EVIDENCE_FILE", result.stderr)
+                self.assertIn("repository-pinned identity", result.stderr)
 
 
 class StateBucketMetadataTests(unittest.TestCase):

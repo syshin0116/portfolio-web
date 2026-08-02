@@ -187,7 +187,9 @@ is a launch blocker, not an alternative retention policy.
 **Positive**
 
 - The chatbot becomes usable by the audience the blog actually has.
-- The perimeter is one file, so the change is small and reviewable.
+- The perimeter is explicit across web token issuance, Aegra-native HTTP guards,
+  graph tooling, PostgreSQL admission, and retention, so each layer is independently
+  reviewable even though the rollout is not a one-file change.
 - Forcing this decision surfaced two live content-leak bugs and a missing rate limiter
   that were latent under the private gate. Those get fixed either way.
 
@@ -261,9 +263,12 @@ is a launch blocker, not an alternative retention policy.
   expired-thread GC may again delete checkpoint children before the parent.
   Maintenance imports both identity and recovery-marker contracts from side-effect-free
   modules and does not require the runtime authentication secret.
-- LLM spend becomes a function of traffic rather than of one person's usage. The only
-  provider-enforced hard stop is the Anthropic org-level spend limit; everything else
-  slows the burn.
+- LLM spend becomes a function of traffic rather than of one person's usage. The durable
+  application daily reservation ledger is the repository-owned hard stop for the reviewed
+  Luna generation-cost envelope; process-local request limits only slow that burn. The
+  separately invoked input-token-count endpoint is outside that envelope, so verified
+  pricing and inclusion in the owner-approved ceiling remain launch blockers. This ADR
+  assumes no provider-side hard cap.
 - Reputational surface: content generated under this domain by anonymous prompting.
   Cost controls do nothing about a screenshot.
 - `web/lib/allowed-user.ts` **fails open** in non-production when `AUTH_ALLOWED_EMAILS`
@@ -279,7 +284,8 @@ is a launch blocker, not an alternative retention policy.
 - [x] `anon` scope route allowlist; strip `configurable.model`; force
       `multitask_strategy="reject"`; fix the seeded default model (P3.4).
 - [x] Outer ingress, inner paid rate limiting, SSE leases, durable storage admission,
-      and provider spend caps (P3.5; paid public launch remains separately gated).
+      and the durable daily spend reservation (P3.5; paid public launch remains
+      separately gated).
 - [x] `expires_at` + bounded GC that calls `checkpointer.adelete_thread` first,
       including session-fenced stale Redis-off guest-run reconciliation (P3.6).
 - [x] Deterministic 16 KiB UTF-8 `read_post` truncation with an explicit marker
@@ -290,7 +296,8 @@ is a launch blocker, not an alternative retention policy.
 
 ## Revisit when
 
-- Monthly LLM spend exceeds what the blog is worth, or the Anthropic cap actually trips.
+- The owner-approved daily ceiling is no longer appropriate, the durable ledger blocks
+  legitimate traffic, or OpenAI routing/pricing changes invalidate its reservation math.
 - Abuse appears that Turnstile plus per-subject rate limiting does not contain - the
   fallback is re-gating to signed-in users, which is cheap because the token route keeps
   both paths.

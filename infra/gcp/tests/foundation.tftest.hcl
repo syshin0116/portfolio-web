@@ -407,7 +407,7 @@ run "foundation_security_contract" {
         for env in service.template[0].containers[0].env :
         env.name => env.value
         if try(env.value, null) != null
-      } == local.cloud_run_runtime_environment
+      } == local.cloud_run_runtime_environments[environment]
       && length([
         for env in service.template[0].containers[0].env : env
         if try(env.value_source[0].secret_key_ref[0].version, null) != null
@@ -444,6 +444,31 @@ run "foundation_security_contract" {
       }
     ])
     error_message = "Anonymous access must remain repository-owned, disabled, and unpriced until a separate reviewed public-launch change."
+  }
+
+  assert {
+    condition = (
+      toset(keys(local.cloud_run_runtime_environments)) == toset(["preview", "production"])
+      && alltrue([
+        for environment in ["preview", "production"] :
+        {
+          for name, value in local.cloud_run_runtime_environments[environment] :
+          name => value
+          if contains([
+            "AGENT_ANONYMOUS_ACCESS_ENABLED",
+            "GUEST_DAILY_BUDGET_MICRO_USD",
+            "GUEST_MODEL",
+            "GUEST_RUN_RESERVATION_MICRO_USD",
+          ], name)
+          } == {
+          AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
+          GUEST_DAILY_BUDGET_MICRO_USD    = ""
+          GUEST_MODEL                     = ""
+          GUEST_RUN_RESERVATION_MICRO_USD = ""
+        }
+      ])
+    )
+    error_message = "Preview and Production must own separate fail-closed anonymous runtime maps before the reviewed Production launch patch."
   }
 
   assert {

@@ -12,6 +12,7 @@ locals {
       migration_secret         = google_secret_manager_secret.migration["preview"].secret_id
       migration_secret_version = try(var.agent_secret_versions["agent-preview-migration-database-url"], null)
       project_label            = "syshin0116-agent-preview"
+      runtime_environment      = local.cloud_run_runtime_environments.preview
       runtime_secrets = {
         AGENT_AUTH_SECRET = {
           secret  = google_secret_manager_secret.preview_runtime["agent-preview-auth-secret"].secret_id
@@ -43,6 +44,7 @@ locals {
       migration_secret         = google_secret_manager_secret.migration["production"].secret_id
       migration_secret_version = try(var.agent_secret_versions["agent-migration-database-url"], null)
       project_label            = "syshin0116-agent-production"
+      runtime_environment      = local.cloud_run_runtime_environments.production
       runtime_secrets = {
         AGENT_AUTH_SECRET = {
           secret  = google_secret_manager_secret.runtime["agent-auth-secret"].secret_id
@@ -64,24 +66,35 @@ locals {
     }
   }
 
-  cloud_run_runtime_environment = {
-    AEGRA_CONFIG                    = "/app/aegra.json"
-    AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
-    BG_JOB_MAX_RETRIES              = "0"
-    ENV_MODE                        = "PRODUCTION"
-    FF_V2_EVENT_STREAMING           = "true"
-    GUEST_DAILY_BUDGET_MICRO_USD    = ""
-    GUEST_MODEL                     = ""
-    GUEST_RUN_RESERVATION_MICRO_USD = ""
-    HOST                            = "0.0.0.0"
-    LANGGRAPH_MAX_POOL_SIZE         = "4"
-    LANGGRAPH_MIN_POOL_SIZE         = "1"
-    MODEL                           = "anthropic:claude-sonnet-4-6"
-    PORT                            = "8080"
-    REDIS_BROKER_ENABLED            = "false"
-    RUN_MIGRATIONS_ON_STARTUP       = "false"
-    SQLALCHEMY_MAX_OVERFLOW         = "0"
-    SQLALCHEMY_POOL_SIZE            = "2"
+  cloud_run_runtime_environment_common = {
+    AEGRA_CONFIG              = "/app/aegra.json"
+    BG_JOB_MAX_RETRIES        = "0"
+    ENV_MODE                  = "PRODUCTION"
+    FF_V2_EVENT_STREAMING     = "true"
+    HOST                      = "0.0.0.0"
+    LANGGRAPH_MAX_POOL_SIZE   = "4"
+    LANGGRAPH_MIN_POOL_SIZE   = "1"
+    MODEL                     = "anthropic:claude-sonnet-4-6"
+    PORT                      = "8080"
+    REDIS_BROKER_ENABLED      = "false"
+    RUN_MIGRATIONS_ON_STARTUP = "false"
+    SQLALCHEMY_MAX_OVERFLOW   = "0"
+    SQLALCHEMY_POOL_SIZE      = "2"
+  }
+
+  cloud_run_runtime_environments = {
+    preview = merge(local.cloud_run_runtime_environment_common, {
+      AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
+      GUEST_DAILY_BUDGET_MICRO_USD    = ""
+      GUEST_MODEL                     = ""
+      GUEST_RUN_RESERVATION_MICRO_USD = ""
+    })
+    production = merge(local.cloud_run_runtime_environment_common, {
+      AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
+      GUEST_DAILY_BUDGET_MICRO_USD    = ""
+      GUEST_MODEL                     = ""
+      GUEST_RUN_RESERVATION_MICRO_USD = ""
+    })
   }
 }
 
@@ -134,7 +147,7 @@ resource "google_cloud_run_v2_service" "agent" {
       }
 
       dynamic "env" {
-        for_each = local.cloud_run_runtime_environment
+        for_each = each.value.runtime_environment
         content {
           name  = env.key
           value = env.value

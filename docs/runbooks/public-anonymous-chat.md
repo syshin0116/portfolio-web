@@ -39,9 +39,11 @@ micro-dollar ceilings is a paid public-launch decision. Land those three exact
 values and the `true` opt-in together in a separate reviewed PR, then apply its
 exact plan. An ordinary image delivery verifies and preserves the reviewed
 values; it must refuse a revision with console or out-of-band drift.
-The pre-launch map is shared only because both environments are disabled; that
-launch PR must split Preview and Production configuration and keep Preview
-disabled unless its own model, budget, and public-test gate are approved.
+Preview and Production now have separate repository-owned runtime maps even though
+both carry the same disabled values before launch. The launch PR must replace only
+the Production constants and keep Preview disabled unless its own model, budget,
+and public-test gate are approved. Do not replace those reviewed constants with
+apply-time launch variables or a generic runtime toggle.
 
 The runtime accepts only `openai:gpt-5.6-luna` as the eventual non-empty
 `GUEST_MODEL`. It uses the OpenAI Responses API with reasoning disabled,
@@ -172,10 +174,10 @@ guest identity or spend state.
    Terraform-owned production maintenance Scheduler, review its exact dedicated-project
    plan, apply it, and verify the first bounded checkpoint-first maintenance execution.
    A paused or unverified Scheduler blocks launch.
-4. Land the separately approved repository change that selects the guest model,
-   fixes both reviewed micro-dollar ceilings, splits Preview from Production,
-   and sets the Production `AGENT_ANONYMOUS_ACCESS_ENABLED=true`; apply it while
-   Vercel still cannot mint or display anonymous access.
+4. Land the separately approved repository change that selects the Production
+   guest model, fixes both reviewed micro-dollar ceilings, and sets only the
+   Production `AGENT_ANONYMOUS_ACCESS_ENABLED=true` while Preview remains
+   disabled; apply it while Vercel still cannot mint or display anonymous access.
 5. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
    real browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.

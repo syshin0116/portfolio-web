@@ -595,21 +595,25 @@ jobs:
         run: |
           uv run --frozen --package syshin0116-dev-agent ruff check \
             scripts/ops_foundation_contract.py \
+            scripts/ops_foundation_live_toolchain.py \
             scripts/verify_gcp_project_readiness.py \
             scripts/validate_agent_release_candidate.py \
             scripts/tests/test_agent_delivery_identity.py \
             scripts/tests/test_deploy_cloud_run.py \
             scripts/tests/test_ops_foundation_contract.py \
+            scripts/tests/test_ops_foundation_live_toolchain.py \
             scripts/tests/test_validate_agent_release_candidate.py \
             scripts/tests/test_verify_gcp_project_readiness.py \
             scripts/tests/test_verify_ops_foundation.py
           uv run --frozen --package syshin0116-dev-agent ruff format --check \
             scripts/ops_foundation_contract.py \
+            scripts/ops_foundation_live_toolchain.py \
             scripts/verify_gcp_project_readiness.py \
             scripts/validate_agent_release_candidate.py \
             scripts/tests/test_agent_delivery_identity.py \
             scripts/tests/test_deploy_cloud_run.py \
             scripts/tests/test_ops_foundation_contract.py \
+            scripts/tests/test_ops_foundation_live_toolchain.py \
             scripts/tests/test_validate_agent_release_candidate.py \
             scripts/tests/test_verify_gcp_project_readiness.py \
             scripts/tests/test_verify_ops_foundation.py

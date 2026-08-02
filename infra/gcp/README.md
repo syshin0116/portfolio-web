@@ -52,8 +52,10 @@ Google-managed members. Post-apply direct-state verification is an explicit read
 gate: it runs the static contract, permits a fixed command catalogue against only
 `festive-ally-503605-v7`, and then requires canonical exact-repository GitHub governance.
 It reads direct IAM and repository-owned resource metadata only. It never reads secret
-payloads or Terraform state contents, executes workloads, mutates resources, or queries
-organizations, folders, ancestors, project parentage, or another project.
+payloads or Terraform state contents, executes workloads, mutates resources, follows or
+queries organization/folder/ancestor/project-parent scopes, or queries another project.
+The exact project describe may return a parent field; the verifier ignores it and makes
+no project-parent claim.
 
 Unsigned v1 is a structure-only file outside every repository/worktree, not
 company-admin evidence. It declares exactly one organization but proves no parent
@@ -63,7 +65,12 @@ project-custom-role bindings are forbidden. Missing, malformed, stale, future-da
 duplicate-key, unrelated, or incomplete structure fails, but a passing structure still
 is not deployment approval.
 
-Run the verifier only through its executable path as shown below. Its direct
+Run the verifier only from a trusted local workstation, shell, checkout, and toolchain,
+and only through its executable path as shown below. The preflight requires selected
+`uv`, `gh`, `gcloud`, and Python executables to be current-user/root-owned regular files
+with non-group/other-writable ancestry, derives `HOME` from passwd, and launches children
+with an explicit sanitized environment. This boundary does not resist a malicious
+same-user workstation or loader injection before the initial shell starts. Its direct
 `/bin/bash -p` process ignores `BASH_ENV` and imported shell functions; sourcing the file
 is unconditionally refused with no environment override, and invoking
 `bash scripts/verify_ops_foundation.sh ...` is also unsupported and refused.
@@ -95,9 +102,12 @@ branch sets `{main}` live only in `.github/repository-governance.json`. When tha
 rules. Foundation `--live` requires this same delegation after exact-project GCP reads:
 
 ```sh
-uv run --frozen --package syshin0116-dev-agent \
-  python scripts/verify_repository_governance.py --live
+scripts/verify_ops_foundation.sh --governance-live
 ```
+
+Any missing API, inaccessible endpoint, or permission denial is a hard **STOP**. The
+verifier does not authorize granting IAM, enabling an API, attaching billing, changing
+project settings, or executing a job; each requires a separate reviewed change.
 
 Both `Agent Preview` and `Agent Production` require `syshin0116`, allow self-review,
 forbid admin bypass, contain exactly `AGENT_SMOKE_BEARER_TOKEN`, and contain zero

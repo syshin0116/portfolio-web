@@ -15,6 +15,7 @@ from scripts.ops_foundation_contract import (
     EXPECTED_LIVE_CONDITIONS,
 )
 from scripts.verify_gcp_project_readiness import (
+    BUCKET_DISCOVERY_COMMAND,
     BUILDER_SA,
     CLOUD_RUN_DELIVERY_ROLE,
     CLOUD_RUN_SERVICE_AGENT,
@@ -38,15 +39,18 @@ from scripts.verify_gcp_project_readiness import (
     REQUIRED_APIS,
     SERVICE_SPECS,
     STATE_BUCKET,
+    STATE_BUCKET_COMMANDS,
     STATE_OBJECT,
     WORKLOAD_SERVICE_ACCOUNTS,
     ReadinessError,
     is_allowed_gcloud_command,
+    validate_readiness_source_contract,
     verify_exact_project_readiness,
 )
 
 TEST_ACCOUNT = "reviewed-test-account@example.test"
 TEST_ACCOUNT_SHA256 = hashlib.sha256(TEST_ACCOUNT.encode()).hexdigest()
+EXTRA_AUDIT_SA = f"extra-audit@{PROJECT_ID}.iam.gserviceaccount.com"
 
 
 def _policy(*pairs: tuple[str, str]) -> dict[str, object]:
@@ -182,8 +186,10 @@ class FakeRead:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
         self.validated_accounts: frozenset[str] = frozenset()
+        self.state_bucket_trusted = False
         self.responses = self._responses()
         self.user_key_output = ""
+        self.user_key_outputs: dict[str, str] = {}
 
     @staticmethod
     def _artifact(repository: str) -> dict[str, object]:
@@ -290,6 +296,13 @@ class FakeRead:
             (
                 "storage",
                 "buckets",
+                "list",
+                f"--filter=name={STATE_BUCKET}",
+                "--format=json(name,projectNumber)",
+            ): [{"name": STATE_BUCKET, "projectNumber": PROJECT_NUMBER}],
+            (
+                "storage",
+                "buckets",
                 "describe",
                 f"gs://{STATE_BUCKET}",
                 "--format=json",
@@ -328,7 +341,7 @@ class FakeRead:
                     "email": account,
                     "name": f"projects/{PROJECT_ID}/serviceAccounts/{account}",
                 }
-                for account in sorted(WORKLOAD_SERVICE_ACCOUNTS)
+                for account in sorted(WORKLOAD_SERVICE_ACCOUNTS | {EXTRA_AUDIT_SA})
             ],
             (
                 "iam",
@@ -514,6 +527,9 @@ class FakeRead:
     def trust(self, accounts: object) -> None:
         self.validated_accounts = frozenset(accounts)  # type: ignore[arg-type]
 
+    def trust_bucket(self) -> None:
+        self.state_bucket_trusted = True
+
     def __call__(self, command: tuple[str, ...]) -> str:
         self.calls.append(command)
         if command[:4] == (
@@ -522,7 +538,7 @@ class FakeRead:
             "keys",
             "list",
         ):
-            return self.user_key_output
+            return self.user_key_outputs.get(command[5], self.user_key_output)
         try:
             return self.responses[command]
         except KeyError as exc:
@@ -530,6 +546,79 @@ class FakeRead:
 
 
 class ExactProjectCommandBoundaryTests(unittest.TestCase):
+    def test_pinned_literal_oracle_matches_source_and_command_catalogue(self) -> None:
+        validate_readiness_source_contract()
+
+    def test_literal_oracle_rejects_identity_and_inventory_mutations(self) -> None:
+        mutations = (
+            ("PROJECT_ID", "another-project", "project"),
+            ("PROJECT_NUMBER", "999", "project"),
+            ("REGION", "us-central1", "project"),
+            (
+                "REQUIRED_APIS",
+                REQUIRED_APIS - {"cloudscheduler.googleapis.com"},
+                "inventory",
+            ),
+            (
+                "WORKLOAD_SERVICE_ACCOUNTS",
+                WORKLOAD_SERVICE_ACCOUNTS - {MAINTENANCE_SCHEDULER_SA},
+                "inventory",
+            ),
+            (
+                "SERVICE_SPECS",
+                {key: value for key, value in SERVICE_SPECS.items() if key != "agent"},
+                "inventory",
+            ),
+            (
+                "JOB_SPECS",
+                {
+                    key: value
+                    for key, value in JOB_SPECS.items()
+                    if key != "agent-maintenance"
+                },
+                "inventory",
+            ),
+        )
+        for name, value, message in mutations:
+            with (
+                self.subTest(name=name),
+                patch(f"scripts.verify_gcp_project_readiness.{name}", value),
+            ):
+                with self.assertRaisesRegex(ReadinessError, message):
+                    validate_readiness_source_contract()
+
+    def test_literal_oracle_rejects_removed_secret_and_added_command(self) -> None:
+        from scripts import verify_gcp_project_readiness as readiness
+
+        with patch.object(
+            readiness,
+            "SECRET_POLICIES",
+            {
+                key: value
+                for key, value in readiness.SECRET_POLICIES.items()
+                if key != "openai-api-key"
+            },
+        ):
+            with self.assertRaisesRegex(ReadinessError, "inventory"):
+                validate_readiness_source_contract()
+        with patch.object(
+            readiness,
+            "FIXED_GCLOUD_COMMANDS",
+            readiness.FIXED_GCLOUD_COMMANDS
+            | {
+                (
+                    "scheduler",
+                    "jobs",
+                    "run",
+                    "agent-guest-maintenance",
+                    "--location",
+                    REGION,
+                )
+            },
+        ):
+            with self.assertRaisesRegex(ReadinessError, "literal oracle"):
+                validate_readiness_source_contract()
+
     def test_catalog_accepts_only_the_exact_project_read(self) -> None:
         self.assertTrue(
             is_allowed_gcloud_command(
@@ -578,10 +667,37 @@ class ExactProjectCommandBoundaryTests(unittest.TestCase):
                 if command[0] == "projects":
                     self.assertEqual(PROJECT_ID, command[2])
 
+    def test_global_bucket_name_reads_require_exact_project_discovery(self) -> None:
+        self.assertTrue(
+            is_allowed_gcloud_command(
+                BUCKET_DISCOVERY_COMMAND,
+                validated_service_accounts=frozenset(),
+            )
+        )
+        for command in STATE_BUCKET_COMMANDS:
+            with self.subTest(command=command):
+                self.assertFalse(
+                    is_allowed_gcloud_command(
+                        command,
+                        validated_service_accounts=frozenset(),
+                    )
+                )
+                self.assertTrue(
+                    is_allowed_gcloud_command(
+                        command,
+                        validated_service_accounts=frozenset(),
+                        trusted_state_bucket=True,
+                    )
+                )
+
     def test_full_verification_requests_only_catalogued_commands(self) -> None:
         reader = FakeRead()
 
-        verify_exact_project_readiness(reader, trust_service_accounts=reader.trust)
+        verify_exact_project_readiness(
+            reader,
+            trust_service_accounts=reader.trust,
+            trust_state_bucket=reader.trust_bucket,
+        )
 
         key_reads = {
             command
@@ -591,12 +707,19 @@ class ExactProjectCommandBoundaryTests(unittest.TestCase):
         fixed_reads = set(reader.calls) - key_reads
         self.assertEqual(FIXED_GCLOUD_COMMANDS, fixed_reads)
         self.assertEqual(len(reader.validated_accounts), len(key_reads))
+        self.assertEqual(
+            reader.validated_accounts,
+            frozenset(command[5] for command in key_reads),
+        )
+        for command in key_reads:
+            self.assertEqual(1, reader.calls.count(command))
         for command in reader.calls:
             with self.subTest(command=command):
                 self.assertTrue(
                     is_allowed_gcloud_command(
                         command,
                         validated_service_accounts=reader.validated_accounts,
+                        trusted_state_bucket=reader.state_bucket_trusted,
                     )
                 )
 
@@ -618,11 +741,13 @@ class GCloudReaderTests(unittest.TestCase):
                 },
                 clear=True,
             ),
-            patch("scripts.verify_gcp_project_readiness.shutil.which") as which,
+            patch(
+                "scripts.verify_gcp_project_readiness.validate_trusted_executable"
+            ) as validate,
         ):
             with self.assertRaisesRegex(ReadinessError, "overrides are forbidden"):
-                GCloudReader()
-        which.assert_not_called()
+                GCloudReader(Path("/missing/gcloud"))
+        validate.assert_not_called()
 
     def test_wrong_account_fails_before_binary_resolution(self) -> None:
         with (
@@ -631,16 +756,18 @@ class GCloudReaderTests(unittest.TestCase):
                 {GCLOUD_ACCOUNT_ENV: "owner@example.test"},
                 clear=True,
             ),
-            patch("scripts.verify_gcp_project_readiness.shutil.which") as which,
+            patch(
+                "scripts.verify_gcp_project_readiness.validate_trusted_executable"
+            ) as validate,
         ):
             with self.assertRaisesRegex(ReadinessError, "pinned identity"):
-                GCloudReader()
-        which.assert_not_called()
+                GCloudReader(Path("/missing/gcloud"))
+        validate.assert_not_called()
 
     def test_reader_injects_exact_globals_and_rejects_uncatalogued_request(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
             binary = Path(directory) / "gcloud"
             binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             binary.chmod(0o700)
@@ -652,7 +779,13 @@ class GCloudReaderTests(unittest.TestCase):
                     os.environ,
                     {
                         GCLOUD_ACCOUNT_ENV: TEST_ACCOUNT,
+                        "HOME": "/tmp/forged-home",
+                        "HTTPS_PROXY": "http://127.0.0.1:9",
+                        "LD_PRELOAD": "/tmp/forged-loader.so",
                         "PATH": os.environ["PATH"],
+                        "PYTHONPATH": "/tmp/forged-python",
+                        "REQUESTS_CA_BUNDLE": "/tmp/forged-ca.pem",
+                        "VIRTUAL_ENV": "/tmp/forged-venv",
                     },
                     clear=True,
                 ),
@@ -662,15 +795,11 @@ class GCloudReaderTests(unittest.TestCase):
                     TEST_ACCOUNT_SHA256,
                 ),
                 patch(
-                    "scripts.verify_gcp_project_readiness.shutil.which",
-                    return_value=str(binary),
-                ),
-                patch(
                     "scripts.verify_gcp_project_readiness.subprocess.run",
                     return_value=completed,
                 ) as run,
             ):
-                reader = GCloudReader()
+                reader = GCloudReader(binary)
                 reader(("projects", "describe", PROJECT_ID, "--format=json"))
                 with self.assertRaisesRegex(ReadinessError, "not allowlisted"):
                     reader(("projects", "describe", "jinjoo", "--format=json"))
@@ -692,6 +821,27 @@ class GCloudReaderTests(unittest.TestCase):
         )
         self.assertNotIn("--billing-project", argv)
         self.assertIs(subprocess.DEVNULL, run.call_args.kwargs["stdin"])
+        child_environment = run.call_args.kwargs["env"]
+        self.assertEqual(
+            {
+                "CLOUDSDK_CORE_DISABLE_PROMPTS": "1",
+                "CLOUDSDK_ENCODING": "UTF-8",
+                "CLOUDSDK_PYTHON": str(Path(os.sys.executable).resolve()),
+                "CLOUDSDK_PYTHON_ARGS": "-I -S",
+                "HOME": str(Path.home().resolve()),
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            },
+            child_environment,
+        )
+        for hostile in (
+            "CLOUDSDK_CONFIG",
+            "HTTPS_PROXY",
+            "LD_PRELOAD",
+            "PYTHONPATH",
+            "REQUESTS_CA_BUNDLE",
+            "VIRTUAL_ENV",
+        ):
+            self.assertNotIn(hostile, child_environment)
 
 
 class ExactProjectReadinessTests(unittest.TestCase):
@@ -699,6 +849,7 @@ class ExactProjectReadinessTests(unittest.TestCase):
         verify_exact_project_readiness(
             fixture,
             trust_service_accounts=fixture.trust,
+            trust_state_bucket=fixture.trust_bucket,
         )
 
     def test_complete_exact_project_contract_passes(self) -> None:
@@ -707,15 +858,32 @@ class ExactProjectReadinessTests(unittest.TestCase):
         self._verify(fixture)
 
         self.assertTrue(fixture.calls)
-        self.assertEqual(WORKLOAD_SERVICE_ACCOUNTS, fixture.validated_accounts)
+        self.assertEqual(
+            WORKLOAD_SERVICE_ACCOUNTS | {EXTRA_AUDIT_SA},
+            fixture.validated_accounts,
+        )
         for command in fixture.calls:
             with self.subTest(command=command):
                 self.assertTrue(
                     is_allowed_gcloud_command(
                         command,
                         validated_service_accounts=fixture.validated_accounts,
+                        trusted_state_bucket=fixture.state_bucket_trusted,
                     )
                 )
+
+    def test_project_describe_parent_field_is_ignored_without_scope_reads(self) -> None:
+        fixture = FakeRead()
+        command = ("projects", "describe", PROJECT_ID, "--format=json")
+        project = json.loads(fixture.responses[command])
+        project["parent"] = {"type": "organization", "id": "123456789"}
+        fixture.responses[command] = json.dumps(project)
+
+        self._verify(fixture)
+
+        self.assertFalse(
+            any(call[0] in {"organizations", "folders"} for call in fixture.calls)
+        )
 
     def test_wrong_project_identity_fails_before_follow_up_reads(self) -> None:
         fixture = FakeRead()
@@ -760,6 +928,52 @@ class ExactProjectReadinessTests(unittest.TestCase):
             fixture.calls,
         )
 
+    def test_bucket_ownership_is_discovered_before_global_name_reads(self) -> None:
+        fixture = FakeRead()
+        discovery = (
+            "storage",
+            "buckets",
+            "list",
+            f"--filter=name={STATE_BUCKET}",
+            "--format=json(name,projectNumber)",
+        )
+        describe = (
+            "storage",
+            "buckets",
+            "describe",
+            f"gs://{STATE_BUCKET}",
+            "--format=json",
+        )
+
+        self._verify(fixture)
+
+        self.assertLess(fixture.calls.index(discovery), fixture.calls.index(describe))
+
+    def test_foreign_bucket_discovery_fails_before_global_name_read(self) -> None:
+        fixture = FakeRead()
+        discovery = (
+            "storage",
+            "buckets",
+            "list",
+            f"--filter=name={STATE_BUCKET}",
+            "--format=json(name,projectNumber)",
+        )
+        describe = (
+            "storage",
+            "buckets",
+            "describe",
+            f"gs://{STATE_BUCKET}",
+            "--format=json",
+        )
+        fixture.responses[discovery] = json.dumps(
+            [{"name": STATE_BUCKET, "projectNumber": "999"}]
+        )
+
+        with self.assertRaisesRegex(ReadinessError, "under the exact project"):
+            self._verify(fixture)
+
+        self.assertNotIn(describe, fixture.calls)
+
     def test_project_role_on_workload_identity_fails(self) -> None:
         fixture = FakeRead()
         command = ("projects", "get-iam-policy", PROJECT_ID, "--format=json")
@@ -782,6 +996,44 @@ class ExactProjectReadinessTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReadinessError, "user-managed key"):
             self._verify(fixture)
+
+    def test_extra_inventory_account_user_managed_key_fails(self) -> None:
+        fixture = FakeRead()
+        fixture.user_key_outputs[EXTRA_AUDIT_SA] = (
+            f"projects/{PROJECT_ID}/serviceAccounts/{EXTRA_AUDIT_SA}/keys/123\n"
+        )
+
+        with self.assertRaisesRegex(ReadinessError, "user-managed key"):
+            self._verify(fixture)
+
+        extra_key_read = (
+            "iam",
+            "service-accounts",
+            "keys",
+            "list",
+            "--iam-account",
+            EXTRA_AUDIT_SA,
+            "--managed-by=user",
+            "--format=value(name)",
+        )
+        self.assertEqual(1, fixture.calls.count(extra_key_read))
+
+    def test_duplicate_service_account_inventory_fails_before_key_reads(self) -> None:
+        fixture = FakeRead()
+        command = ("iam", "service-accounts", "list", "--format=json")
+        accounts = json.loads(fixture.responses[command])
+        accounts.append(accounts[0])
+        fixture.responses[command] = json.dumps(accounts)
+
+        with self.assertRaisesRegex(ReadinessError, "escaped"):
+            self._verify(fixture)
+
+        self.assertFalse(
+            any(
+                call[:4] == ("iam", "service-accounts", "keys", "list")
+                for call in fixture.calls
+            )
+        )
 
     def test_unrelated_service_account_inventory_fails_before_key_reads(self) -> None:
         fixture = FakeRead()
@@ -828,6 +1080,42 @@ class ExactProjectReadinessTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReadinessError, "exact repository-owned"):
             self._verify(fixture)
+
+    def test_artifact_cleanup_prefix_or_unknown_selector_fails(self) -> None:
+        cases: dict[str, tuple[str, object]] = {
+            "newerThan": ("condition", "3600s"),
+            "tagPrefixes": ("condition", ["release-"]),
+            "versionNamePrefixes": ("condition", ["agent-"]),
+            "packageNamePrefixes": ("condition", ["agent"]),
+            "keepPackageNamePrefixes": ("mostRecentVersions", ["agent"]),
+            "unknown": ("condition", []),
+        }
+        for name, (target, value) in cases.items():
+            with self.subTest(name=name):
+                fixture = FakeRead()
+                command = (
+                    "artifacts",
+                    "repositories",
+                    "describe",
+                    "agent",
+                    "--location",
+                    REGION,
+                    "--format=json",
+                )
+                document = json.loads(fixture.responses[command])
+                if name == "keepPackageNamePrefixes":
+                    document["cleanupPolicies"]["keep-last-30"][target][
+                        "packageNamePrefixes"
+                    ] = value
+                else:
+                    key = "unexpectedSelector" if name == "unknown" else name
+                    document["cleanupPolicies"]["delete-after-90-days"][target][key] = (
+                        value
+                    )
+                fixture.responses[command] = json.dumps(document)
+
+                with self.assertRaisesRegex(ReadinessError, "cleanup selector"):
+                    self._verify(fixture)
 
     def test_production_luna_spend_control_drift_fails(self) -> None:
         fixture = FakeRead()

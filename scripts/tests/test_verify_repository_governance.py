@@ -3564,6 +3564,8 @@ class LiveGovernanceTests(unittest.TestCase):
                 "owner/repository",
                 "2026-03-10",
                 "actions/permissions",
+                gh_binary=Path("/trusted/gh"),
+                home=Path("/trusted/home"),
             )
 
     def test_gh_api_accepts_an_empty_204_response(self) -> None:
@@ -3579,15 +3581,26 @@ class LiveGovernanceTests(unittest.TestCase):
             governance.subprocess,
             "run",
             return_value=completed,
-        ):
+        ) as run:
             response = governance._gh_api(
                 "owner/repository",
                 "2026-03-10",
                 "vulnerability-alerts",
+                gh_binary=Path("/trusted/gh"),
+                home=Path("/trusted/home"),
             )
 
         self.assertEqual(204, response.status)
         self.assertIsNone(response.payload)
+        self.assertEqual("/trusted/gh", run.call_args.args[0][0])
+        self.assertEqual(
+            {
+                "HOME": "/trusted/home",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            },
+            run.call_args.kwargs["env"],
+        )
+        self.assertIs(governance.subprocess.DEVNULL, run.call_args.kwargs["stdin"])
 
     def test_gh_api_rejects_a_body_on_204(self) -> None:
         completed = governance.subprocess.CompletedProcess(
@@ -3614,6 +3627,8 @@ class LiveGovernanceTests(unittest.TestCase):
                 "owner/repository",
                 "2026-03-10",
                 "vulnerability-alerts",
+                gh_binary=Path("/trusted/gh"),
+                home=Path("/trusted/home"),
             )
 
     def test_disabled_vulnerability_alerts_are_reported(self) -> None:

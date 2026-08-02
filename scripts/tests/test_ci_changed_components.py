@@ -151,6 +151,18 @@ class PathClassificationTests(unittest.TestCase):
                     changes.classify_paths([path]),
                 )
 
+    def test_live_toolchain_contract_runs_agent_and_infrastructure_ci(self) -> None:
+        for path in (
+            "scripts/gcp_project_readiness_contract.json",
+            "scripts/ops_foundation_live_toolchain.py",
+            "scripts/tests/test_ops_foundation_live_toolchain.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": False, "agent": True, "eval": False, "infra": True},
+                    changes.classify_paths([path]),
+                )
+
     def test_unrelated_docs_do_not_rebuild_components(self) -> None:
         self.assertEqual(
             {"web": False, "agent": False, "eval": False, "infra": False},

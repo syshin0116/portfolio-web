@@ -268,8 +268,9 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    ```
 
    The gate permits only fixed reads against `festive-ally-503605-v7`; it does not read
-   secret payloads or Terraform state contents, execute workloads, mutate resources, or
-   query organizations, folders, ancestors, project parentage, or another project. The
+   secret payloads or Terraform state contents, execute workloads, mutate resources,
+   follow or query organization/folder/ancestor/project-parent scopes, or query another
+   project. It ignores any parent field returned by the exact project describe. The
    optional unsigned v1 structure check is not a prerequisite and never authenticates
    company-admin origin or inherited-policy completeness. See
    [the foundation runbook](gcp-neon-foundation.md#evidence-and-target-state).
@@ -277,6 +278,8 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    Keep both web public flags disabled after this gate. A pass does not settle Luna
    input-count billing, prove a pre-provider upper bound, authorize anonymous issuance,
    or prove bounded or zero spend.
+   A missing API or permission denial is a hard stop and does not authorize an IAM grant,
+   API enablement, billing attachment, project-setting change, or job execution.
 
 After bootstrap, every Terraform plan must explicitly retain `stage=services`, both
 current exact digests, and the complete eleven-key numeric version map. Omitting them

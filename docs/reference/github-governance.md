@@ -172,8 +172,7 @@ second-page requirement fails closed:
 ```bash
 uv run --frozen --package syshin0116-dev-agent \
   python scripts/verify_repository_governance.py
-uv run --frozen --package syshin0116-dev-agent \
-  python scripts/verify_repository_governance.py --live
+scripts/verify_ops_foundation.sh --governance-live
 ```
 
 Run the local command before changing a workflow. Run `--live` after changing

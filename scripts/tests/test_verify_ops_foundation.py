@@ -34,6 +34,8 @@ FIXTURE_FILES = (
     "infra/gcp/tests/foundation.tftest.hcl",
     "infra/gcp/variables.tf",
     "infra/gcp/versions.tf",
+    "scripts/gcp_project_readiness_contract.json",
+    "scripts/ops_foundation_live_toolchain.py",
     "scripts/verify_gcp_project_readiness.py",
 )
 DISABLED_PREVIEW_CONDITION_LINE = (
@@ -115,7 +117,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
             check=True,
         )
         subprocess.run(
-            ["git", "add", "infra/gcp"],
+            ["git", "add", "infra/gcp", "scripts/gcp_project_readiness_contract.json"],
             cwd=root,
             check=True,
         )
@@ -151,6 +153,42 @@ class StaticVerifierMutationTests(unittest.TestCase):
             result = self._run(self._fixture(directory))
 
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_static_rejects_readiness_oracle_digest_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            oracle = root / "scripts/gcp_project_readiness_contract.json"
+            oracle.write_text(
+                oracle.read_text(encoding="utf-8").replace(
+                    '"region": "us-east4"', '"region": "us-central1"', 1
+                ),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("readiness oracle content digest is not exact", result.stderr)
+
+    def test_static_rejects_untracked_readiness_oracle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            subprocess.run(
+                [
+                    "git",
+                    "rm",
+                    "--cached",
+                    "--quiet",
+                    "scripts/gcp_project_readiness_contract.json",
+                ],
+                cwd=root,
+                check=True,
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("pinned readiness oracle must be tracked", result.stderr)
 
     def test_builder_role_arms_are_lazy_before_optional_environment_claims(
         self,
@@ -795,7 +833,7 @@ output "unreviewed_sensitive_value" {
         self.assertIn("on-disk Terraform loadable inventory mismatch", result.stderr)
 
     def test_governance_delegation_uses_exact_pinned_uv_command(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
             root = self._fixture(directory)
             manifest = root / ".github/repository-governance.json"
             manifest.parent.mkdir(parents=True)
@@ -808,7 +846,7 @@ output "unreviewed_sensitive_value" {
             args_file = root / "uv-args.txt"
             fake_uv = fake_bin / "uv"
             fake_uv.write_text(
-                '#!/bin/bash\nprintf \'%s\\n\' "$@" > "$UV_ARGS_FILE"\n',
+                f"#!/bin/bash\nprintf '%s\\n' \"$@\" > {shlex.quote(str(args_file))}\n",
                 encoding="utf-8",
             )
             fake_uv.chmod(0o755)
@@ -818,7 +856,6 @@ output "unreviewed_sensitive_value" {
 
             environment = os.environ.copy()
             environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
-            environment["UV_ARGS_FILE"] = str(args_file)
             result = subprocess.run(
                 ["scripts/verify_ops_foundation.sh", "--governance-live"],
                 cwd=root,
@@ -838,6 +875,8 @@ output "unreviewed_sensitive_value" {
                     "python",
                     str(governance.resolve()),
                     "--live",
+                    "--gh-bin",
+                    str(fake_gh.resolve()),
                 ],
                 args_file.read_text(encoding="utf-8").splitlines(),
             )
@@ -1422,20 +1461,21 @@ class LiveShellGuardTests(unittest.TestCase):
         *arguments: str,
         extra_env: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], str]:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
             root = Path(directory)
             binary_dir = root / "bin"
             binary_dir.mkdir()
             log_path = root / "gcloud.log"
             fake_gcloud = binary_dir / "gcloud"
             fake_gcloud.write_text(
-                """#!/bin/sh
-printf '%s\n' CALLED >>"$FAKE_GCLOUD_LOG"
-exit 99
-""",
+                "#!/bin/sh\nprintf '%s\\n' CALLED >>"
+                f"{shlex.quote(str(log_path))}\nexit 99\n",
                 encoding="utf-8",
             )
             fake_gcloud.chmod(0o755)
+            fake_gh = binary_dir / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
             environment = {
                 key: value
                 for key, value in os.environ.items()
@@ -1502,6 +1542,9 @@ exit 99
                 encoding="utf-8",
             )
             fake_gcloud.chmod(0o755)
+            fake_gh = binary_dir / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
             environment = {
                 key: value
                 for key, value in os.environ.items()
@@ -1575,7 +1618,7 @@ exit "$source_status"
         verifier = (REPO_ROOT / "scripts/verify_ops_foundation.sh").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("gcloud", verifier.casefold())
+        self.assertNotIn("\n  gcloud ", verifier.casefold())
         self.assertNotIn("OPS_FOUNDATION_TEST_ONLY_SOURCE", verifier)
         self.assertNotIn("resolve_gcloud_binary", verifier)
         self.assertNotIn("is_allowed_gcloud_command", verifier)
@@ -1583,9 +1626,16 @@ exit "$source_status"
             1,
             verifier.count(
                 "verify_live_contract() {\n"
-                "  verify_static_contract\n"
-                "  require_command python3\n"
-                '  python3 -E -s "$LIVE_GCP_VERIFIER"\n'
+                "  prepare_live_toolchain\n"
+                "  verify_static_contract_live\n"
+                "  prepare_live_python\n"
+                "  /usr/bin/env -i \\\n"
+                '    HOME="$LIVE_TRUSTED_HOME" \\\n'
+                '    OPS_FOUNDATION_GCLOUD_ACCOUNT="${OPS_FOUNDATION_GCLOUD_ACCOUNT:-}" '
+                "\\\n"
+                '    PATH="$LIVE_CHILD_PATH" \\\n'
+                '    "$LIVE_PYTHON_BIN" -E -s "$LIVE_GCP_VERIFIER" \\\n'
+                '    --gcloud-bin "$LIVE_GCLOUD_BIN"\n'
                 "  verify_canonical_repository_governance true\n"
                 "  printf '%s\\n' \\\n"
                 '    "OK: exact GCP-project direct state and canonical GitHub '
@@ -1616,7 +1666,7 @@ exit "$source_status"
                 self.assertIn("at most one mode argument", result.stderr)
 
     def test_direct_live_ignores_exported_functions_and_bash_env(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
             root = Path(directory)
             binary_dir = root / "bin"
             binary_dir.mkdir()
@@ -1624,13 +1674,14 @@ exit "$source_status"
             hostile_marker = root / "hostile-environment-was-used"
             fake_gcloud = binary_dir / "gcloud"
             fake_gcloud.write_text(
-                """#!/bin/sh
-printf '%s\n' CALLED >>"$FAKE_GCLOUD_LOG"
-exit 99
-""",
+                "#!/bin/sh\nprintf '%s\\n' CALLED >>"
+                f"{shlex.quote(str(log_path))}\nexit 99\n",
                 encoding="utf-8",
             )
             fake_gcloud.chmod(0o755)
+            fake_gh = binary_dir / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
             hostile_bash_env = root / "hostile-bash-env"
             hostile_bash_env.write_text(
                 ("/usr/bin/printf '%s\\n' BASH_ENV_LOADED >>\"$HOSTILE_MARKER\"\n"),
@@ -1728,6 +1779,61 @@ exec "$VERIFIER" --live
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", log)
         self.assertIn("repository-pinned identity", result.stderr)
+
+    def test_live_rejects_caller_google_overrides_before_external_reads(self) -> None:
+        for name in ("CLOUDSDK_CONFIG", "GOOGLE_APPLICATION_CREDENTIALS"):
+            with self.subTest(name=name):
+                result, log = self._run_with_fake_gcloud_marker(
+                    "--live", extra_env={name: "/tmp/forbidden"}
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", log)
+                self.assertIn("environment overrides are forbidden", result.stderr)
+
+    def test_live_rejects_insecure_path_before_hostile_tools_or_env_can_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory)
+            hostile_bin = root / "hostile-bin"
+            hostile_bin.mkdir(mode=0o700)
+            marker = root / "hostile-tool-ran"
+            for name in ("gcloud", "gh", "uv"):
+                executable = hostile_bin / name
+                executable.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' CALLED >>"
+                    f"{shlex.quote(str(marker))}\nexit 0\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o700)
+            hostile_bin.chmod(0o777)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "HOME": str(root / "forged-home"),
+                    "HTTPS_PROXY": "http://127.0.0.1:9",
+                    "LD_PRELOAD": "/definitely/missing/forged-loader.so",
+                    "PATH": f"{hostile_bin}:{environment['PATH']}",
+                    "PYTHONPATH": str(root / "forged-python"),
+                    "REQUESTS_CA_BUNDLE": str(root / "forged-ca.pem"),
+                    "VIRTUAL_ENV": str(root / "forged-venv"),
+                }
+            )
+
+            result = subprocess.run(
+                ["scripts/verify_ops_foundation.sh", "--live"],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            marker_was_written = marker.exists()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(marker_was_written)
+        self.assertIn("group/other writable", result.stderr)
 
     def test_live_does_not_treat_unsigned_structure_as_approval_or_prerequisite(
         self,

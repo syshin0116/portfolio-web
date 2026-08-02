@@ -2,16 +2,17 @@
 """Verify the repository-owned GCP surface with exact-project read calls only.
 
 This verifier intentionally makes no claim about inherited organization/folder IAM or
-the project's parent.  It never queries those scopes and it never mutates Google Cloud.
+the project's parent.  It does not follow or query those scopes, ignores any parent
+field returned by the exact project describe, and never mutates Google Cloud.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping
@@ -19,8 +20,18 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from scripts.ops_foundation_live_toolchain import (
+        ToolchainError,
+        trusted_home,
+        validate_trusted_executable,
+    )
     from scripts.ops_foundation_contract import ContractError, validate_live_wif
 except ModuleNotFoundError:  # Direct `python scripts/...` execution.
+    from ops_foundation_live_toolchain import (  # type: ignore[no-redef]
+        ToolchainError,
+        trusted_home,
+        validate_trusted_executable,
+    )
     from ops_foundation_contract import ContractError, validate_live_wif
 
 PROJECT_ID = "festive-ally-503605-v7"
@@ -33,6 +44,12 @@ EXPECTED_GCLOUD_ACCOUNT_SHA256 = (
     "8d855626e841898add1ba4e401a4c7789a97b0f30d1ca837a3c6af90b1d48695"
 )
 MAX_GCLOUD_OUTPUT_BYTES = 16 * 1024 * 1024
+READINESS_CONTRACT_PATH = Path(__file__).with_name(
+    "gcp_project_readiness_contract.json"
+)
+READINESS_CONTRACT_SHA256 = (
+    "40a7244d0d2266985a2aaaf8072346cb4852a6e72226a1bc701c66e860b4711c"
+)
 
 PRODUCTION_RUNTIME_SA = f"agent-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
 PREVIEW_RUNTIME_SA = f"agent-preview-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
@@ -226,19 +243,15 @@ def _fail(message: str) -> None:
     raise ReadinessError(message)
 
 
-def _fixed_commands() -> frozenset[tuple[str, ...]]:
-    commands: set[tuple[str, ...]] = {
-        ("projects", "describe", PROJECT_ID, "--format=json"),
-        ("projects", "get-iam-policy", PROJECT_ID, "--format=json"),
-        ("services", "list", "--enabled", "--format=value(config.name)"),
-        (
-            "iam",
-            "roles",
-            "describe",
-            "cloudRunAgentDelivery",
-            "--format=json",
-        ),
-        ("iam", "service-accounts", "list", "--format=json"),
+BUCKET_DISCOVERY_COMMAND = (
+    "storage",
+    "buckets",
+    "list",
+    f"--filter=name={STATE_BUCKET}",
+    "--format=json(name,projectNumber)",
+)
+STATE_BUCKET_COMMANDS = frozenset(
+    {
         (
             "storage",
             "buckets",
@@ -260,6 +273,25 @@ def _fixed_commands() -> frozenset[tuple[str, ...]]:
             f"gs://{STATE_BUCKET}/{STATE_OBJECT}",
             "--format=json",
         ),
+    }
+)
+
+
+def _fixed_commands() -> frozenset[tuple[str, ...]]:
+    commands: set[tuple[str, ...]] = {
+        ("projects", "describe", PROJECT_ID, "--format=json"),
+        ("projects", "get-iam-policy", PROJECT_ID, "--format=json"),
+        ("services", "list", "--enabled", "--format=value(config.name)"),
+        (
+            "iam",
+            "roles",
+            "describe",
+            "cloudRunAgentDelivery",
+            "--format=json",
+        ),
+        ("iam", "service-accounts", "list", "--format=json"),
+        BUCKET_DISCOVERY_COMMAND,
+        *STATE_BUCKET_COMMANDS,
         (
             "iam",
             "workload-identity-pools",
@@ -367,8 +399,11 @@ def is_allowed_gcloud_command(
     command: tuple[str, ...],
     *,
     validated_service_accounts: frozenset[str],
+    trusted_state_bucket: bool = False,
 ) -> bool:
     """Return whether a command is one exact, read-only request in this project."""
+    if command in STATE_BUCKET_COMMANDS:
+        return trusted_state_bucket
     if command in FIXED_GCLOUD_COMMANDS:
         return True
     if len(command) != 8:
@@ -417,10 +452,205 @@ def _array(value: Any, label: str) -> list[Any]:
     return value
 
 
+def _contract_string_list(contract: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    values = _array(contract.get(key), f"readiness contract {key}")
+    if any(not isinstance(value, str) or not value for value in values):
+        _fail(f"readiness contract {key} must contain non-empty strings")
+    result = tuple(values)
+    if len(result) != len(set(result)):
+        _fail(f"readiness contract {key} contains duplicates")
+    return result
+
+
+def _approved_fixed_commands(contract: Mapping[str, Any]) -> frozenset[tuple[str, ...]]:
+    commands: set[tuple[str, ...]] = set()
+    singleton_commands = _array(
+        contract.get("fixedSingletonCommands"),
+        "readiness contract fixed singleton commands",
+    )
+    for raw_command in singleton_commands:
+        tokens = _array(raw_command, "readiness contract command")
+        if any(not isinstance(token, str) or not token for token in tokens):
+            _fail("readiness contract commands must contain non-empty strings")
+        command = tuple(tokens)
+        if command in commands:
+            _fail("readiness contract contains duplicate commands")
+        commands.add(command)
+
+    region = contract.get("region")
+    for repository in _contract_string_list(contract, "repositories"):
+        for operation in _contract_string_list(contract, "repositoryOperations"):
+            commands.add(
+                (
+                    "artifacts",
+                    "repositories",
+                    operation,
+                    repository,
+                    "--location",
+                    str(region),
+                    "--format=json",
+                )
+            )
+    for service in _contract_string_list(contract, "services"):
+        for operation in _contract_string_list(contract, "serviceOperations"):
+            commands.add(
+                (
+                    "run",
+                    "services",
+                    operation,
+                    service,
+                    "--region",
+                    str(region),
+                    "--format=json",
+                )
+            )
+    for job in _contract_string_list(contract, "jobs"):
+        for operation in _contract_string_list(contract, "jobOperations"):
+            commands.add(
+                (
+                    "run",
+                    "jobs",
+                    operation,
+                    job,
+                    "--region",
+                    str(region),
+                    "--format=json",
+                )
+            )
+    for account in _contract_string_list(contract, "workloadServiceAccounts"):
+        commands.add(
+            (
+                "iam",
+                "service-accounts",
+                "get-iam-policy",
+                account,
+                "--format=json",
+            )
+        )
+    for secret in _contract_string_list(contract, "secrets"):
+        for operation in _contract_string_list(contract, "secretOperations"):
+            commands.add(("secrets", operation, secret, "--format=json"))
+    for provider in _contract_string_list(contract, "wifProviders"):
+        commands.add(
+            (
+                "iam",
+                "workload-identity-pools",
+                "providers",
+                "describe",
+                provider,
+                "--location",
+                "global",
+                "--workload-identity-pool",
+                "github",
+                "--format=json",
+            )
+        )
+    return frozenset(commands)
+
+
+def validate_readiness_source_contract() -> None:
+    """Match source constants and every command shape to the pinned literal oracle."""
+    path = READINESS_CONTRACT_PATH
+    if path.is_symlink():
+        _fail("readiness contract manifest must not be a symlink")
+    try:
+        raw = path.read_bytes()
+        metadata = path.stat()
+    except OSError as exc:
+        raise ReadinessError("cannot read readiness contract manifest") from exc
+    if not path.is_file() or metadata.st_size != len(raw):
+        _fail("readiness contract manifest must be a regular file")
+    if hashlib.sha256(raw).hexdigest() != READINESS_CONTRACT_SHA256:
+        _fail("readiness contract manifest digest drifted")
+    try:
+        contract = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys
+        )
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise ReadinessError("readiness contract manifest is invalid JSON") from exc
+    document = _object(contract, "readiness contract manifest")
+    expected_keys = {
+        "schemaVersion",
+        "projectId",
+        "projectNumber",
+        "region",
+        "stateBucket",
+        "stateObject",
+        "requiredApis",
+        "workloadServiceAccounts",
+        "repositories",
+        "services",
+        "jobs",
+        "secrets",
+        "wifProviders",
+        "repositoryOperations",
+        "serviceOperations",
+        "jobOperations",
+        "secretOperations",
+        "fixedSingletonCommands",
+        "dynamicServiceAccountKeyCommand",
+    }
+    if set(document) != expected_keys or document.get("schemaVersion") != 1:
+        _fail("readiness contract manifest schema drifted")
+    scalar_contract = {
+        "projectId": PROJECT_ID,
+        "projectNumber": PROJECT_NUMBER,
+        "region": REGION,
+        "stateBucket": STATE_BUCKET,
+        "stateObject": STATE_OBJECT,
+    }
+    if any(document.get(key) != value for key, value in scalar_contract.items()):
+        _fail("readiness source project, number, region, or state target drifted")
+    inventory_contract = {
+        "requiredApis": REQUIRED_APIS,
+        "workloadServiceAccounts": WORKLOAD_SERVICE_ACCOUNTS,
+        "repositories": frozenset({"agent", "agent-preview"}),
+        "services": frozenset(SERVICE_SPECS),
+        "jobs": frozenset(JOB_SPECS),
+        "secrets": frozenset(SECRET_POLICIES),
+        "wifProviders": frozenset({"github-preview", "github-production"}),
+    }
+    if any(
+        frozenset(_contract_string_list(document, key)) != expected
+        for key, expected in inventory_contract.items()
+    ):
+        _fail("readiness source resource inventory drifted")
+    operation_contract = {
+        "repositoryOperations": ("describe", "get-iam-policy"),
+        "serviceOperations": ("describe", "get-iam-policy"),
+        "jobOperations": ("describe", "get-iam-policy"),
+        "secretOperations": ("describe", "get-iam-policy"),
+    }
+    if any(
+        _contract_string_list(document, key) != expected
+        for key, expected in operation_contract.items()
+    ):
+        _fail("readiness source operation catalogue drifted")
+    key_command = _object(
+        document.get("dynamicServiceAccountKeyCommand"),
+        "dynamic service-account key command",
+    )
+    if key_command != {
+        "prefix": [
+            "iam",
+            "service-accounts",
+            "keys",
+            "list",
+            "--iam-account",
+        ],
+        "suffix": ["--managed-by=user", "--format=value(name)"],
+        "accountSource": "validatedExactProjectInventory",
+    }:
+        _fail("dynamic service-account key command shape drifted")
+    if _approved_fixed_commands(document) != FIXED_GCLOUD_COMMANDS:
+        _fail("fixed gcloud command catalogue drifted from the literal oracle")
+
+
 class GCloudReader:
     """Execute only the repository-owned exact-project read catalogue."""
 
-    def __init__(self) -> None:
+    def __init__(self, gcloud_binary: Path) -> None:
+        validate_readiness_source_contract()
         overrides = sorted(
             name for name in os.environ if name.startswith(("CLOUDSDK_", "GOOGLE_"))
         )
@@ -430,36 +660,39 @@ class GCloudReader:
         digest = hashlib.sha256(account.encode()).hexdigest()
         if not account or digest != EXPECTED_GCLOUD_ACCOUNT_SHA256:
             _fail("gcloud account does not match the repository-pinned identity")
-        candidate = shutil.which("gcloud")
-        if candidate is None:
-            _fail("an executable gcloud binary is required")
         try:
-            binary = Path(candidate).resolve(strict=True)
-        except OSError as exc:
-            raise ReadinessError("cannot resolve the gcloud binary") from exc
-        if not binary.is_file() or not os.access(binary, os.X_OK):
-            _fail("resolved gcloud path is not an executable regular file")
+            binary = validate_trusted_executable(gcloud_binary, "gcloud")
+            python = validate_trusted_executable(sys.executable, "live Python")
+            home = trusted_home()
+        except ToolchainError as exc:
+            raise ReadinessError(str(exc)) from exc
 
         self._account = account
         self._binary = binary
+        self._environment = {
+            "CLOUDSDK_CORE_DISABLE_PROMPTS": "1",
+            "CLOUDSDK_ENCODING": "UTF-8",
+            "CLOUDSDK_PYTHON": str(python),
+            "CLOUDSDK_PYTHON_ARGS": "-I -S",
+            "HOME": str(home),
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        }
         self._validated_service_accounts: frozenset[str] = frozenset()
+        self._state_bucket_trusted = False
 
     def trust_service_account_inventory(self, accounts: Iterable[str]) -> None:
         self._validated_service_accounts = frozenset(accounts)
+
+    def trust_state_bucket(self) -> None:
+        self._state_bucket_trusted = True
 
     def __call__(self, command: tuple[str, ...]) -> str:
         if not is_allowed_gcloud_command(
             command,
             validated_service_accounts=self._validated_service_accounts,
+            trusted_state_bucket=self._state_bucket_trusted,
         ):
             _fail("gcloud command tuple or target is not allowlisted")
-        environment = {
-            key: value
-            for key, value in os.environ.items()
-            if key != GCLOUD_ACCOUNT_ENV
-            and not key.startswith(("CLOUDSDK_", "GOOGLE_"))
-            and not key.startswith("PYTHON")
-        }
         argv = (
             str(self._binary),
             "--configuration=NONE",
@@ -473,7 +706,7 @@ class GCloudReader:
                 argv,
                 check=False,
                 capture_output=True,
-                env=environment,
+                env=self._environment,
                 stdin=subprocess.DEVNULL,
                 text=True,
                 timeout=60,
@@ -642,6 +875,38 @@ def _validate_artifact_repository(document: Any, repository: str) -> None:
     keep = _object(policies[keep_id], f"{repository} keep policy")
     condition = _object(delete.get("condition"), f"{repository} delete condition")
     recent = _object(keep.get("mostRecentVersions"), f"{repository} keep count")
+    if set(delete) != {"action", "condition"} or set(keep) != {
+        "action",
+        "mostRecentVersions",
+    }:
+        _fail(f"Artifact Registry {repository} cleanup policy fields drifted")
+    condition_fields = {
+        "newerThan",
+        "olderThan",
+        "packageNamePrefixes",
+        "tagPrefixes",
+        "tagState",
+        "versionNamePrefixes",
+    }
+    if not set(condition) <= condition_fields or not set(recent) <= {
+        "keepCount",
+        "packageNamePrefixes",
+    }:
+        _fail(f"Artifact Registry {repository} cleanup selector fields drifted")
+    empty_selectors = (None, "", [])
+    if (
+        any(
+            condition.get(field) not in empty_selectors
+            for field in (
+                "newerThan",
+                "packageNamePrefixes",
+                "tagPrefixes",
+                "versionNamePrefixes",
+            )
+        )
+        or recent.get("packageNamePrefixes") not in empty_selectors
+    ):
+        _fail(f"Artifact Registry {repository} cleanup selector narrowed")
     if (
         repo.get("name")
         != f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{repository}"
@@ -696,6 +961,18 @@ def _validate_bucket(document: Any) -> None:
         or int(retention) < 2_592_000
     ):
         _fail("Terraform state bucket owner or protection metadata drifted")
+
+
+def _validate_bucket_discovery(document: Any) -> None:
+    buckets = _array(document, "exact-project bucket discovery")
+    if len(buckets) != 1:
+        _fail("exact-project bucket discovery must return the one state bucket")
+    bucket = _object(buckets[0], "discovered state bucket")
+    if (
+        bucket.get("name") != STATE_BUCKET
+        or str(bucket.get("projectNumber")) != PROJECT_NUMBER
+    ):
+        _fail("state bucket was not discovered under the exact project")
 
 
 def _validate_state_object(document: Any) -> None:
@@ -932,8 +1209,10 @@ def verify_exact_project_readiness(
     read: Read,
     *,
     trust_service_accounts: Callable[[Iterable[str]], None] | None = None,
+    trust_state_bucket: Callable[[], None] | None = None,
 ) -> None:
     """Read and validate every repository-owned exact-project readiness invariant."""
+    validate_readiness_source_contract()
     _validate_project(
         _read_json(
             read,
@@ -997,6 +1276,15 @@ def verify_exact_project_readiness(
         )
         _require_exact_policy(policy, expected_policy, repository)
 
+    _validate_bucket_discovery(
+        _read_json(
+            read,
+            (*BUCKET_DISCOVERY_COMMAND,),
+            "exact-project bucket discovery",
+        )
+    )
+    if trust_state_bucket is not None:
+        trust_state_bucket()
     _validate_bucket(
         _read_json(
             read,
@@ -1275,11 +1563,20 @@ def verify_exact_project_readiness(
     )
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gcloud-bin", type=Path, required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     try:
-        reader = GCloudReader()
+        reader = GCloudReader(args.gcloud_bin)
         verify_exact_project_readiness(
-            reader, trust_service_accounts=reader.trust_service_account_inventory
+            reader,
+            trust_service_accounts=reader.trust_service_account_inventory,
+            trust_state_bucket=reader.trust_state_bucket,
         )
     except ReadinessError as exc:
         print(f"FAIL: {exc}", file=sys.stderr)

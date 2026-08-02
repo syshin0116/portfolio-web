@@ -37,15 +37,30 @@ readonly -a WORKLOAD_SERVICE_ACCOUNTS=(
   "$PRODUCTION_MIGRATOR_SA"
   "$MAINTENANCE_SCHEDULER_SA"
 )
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+if [[ "$SCRIPT_PATH" != /* ]]; then
+  SCRIPT_PATH="$(pwd -P)/${SCRIPT_PATH}"
+fi
+SCRIPT_PARENT="${SCRIPT_PATH%/*}"
+SCRIPT_DIR="$(cd -- "$SCRIPT_PARENT" && pwd -P)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 readonly REPO_ROOT
 readonly TERRAFORM_DIR="${REPO_ROOT}/infra/gcp"
 readonly CONTRACT_SCRIPT="${REPO_ROOT}/scripts/ops_foundation_contract.py"
 readonly LIVE_GCP_VERIFIER="${REPO_ROOT}/scripts/verify_gcp_project_readiness.py"
+readonly LIVE_TOOLCHAIN_VERIFIER="${REPO_ROOT}/scripts/ops_foundation_live_toolchain.py"
+readonly LIVE_READINESS_ORACLE="${REPO_ROOT}/scripts/gcp_project_readiness_contract.json"
 readonly GOVERNANCE_MANIFEST="${REPO_ROOT}/.github/repository-governance.json"
 readonly GOVERNANCE_VERIFIER="${REPO_ROOT}/scripts/verify_repository_governance.py"
+LIVE_TRUSTED_HOME=""
+LIVE_BOOTSTRAP_PYTHON_BIN=""
+LIVE_UV_BIN=""
+LIVE_PYTHON_BIN=""
+LIVE_GH_BIN=""
+LIVE_GCLOUD_BIN=""
+readonly LIVE_CHILD_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+readonly LIVE_SELECTION_PATH="${PATH:-}"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -83,18 +98,115 @@ verify_disk_contract() {
   python3 "$CONTRACT_SCRIPT" disk-inventory --repo-root "$REPO_ROOT"
 }
 
-verify_static_contract() {
-  require_command uv
+verify_static_file_contract() {
   [[ -f "$LIVE_GCP_VERIFIER" && ! -L "$LIVE_GCP_VERIFIER" ]] ||
     fail "exact-project live verifier must be a regular non-symlink file"
-  uv run --frozen --package syshin0116-dev-agent \
-    python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
+  [[ -f "$LIVE_TOOLCHAIN_VERIFIER" && ! -L "$LIVE_TOOLCHAIN_VERIFIER" ]] ||
+    fail "live toolchain verifier must be a regular non-symlink file"
+  [[ -f "$LIVE_READINESS_ORACLE" && ! -L "$LIVE_READINESS_ORACLE" ]] ||
+    fail "exact-project readiness oracle must be a regular non-symlink file"
 
   if [[ -e "$GOVERNANCE_MANIFEST" && ! -f "$GOVERNANCE_VERIFIER" ]] ||
     [[ -e "$GOVERNANCE_VERIFIER" && ! -f "$GOVERNANCE_MANIFEST" ]]; then
     fail "canonical repository governance manifest and verifier must land together"
   fi
+}
 
+verify_static_contract() {
+  require_command uv
+  verify_static_file_contract
+  uv run --frozen --package syshin0116-dev-agent \
+    python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
+
+  printf 'OK: credential-free Terraform security contract verified.\n'
+}
+
+resolve_live_tool() {
+  local tool="$1"
+
+  /usr/bin/env -i \
+    PATH="$LIVE_SELECTION_PATH" \
+    "$LIVE_BOOTSTRAP_PYTHON_BIN" -I -s \
+    "$LIVE_TOOLCHAIN_VERIFIER" resolve "$tool"
+}
+
+reject_live_google_overrides() {
+  local overrides
+
+  overrides="$(
+    compgen -A variable CLOUDSDK_ || true
+    compgen -A variable GOOGLE_ || true
+  )"
+  [[ -z "$overrides" ]] ||
+    fail "caller Google/gcloud environment overrides are forbidden"
+}
+
+clear_live_loader_overrides() {
+  local name
+  local overrides
+
+  overrides="$(
+    compgen -A variable DYLD_ || true
+    compgen -A variable LD_ || true
+  )"
+  while IFS= read -r name; do
+    [[ -z "$name" ]] || unset "$name"
+  done <<<"$overrides"
+}
+
+prepare_live_toolchain() {
+  local include_gcloud="${1:-true}"
+
+  reject_live_google_overrides
+  clear_live_loader_overrides
+  [[ -x /usr/bin/python3 ]] ||
+    fail "trusted system Python is required for live toolchain preflight"
+  verify_static_file_contract
+  LIVE_BOOTSTRAP_PYTHON_BIN="$(
+    /usr/bin/env -i \
+      PATH="$LIVE_CHILD_PATH" \
+      /usr/bin/python3 -I -s "$LIVE_TOOLCHAIN_VERIFIER" \
+      validate /usr/bin/python3
+  )" || fail "cannot validate the trusted system Python"
+  LIVE_TRUSTED_HOME="$(
+    /usr/bin/env -i \
+      PATH="$LIVE_CHILD_PATH" \
+      "$LIVE_BOOTSTRAP_PYTHON_BIN" -I -s \
+      "$LIVE_TOOLCHAIN_VERIFIER" home
+  )" || fail "cannot resolve the trusted local home"
+  LIVE_UV_BIN="$(resolve_live_tool uv)" || fail "cannot resolve trusted uv"
+  LIVE_GH_BIN="$(resolve_live_tool gh)" || fail "cannot resolve trusted gh"
+  if [[ "$include_gcloud" == "true" ]]; then
+    LIVE_GCLOUD_BIN="$(resolve_live_tool gcloud)" ||
+      fail "cannot resolve trusted gcloud"
+  fi
+}
+
+prepare_live_python() {
+  LIVE_PYTHON_BIN="$(
+    /usr/bin/env -i \
+      PATH="$LIVE_CHILD_PATH" \
+      "$LIVE_BOOTSTRAP_PYTHON_BIN" -I -s "$LIVE_TOOLCHAIN_VERIFIER" \
+      validate "${REPO_ROOT}/.venv/bin/python3"
+  )" || fail "cannot resolve the trusted frozen-workspace Python"
+  /usr/bin/env -i \
+    HOME="$LIVE_TRUSTED_HOME" \
+    PATH="$LIVE_CHILD_PATH" \
+    "$LIVE_PYTHON_BIN" -I -s -c \
+    'import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] <= (3, 14) else 1)' ||
+    fail "live Python must be within the reviewed 3.12-3.14 range"
+}
+
+run_live_uv() {
+  /usr/bin/env -i \
+    HOME="$LIVE_TRUSTED_HOME" \
+    PATH="$LIVE_CHILD_PATH" \
+    "$LIVE_UV_BIN" run --frozen --package syshin0116-dev-agent "$@"
+}
+
+verify_static_contract_live() {
+  run_live_uv \
+    python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
   printf 'OK: credential-free Terraform security contract verified.\n'
 }
 
@@ -154,12 +266,10 @@ verify_canonical_repository_governance() {
   local required="${1:-false}"
 
   if [[ -f "$GOVERNANCE_MANIFEST" && -f "$GOVERNANCE_VERIFIER" ]]; then
-    require_command uv
-    require_command gh
     (
       cd "$REPO_ROOT"
-      uv run --frozen --package syshin0116-dev-agent \
-        python "$GOVERNANCE_VERIFIER" --live
+      run_live_uv \
+        python "$GOVERNANCE_VERIFIER" --live --gh-bin "$LIVE_GH_BIN"
     )
   elif [[ -e "$GOVERNANCE_MANIFEST" || -e "$GOVERNANCE_VERIFIER" ]]; then
     fail "canonical repository-governance manifest and verifier must land together"
@@ -172,9 +282,15 @@ verify_canonical_repository_governance() {
 }
 
 verify_live_contract() {
-  verify_static_contract
-  require_command python3
-  python3 -E -s "$LIVE_GCP_VERIFIER"
+  prepare_live_toolchain
+  verify_static_contract_live
+  prepare_live_python
+  /usr/bin/env -i \
+    HOME="$LIVE_TRUSTED_HOME" \
+    OPS_FOUNDATION_GCLOUD_ACCOUNT="${OPS_FOUNDATION_GCLOUD_ACCOUNT:-}" \
+    PATH="$LIVE_CHILD_PATH" \
+    "$LIVE_PYTHON_BIN" -E -s "$LIVE_GCP_VERIFIER" \
+    --gcloud-bin "$LIVE_GCLOUD_BIN"
   verify_canonical_repository_governance true
   printf '%s\n' \
     "OK: exact GCP-project direct state and canonical GitHub governance verified; public launch, spend safety, project parent, and inherited IAM are not claimed."
@@ -219,6 +335,7 @@ case "$mode" in
     verify_live_contract
     ;;
   --governance-live)
+    prepare_live_toolchain false
     verify_canonical_repository_governance
     ;;
   -h | --help)

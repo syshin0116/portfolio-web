@@ -88,10 +88,11 @@ accounts and user-managed keys, Secret Manager metadata and direct IAM, WIF, Clo
 services/jobs and their direct IAM, and the maintenance Scheduler.
 
 The live verifier never reads a secret payload or Terraform state contents, executes a
-job, inspects logs, mutates a resource, or requests organization, folder, ancestor,
-project-parent, or other-project data. It rejects ambient `CLOUDSDK_*` and `GOOGLE_*`
-overrides and injects the exact project into every allowlisted command. The operator must
-explicitly select the locally reviewed account:
+job, inspects logs, mutates a resource, follows or queries an organization/folder/
+ancestor/project-parent scope, or queries another project. An exact project describe may
+contain a parent field; the verifier ignores it and makes no parentage claim. It rejects
+ambient `CLOUDSDK_*` and `GOOGLE_*` overrides and injects the exact project into every
+allowlisted command. The operator must explicitly select the locally reviewed account:
 
 ```sh
 export OPS_FOUNDATION_GCLOUD_ACCOUNT='<reviewed local account>'
@@ -105,12 +106,22 @@ therefore proves only the checked exact-project direct state plus canonical GitH
 repository/environment governance. It does not prove public-launch readiness, zero or
 bounded spend, complete inherited policy, or project-parent linkage.
 
-Invoke this verifier only through its executable path, for example
+Invoke this verifier only from a trusted local workstation, shell, checkout, and
+toolchain, and only through its executable path, for example
 `scripts/verify_ops_foundation.sh --static`. Its `/bin/bash -p` process ignores
 `BASH_ENV` and imported shell functions. Sourcing it or running
 `bash scripts/verify_ops_foundation.sh ...` is unsupported and refused; sourcing has no
-test or environment override. The GCP reader is a separate Python process launched with
-`-E -s`, and every request must match the repository-owned command catalogue.
+test or environment override. Live preflight accepts only current-user/root-owned regular
+`uv`, `gh`, `gcloud`, and Python executables whose selected and resolved ancestry is not
+group/other writable; it derives `HOME` from passwd and gives children a fixed, sanitized
+environment. The GCP reader is a separate Python process launched with `-E -s`, and every
+request must match the SHA-pinned literal command oracle. This boundary does not resist a
+malicious same-user workstation or loader injection before the initial shell starts.
+
+A missing API, permission denial, inaccessible endpoint, or unreadable response is a
+hard **STOP**, not remediation authority. This verifier never authorizes an IAM grant,
+API enablement, billing attachment, project-setting change, or job execution; make any
+such change only through its own reviewed plan and PR.
 
 `OPS_FOUNDATION_ADMIN_EVIDENCE_FILE` names only an unsigned structure input. Its absolute
 path must remain outside every repository/worktree and point to a regular non-symlink
@@ -183,8 +194,7 @@ published gold.
 Delegation requires both `uv` and `gh` and runs the verifier exactly as:
 
 ```sh
-uv run --frozen --package syshin0116-dev-agent \
-  python scripts/verify_repository_governance.py --live
+scripts/verify_ops_foundation.sh --governance-live
 ```
 
 ### Neon: verified live agent state versus remaining target

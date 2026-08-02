@@ -12,7 +12,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-08-02"
+updated: "2026-08-03"
 owners: ["@syshin0116"]
 refs: [../research/public-exposure.md, ../plans/rag-restack.md, 0004-adopt-aegra.md, 0007-postgres-on-neon-split-projects.md]
 template: adr
@@ -21,9 +21,9 @@ template: adr
 # ADR-0006: The chatbot is public, with Turnstile-gated anonymous subjects
 
 > **status: accepted; the application hardening is implemented, but public rollout is
-> still gated.** The production guest flags and recurring retention Scheduler remain
-> disabled until the launch, billing, browser, and exact-project operational gates in the
-> public rollout runbook pass.
+> still gated.** The recurring retention Scheduler is repository-configured active, while
+> the production guest flags remain disabled until its exact-project apply and first
+> bounded execution plus the remaining launch, billing, and browser gates pass.
 
 ## Context
 
@@ -178,9 +178,10 @@ rate token, reserves the durable worst-case amount, and calls Aegra immediately;
 post-dispatch failures remain intentionally charged.
 
 **Rollout remains gated.** The code boundary does not activate guest flags, inject an
-OpenAI credential, approve a paid budget, or unpause recurring GC. The Scheduler must be
-reviewed and proven active before anonymous token issuance is enabled; leaving it paused
-is a launch blocker, not an alternative retention policy.
+OpenAI credential, or approve a paid budget. The repository configures recurring GC
+active, but its exact-project apply and first bounded execution must be proven before
+anonymous token issuance is enabled; a paused or unverified Scheduler is a launch
+blocker, not an alternative retention policy.
 
 ## Consequences
 

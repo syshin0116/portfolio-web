@@ -568,15 +568,15 @@ printf '%s\n' \
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Terraform source content digest is not exact", result.stderr)
 
-    def test_guest_maintenance_scheduler_unpause_fails_closed(self) -> None:
+    def test_guest_maintenance_scheduler_pause_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory)
             cloud_run_path = root / "infra/gcp/cloud_run.tf"
             original = cloud_run_path.read_text(encoding="utf-8")
-            expected = "  paused = true"
+            expected = "  paused = false"
             self.assertEqual(1, original.count(expected))
             cloud_run_path.write_text(
-                original.replace(expected, "  paused = false", 1),
+                original.replace(expected, "  paused = true", 1),
                 encoding="utf-8",
             )
 

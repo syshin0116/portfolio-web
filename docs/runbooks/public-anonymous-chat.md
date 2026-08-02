@@ -169,11 +169,10 @@ guest identity or spend state.
 1. Deploy and verify the agent with anonymous access still false.
 2. Run owner, PostgreSQL, public raw-wire, rate, concurrency, spend, retention,
    and maintenance proofs against the exact revision.
-3. While both public surfaces remain disabled, obtain the separate owner approval for
-   recurring billing, land the repository change that activates the currently paused
-   Terraform-owned production maintenance Scheduler, review its exact dedicated-project
-   plan, apply it, and verify the first bounded checkpoint-first maintenance execution.
-   A paused or unverified Scheduler blocks launch.
+3. While both public surfaces remain disabled, review the exact dedicated-project plan
+   for the repository-configured active production maintenance Scheduler, apply it, and
+   verify the first bounded checkpoint-first maintenance execution. A paused or
+   unverified Scheduler blocks launch.
 4. Land the separately approved repository change that selects the Production
    guest model, fixes both reviewed micro-dollar ceilings, and sets only the
    Production `AGENT_ANONYMOUS_ACCESS_ENABLED=true` while Preview remains
@@ -182,9 +181,10 @@ guest identity or spend state.
    real browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.
 
-This repository change intentionally leaves the production maintenance Scheduler paused.
-Do not activate it with an untracked console-only toggle, and do not interpret application
-hardening as approval to enable either public flag before step 3 completes.
+The production maintenance Scheduler is repository-configured active after the separate
+owner approval. Do not pause or activate it with an untracked console-only toggle, and do
+not interpret the configuration change as proof that step 3 completed: the exact plan,
+apply, and first bounded execution remain required before either public flag is enabled.
 
 The web gate first attempts a bodyless cookie resume. A missing or expired
 cookie returns to Turnstile. A successful challenge injects its returned

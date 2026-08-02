@@ -9,7 +9,7 @@ when_to_read: >
   Singapore database.
 tags: [operations, gcp, neon, workload-identity, cloud-run, secrets, terraform]
 status: stable
-updated: "2026-07-29"
+updated: "2026-08-03"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
@@ -397,7 +397,7 @@ The repository-side follow-up is implemented. It declares preview/production ser
 separate runtime/migration identities and URLs, isolated image builders and registries, one
 active four-role WIF provider with a disabled legacy provider, split secretless build and
 reviewer-gated release workflows, same-digest migration, grant-probe, and maintenance
-jobs, a production-only paused-by-default 15-minute OAuth-authenticated Cloud Scheduler
+jobs, an active production-only 15-minute OAuth-authenticated Cloud Scheduler
 trigger, exact Cloud Run REST v2 read-back plus etag-bound Job execution before traffic
 movement, owner-auth APv2 smoke on the tagged no-traffic revision before promotion, and
 revision-traffic rollback. Production deploy rechecks current `main` and all three exact
@@ -411,8 +411,9 @@ environment, or secret external state. Follow
 [`cloud-run-delivery.md`](cloud-run-delivery.md) for bootstrap and keep
 `AGENT_CLOUD_RUN_ENABLED` false until its live gates pass. That variable gates future
 delivery workflows only; it does not pause Scheduler, revoke the public invoker, stop a
-service, or guarantee zero cost. Terraform creates the production 15-minute schedule
-paused, and only a separately reviewed public-launch and billing change may activate it.
+service, or guarantee zero cost. After explicit owner approval, Terraform creates the
+production 15-minute schedule active. Keep both web public flags disabled until the exact
+plan is applied and the first bounded scheduled execution succeeds.
 The public-access policy remains in
 [ADR-0006](../adr/0006-public-anonymous-chat-access.md); application auth is still
 owner-only until that later hardening lands.

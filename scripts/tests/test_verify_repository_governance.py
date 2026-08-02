@@ -315,6 +315,85 @@ class LocalGovernanceTests(unittest.TestCase):
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
 
+    def test_ci_changes_timeout_has_the_exact_plain_literal(self) -> None:
+        document = governance.load_yaml_document(
+            REPO_ROOT / governance.AGENT_CI_WORKFLOW
+        )
+        changes = governance._workflow_jobs(document)["changes"]
+        timeout = governance._mapping_value(changes, "timeout-minutes")
+
+        self.assertIsInstance(timeout, governance.ScalarNode)
+        self.assertEqual(("10", None), (timeout.value, timeout.style))
+        self.assertEqual([], governance.validate_ci_changes_timeout_contract(document))
+
+    def test_ci_changes_timeout_rejects_every_nonexact_shape(self) -> None:
+        original = (REPO_ROOT / governance.AGENT_CI_WORKFLOW).read_text(
+            encoding="utf-8"
+        )
+        exact = "    timeout-minutes: 10\n"
+        self.assertEqual(1, original.split("\n  web:", 1)[0].count(exact))
+        mutations = {
+            "other-value": "    timeout-minutes: 11\n",
+            "quoted": '    timeout-minutes: "10"\n',
+            "missing": "",
+            "mapping": "    timeout-minutes:\n      nested: 10\n",
+            "sequence": "    timeout-minutes:\n      - 10\n",
+        }
+        for name, replacement in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "ci.yml"
+                path.write_text(
+                    original.replace(exact, replacement, 1), encoding="utf-8"
+                )
+                document = governance.load_yaml_document(path)
+
+                errors = governance.validate_ci_changes_timeout_contract(document)
+
+                self.assertTrue(errors)
+                self.assertIn("job 'changes' timeout-minutes", errors[0])
+
+    def test_ci_changes_timeout_is_wired_into_local_governance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / governance.AGENT_CI_WORKFLOW
+            original = workflow.read_text(encoding="utf-8")
+            mutated = original.replace(
+                "    timeout-minutes: 10\n",
+                "    timeout-minutes: 11\n",
+                1,
+            )
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                "job 'changes' timeout-minutes must be the unquoted plain scalar 10"
+                in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_ci_changes_timeout_contract_does_not_pin_other_jobs(self) -> None:
+        original = (REPO_ROOT / governance.AGENT_CI_WORKFLOW).read_text(
+            encoding="utf-8"
+        )
+        exact = "    timeout-minutes: 30\n"
+        self.assertGreaterEqual(original.count(exact), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ci.yml"
+            path.write_text(
+                original.replace(exact, "    timeout-minutes: 31\n", 1),
+                encoding="utf-8",
+            )
+            document = governance.load_yaml_document(path)
+
+            errors = governance.validate_ci_changes_timeout_contract(document)
+
+        self.assertEqual([], errors)
+
     def test_vercel_git_autodeploy_contract_rejects_disabled_main_override(
         self,
     ) -> None:
@@ -3564,6 +3643,8 @@ class LiveGovernanceTests(unittest.TestCase):
                 "owner/repository",
                 "2026-03-10",
                 "actions/permissions",
+                gh_binary=Path("/trusted/gh"),
+                home=Path("/trusted/home"),
             )
 
     def test_gh_api_accepts_an_empty_204_response(self) -> None:
@@ -3579,15 +3660,26 @@ class LiveGovernanceTests(unittest.TestCase):
             governance.subprocess,
             "run",
             return_value=completed,
-        ):
+        ) as run:
             response = governance._gh_api(
                 "owner/repository",
                 "2026-03-10",
                 "vulnerability-alerts",
+                gh_binary=Path("/trusted/gh"),
+                home=Path("/trusted/home"),
             )
 
         self.assertEqual(204, response.status)
         self.assertIsNone(response.payload)
+        self.assertEqual("/trusted/gh", run.call_args.args[0][0])
+        self.assertEqual(
+            {
+                "HOME": "/trusted/home",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            },
+            run.call_args.kwargs["env"],
+        )
+        self.assertIs(governance.subprocess.DEVNULL, run.call_args.kwargs["stdin"])
 
     def test_gh_api_rejects_a_body_on_204(self) -> None:
         completed = governance.subprocess.CompletedProcess(
@@ -3614,6 +3706,8 @@ class LiveGovernanceTests(unittest.TestCase):
                 "owner/repository",
                 "2026-03-10",
                 "vulnerability-alerts",
+                gh_binary=Path("/trusted/gh"),
+                home=Path("/trusted/home"),
             )
 
     def test_disabled_vulnerability_alerts_are_reported(self) -> None:

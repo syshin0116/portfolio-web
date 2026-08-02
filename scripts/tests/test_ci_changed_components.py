@@ -138,14 +138,28 @@ class PathClassificationTests(unittest.TestCase):
             "scripts/tests/test_deploy_cloud_run.py",
             "scripts/tests/test_ops_foundation_contract.py",
             "scripts/tests/test_validate_agent_release_candidate.py",
+            "scripts/tests/test_verify_gcp_project_readiness.py",
             "scripts/verify_ops_foundation.sh",
             "scripts/tests/test_verify_ops_foundation.py",
             "scripts/validate_agent_release_candidate.py",
             "scripts/validate_agent_delivery_identity.sh",
+            "scripts/verify_gcp_project_readiness.py",
         ):
             with self.subTest(path=path):
                 self.assertEqual(
                     {"web": False, "agent": False, "eval": False, "infra": True},
+                    changes.classify_paths([path]),
+                )
+
+    def test_live_toolchain_contract_runs_agent_and_infrastructure_ci(self) -> None:
+        for path in (
+            "scripts/gcp_project_readiness_contract.json",
+            "scripts/ops_foundation_live_toolchain.py",
+            "scripts/tests/test_ops_foundation_live_toolchain.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    {"web": False, "agent": True, "eval": False, "infra": True},
                     changes.classify_paths([path]),
                 )
 

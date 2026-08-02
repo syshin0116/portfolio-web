@@ -37,8 +37,9 @@ Repository tags are intentionally mutable because Artifact Registry cannot delet
 versions when immutable tags are enabled. Delivery never trusts or reuses a pre-existing
 tag: each run attempt pushes a fresh run/attempt-scoped tag, resolves it in the same job,
 and passes only the digest. The repository statically pins active cleanup policies and
-retention floors, but the current verifier performs no live repository read; run the
-documented dry-run review before any foundation apply that enables deletion.
+retention floors. The explicit post-apply live verifier reads and checks the exact
+repository metadata and direct IAM, but the documented dry-run candidate review remains
+mandatory before any foundation apply that enables deletion.
 The services are publicly invokable at the Cloud Run layer so Vercel-hosted browsers can
 reach them; fail-closed Aegra bearer authentication protects APv2 operations.
 Public Cloud Run invocation is only transport reachability, not anonymous product access.
@@ -47,11 +48,14 @@ release enables them; an Agent Preview release is never the public guest path.
 
 IAM member resources are deliberately additive: changing them to authoritative
 role-level bindings without a reviewed live plan could remove unrelated or
-Google-managed members. Post-apply live acceptance is currently blocked, not verified:
-unsigned v1 structure validation ends `--live` at the signed-attestation blocker. The
-shell contains no GCP CLI helper, command catalogue, account digest, or request path. A
-separately reviewed signed v2 attestation format with a repository-pinned company-admin
-public key must land before any live read or deployment acceptance can be implemented.
+Google-managed members. Post-apply direct-state verification is an explicit read-only
+gate: it runs the static contract, permits a fixed command catalogue against only
+`festive-ally-503605-v7`, and then requires canonical exact-repository GitHub governance.
+It reads direct IAM and repository-owned resource metadata only. It never reads secret
+payloads or Terraform state contents, executes workloads, mutates resources, follows or
+queries organization/folder/ancestor/project-parent scopes, or queries another project.
+The exact project describe may return a parent field; the verifier ignores it and makes
+no project-parent claim.
 
 Unsigned v1 is a structure-only file outside every repository/worktree, not
 company-admin evidence. It declares exactly one organization but proves no parent
@@ -61,14 +65,20 @@ project-custom-role bindings are forbidden. Missing, malformed, stale, future-da
 duplicate-key, unrelated, or incomplete structure fails, but a passing structure still
 is not deployment approval.
 
-Run the verifier only through its executable path as shown below. Its direct
+Run the verifier only from a trusted local workstation, shell, checkout, and toolchain,
+and only through its executable path as shown below. The preflight requires selected
+`uv`, `gh`, `gcloud`, and Python executables to be current-user/root-owned regular files
+with non-group/other-writable ancestry, derives `HOME` from passwd, and launches children
+with an explicit sanitized environment. This boundary does not resist a malicious
+same-user workstation or loader injection before the initial shell starts. Its direct
 `/bin/bash -p` process ignores `BASH_ENV` and imported shell functions; sourcing the file
 is unconditionally refused with no environment override, and invoking
 `bash scripts/verify_ops_foundation.sh ...` is also unsupported and refused.
 Unsigned structure is not permission to inspect company hierarchy from this repository
-and not a waiver of inherited-IAM risk. Exact live IAM, service-account-key, repository,
-service, job, and Scheduler state remain unverified until a separate signed-v2
-implementation is reviewed.
+and not a waiver of inherited-IAM risk. The live gate verifies exact-project direct IAM,
+service-account-key absence, repositories, services, jobs, secrets, WIF, state metadata,
+and Scheduler state without claiming inherited-IAM completeness. A signed company-admin
+format is needed only if that broader claim is later required.
 
 The canonical active `github-production` provider explicitly maps the immutable repository
 and owner numeric IDs. Its `delivery_role` mapping pins event, caller `workflow_ref`, and
@@ -89,12 +99,15 @@ GitHub environment reviewers, self-review, and the canonical agent/Vercel produc
 branch sets `{main}` live only in `.github/repository-governance.json`. When that manifest and
 `scripts/verify_repository_governance.py` are present, the independent
 `--governance-live` mode requires `uv` and `gh`, then delegates without duplicating the
-rules. Foundation `--live` never reaches this mode:
+rules. Foundation `--live` requires this same delegation after exact-project GCP reads:
 
 ```sh
-uv run --frozen --package syshin0116-dev-agent \
-  python scripts/verify_repository_governance.py --live
+scripts/verify_ops_foundation.sh --governance-live
 ```
+
+Any missing API, inaccessible endpoint, or permission denial is a hard **STOP**. The
+verifier does not authorize granting IAM, enabling an API, attaching billing, changing
+project settings, or executing a job; each requires a separate reviewed change.
 
 Both `Agent Preview` and `Agent Production` require `syshin0116`, allow self-review,
 forbid admin bypass, contain exactly `AGENT_SMOKE_BEARER_TOKEN`, and contain zero
@@ -221,18 +234,25 @@ approval. Manual rollback remains usable on red CI but requires
 
 Run `scripts/verify_ops_foundation.sh --static` directly before review; no-argument
 execution also defaults to `--static`, while `--live` always requires explicit opt-in.
-Do not treat `--live` as an acceptance gate: it contains no GCP request path and must
-return the trusted-company-admin-attestation blocker after validating
-`OPS_FOUNDATION_ADMIN_EVIDENCE_FILE`. That variable points only to the private unsigned
-structure described in
-[`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md). Run
-`scripts/verify_ops_foundation.sh --offline-admin-evidence-structure` to validate its
-shape without a network call; success prints `STRUCTURE ONLY / NOT AUTHENTICATED`.
-Any future live-read contract belongs in the separate signed-v2 change and must preserve
-the exact project boundary. After explicit owner approval, the repository contract now
-requires the production Scheduler to be `ENABLED`; `PAUSED` is drift. Keep both Vercel
-public flags disabled until the exact services-stage plan is applied and the first
-bounded scheduled execution passes. Secret injection and state recovery remain in
+Select the locally reviewed account explicitly before the post-apply gate:
+
+```sh
+export OPS_FOUNDATION_GCLOUD_ACCOUNT='<reviewed local account>'
+scripts/verify_ops_foundation.sh --live
+```
+
+The repository-pinned account-name digest prevents accidental local-account drift; it
+does not authenticate company-admin origin, project parentage, or inherited policy. The
+optional `OPS_FOUNDATION_ADMIN_EVIDENCE_FILE` command described in
+[`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md)
+validates unsigned structure only and is not a live prerequisite or approval input.
+
+A passing live result proves neither public launch nor bounded or zero spend. The
+production Scheduler must be `ENABLED`; `PAUSED` is drift, but its exact plan/apply and
+first bounded execution still must pass. Keep both Vercel public flags disabled while
+Luna input-count billing and the proven pre-provider upper bound remain unresolved, and
+until the remaining Turnstile, provider, and browser gates pass. Secret injection and
+state recovery remain in
 [`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md).
 Bootstrap, normal delivery, and rollback are in
 [`docs/runbooks/cloud-run-delivery.md`](../../docs/runbooks/cloud-run-delivery.md).

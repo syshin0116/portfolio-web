@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "projectId": "festive-ally-503605-v7",
+  "projectNumber": "72919926064",
+  "region": "us-east4",
+  "stateBucket": "festive-ally-503605-v7-tfstate",
+  "stateObject": "syshin0116.dev/gcp/foundation/default.tfstate",
+  "requiredApis": [
+    "artifactregistry.googleapis.com",
+    "cloudscheduler.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "run.googleapis.com",
+    "secretmanager.googleapis.com",
+    "storage.googleapis.com",
+    "sts.googleapis.com"
+  ],
+  "workloadServiceAccounts": [
+    "agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-maintenance-scheduler@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-preview-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com",
+    "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
+  ],
+  "repositories": [
+    "agent",
+    "agent-preview"
+  ],
+  "services": [
+    "agent",
+    "agent-preview"
+  ],
+  "jobs": [
+    "agent-grants",
+    "agent-maintenance",
+    "agent-migrate",
+    "agent-preview-grants",
+    "agent-preview-maintenance",
+    "agent-preview-migrate"
+  ],
+  "secrets": [
+    "agent-auth-secret",
+    "agent-database-url",
+    "agent-migration-database-url",
+    "agent-preview-anthropic-api-key",
+    "agent-preview-auth-secret",
+    "agent-preview-database-url",
+    "agent-preview-langsmith-api-key",
+    "agent-preview-migration-database-url",
+    "anthropic-api-key",
+    "langsmith-api-key",
+    "openai-api-key"
+  ],
+  "wifProviders": [
+    "github-preview",
+    "github-production"
+  ],
+  "anonymousRuntimeContract": {
+    "preview": {
+      "AGENT_ANONYMOUS_ACCESS_ENABLED": "false",
+      "GUEST_DAILY_BUDGET_MICRO_USD": "",
+      "GUEST_MODEL": "",
+      "GUEST_RUN_RESERVATION_MICRO_USD": ""
+    },
+    "production": {
+      "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
+      "GUEST_DAILY_BUDGET_MICRO_USD": "500000",
+      "GUEST_MODEL": "openai:gpt-5.6-luna",
+      "GUEST_RUN_RESERVATION_MICRO_USD": "18892"
+    }
+  },
+  "repositoryOperations": [
+    "describe",
+    "get-iam-policy"
+  ],
+  "serviceOperations": [
+    "describe",
+    "get-iam-policy"
+  ],
+  "jobOperations": [
+    "describe",
+    "get-iam-policy"
+  ],
+  "secretOperations": [
+    "describe",
+    "get-iam-policy"
+  ],
+  "fixedSingletonCommands": [
+    [
+      "projects",
+      "describe",
+      "festive-ally-503605-v7",
+      "--format=json"
+    ],
+    [
+      "projects",
+      "get-iam-policy",
+      "festive-ally-503605-v7",
+      "--format=json"
+    ],
+    [
+      "services",
+      "list",
+      "--enabled",
+      "--format=value(config.name)"
+    ],
+    [
+      "iam",
+      "roles",
+      "describe",
+      "cloudRunAgentDelivery",
+      "--format=json"
+    ],
+    [
+      "iam",
+      "service-accounts",
+      "list",
+      "--format=json"
+    ],
+    [
+      "storage",
+      "buckets",
+      "list",
+      "--filter=name=festive-ally-503605-v7-tfstate",
+      "--format=json(name,projectNumber)"
+    ],
+    [
+      "storage",
+      "buckets",
+      "describe",
+      "gs://festive-ally-503605-v7-tfstate",
+      "--format=json"
+    ],
+    [
+      "storage",
+      "buckets",
+      "get-iam-policy",
+      "gs://festive-ally-503605-v7-tfstate",
+      "--format=json"
+    ],
+    [
+      "storage",
+      "objects",
+      "describe",
+      "gs://festive-ally-503605-v7-tfstate/syshin0116.dev/gcp/foundation/default.tfstate",
+      "--format=json"
+    ],
+    [
+      "iam",
+      "workload-identity-pools",
+      "describe",
+      "github",
+      "--location",
+      "global",
+      "--format=json"
+    ],
+    [
+      "iam",
+      "workload-identity-pools",
+      "providers",
+      "list",
+      "--location",
+      "global",
+      "--workload-identity-pool",
+      "github",
+      "--format=json"
+    ],
+    [
+      "scheduler",
+      "jobs",
+      "describe",
+      "agent-guest-maintenance",
+      "--location",
+      "us-east4",
+      "--format=json"
+    ]
+  ],
+  "dynamicServiceAccountKeyCommand": {
+    "prefix": [
+      "iam",
+      "service-accounts",
+      "keys",
+      "list",
+      "--iam-account"
+    ],
+    "suffix": [
+      "--managed-by=user",
+      "--format=value(name)"
+    ],
+    "accountSource": "validatedExactProjectInventory"
+  }
+}

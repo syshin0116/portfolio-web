@@ -39,14 +39,19 @@ PUBLICATION_DOCKER_CONTEXT_PATHS = frozenset(
 OPS_FOUNDATION_PATHS = frozenset(
     {
         "scripts/deploy_cloud_run.sh",
+        "scripts/gcp_project_readiness_contract.json",
         "scripts/ops_foundation_contract.py",
+        "scripts/ops_foundation_live_toolchain.py",
         "scripts/tests/test_agent_delivery_identity.py",
         "scripts/tests/test_deploy_cloud_run.py",
         "scripts/tests/test_ops_foundation_contract.py",
+        "scripts/tests/test_ops_foundation_live_toolchain.py",
         "scripts/tests/test_validate_agent_release_candidate.py",
+        "scripts/tests/test_verify_gcp_project_readiness.py",
         "scripts/tests/test_verify_ops_foundation.py",
         "scripts/validate_agent_release_candidate.py",
         "scripts/validate_agent_delivery_identity.sh",
+        "scripts/verify_gcp_project_readiness.py",
         "scripts/verify_ops_foundation.sh",
     }
 )
@@ -77,6 +82,12 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
             affected["agent"] = True
             affected["eval"] = True
             affected["infra"] = True
+        if path in {
+            "scripts/gcp_project_readiness_contract.json",
+            "scripts/ops_foundation_live_toolchain.py",
+            "scripts/tests/test_ops_foundation_live_toolchain.py",
+        }:
+            affected["agent"] = True
         if path.startswith("protocol/") or path.startswith("content/"):
             affected["web"] = True
             affected["agent"] = True

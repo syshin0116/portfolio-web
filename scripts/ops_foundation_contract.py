@@ -43,6 +43,11 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
         "2cd81306c789caa4fed43dc31bc687665a4b29ccb1fbcdecbcf159b989c545b9"
     )
 }
+EXPECTED_PINNED_READINESS_FILES = {
+    "scripts/gcp_project_readiness_contract.json": (
+        "e1bdcf7e7b412f3769fe65d1ad196c2d8986e1cbeb8116836e6af2d7310655a8"
+    )
+}
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
     {
         ("google_cloud_run_v2_job", "grant_probe"),
@@ -1496,6 +1501,38 @@ def _validate_pinned_terraform_file_contract(repo_root: Path) -> None:
             )
 
 
+def _validate_pinned_readiness_file_contract(repo_root: Path) -> None:
+    for relative_path, expected_sha256 in EXPECTED_PINNED_READINESS_FILES.items():
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", relative_path],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+        )
+        if tracked.returncode == 1:
+            _fail(f"pinned readiness oracle must be tracked: {relative_path}")
+        if tracked.returncode != 0:
+            detail = tracked.stderr.decode(errors="replace").strip()
+            _fail(f"cannot verify tracked readiness oracle: {detail}")
+        path = repo_root / relative_path
+        if path.is_symlink():
+            _fail(f"pinned readiness oracle must not be a symlink: {relative_path}")
+        try:
+            metadata = path.stat()
+            actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ContractError(
+                f"cannot read pinned readiness oracle {relative_path}: {exc}"
+            ) from exc
+        if not stat.S_ISREG(metadata.st_mode):
+            _fail(f"pinned readiness oracle must be regular: {relative_path}")
+        if actual_sha256 != expected_sha256:
+            _fail(
+                f"readiness oracle content digest is not exact: {relative_path}; "
+                f"expected={expected_sha256}, got={actual_sha256}"
+            )
+
+
 def validate_static_contract(repo_root: Path) -> None:
     tracked_paths = validate_disk_inventory(repo_root)
     tracked_tf = frozenset(
@@ -1511,6 +1548,7 @@ def validate_static_contract(repo_root: Path) -> None:
         )
     _validate_test_file_contract(repo_root, tracked_paths)
     _validate_pinned_terraform_file_contract(repo_root)
+    _validate_pinned_readiness_file_contract(repo_root)
 
     documents = _load_hcl_documents(repo_root, tracked_tf)
     modules = _single_label_blocks(documents, "module")

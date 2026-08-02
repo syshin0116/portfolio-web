@@ -20,6 +20,19 @@ from typing import Any
 from urllib.parse import quote
 
 try:
+    from scripts.ops_foundation_live_toolchain import (
+        ToolchainError,
+        trusted_home,
+        validate_trusted_executable,
+    )
+except ModuleNotFoundError:  # Direct `python scripts/...` execution.
+    from ops_foundation_live_toolchain import (  # type: ignore[no-redef]
+        ToolchainError,
+        trusted_home,
+        validate_trusted_executable,
+    )
+
+try:
     import yaml
     from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
     from yaml.tokens import AliasToken, AnchorToken, DirectiveToken, TagToken
@@ -203,6 +216,8 @@ AGENT_DOCKER_UV_IMAGE = (
     "sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
 )
 AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
+CI_CHANGES_JOB = "changes"
+CI_CHANGES_TIMEOUT_MINUTES = 10
 AGENT_CI_JOB = "agent"
 AGENT_CI_JOB_AST_SHA256 = (
     "9033845cf4855fdb77b98afa979ea099e40e05f30666fc70e4e800ce4284983d"
@@ -1300,6 +1315,28 @@ def _simple_shell_words(run: Node, *, context: str) -> tuple[str, ...]:
         raise GovernanceError(
             f"{context} run is not valid shell syntax: {exc}"
         ) from exc
+
+
+def validate_ci_changes_timeout_contract(document: YamlDocument) -> list[str]:
+    """Pin only the bootstrap suite's measured execution ceiling."""
+    jobs = _workflow_jobs(document)
+    changes = jobs.get(CI_CHANGES_JOB)
+    if changes is None:
+        return [f"{AGENT_CI_WORKFLOW}: required job {CI_CHANGES_JOB!r} is missing"]
+
+    timeout = _mapping_value(changes, "timeout-minutes")
+    if (
+        not isinstance(timeout, ScalarNode)
+        or timeout.value != str(CI_CHANGES_TIMEOUT_MINUTES)
+        or timeout.style is not None
+    ):
+        actual = None if timeout is None else _node_to_data(timeout)
+        return [
+            f"{AGENT_CI_WORKFLOW}: job 'changes' timeout-minutes must be "
+            f"the unquoted plain scalar {CI_CHANGES_TIMEOUT_MINUTES}; "
+            f"actual={actual!r}"
+        ]
+    return []
 
 
 def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
@@ -2740,6 +2777,15 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         try:
             errors.extend(
                 f"local: {error}"
+                for error in validate_ci_changes_timeout_contract(
+                    documents[ci_workflow]
+                )
+            )
+        except GovernanceError as exc:
+            errors.append(f"local: invalid ci/changes timeout contract: {exc}")
+        try:
+            errors.extend(
+                f"local: {error}"
                 for error in validate_agent_ci_resolution(documents[ci_workflow])
             )
         except GovernanceError as exc:
@@ -2873,10 +2919,17 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
     return errors
 
 
-def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
+def _gh_api(
+    repository: str,
+    api_version: str,
+    endpoint: str,
+    *,
+    gh_binary: Path,
+    home: Path,
+) -> ApiResponse:
     resource = f"repos/{repository}/{endpoint}" if endpoint else f"repos/{repository}"
     command = [
-        "gh",
+        str(gh_binary),
         "api",
         "--include",
         "--method",
@@ -2890,7 +2943,13 @@ def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
             command,
             check=False,
             capture_output=True,
+            env={
+                "HOME": str(home),
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            },
+            stdin=subprocess.DEVNULL,
             text=True,
+            timeout=60,
         )
         normalized = result.stdout.replace("\r\n", "\n")
         if "\n\n" not in normalized:
@@ -2944,8 +3003,8 @@ def _gh_api(repository: str, api_version: str, endpoint: str) -> ApiResponse:
             headers=headers,
             status=status,
         )
-    except FileNotFoundError as exc:
-        raise GovernanceError("gh is required for --live verification") from exc
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        raise GovernanceError("trusted gh could not complete the live read") from exc
     except json.JSONDecodeError as exc:
         raise GovernanceError(
             f"GitHub API GET {endpoint!r} returned invalid JSON"
@@ -3685,6 +3744,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="also query GitHub read-only through the authenticated gh CLI",
     )
+    parser.add_argument(
+        "--gh-bin",
+        type=Path,
+        help="absolute preflighted gh executable; required with --live",
+    )
     return parser.parse_args(argv)
 
 
@@ -3694,6 +3758,13 @@ def main(argv: list[str] | None = None) -> int:
         policy = load_policy(args.policy)
         errors = validate_local(args.root, policy)
         if args.live:
+            if args.gh_bin is None:
+                raise GovernanceError("--gh-bin is required with --live")
+            try:
+                gh_binary = validate_trusted_executable(args.gh_bin, "gh")
+                home = trusted_home()
+            except ToolchainError as exc:
+                raise GovernanceError(str(exc)) from exc
             repository = policy.get("repository")
             api_version = policy.get("api_version")
             if not isinstance(repository, str) or not isinstance(api_version, str):
@@ -3703,7 +3774,13 @@ def main(argv: list[str] | None = None) -> int:
             errors.extend(
                 verify_live(
                     policy,
-                    lambda endpoint: _gh_api(repository, api_version, endpoint),
+                    lambda endpoint: _gh_api(
+                        repository,
+                        api_version,
+                        endpoint,
+                        gh_binary=gh_binary,
+                        home=home,
+                    ),
                 )
             )
     except GovernanceError as exc:

@@ -9,7 +9,7 @@ when_to_read: >
   dependency and upstream-version audit.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
-updated: "2026-07-31"
+updated: "2026-08-03"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/repository-governance.json
@@ -71,6 +71,11 @@ escape. The same ban is followed recursively through every reachable local
 composite action and reusable workflow, including nested local calls.
 This keeps a required check from remaining permanently pending after an
 upstream failure or merge-queue run.
+
+The Application CI `changes` bootstrap job has an exact 10-minute ceiling for
+frozen toolchain setup, the repository governance/unit suite, and component
+classification. The verifier targets only `jobs.changes.timeout-minutes`; it
+does not introduce a workflow-wide timeout baseline.
 
 The `ci/agent` job also has an immutable-resolution contract. It runs exactly
 one executable `uv lock --check` before its exact
@@ -172,8 +177,7 @@ second-page requirement fails closed:
 ```bash
 uv run --frozen --package syshin0116-dev-agent \
   python scripts/verify_repository_governance.py
-uv run --frozen --package syshin0116-dev-agent \
-  python scripts/verify_repository_governance.py --live
+scripts/verify_ops_foundation.sh --governance-live
 ```
 
 Run the local command before changing a workflow. Run `--live` after changing

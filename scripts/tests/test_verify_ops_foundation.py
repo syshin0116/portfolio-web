@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Callable
@@ -34,6 +35,9 @@ FIXTURE_FILES = (
     "infra/gcp/tests/foundation.tftest.hcl",
     "infra/gcp/variables.tf",
     "infra/gcp/versions.tf",
+    "scripts/gcp_project_readiness_contract.json",
+    "scripts/ops_foundation_live_toolchain.py",
+    "scripts/verify_gcp_project_readiness.py",
 )
 DISABLED_PREVIEW_CONDITION_LINE = (
     "  disabled_preview_wif_attribute_condition = "
@@ -47,6 +51,47 @@ DELIVERY_ROLE_MAPPING_LINE = (
     "  delivery_role_mapping                    = "
     f'"{EXPECTED_SOURCE_DELIVERY_ROLE_MAPPING}"\n'
 )
+
+
+def _foundation_fixture(directory: str | Path) -> Path:
+    root = Path(directory)
+    for relative_path in FIXTURE_FILES:
+        source = REPO_ROOT / relative_path
+        destination = root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+    verifier = root / "scripts/verify_ops_foundation.sh"
+    verifier.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(
+        REPO_ROOT / "scripts/verify_ops_foundation.sh",
+        verifier,
+    )
+    verifier.chmod(0o755)
+    shutil.copyfile(
+        REPO_ROOT / "scripts/ops_foundation_contract.py",
+        root / "scripts/ops_foundation_contract.py",
+    )
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "infra/gcp", "scripts/gcp_project_readiness_contract.json"],
+        cwd=root,
+        check=True,
+    )
+    return root
+
+
+def _write_secure_python_wrapper(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
@@ -90,35 +135,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
                 )
 
     def _fixture(self, directory: str) -> Path:
-        root = Path(directory)
-        for relative_path in FIXTURE_FILES:
-            source = REPO_ROOT / relative_path
-            destination = root / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
-
-        verifier = root / "scripts/verify_ops_foundation.sh"
-        verifier.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(
-            REPO_ROOT / "scripts/verify_ops_foundation.sh",
-            verifier,
-        )
-        verifier.chmod(0o755)
-        shutil.copyfile(
-            REPO_ROOT / "scripts/ops_foundation_contract.py",
-            root / "scripts/ops_foundation_contract.py",
-        )
-        subprocess.run(
-            ["git", "init", "--quiet"],
-            cwd=root,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "add", "infra/gcp"],
-            cwd=root,
-            check=True,
-        )
-        return root
+        return _foundation_fixture(directory)
 
     def _run(self, root: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -150,6 +167,42 @@ class StaticVerifierMutationTests(unittest.TestCase):
             result = self._run(self._fixture(directory))
 
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_static_rejects_readiness_oracle_digest_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            oracle = root / "scripts/gcp_project_readiness_contract.json"
+            oracle.write_text(
+                oracle.read_text(encoding="utf-8").replace(
+                    '"region": "us-east4"', '"region": "us-central1"', 1
+                ),
+                encoding="utf-8",
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("readiness oracle content digest is not exact", result.stderr)
+
+    def test_static_rejects_untracked_readiness_oracle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            subprocess.run(
+                [
+                    "git",
+                    "rm",
+                    "--cached",
+                    "--quiet",
+                    "scripts/gcp_project_readiness_contract.json",
+                ],
+                cwd=root,
+                check=True,
+            )
+
+            result = self._run(root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("pinned readiness oracle must be tracked", result.stderr)
 
     def test_builder_role_arms_are_lazy_before_optional_environment_claims(
         self,
@@ -793,21 +846,33 @@ output "unreviewed_sensitive_value" {
         self.assertNotEqual(0, result.returncode)
         self.assertIn("on-disk Terraform loadable inventory mismatch", result.stderr)
 
-    def test_governance_delegation_uses_exact_pinned_uv_command(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+    def test_governance_delegation_syncs_then_uses_validated_python(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
             root = self._fixture(directory)
             manifest = root / ".github/repository-governance.json"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("{}\n", encoding="utf-8")
             governance = root / "scripts/verify_repository_governance.py"
-            governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+            governance_args = root / "governance-args.txt"
+            governance.write_text(
+                "import pathlib, sys\n"
+                f"pathlib.Path({str(governance_args)!r}).write_text("
+                "'\\n'.join(sys.argv[1:]) + '\\n', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            workspace_bin = root / ".venv/bin"
+            workspace_bin.mkdir(parents=True)
+            workspace_python = workspace_bin / "python3"
+            _write_secure_python_wrapper(workspace_python)
 
             fake_bin = root / "fake-bin"
             fake_bin.mkdir()
             args_file = root / "uv-args.txt"
             fake_uv = fake_bin / "uv"
             fake_uv.write_text(
-                '#!/bin/bash\nprintf \'%s\\n\' "$@" > "$UV_ARGS_FILE"\n',
+                "#!/bin/bash\n"
+                "set -eu\n"
+                f"/usr/bin/printf '%s\\n' \"$@\" > {shlex.quote(str(args_file))}\n",
                 encoding="utf-8",
             )
             fake_uv.chmod(0o755)
@@ -817,7 +882,6 @@ output "unreviewed_sensitive_value" {
 
             environment = os.environ.copy()
             environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
-            environment["UV_ARGS_FILE"] = str(args_file)
             result = subprocess.run(
                 ["scripts/verify_ops_foundation.sh", "--governance-live"],
                 cwd=root,
@@ -830,16 +894,177 @@ output "unreviewed_sensitive_value" {
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(
                 [
-                    "run",
+                    "sync",
+                    "--project",
+                    str(root.resolve()),
+                    "--python",
+                    str(workspace_python),
+                    "--no-config",
+                    "--no-python-downloads",
                     "--frozen",
                     "--package",
                     "syshin0116-dev-agent",
-                    "python",
-                    str(governance.resolve()),
-                    "--live",
+                    "--all-extras",
+                    "--dev",
                 ],
                 args_file.read_text(encoding="utf-8").splitlines(),
             )
+            self.assertEqual(
+                [
+                    "--live",
+                    "--gh-bin",
+                    str(fake_gh.resolve()),
+                ],
+                governance_args.read_text(encoding="utf-8").splitlines(),
+            )
+
+    def test_live_modes_reject_workspace_python_before_execution(self) -> None:
+        for mode in ("--live", "--governance-live"):
+            with (
+                self.subTest(mode=mode),
+                tempfile.TemporaryDirectory(dir=Path.home()) as directory,
+            ):
+                root = self._fixture(directory)
+                manifest = root / ".github/repository-governance.json"
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text("{}\n", encoding="utf-8")
+                governance = root / "scripts/verify_repository_governance.py"
+                governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+                marker = root / "untrusted-python-ran"
+                workspace_bin = root / ".venv/bin"
+                workspace_bin.mkdir(parents=True)
+                workspace_python = workspace_bin / "python3"
+                workspace_python.write_text(
+                    "#!/bin/sh\n"
+                    f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(marker))}\n",
+                    encoding="utf-8",
+                )
+                workspace_python.chmod(0o770)
+
+                fake_bin = root / "fake-bin"
+                fake_bin.mkdir()
+                uv_marker = root / "uv-ran"
+                fake_uv = fake_bin / "uv"
+                fake_uv.write_text(
+                    "#!/bin/sh\n"
+                    f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(uv_marker))}\n"
+                    f"exec {shlex.quote(str(workspace_python))}\n",
+                    encoding="utf-8",
+                )
+                fake_uv.chmod(0o755)
+                for tool in ("gh", "gcloud"):
+                    executable = fake_bin / tool
+                    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    executable.chmod(0o755)
+
+                environment = os.environ.copy()
+                environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+                result = subprocess.run(
+                    ["scripts/verify_ops_foundation.sh", mode],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("group/other writable", result.stderr)
+                self.assertFalse(uv_marker.exists())
+                self.assertFalse(marker.exists())
+
+    def test_live_revalidates_workspace_python_after_sync(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            root = self._fixture(directory)
+            manifest = root / ".github/repository-governance.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("{}\n", encoding="utf-8")
+            governance = root / "scripts/verify_repository_governance.py"
+            governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+            marker = root / "replacement-python-ran"
+            workspace_bin = root / ".venv/bin"
+            workspace_bin.mkdir(parents=True)
+            workspace_python = workspace_bin / "python3"
+            _write_secure_python_wrapper(workspace_python)
+            replacement = root / "replacement-python"
+            replacement.write_text(
+                "#!/bin/sh\n"
+                f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(marker))}\n",
+                encoding="utf-8",
+            )
+            replacement.chmod(0o770)
+
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            uv_marker = root / "uv-ran"
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text(
+                "#!/bin/sh\n"
+                f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(uv_marker))}\n"
+                f"exec /bin/mv {shlex.quote(str(replacement))} "
+                f"{shlex.quote(str(workspace_python))}\n",
+                encoding="utf-8",
+            )
+            fake_uv.chmod(0o755)
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            result = subprocess.run(
+                ["scripts/verify_ops_foundation.sh", "--governance-live"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("group/other writable", result.stderr)
+            self.assertTrue(uv_marker.exists())
+            self.assertFalse(marker.exists())
+
+    def test_governance_live_missing_workspace_python_stops_before_sync(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            root = self._fixture(directory)
+            manifest = root / ".github/repository-governance.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("{}\n", encoding="utf-8")
+            governance = root / "scripts/verify_repository_governance.py"
+            governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            uv_marker = root / "uv-ran"
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text(
+                "#!/bin/sh\n"
+                f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(uv_marker))}\n",
+                encoding="utf-8",
+            )
+            fake_uv.chmod(0o755)
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            result = subprocess.run(
+                ["scripts/verify_ops_foundation.sh", "--governance-live"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("must exist before live sync", result.stderr)
+            self.assertFalse(uv_marker.exists())
 
     def test_preview_condition_mutations_fail_closed(self) -> None:
         mutations: dict[str, Callable[[str], str]] = {
@@ -1421,20 +1646,28 @@ class LiveShellGuardTests(unittest.TestCase):
         *arguments: str,
         extra_env: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], str]:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            live_mode = arguments == ("--live",)
+            root = _foundation_fixture(directory) if live_mode else Path(directory)
+            if live_mode:
+                _write_secure_python_wrapper(root / ".venv/bin/python3")
             binary_dir = root / "bin"
             binary_dir.mkdir()
             log_path = root / "gcloud.log"
             fake_gcloud = binary_dir / "gcloud"
             fake_gcloud.write_text(
-                """#!/bin/sh
-printf '%s\n' CALLED >>"$FAKE_GCLOUD_LOG"
-exit 99
-""",
+                "#!/bin/sh\nprintf '%s\\n' CALLED >>"
+                f"{shlex.quote(str(log_path))}\nexit 99\n",
                 encoding="utf-8",
             )
             fake_gcloud.chmod(0o755)
+            fake_gh = binary_dir / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
+            if live_mode:
+                fake_uv = binary_dir / "uv"
+                fake_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                fake_uv.chmod(0o755)
             environment = {
                 key: value
                 for key, value in os.environ.items()
@@ -1453,7 +1686,7 @@ exit 99
                 environment.update(extra_env)
             result = subprocess.run(
                 ["scripts/verify_ops_foundation.sh", *arguments],
-                cwd=REPO_ROOT,
+                cwd=root if live_mode else REPO_ROOT,
                 env=environment,
                 check=False,
                 capture_output=True,
@@ -1501,6 +1734,9 @@ exit 99
                 encoding="utf-8",
             )
             fake_gcloud.chmod(0o755)
+            fake_gh = binary_dir / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
             environment = {
                 key: value
                 for key, value in os.environ.items()
@@ -1570,28 +1806,69 @@ exit "$source_status"
             result.stderr,
         )
 
-    def test_live_verifier_contains_no_gcp_execution_surface(self) -> None:
+    def test_live_dispatch_preserves_shell_boundary_and_order(self) -> None:
         verifier = (REPO_ROOT / "scripts/verify_ops_foundation.sh").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("gcloud", verifier.casefold())
-        self.assertNotIn("CLOUDSDK_", verifier)
-        self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", verifier)
-        self.assertNotIn("GOOGLE_CLOUD_PROJECT", verifier)
-        self.assertNotIn("OPS_FOUNDATION_GCLOUD_ACCOUNT", verifier)
+        self.assertNotIn("\n  gcloud ", verifier.casefold())
         self.assertNotIn("OPS_FOUNDATION_TEST_ONLY_SOURCE", verifier)
         self.assertNotIn("resolve_gcloud_binary", verifier)
         self.assertNotIn("is_allowed_gcloud_command", verifier)
-        self.assertNotIn("verify_cloud_run_service", verifier)
-        self.assertNotIn(
-            "verify_project_has_no_user_managed_service_account_keys", verifier
+        self.assertEqual(
+            1,
+            verifier.count(
+                "prepare_live_python() {\n"
+                "  validate_live_python\n"
+                "  sync_live_python_environment\n"
+                "  validate_live_python\n"
+                "}\n"
+            ),
+        )
+        self.assertEqual(
+            1,
+            verifier.count(
+                "run_live_python() {\n"
+                "  /usr/bin/env -i \\\n"
+                '    HOME="$LIVE_TRUSTED_HOME" \\\n'
+                '    PATH="$LIVE_CHILD_PATH" \\\n'
+                '    "$LIVE_PYTHON_BIN" -I -s "$@"\n'
+                "}\n"
+            ),
+        )
+        self.assertEqual(
+            1,
+            verifier.count(
+                "verify_static_contract_live() {\n"
+                '  run_live_python "$CONTRACT_SCRIPT" static --repo-root '
+                '"$REPO_ROOT"\n'
+            ),
+        )
+        self.assertEqual(
+            1,
+            verifier.count(
+                '      run_live_python "$GOVERNANCE_VERIFIER" --live --gh-bin '
+                '"$LIVE_GH_BIN"\n'
+            ),
         )
         self.assertEqual(
             1,
             verifier.count(
                 "verify_live_contract() {\n"
-                "  verify_offline_admin_evidence_structure\n"
-                '  fail "BLOCKED: trusted company-admin attestation is not configured"\n'
+                "  prepare_live_toolchain\n"
+                "  prepare_live_python\n"
+                "  verify_static_contract_live\n"
+                "  /usr/bin/env -i \\\n"
+                '    HOME="$LIVE_TRUSTED_HOME" \\\n'
+                '    OPS_FOUNDATION_GCLOUD_ACCOUNT="${OPS_FOUNDATION_GCLOUD_ACCOUNT:-}" '
+                "\\\n"
+                '    PATH="$LIVE_CHILD_PATH" \\\n'
+                '    "$LIVE_PYTHON_BIN" -E -s "$LIVE_GCP_VERIFIER" \\\n'
+                '    --gcloud-bin "$LIVE_GCLOUD_BIN"\n'
+                "  verify_canonical_repository_governance true\n"
+                "  printf '%s\\n' \\\n"
+                '    "OK: exact GCP-project direct state and canonical GitHub '
+                "governance verified; public launch, spend safety, project parent, "
+                'and inherited IAM are not claimed."\n'
                 "}\n"
             ),
         )
@@ -1617,21 +1894,26 @@ exit "$source_status"
                 self.assertIn("at most one mode argument", result.stderr)
 
     def test_direct_live_ignores_exported_functions_and_bash_env(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            root = _foundation_fixture(directory)
+            _write_secure_python_wrapper(root / ".venv/bin/python3")
             binary_dir = root / "bin"
             binary_dir.mkdir()
             log_path = root / "gcloud.log"
             hostile_marker = root / "hostile-environment-was-used"
             fake_gcloud = binary_dir / "gcloud"
             fake_gcloud.write_text(
-                """#!/bin/sh
-printf '%s\n' CALLED >>"$FAKE_GCLOUD_LOG"
-exit 99
-""",
+                "#!/bin/sh\nprintf '%s\\n' CALLED >>"
+                f"{shlex.quote(str(log_path))}\nexit 99\n",
                 encoding="utf-8",
             )
             fake_gcloud.chmod(0o755)
+            fake_gh = binary_dir / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
+            fake_uv = binary_dir / "uv"
+            fake_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_uv.chmod(0o755)
             hostile_bash_env = root / "hostile-bash-env"
             hostile_bash_env.write_text(
                 ("/usr/bin/printf '%s\\n' BASH_ENV_LOADED >>\"$HOSTILE_MARKER\"\n"),
@@ -1653,7 +1935,7 @@ exit 99
                     "HOSTILE_MARKER": str(hostile_marker),
                     "OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence),
                     "PATH": f"{binary_dir}:{environment['PATH']}",
-                    "VERIFIER": str(REPO_ROOT / "scripts/verify_ops_foundation.sh"),
+                    "VERIFIER": str(root / "scripts/verify_ops_foundation.sh"),
                 }
             )
             result = subprocess.run(
@@ -1684,7 +1966,7 @@ export BASH_ENV="$HOSTILE_BASH_ENV"
 exec "$VERIFIER" --live
 """,
                 ],
-                cwd=REPO_ROOT,
+                cwd=root,
                 env=environment,
                 check=False,
                 capture_output=True,
@@ -1695,29 +1977,20 @@ exec "$VERIFIER" --live
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", log)
         self.assertFalse(hostile_marker.exists())
-        self.assertNotIn("OK:", result.stdout + result.stderr)
-        self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
-        self.assertIn(
-            "BLOCKED: trusted company-admin attestation is not configured",
-            result.stderr,
-        )
+        self.assertNotIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
+        self.assertIn("repository-pinned identity", result.stderr)
 
-    def test_explicit_live_validates_structure_then_blocks_without_gcloud(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = self._write_unsigned_live_structure(directory)
-            result, log = self._run_with_fake_gcloud_marker(
-                "--live",
-                extra_env={"OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence)},
-            )
+    def test_explicit_live_no_longer_requires_unsigned_evidence(
+        self,
+    ) -> None:
+        result, log = self._run_with_fake_gcloud_marker(
+            "--live",
+        )
 
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", log)
-        self.assertNotIn("OK:", result.stdout + result.stderr)
-        self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
-        self.assertIn(
-            "BLOCKED: trusted company-admin attestation is not configured",
-            result.stderr,
-        )
+        self.assertNotIn("ADMIN_EVIDENCE_FILE", result.stderr)
+        self.assertIn("repository-pinned identity", result.stderr)
 
     def test_structure_only_mode_never_claims_authentication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1732,21 +2005,75 @@ exec "$VERIFIER" --live
         self.assertNotIn("OK:", result.stdout + result.stderr)
         self.assertIn("STRUCTURE ONLY / NOT AUTHENTICATED", result.stdout)
 
-    def test_live_missing_evidence_blocks_before_any_gcloud_marker(self) -> None:
+    def test_live_missing_pinned_account_blocks_before_any_gcloud_marker(self) -> None:
         result, log = self._run_with_fake_gcloud_marker("--live")
 
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", log)
-        self.assertIn("ADMIN_EVIDENCE_FILE is required", result.stderr)
+        self.assertIn("repository-pinned identity", result.stderr)
 
-    def test_live_malformed_or_public_evidence_blocks_before_any_gcloud_marker(
+    def test_live_rejects_caller_google_overrides_before_external_reads(self) -> None:
+        for name in ("CLOUDSDK_CONFIG", "GOOGLE_APPLICATION_CREDENTIALS"):
+            with self.subTest(name=name):
+                result, log = self._run_with_fake_gcloud_marker(
+                    "--live", extra_env={name: "/tmp/forbidden"}
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", log)
+                self.assertIn("environment overrides are forbidden", result.stderr)
+
+    def test_live_rejects_insecure_path_before_hostile_tools_or_env_can_run(
         self,
     ) -> None:
-        cases = {
-            "malformed": ('{"schemaVersion":', 0o600, "valid UTF-8 JSON"),
-            "public_mode": ("{}", 0o644, "no group or other permissions"),
-        }
-        for name, (content, mode, expected_error) in cases.items():
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory)
+            hostile_bin = root / "hostile-bin"
+            hostile_bin.mkdir(mode=0o700)
+            marker = root / "hostile-tool-ran"
+            for name in ("gcloud", "gh", "uv"):
+                executable = hostile_bin / name
+                executable.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' CALLED >>"
+                    f"{shlex.quote(str(marker))}\nexit 0\n",
+                    encoding="utf-8",
+                )
+                executable.chmod(0o700)
+            hostile_bin.chmod(0o777)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "HOME": str(root / "forged-home"),
+                    "HTTPS_PROXY": "http://127.0.0.1:9",
+                    "LD_PRELOAD": "/definitely/missing/forged-loader.so",
+                    "PATH": f"{hostile_bin}:{environment['PATH']}",
+                    "PYTHONPATH": str(root / "forged-python"),
+                    "REQUESTS_CA_BUNDLE": str(root / "forged-ca.pem"),
+                    "VIRTUAL_ENV": str(root / "forged-venv"),
+                }
+            )
+
+            result = subprocess.run(
+                ["scripts/verify_ops_foundation.sh", "--live"],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            marker_was_written = marker.exists()
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(marker_was_written)
+        self.assertIn("group/other writable", result.stderr)
+
+    def test_live_does_not_treat_unsigned_structure_as_approval_or_prerequisite(
+        self,
+    ) -> None:
+        for name, (content, mode) in {
+            "malformed": ('{"schemaVersion":', 0o600),
+            "public_mode": ("{}", 0o644),
+        }.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 evidence = Path(directory) / "admin-evidence.json"
                 evidence.write_text(content, encoding="utf-8")
@@ -1758,7 +2085,8 @@ exec "$VERIFIER" --live
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertEqual("", log)
-                self.assertIn(expected_error, result.stderr)
+                self.assertNotIn("ADMIN_EVIDENCE_FILE", result.stderr)
+                self.assertIn("repository-pinned identity", result.stderr)
 
 
 class StateBucketMetadataTests(unittest.TestCase):

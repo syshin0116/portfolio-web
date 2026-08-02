@@ -213,13 +213,29 @@ test("representative post is keyboard-labelled and WCAG clean", async ({
 
 test("representative post does not overflow a mobile viewport", async ({
   page,
+  request,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "site-mobile", "mobile journey")
+  const serverResponse = await request.get(REPRESENTATIVE_HREF)
+  expect(serverResponse.ok()).toBe(true)
+  const serverHtml = await serverResponse.text()
+  expect(serverHtml).toContain(
+    '<pre tabindex="0"><code>GitHub Actions 큐'
+  )
+  expect(serverHtml).toContain(
+    '<pre tabindex="0"><code>PR 러시'
+  )
+
   await page.goto(REPRESENTATIVE_HREF)
 
   await expect(
     page.getByRole("heading", { level: 1, name: REPRESENTATIVE_TITLE })
   ).toBeVisible()
+  const plainCodeBlocks = page.locator(".prose pre:not([data-language])")
+  await expect(plainCodeBlocks).toHaveCount(2)
+  for (const codeBlock of await plainCodeBlocks.all()) {
+    await expect(codeBlock).toHaveAttribute("tabindex", "0")
+  }
   await expectNoHorizontalOverflow(page)
   await expectA11yClean(page)
   await attachScreenshot(page, testInfo, "representative-post-mobile")

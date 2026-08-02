@@ -26,6 +26,7 @@ import {
 } from "nuartz"
 import { renderMarkdown } from "nuartz/markdown"
 import { applyContentImageOverrides } from "../lib/content-image-overrides"
+import { makeGeneratedCodeBlocksFocusable } from "../lib/focusable-code-blocks"
 import type { Frontmatter, TocEntry } from "nuartz"
 import { isAllowedMediaPath } from "../lib/media"
 
@@ -476,8 +477,10 @@ async function main() {
       : null
 
     // Rewrite generated and retired content URLs without modifying source posts.
-    const html = applyContentImageOverrides(
-      result.html.replaceAll("/api/content/", "/blog/api/content/")
+    const html = makeGeneratedCodeBlocksFocusable(
+      applyContentImageOverrides(
+        result.html.replaceAll("/api/content/", "/blog/api/content/")
+      )
     )
 
     const pageData: PageData = {

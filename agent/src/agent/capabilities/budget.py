@@ -1266,10 +1266,10 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         input_token_count_preparer: InputTokenCountPreparer | None = None,
         model_provider: str = "anthropic",
         expected_response_models: frozenset[str] = frozenset(),
-        native_subagent_prompt: str | None = None,
         quickjs_tool_name: str | None = None,
         allow_quickjs: bool = False,
         root_tool_allowlist: frozenset[str] | None = None,
+        root_tool_denylist: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__()
         if quickjs_tool_name is not None and (
@@ -1295,6 +1295,22 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             raise ValueError(
                 "root_tool_allowlist must be a root-only frozenset of tool names"
             )
+        if (
+            not isinstance(root_tool_denylist, frozenset)
+            or any(
+                not isinstance(tool_name, str) or not tool_name
+                for tool_name in root_tool_denylist
+            )
+            or (root_tool_denylist and depth != 0)
+            or (
+                root_tool_allowlist is not None
+                and not root_tool_allowlist.isdisjoint(root_tool_denylist)
+            )
+        ):
+            raise ValueError(
+                "root_tool_denylist must be a disjoint root-only frozenset of "
+                "tool names"
+            )
         if model_provider not in {"anthropic", "openai"}:
             raise ValueError("model_provider must be anthropic or openai")
         if (
@@ -1316,50 +1332,19 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         self._input_token_count_preparer = input_token_count_preparer
         self._model_provider = model_provider
         self._expected_response_models = expected_response_models
-        self._native_subagent_prompt = native_subagent_prompt
         self._prompt_caching = AnthropicPromptCachingMiddleware(
             unsupported_model_behavior="ignore"
         )
         self._quickjs_tool_name = quickjs_tool_name
         self._allow_quickjs = allow_quickjs
         self._root_tool_allowlist = root_tool_allowlist
+        self._root_tool_denylist = root_tool_denylist
 
     def _remove_unauthorized_subagent_surface(
         self,
         request: ModelRequest[Any],
     ) -> ModelRequest[Any]:
-        """Remove the task schema and exact pinned native prompt block."""
-        if self._native_subagent_prompt is not None:
-            system_message = request.system_message
-            content = system_message.content if system_message is not None else None
-            expected_text = f"\n\n{self._native_subagent_prompt}"
-            if not isinstance(content, list) or not content:
-                raise CapabilityDeniedError(
-                    "pinned Deep Agents task prompt shape changed"
-                )
-            matching_indexes = [
-                index
-                for index, block in enumerate(content)
-                if isinstance(block, Mapping)
-                and block.get("type") == "text"
-                and block.get("text") == expected_text
-            ]
-            if len(matching_indexes) != 1:
-                raise CapabilityDeniedError(
-                    "pinned Deep Agents task prompt shape changed"
-                )
-            native_prompt_index = matching_indexes[0]
-            system_message = system_message.model_copy(
-                update={
-                    "content": [
-                        block
-                        for index, block in enumerate(content)
-                        if index != native_prompt_index
-                    ]
-                }
-            )
-            request = request.override(system_message=system_message)
-
+        """Remove the native Deep Agents 0.7 task tool from unauthorized calls."""
         return request.override(
             tools=[tool for tool in request.tools if _tool_name(tool) != TASK_TOOL_NAME]
         )
@@ -1458,6 +1443,14 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> Any:
+        if self._root_tool_denylist:
+            request = request.override(
+                tools=[
+                    tool
+                    for tool in request.tools
+                    if _tool_name(tool) not in self._root_tool_denylist
+                ]
+            )
         if not self._allow_subagents:
             request = self._remove_unauthorized_subagent_surface(request)
         if self._quickjs_tool_name is not None and not self._allow_quickjs:
@@ -1557,6 +1550,10 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         ],
     ) -> ToolMessage | Command[Any]:
         tool_name = request.tool_call.get("name")
+        if tool_name in self._root_tool_denylist:
+            raise CapabilityDeniedError(
+                "root tool is outside the reviewed root tool surface"
+            )
         if (
             self._root_tool_allowlist is not None
             and tool_name not in self._root_tool_allowlist

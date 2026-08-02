@@ -210,7 +210,7 @@ def test_openai_identity_derives_exact_luna_contract_and_fresh_execution_ids() -
     assert first.provider_contract == OPENAI_CAPABILITY_PROVIDER_CONTRACT
     assert first.provider_contract.endswith("langchain-openai-1.3.5:openai-2.52.0")
     assert capability_openai._EXPECTED_DISTRIBUTIONS == {
-        "deepagents": "0.6.12",
+        "deepagents": "0.7.1",
         "langchain-openai": "1.3.5",
         "openai": "2.52.0",
     }
@@ -777,7 +777,7 @@ def test_provider_stack_version_drift_fails_before_credentials_or_network(
             "0.0.0"
             if distribution == "openai"
             else {
-                "deepagents": "0.6.12",
+                "deepagents": "0.7.1",
                 "langchain-openai": "1.3.5",
             }[distribution]
         ),

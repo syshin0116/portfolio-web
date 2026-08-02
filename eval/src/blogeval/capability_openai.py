@@ -80,7 +80,7 @@ OPENAI_CAPABILITY_POLICY = RunBudgetPolicy(
     max_elapsed_seconds=90,
 )
 _EXPECTED_DISTRIBUTIONS = {
-    "deepagents": "0.6.12",
+    "deepagents": "0.7.1",
     "langchain-openai": "1.3.5",
     "openai": "2.52.0",
 }

@@ -12,11 +12,11 @@ from pydantic import Field
 from agent.capabilities.budget import RunBudget
 from agent.capabilities.quickjs import QUICKJS_SYSTEM_PROMPT
 from agent.capabilities.subagents import (
+    BOUNDED_TASK_TOOL_DESCRIPTION,
     SUBAGENT_NAMES,
     SUBAGENT_SKILLS,
     build_subagents,
     dynamic_subagents_allowed,
-    native_subagent_system_prompt,
     validate_capability_config,
 )
 
@@ -185,7 +185,7 @@ async def test_compiled_subagents_enforce_real_state_and_backend_isolation():
     assert (snapshot.model_calls, snapshot.charged_tokens) == (4, 40)
 
 
-def test_eval_inventory_compiles_and_advertises_only_the_evidence_checker():
+def test_eval_inventory_compiles_only_the_evidence_checker():
     specs = build_subagents(
         model=_model(),
         budget=RunBudget(),
@@ -194,11 +194,20 @@ def test_eval_inventory_compiles_and_advertises_only_the_evidence_checker():
     )
 
     assert [spec["name"] for spec in specs] == ["evidence-checker"]
-    prompt = native_subagent_system_prompt(frozenset({"evidence-checker"}))
-    assert "- evidence-checker:" in prompt
-    assert all(
-        f"- {name}:" not in prompt for name in SUBAGENT_NAMES - {"evidence-checker"}
-    )
+
+
+def test_bounded_task_description_preserves_native_inventory_and_budget_hooks():
+    assert "{available_agents}" in BOUNDED_TASK_TOOL_DESCRIPTION
+    assert "Launch an ephemeral subagent" in BOUNDED_TASK_TOOL_DESCRIPTION
+    assert "shared run budget" in BOUNDED_TASK_TOOL_DESCRIPTION
+    assert "at most two task dispatches" in BOUNDED_TASK_TOOL_DESCRIPTION
+    for heading in (
+        "Question:",
+        "Allowed corpus/method scope:",
+        "Expected output schema:",
+        "Stopping condition:",
+    ):
+        assert heading in BOUNDED_TASK_TOOL_DESCRIPTION
 
 
 @pytest.mark.parametrize("permission", ["admin", "eval"])

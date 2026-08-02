@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -26,12 +27,20 @@ from deepagents.backends import (
     StateBackend,
     StoreBackend,
 )
+from deepagents.backends.protocol import WriteResult
+from deepagents.backends.utils import create_file_data
+from langchain.agents.middleware import TodoListMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.runtime import Runtime
+from langgraph.store.memory import InMemoryStore
+from langgraph.store.postgres import AsyncPostgresStore
 from langgraph_sdk.runtime import ServerRuntime
+from psycopg import AsyncConnection
+from psycopg.types.json import Jsonb
+from psycopg_pool import AsyncConnectionPool
 
 from agent.auth import ANONYMOUS_PERMISSION, is_anonymous_identity
 from agent.capabilities.budget import (
@@ -46,11 +55,11 @@ from agent.capabilities.quickjs import (
     quickjs_allowed,
 )
 from agent.capabilities.subagents import (
+    BOUNDED_TASK_TOOL_DESCRIPTION,
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
     build_subagents,
     dynamic_subagents_allowed,
-    native_subagent_system_prompt,
     validate_capability_config,
 )
 from agent.capabilities.token_counting import (
@@ -86,12 +95,36 @@ MODEL_TIMEOUT_SECONDS = OPENAI_GUEST_TIMEOUT_SECONDS
 SUPPORTED_OWNER_MODEL_PROVIDERS = frozenset({"anthropic"})
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
+    tool_description_overrides={"task": BOUNDED_TASK_TOOL_DESCRIPTION},
+    excluded_tools=frozenset({"delete"}),
     general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
     # This middleware performs its own provider call outside user middleware,
     # which would bypass the shared model reservation.
     excluded_middleware=frozenset({"SummarizationMiddleware"}),
 )
 logger = logging.getLogger(__name__)
+
+# Reduce duplicate work inside one process. PostgreSQL's unique (prefix, key)
+# constraint remains the correctness boundary across Cloud Run revisions.
+_PERSISTENT_MEMORY_WRITE_LOCK = threading.Lock()
+_PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR = (
+    "Persistent memory create was not attempted because shared PostgreSQL atomic "
+    "protection is unavailable."
+)
+_POSTGRES_CREATE_MEMORY_SQL = """
+    INSERT INTO store (
+        prefix,
+        key,
+        value,
+        created_at,
+        updated_at,
+        expires_at,
+        ttl_minutes
+    )
+    VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL)
+    ON CONFLICT (prefix, key) DO NOTHING
+    RETURNING key
+"""
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     policy_id="anonymous-public-v2",
@@ -118,6 +151,7 @@ _GUEST_ROOT_TOOL_ORDER = (
     "list_posts",
     "read_post",
 )
+ROOT_TOOL_DENYLIST = frozenset({"delete"})
 GUEST_ROOT_TOOL_NAMES = frozenset(
     {
         "keyword_search",
@@ -147,6 +181,161 @@ def _memory_namespace(runtime: Runtime[Any]) -> tuple[str, str, str]:
     )
 
 
+async def _acquire_persistent_memory_write_lock() -> None:
+    """Acquire the cross-mode memory lock without blocking the event loop."""
+    acquire_task = asyncio.create_task(
+        asyncio.to_thread(_PERSISTENT_MEMORY_WRITE_LOCK.acquire)
+    )
+    interrupted: asyncio.CancelledError | None = None
+    while not acquire_task.done():
+        try:
+            await asyncio.shield(acquire_task)
+        except asyncio.CancelledError as error:
+            interrupted = error
+
+    acquired = acquire_task.result()
+    if interrupted is not None:
+        if acquired:
+            _PERSISTENT_MEMORY_WRITE_LOCK.release()
+        raise interrupted
+
+
+async def _atomic_postgres_memory_create(
+    store: AsyncPostgresStore,
+    namespace: tuple[str, ...],
+    file_path: str,
+    value: dict[str, Any],
+) -> bool:
+    """Insert one memory without ever updating an existing PostgreSQL row."""
+    if store.index_config is not None:
+        raise RuntimeError(
+            "atomic persistent-memory create does not support an indexed store"
+        )
+
+    async def insert(connection: AsyncConnection) -> bool:
+        async with connection.transaction(), connection.cursor() as cursor:
+            await cursor.execute(
+                _POSTGRES_CREATE_MEMORY_SQL,
+                (".".join(namespace), file_path, Jsonb(value)),
+            )
+            return await cursor.fetchone() is not None
+
+    connection_source = store.conn
+    if isinstance(connection_source, AsyncConnectionPool):
+        async with connection_source.connection() as connection:
+            return await insert(connection)
+    if isinstance(connection_source, AsyncConnection):
+        async with store.lock:
+            return await insert(connection_source)
+    raise RuntimeError("AsyncPostgresStore has an unsupported connection source")
+
+
+def _atomic_postgres_memory_create_sync(
+    store: AsyncPostgresStore,
+    namespace: tuple[str, ...],
+    file_path: str,
+    value: dict[str, Any],
+) -> bool:
+    """Submit the atomic insert to the event loop that owns the async store."""
+    store_loop = store._loop
+    if store_loop.is_closed() or not store_loop.is_running():
+        raise RuntimeError("AsyncPostgresStore event loop is unavailable")
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if current_loop is store_loop:
+        raise RuntimeError(
+            "synchronous persistent-memory create cannot run on the store event loop"
+        )
+    future = asyncio.run_coroutine_threadsafe(
+        _atomic_postgres_memory_create(store, namespace, file_path, value),
+        store_loop,
+    )
+    return future.result()
+
+
+class CreateOnlyStoreBackend(StoreBackend):
+    """Keep persistent write_file create-only; edit_file remains the update path."""
+
+    @staticmethod
+    def _already_exists(file_path: str) -> WriteResult:
+        return WriteResult(
+            error=(
+                f"Cannot write to {file_path} because it already exists. "
+                "Read and then make an edit, or write to a new path."
+            )
+        )
+
+    @staticmethod
+    def _atomic_guard_unavailable() -> WriteResult:
+        return WriteResult(error=_PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR)
+
+    def _new_store_value(self, content: str) -> dict[str, Any]:
+        return self._convert_file_data_to_store_value(create_file_data(content))
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        with _PERSISTENT_MEMORY_WRITE_LOCK:
+            store = self._get_store()
+            namespace = self._get_namespace()
+            if isinstance(store, AsyncPostgresStore):
+                try:
+                    created = _atomic_postgres_memory_create_sync(
+                        store,
+                        namespace,
+                        file_path,
+                        self._new_store_value(content),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Persistent memory create failed closed because the shared "
+                        "PostgreSQL atomic guard was unavailable"
+                    )
+                    return self._atomic_guard_unavailable()
+                return (
+                    WriteResult(path=file_path)
+                    if created
+                    else self._already_exists(file_path)
+                )
+            if isinstance(store, InMemoryStore):
+                if store.get(namespace, file_path) is not None:
+                    return self._already_exists(file_path)
+                return super().write(file_path, content)
+            return self._atomic_guard_unavailable()
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        await _acquire_persistent_memory_write_lock()
+        try:
+            store = self._get_store()
+            namespace = self._get_namespace()
+            if isinstance(store, AsyncPostgresStore):
+                try:
+                    created = await _atomic_postgres_memory_create(
+                        store,
+                        namespace,
+                        file_path,
+                        self._new_store_value(content),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Persistent memory create failed closed because the shared "
+                        "PostgreSQL atomic guard was unavailable"
+                    )
+                    return self._atomic_guard_unavailable()
+                return (
+                    WriteResult(path=file_path)
+                    if created
+                    else self._already_exists(file_path)
+                )
+            if isinstance(store, InMemoryStore):
+                if await store.aget(namespace, file_path) is not None:
+                    return self._already_exists(file_path)
+                return await super().awrite(file_path, content)
+            return self._atomic_guard_unavailable()
+        finally:
+            _PERSISTENT_MEMORY_WRITE_LOCK.release()
+
+
 def _build_backend(*, persistent_memory: bool = True) -> CompositeBackend:
     """Build the instance backend used by every Aegra graph copy.
 
@@ -158,7 +347,7 @@ def _build_backend(*, persistent_memory: bool = True) -> CompositeBackend:
         "/skills/": FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True),
     }
     if persistent_memory:
-        routes["/memories/"] = StoreBackend(namespace=_memory_namespace)
+        routes["/memories/"] = CreateOnlyStoreBackend(namespace=_memory_namespace)
     return CompositeBackend(default=StateBackend(), routes=routes)
 
 
@@ -429,7 +618,6 @@ def create_graph(
             "frozenset on an injected experiment graph"
         )
     selected_subagents = experiment_subagent_allowlist or SUBAGENT_NAMES
-    selected_native_subagent_prompt = native_subagent_system_prompt(selected_subagents)
     if quickjs_middleware is None:
         quickjs_middleware = BoundedQuickJSMiddleware(enabled=allow_quickjs)
     elif (
@@ -442,12 +630,16 @@ def create_graph(
     system_prompt = GUEST_SYSTEM_PROMPT if is_guest else SYSTEM_PROMPT
     if allow_subagents:
         system_prompt = f"{system_prompt}\n\n{SUBAGENT_ROOT_PROMPT}"
+    todo_middleware = (
+        TodoListMiddleware(system_prompt="") if is_guest else TodoListMiddleware()
+    )
 
     compiled = create_deep_agent(
         model=selected_model,
         tools=TOOLS,
         system_prompt=system_prompt,
         middleware=[
+            todo_middleware,
             quickjs_middleware,
             RunBudgetMiddleware(
                 run_budget,
@@ -458,10 +650,10 @@ def create_graph(
                 input_token_count_preparer=exact_input_preparer,
                 model_provider=usage_model_provider,
                 expected_response_models=usage_response_models,
-                native_subagent_prompt=selected_native_subagent_prompt,
                 quickjs_tool_name=QUICKJS_TOOL_NAME,
                 allow_quickjs=allow_quickjs,
                 root_tool_allowlist=effective_root_tool_allowlist,
+                root_tool_denylist=ROOT_TOOL_DENYLIST,
             ),
         ],
         subagents=build_subagents(

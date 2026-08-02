@@ -1,10 +1,12 @@
 """Unit tests for the agent module."""
 
+import ast
 import asyncio
 import hashlib
 import inspect
 import json
 from dataclasses import asdict
+from threading import Event, Lock
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -27,6 +29,7 @@ from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.profiles.harness.harness_profiles import (
     _harness_profile_for_model,
 )
+from langchain.agents.middleware.todo import WRITE_TODOS_SYSTEM_PROMPT
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
@@ -54,10 +57,9 @@ from agent.capabilities.quickjs import (
     BoundedQuickJSMiddleware,
 )
 from agent.capabilities.subagents import (
-    NATIVE_SUBAGENT_SYSTEM_PROMPT,
+    BOUNDED_TASK_TOOL_DESCRIPTION,
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
-    native_subagent_system_prompt,
 )
 from agent.capabilities.token_counting import (
     OPENAI_API_BASE_URL,
@@ -136,6 +138,91 @@ class PayloadRecordingFakeModel(ToolCapableFakeModel):
             run_manager=run_manager,
             **kwargs,
         )
+
+
+class YieldingInMemoryStore(InMemoryStore):
+    """Force concurrent create attempts to overlap at the read boundary."""
+
+    async def aget(self, namespace, key, *, refresh_ttl=None):
+        item = await super().aget(namespace, key, refresh_ttl=refresh_ttl)
+        await asyncio.sleep(0)
+        return item
+
+
+class ObservedThreadLock:
+    """Delegate to one real lock while exposing deterministic acquire attempts."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._attempt_guard = Lock()
+        self._attempts = 0
+        self.second_attempted = Event()
+
+    def acquire(self) -> bool:
+        with self._attempt_guard:
+            self._attempts += 1
+            if self._attempts == 2:
+                self.second_attempted.set()
+        return self._lock.acquire()
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, exc_value, traceback
+        self.release()
+
+
+class SyncHoldingInMemoryStore(InMemoryStore):
+    """Hold the first synchronous read while an async create tries to enter."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = Event()
+        self.release = Event()
+        self.async_read_entered = Event()
+        self._hold_first_sync_read = True
+
+    def get(self, namespace, key, *, refresh_ttl=None):
+        if self._hold_first_sync_read:
+            self._hold_first_sync_read = False
+            self.entered.set()
+            if not self.release.wait(5):
+                raise TimeoutError("synchronous memory create was not released")
+        return super().get(namespace, key, refresh_ttl=refresh_ttl)
+
+    async def aget(self, namespace, key, *, refresh_ttl=None):
+        self.async_read_entered.set()
+        return await super().aget(namespace, key, refresh_ttl=refresh_ttl)
+
+
+class AsyncHoldingInMemoryStore(InMemoryStore):
+    """Hold the first asynchronous read while another create tries to enter."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.sync_read_entered = Event()
+        self._hold_first_async_read = True
+
+    def get(self, namespace, key, *, refresh_ttl=None):
+        self.sync_read_entered.set()
+        return super().get(namespace, key, refresh_ttl=refresh_ttl)
+
+    async def aget(self, namespace, key, *, refresh_ttl=None):
+        if self._hold_first_async_read:
+            self._hold_first_async_read = False
+            self.entered.set()
+            await self.release.wait()
+        return await super().aget(namespace, key, refresh_ttl=refresh_ttl)
 
 
 def _compiled_tool_names(compiled_graph: CompiledStateGraph) -> set[str]:
@@ -660,9 +747,17 @@ async def test_graph_factory_cancellation_waits_for_quickjs_worker_shutdown(
 
 def test_graph_module_never_constructs_its_own_persistence():
     source = inspect.getsource(__import__("agent.graph", fromlist=["graph"]))
+    constructed_names = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            constructed_names.add(node.func.id)
+        elif isinstance(node.func, ast.Attribute):
+            constructed_names.add(node.func.attr)
 
-    assert "AsyncPostgresSaver" not in source
-    assert "AsyncPostgresStore" not in source
+    assert "AsyncPostgresSaver" not in constructed_names
+    assert "AsyncPostgresStore" not in constructed_names
     assert "checkpointer=" not in source
 
 
@@ -681,6 +776,8 @@ def test_prebuilt_production_model_resolves_fail_closed_harness_profile(monkeypa
     assert isinstance(model, ChatAnthropic)
     assert profile.general_purpose_subagent.enabled is False
     assert "SummarizationMiddleware" in profile.excluded_middleware
+    assert profile.excluded_tools == frozenset({"delete"})
+    assert profile.tool_description_overrides == {"task": BOUNDED_TASK_TOOL_DESCRIPTION}
 
 
 def test_repeated_graph_creation_registers_profile_once_per_model(monkeypatch):
@@ -713,7 +810,7 @@ def test_compiled_graph_keeps_capability_topology_stable_while_opted_out():
     registered_tools = _compiled_tool_names(compiled)
 
     assert {tool.name for tool in TOOLS} <= registered_tools
-    assert {"task"} <= registered_tools
+    assert {"task", "write_todos"} <= registered_tools
     assert QUICKJS_TOOL_NAME in registered_tools
 
 
@@ -1064,13 +1161,12 @@ async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt
     assert result["messages"][-1].content == "no delegation"
     assert len(model.bound_tool_names) == 1
     assert "task" not in model.bound_tool_names[0]
+    assert "write_todos" in model.bound_tool_names[0]
+    assert "delete" not in model.bound_tool_names[0]
     assert QUICKJS_TOOL_NAME not in model.bound_tool_names[0]
     assert len(root_prompts) == 1
     prompt_text = str(root_prompts[0])
     assert SUBAGENT_ROOT_PROMPT.strip() not in prompt_text
-    assert NATIVE_SUBAGENT_SYSTEM_PROMPT not in prompt_text
-    assert "## `task` (subagent spawner)" not in prompt_text
-    assert "Available subagent types" not in prompt_text
     assert all(name not in prompt_text for name in SUBAGENT_NAMES)
     assert QUICKJS_SYSTEM_PROMPT.strip() not in prompt_text
     assert budget.snapshot().model_calls == 1
@@ -1080,7 +1176,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     monkeypatch,
 ):
     monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
-    model = ToolCapableFakeModel(responses=[_openai_final_message("guest answer")])
+    model = PayloadRecordingFakeModel(responses=[_openai_final_message("guest answer")])
     budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
     compiled = create_graph(
         runtime=_guest_runtime(),
@@ -1098,6 +1194,13 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
 
     assert result["messages"][-1].content == "guest answer"
     assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
+    assert len(model.invoked_messages) == 1
+    guest_system_text = "\n".join(
+        block["text"]
+        for block in model.invoked_messages[0][0].content_blocks
+        if block["type"] == "text"
+    )
+    assert WRITE_TODOS_SYSTEM_PROMPT not in guest_system_text
     snapshot = budget.snapshot()
     assert snapshot.policy_id == "anonymous-public-v2"
     assert snapshot.model_calls == 1
@@ -1217,6 +1320,363 @@ async def test_canonical_guest_runtime_rejects_a_forged_filesystem_tool_call(
     assert budget.snapshot().tool_calls == 0
 
 
+async def test_owner_runtime_rejects_a_forged_recursive_delete_tool_call():
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "delete",
+                        "args": {"file_path": "/memories"},
+                        "id": "forged-owner-delete-call",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 1,
+                    "output_tokens": 9,
+                    "total_tokens": 10,
+                },
+            )
+        ]
+    )
+    budget = RunBudget()
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": "owner-forged-delete"}},
+        model=model,
+        budget=budget,
+    )
+
+    with pytest.raises(CapabilityDeniedError, match="reviewed root tool surface"):
+        await compiled.ainvoke(
+            {"messages": [{"role": "user", "content": "delete memories"}]},
+            {"configurable": {"thread_id": "owner-forged-delete"}},
+        )
+
+    assert len(model.bound_tool_names) == 1
+    assert {"task", "write_todos", "write_file", "edit_file"} <= (
+        model.bound_tool_names[0]
+    )
+    assert "delete" not in model.bound_tool_names[0]
+    assert budget.snapshot().tool_calls == 0
+
+
+async def test_owner_runtime_keeps_reviewed_write_overwrite_and_edit_semantics():
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {
+                            "file_path": "/draft.txt",
+                            "content": "after overwrite\n",
+                        },
+                        "id": "owner-overwrite-file",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "args": {
+                            "file_path": "/draft.txt",
+                            "old_string": "after overwrite",
+                            "new_string": "after reviewed edit",
+                        },
+                        "id": "owner-edit-file",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            ),
+            _final_message("Draft updated."),
+        ]
+    )
+    budget = RunBudget()
+    thread_id = "owner-reviewed-write-edit"
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": thread_id}},
+        model=model,
+        budget=budget,
+    )
+
+    result = await compiled.ainvoke(
+        {
+            "messages": [{"role": "user", "content": "update the draft"}],
+            "files": {
+                "/draft.txt": {
+                    "content": "before overwrite\n",
+                    "encoding": "utf-8",
+                }
+            },
+        },
+        {"configurable": {"thread_id": thread_id}},
+    )
+
+    assert result["files"]["/draft.txt"]["content"] == "after reviewed edit\n"
+    assert all("delete" not in names for names in model.bound_tool_names)
+    assert all(
+        {"write_todos", "write_file", "edit_file"} <= names
+        for names in model.bound_tool_names
+    )
+    assert budget.snapshot().tool_calls == 2
+
+
+async def test_persistent_memory_write_is_create_only_and_edit_is_explicit():
+    backend = _build_backend()
+    memory_backend = backend.routes["/memories/"]
+    memory_backend._store = InMemoryStore()
+    memory_backend._namespace = lambda _runtime: (
+        "users",
+        "test-owner",
+        "filesystem",
+    )
+
+    created = await backend.awrite("/memories/profile.txt", "first")
+    overwritten = await backend.awrite("/memories/profile.txt", "blind overwrite")
+    unchanged = await backend.aread("/memories/profile.txt")
+    edited = await backend.aedit(
+        "/memories/profile.txt",
+        "first",
+        "reviewed edit",
+    )
+    updated = await backend.aread("/memories/profile.txt")
+
+    assert created.path == "/memories/profile.txt"
+    assert overwritten.path is None
+    assert overwritten.error is not None
+    assert "already exists" in overwritten.error
+    assert unchanged.file_data is not None
+    assert unchanged.file_data["content"] == "first"
+    assert edited.path == "/memories/profile.txt"
+    assert updated.file_data is not None
+    assert updated.file_data["content"] == "reviewed edit"
+
+
+async def test_persistent_memory_unknown_store_fails_closed_without_dml():
+    class UnsupportedStore:
+        def __getattr__(self, name):
+            raise AssertionError(f"unsupported store DML was attempted through {name}")
+
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "unsupported-owner", "filesystem"),
+        store=UnsupportedStore(),
+    )
+
+    async_result = await backend.awrite("/profile.txt", "async content")
+    sync_result = await asyncio.to_thread(
+        backend.write,
+        "/other.txt",
+        "sync content",
+    )
+
+    for result in (async_result, sync_result):
+        assert result.path is None
+        assert result.error == graph_module._PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR
+
+
+async def test_persistent_memory_postgres_guard_failure_never_falls_back(
+    monkeypatch,
+):
+    store = graph_module.AsyncPostgresStore(conn=SimpleNamespace())
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "postgres-failure-owner", "filesystem"),
+        store=store,
+    )
+
+    async def fail_async(*_args, **_kwargs):
+        raise RuntimeError("injected async PostgreSQL guard failure")
+
+    def fail_sync(*_args, **_kwargs):
+        raise RuntimeError("injected sync PostgreSQL guard failure")
+
+    monkeypatch.setattr(
+        graph_module,
+        "_atomic_postgres_memory_create",
+        fail_async,
+    )
+    async_result = await backend.awrite("/profile.txt", "async content")
+    monkeypatch.setattr(
+        graph_module,
+        "_atomic_postgres_memory_create_sync",
+        fail_sync,
+    )
+    sync_result = await asyncio.to_thread(
+        backend.write,
+        "/other.txt",
+        "sync content",
+    )
+
+    for result in (async_result, sync_result):
+        assert result.path is None
+        assert result.error == graph_module._PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR
+
+
+async def test_persistent_memory_concurrent_creates_have_one_winner():
+    backend = _build_backend()
+    memory_backend = backend.routes["/memories/"]
+    memory_backend._store = YieldingInMemoryStore()
+    memory_backend._namespace = lambda _runtime: (
+        "users",
+        "concurrent-owner",
+        "filesystem",
+    )
+
+    results = await asyncio.gather(
+        backend.awrite("/memories/profile.txt", "first contender"),
+        backend.awrite("/memories/profile.txt", "second contender"),
+    )
+    persisted = await backend.aread("/memories/profile.txt")
+
+    assert sum(result.path is not None for result in results) == 1
+    assert sum(result.error is not None for result in results) == 1
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] in {
+        "first contender",
+        "second contender",
+    }
+
+
+async def test_persistent_memory_sync_create_blocks_async_create(
+    monkeypatch,
+):
+    lock = ObservedThreadLock()
+    store = SyncHoldingInMemoryStore()
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "sync-first-owner", "filesystem"),
+        store=store,
+    )
+    monkeypatch.setattr(graph_module, "_PERSISTENT_MEMORY_WRITE_LOCK", lock)
+
+    sync_create = asyncio.create_task(
+        asyncio.to_thread(backend.write, "/profile.txt", "sync winner")
+    )
+    assert await asyncio.to_thread(store.entered.wait, 2)
+    async_create = asyncio.create_task(
+        backend.awrite("/profile.txt", "async contender")
+    )
+    second_attempted = await asyncio.to_thread(lock.second_attempted.wait, 2)
+    async_read_blocked = store.async_read_entered.is_set() is False
+
+    store.release.set()
+    sync_result, async_result = await asyncio.wait_for(
+        asyncio.gather(sync_create, async_create),
+        timeout=2,
+    )
+
+    assert second_attempted is True
+    assert async_read_blocked is True
+    assert sync_result.path == "/profile.txt"
+    assert sync_result.error is None
+    assert async_result.path is None
+    assert "already exists" in (async_result.error or "")
+    persisted = await backend.aread("/profile.txt")
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] == "sync winner"
+
+
+async def test_persistent_memory_async_create_blocks_sync_create(
+    monkeypatch,
+):
+    lock = ObservedThreadLock()
+    store = AsyncHoldingInMemoryStore()
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "async-first-owner", "filesystem"),
+        store=store,
+    )
+    monkeypatch.setattr(graph_module, "_PERSISTENT_MEMORY_WRITE_LOCK", lock)
+
+    async_create = asyncio.create_task(backend.awrite("/profile.txt", "async winner"))
+    await asyncio.wait_for(store.entered.wait(), timeout=2)
+    sync_create = asyncio.create_task(
+        asyncio.to_thread(backend.write, "/profile.txt", "sync contender")
+    )
+    second_attempted = await asyncio.to_thread(lock.second_attempted.wait, 2)
+    sync_read_blocked = store.sync_read_entered.is_set() is False
+
+    store.release.set()
+    async_result, sync_result = await asyncio.wait_for(
+        asyncio.gather(async_create, sync_create),
+        timeout=2,
+    )
+
+    assert second_attempted is True
+    assert sync_read_blocked is True
+    assert async_result.path == "/profile.txt"
+    assert async_result.error is None
+    assert sync_result.path is None
+    assert "already exists" in (sync_result.error or "")
+    persisted = await backend.aread("/profile.txt")
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] == "async winner"
+
+
+async def test_cancelled_persistent_memory_waiter_releases_lock_for_reuse(
+    monkeypatch,
+):
+    lock = ObservedThreadLock()
+    store = AsyncHoldingInMemoryStore()
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "cancel-owner", "filesystem"),
+        store=store,
+    )
+    monkeypatch.setattr(graph_module, "_PERSISTENT_MEMORY_WRITE_LOCK", lock)
+
+    holder = asyncio.create_task(backend.awrite("/profile.txt", "winner"))
+    await asyncio.wait_for(store.entered.wait(), timeout=2)
+    cancelled_waiter = asyncio.create_task(
+        backend.awrite("/profile.txt", "cancelled contender")
+    )
+    second_attempted = await asyncio.to_thread(lock.second_attempted.wait, 2)
+
+    cancelled_waiter.cancel()
+    cancellation_waited_for_lock = False
+    try:
+        await asyncio.wait_for(asyncio.shield(cancelled_waiter), timeout=0.1)
+    except TimeoutError:
+        cancellation_waited_for_lock = True
+
+    store.release.set()
+    holder_result = await asyncio.wait_for(holder, timeout=2)
+    assert holder_result.path == "/profile.txt"
+    waiter_propagated_cancellation = False
+    try:
+        await asyncio.wait_for(cancelled_waiter, timeout=2)
+    except asyncio.CancelledError:
+        waiter_propagated_cancellation = True
+
+    assert lock.locked() is False
+    followup = await asyncio.wait_for(
+        backend.awrite("/profile.txt", "late contender"),
+        timeout=2,
+    )
+    assert second_attempted is True
+    assert cancellation_waited_for_lock is True
+    assert waiter_propagated_cancellation is True
+    assert followup.path is None
+    assert "already exists" in (followup.error or "")
+    persisted = await backend.aread("/profile.txt")
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] == "winner"
+
+
 def test_guest_runtime_rejects_caller_supplied_experiment_root_allowlist(monkeypatch):
     monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
 
@@ -1291,8 +1751,29 @@ async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model
         for tool in counted.tools
     )
     assert model.bound_tool_names == [counted_tool_names]
-    assert "## `task` (subagent spawner)" in str(counted.system_message.content)
-    assert "Available subagent types" in str(counted.system_message.content)
+    assert {"task", "write_todos", "write_file", "edit_file"} <= counted_tool_names
+    assert "delete" not in counted_tool_names
+    owner_system_text = "\n".join(
+        block["text"]
+        for block in counted.system_message.content_blocks
+        if block["type"] == "text"
+    )
+    assert WRITE_TODOS_SYSTEM_PROMPT in owner_system_text
+    task_tools = [
+        tool
+        for tool in counted.tools
+        if (tool.get("name") if isinstance(tool, dict) else tool.name) == "task"
+    ]
+    assert len(task_tools) == 1
+    task_description = (
+        task_tools[0].get("description")
+        if isinstance(task_tools[0], dict)
+        else task_tools[0].description
+    )
+    assert isinstance(task_description, str)
+    assert "shared run budget" in task_description
+    assert "at most two task dispatches" in task_description
+    assert all(f"- {name}:" in task_description for name in SUBAGENT_NAMES)
 
 
 @pytest.mark.parametrize(
@@ -1473,10 +1954,8 @@ async def test_server_capability_axes_have_exact_prompt_and_tool_order(
         if block["type"] == "text"
     )
     root_prompt = SUBAGENT_ROOT_PROMPT.strip()
-    native_prompt = NATIVE_SUBAGENT_SYSTEM_PROMPT.strip()
     quickjs_prompt = QUICKJS_SYSTEM_PROMPT.strip()
     assert (root_prompt in system_text) is subagents_enabled
-    assert (native_prompt in system_text) is subagents_enabled
     assert (quickjs_prompt in system_text) is quickjs_enabled
     if subagents_enabled:
         task_tools = [
@@ -1492,13 +1971,13 @@ async def test_server_capability_axes_have_exact_prompt_and_tool_order(
         )
         assert isinstance(task_description, str)
         assert all(f"- {name}:" in task_description for name in SUBAGENT_NAMES)
+        assert "shared run budget" in task_description
+        assert "at most two task dispatches" in task_description
+        assert "Question:" in task_description
+        assert "Stopping condition:" in task_description
         assert system_text.count(root_prompt) == 1
-        assert system_text.count(native_prompt) == 1
-        assert system_text.index(root_prompt) < system_text.index(native_prompt)
     if quickjs_enabled:
         assert system_text.count(quickjs_prompt) == 1
-    if subagents_enabled and quickjs_enabled:
-        assert system_text.index(native_prompt) < system_text.index(quickjs_prompt)
 
 
 async def test_experiment_subagent_allowlist_rejects_other_specialists_before_reservation():
@@ -1566,14 +2045,6 @@ Stop after one verdict.
     finally:
         await quickjs_middleware.aclose()
 
-    system_text = "\n".join(
-        block["text"]
-        for block in model.invoked_messages[0][0].content_blocks
-        if block["type"] == "text"
-    )
-    eval_native_prompt = native_subagent_system_prompt(frozenset({"evidence-checker"}))
-    assert eval_native_prompt in system_text
-    assert NATIVE_SUBAGENT_SYSTEM_PROMPT not in system_text
     assert len(counted_requests) == 1
     task_tools = [
         tool
@@ -1587,6 +2058,9 @@ Stop after one verdict.
         else task_tools[0].description
     )
     assert isinstance(task_description, str)
+    assert "shared run budget" in task_description
+    assert "Question:" in task_description
+    assert "Stopping condition:" in task_description
     assert "- evidence-checker:" in task_description
     assert all(
         f"- {name}:" not in task_description

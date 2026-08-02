@@ -1,3 +1,8 @@
+import {
+  AGENT_TOKEN_INTENT_HEADER,
+  ANONYMOUS_AGENT_TOKEN_INTENT,
+} from "@/lib/agent-token-intent"
+
 const TOKEN_ENDPOINT = "/api/agent-token"
 const TOKEN_ISSUER = "syshin0116.dev"
 const TOKEN_AUDIENCE = "agent-api"
@@ -260,12 +265,17 @@ export async function bootstrapAnonymousSession(
     method: "POST",
     cache: "no-store",
     credentials: "same-origin",
+    headers: {
+      [AGENT_TOKEN_INTENT_HEADER]: ANONYMOUS_AGENT_TOKEN_INTENT,
+    },
     redirect: "error",
     referrerPolicy: "no-referrer",
     signal: options.signal,
   }
   if (turnstileToken !== undefined) {
-    init.headers = { "Content-Type": "application/json" }
+    const headers = new Headers(init.headers)
+    headers.set("Content-Type", "application/json")
+    init.headers = headers
     init.body = JSON.stringify({ turnstileToken })
   }
 

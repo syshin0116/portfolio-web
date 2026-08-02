@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react"
+import type { AgentTokenIntent } from "@/lib/agent-token-intent"
 
 import {
   NativeAgentClient,
@@ -57,6 +58,7 @@ interface AgentRuntimeProviderProps {
   identity: string
   initialToken?: string
   onAuthenticationExpired?: () => void
+  tokenIntent?: AgentTokenIntent
   children: React.ReactNode
 }
 
@@ -76,6 +78,7 @@ function ConfiguredAgentRuntimeProvider({
   identity,
   initialToken,
   onAuthenticationExpired,
+  tokenIntent,
   apiUrl,
   assistantId,
   children,
@@ -137,6 +140,7 @@ function ConfiguredAgentRuntimeProvider({
         identity,
         initialToken,
         onAuthenticationExpired,
+        tokenIntent,
         getSourceGeneration: () =>
           activeThreadSourceRef.current.generation,
         onActivity: handleActivity,
@@ -150,6 +154,7 @@ function ConfiguredAgentRuntimeProvider({
       identity,
       initialToken,
       onAuthenticationExpired,
+      tokenIntent,
     ]
   )
   const threadAdapter = useMemo<RemoteThreadListAdapter & AegraThreadAdapter>(
@@ -299,6 +304,7 @@ export function AgentRuntimeProvider({
   identity,
   initialToken,
   onAuthenticationExpired,
+  tokenIntent,
   children,
 }: AgentRuntimeProviderProps) {
   const config = resolveAgentConfig()
@@ -321,6 +327,7 @@ export function AgentRuntimeProvider({
       identity={identity}
       initialToken={initialToken}
       onAuthenticationExpired={onAuthenticationExpired}
+      tokenIntent={tokenIntent}
       apiUrl={config.apiUrl}
       assistantId={config.assistantId}
     >

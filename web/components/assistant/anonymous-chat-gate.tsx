@@ -16,6 +16,7 @@ import {
 } from "react"
 
 import { Button } from "@/components/ui/button"
+import { ANONYMOUS_AGENT_TOKEN_INTENT } from "@/lib/agent-token-intent"
 
 import { AgentRuntimeProvider } from "./agent-runtime-provider"
 import { ChatShell, SignedOutChat } from "./chat-shell"
@@ -222,6 +223,7 @@ export function AnonymousChatGate() {
           key={credential.identity}
           identity={credential.identity}
           initialToken={credential.token}
+          tokenIntent={ANONYMOUS_AGENT_TOKEN_INTENT}
           onAuthenticationExpired={handleCredentialExpired}
         >
           <ChatShell />

@@ -104,6 +104,9 @@ describe("bootstrapAnonymousSession", () => {
       redirect: "error",
       referrerPolicy: "no-referrer",
     })
+    expect(new Headers(captured?.headers).get("x-agent-token-intent")).toBe(
+      "anonymous"
+    )
     expect(captured?.body).toBeUndefined()
   })
 
@@ -121,6 +124,9 @@ describe("bootstrapAnonymousSession", () => {
 
     expect(new Headers(captured?.headers).get("content-type")).toBe(
       "application/json"
+    )
+    expect(new Headers(captured?.headers).get("x-agent-token-intent")).toBe(
+      "anonymous"
     )
     expect(captured?.body).toBe(
       JSON.stringify({ turnstileToken: "one-time-challenge" })

@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto"
+import {
+  AGENT_TOKEN_INTENT_HEADER,
+  ANONYMOUS_AGENT_TOKEN_INTENT,
+} from "@/lib/agent-token-intent"
 
 import {
   FIXTURE_OWNER_IDENTITY,
@@ -55,6 +59,9 @@ function json(
 
 export async function POST(request: Request) {
   if (hasOwnerSession(request)) {
+    if (request.headers.has(AGENT_TOKEN_INTENT_HEADER)) {
+      return json({ error: "Invalid owner token intent" }, 400)
+    }
     return json({
       token: fixtureOwnerToken(),
       expiresAt: FIXTURE_TOKEN_EXPIRES_AT,
@@ -62,7 +69,15 @@ export async function POST(request: Request) {
     })
   }
 
+  if (
+    request.headers.get(AGENT_TOKEN_INTENT_HEADER) !==
+    ANONYMOUS_AGENT_TOKEN_INTENT
+  ) {
+    return json({ error: "Invalid anonymous token intent" }, 400)
+  }
+
   let subject = cookieSubject(request)
+  let createdSubject = false
   if (subject === undefined) {
     let body: unknown
     try {
@@ -81,11 +96,14 @@ export async function POST(request: Request) {
       return json({ error: "Verification failed" }, 403)
     }
     subject = `anon:${randomUUID()}`
+    createdSubject = true
   }
+  const expiresAt =
+    Math.floor(Date.now() / 1_000) + (createdSubject ? 30 : 300)
   return json(
     {
-      token: fixtureAnonymousToken(subject),
-      expiresAt: FIXTURE_TOKEN_EXPIRES_AT,
+      token: fixtureAnonymousToken(subject, expiresAt),
+      expiresAt,
     },
     200,
     subject

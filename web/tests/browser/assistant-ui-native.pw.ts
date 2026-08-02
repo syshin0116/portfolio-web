@@ -556,7 +556,10 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
   page,
 }, testInfo) => {
   const diagnostics = collectDiagnostics(page)
-  const tokenRequests: Array<string | null> = []
+  const tokenRequests: Array<{
+    body: string | null
+    intent: string | null
+  }> = []
   await page.setViewportSize({ width: 390, height: 820 })
   await resetFixture(
     page,
@@ -609,7 +612,10 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
   )
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === "/api/agent-token") {
-      tokenRequests.push(request.postData())
+      tokenRequests.push({
+        body: request.postData(),
+        intent: request.headers()["x-agent-token-intent"] ?? null,
+      })
     }
   })
 
@@ -621,8 +627,12 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
     page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
   ).toBeVisible({ timeout: 12_000 })
   expect(tokenRequests).toEqual([
-    null,
-    JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
+    { body: null, intent: "anonymous" },
+    {
+      body: JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
+      intent: "anonymous",
+    },
+    { body: null, intent: "anonymous" },
   ])
   expect(
     await page.evaluate(() =>
@@ -676,9 +686,13 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
     page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
   ).toBeVisible({ timeout: 12_000 })
   expect(tokenRequests).toEqual([
-    null,
-    JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
-    null,
+    { body: null, intent: "anonymous" },
+    {
+      body: JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
+      intent: "anonymous",
+    },
+    { body: null, intent: "anonymous" },
+    { body: null, intent: "anonymous" },
   ])
   expect(
     await page.evaluate(() =>

@@ -1,3 +1,9 @@
+import {
+  AGENT_TOKEN_INTENT_HEADER,
+  ANONYMOUS_AGENT_TOKEN_INTENT,
+  type AgentTokenIntent,
+} from "@/lib/agent-token-intent"
+
 const TOKEN_ENDPOINT = "/api/agent-token"
 export const TOKEN_REFRESH_MARGIN_SECONDS = 60
 const MAX_CANCELLATION_STATUS_POLLS = 32
@@ -38,6 +44,7 @@ interface AgentTokenBrokerOptions {
   nowSeconds?: () => number
   onAuthenticationExpired?: () => void
   refreshMarginSeconds?: number
+  tokenIntent?: AgentTokenIntent
 }
 
 export type FetchLike = (
@@ -526,6 +533,7 @@ export class AgentTokenBroker {
   readonly #refreshMarginSeconds: number
   readonly #agentOrigin: string
   readonly #onAuthenticationExpired?: () => void
+  readonly #tokenIntent?: AgentTokenIntent
   #identity: string
   #cached?: CachedToken
   #flight?: RefreshFlight
@@ -536,6 +544,13 @@ export class AgentTokenBroker {
       throw new AgentAuthenticationError("Agent identity is required")
     }
     this.#identity = identity
+    if (
+      options.tokenIntent !== undefined &&
+      options.tokenIntent !== ANONYMOUS_AGENT_TOKEN_INTENT
+    ) {
+      throw new AgentAuthenticationError("Agent token intent is invalid")
+    }
+    this.#tokenIntent = options.tokenIntent
     const agentUrl = new URL(options.agentOrigin)
     const loopbackHttp =
       agentUrl.protocol === "http:" &&
@@ -747,12 +762,18 @@ export class AgentTokenBroker {
     identity: string,
     signal: AbortSignal
   ): Promise<CachedToken> {
-    const response = await this.#fetch(TOKEN_ENDPOINT, {
+    const requestInit: RequestInit = {
       method: "POST",
       cache: "no-store",
       credentials: "same-origin",
       signal,
-    })
+    }
+    if (this.#tokenIntent !== undefined) {
+      requestInit.headers = {
+        [AGENT_TOKEN_INTENT_HEADER]: this.#tokenIntent,
+      }
+    }
+    const response = await this.#fetch(TOKEN_ENDPOINT, requestInit)
     if (!response.ok) {
       if (
         response.status === 400 ||

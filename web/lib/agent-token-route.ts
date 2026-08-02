@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import type { createAgentToken } from "@/lib/agent-auth"
 import { canonicalAuthSubject } from "@/lib/auth-subject"
+import { hasAnonymousAgentTokenIntent } from "@/lib/agent-token-intent"
 import {
   ANONYMOUS_COOKIE_NAME,
   ANONYMOUS_SESSION_TTL_SECONDS,
@@ -122,23 +123,9 @@ function isBodylessCookieResume(request: NextRequest): boolean {
 export function createAgentTokenPostHandler(
   dependencies: AgentTokenPostDependencies
 ): (request: NextRequest) => Promise<NextResponse> {
-  return async (request: NextRequest): Promise<NextResponse> => {
-    let session: AgentTokenSession | null
-    try {
-      session = await dependencies.authenticate()
-    } catch {
-      return jsonResponse(
-        { error: "Authentication is unavailable" },
-        503
-      )
-    }
-    if (dependencies.isAllowed(session?.user?.email)) {
-      return mintSignedInToken(session as AgentTokenSession, dependencies)
-    }
-    if (session !== null) {
-      return jsonResponse({ error: "Forbidden" }, 403)
-    }
-
+  const handleAnonymousRequest = async (
+    request: NextRequest
+  ): Promise<NextResponse> => {
     const feature = readAnonymousAgentTokenFeature(dependencies.env)
     if (feature.state === "disabled") {
       return jsonResponse({ error: "Forbidden" }, 403)
@@ -250,5 +237,29 @@ export function createAgentTokenPostHandler(
         503
       )
     }
+  }
+
+  return async (request: NextRequest): Promise<NextResponse> => {
+    if (hasAnonymousAgentTokenIntent(request)) {
+      return handleAnonymousRequest(request)
+    }
+
+    let session: AgentTokenSession | null
+    try {
+      session = await dependencies.authenticate()
+    } catch {
+      return jsonResponse(
+        { error: "Authentication is unavailable" },
+        503
+      )
+    }
+    if (dependencies.isAllowed(session?.user?.email)) {
+      return mintSignedInToken(session as AgentTokenSession, dependencies)
+    }
+    if (session !== null) {
+      return jsonResponse({ error: "Forbidden" }, 403)
+    }
+
+    return handleAnonymousRequest(request)
   }
 }

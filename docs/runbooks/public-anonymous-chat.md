@@ -132,6 +132,19 @@ cookie returns to Turnstile. A successful challenge injects its returned
 credential into the existing `AgentTokenBroker`; all later AP v2 operations use
 the same native assistant-ui/LangGraph runtime.
 
+The bodyless resume, Turnstile submission, and every later `AgentTokenBroker`
+remint carry the exact `X-Agent-Token-Intent: anonymous` request header. The
+intent is immutable for that native runtime's lifetime, including expiry-margin
+refreshes, forced 401 retries, and refreshes retained by a run-scoped
+cancellation snapshot after the general broker is sealed. Owner runtimes are
+constructed without an intent and remain headerless. The token route dispatches
+only the exactly marked branch before invoking Auth.js, so an Auth.js, Neon, or
+OAuth outage cannot prevent a valid anonymous cookie remint or challenge
+exchange. The header is routing metadata, not authority: the server-side public
+feature flag and the cookie or Turnstile verification remain mandatory.
+Missing, unknown, or unrecognized intent values stay on the existing owner path,
+where session lookup failures remain a generic fail-closed `503`.
+
 ## Emergency close
 
 Disable `AGENT_ANONYMOUS_TOKEN_ENABLED` and

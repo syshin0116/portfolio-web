@@ -15,7 +15,7 @@ from langchain.agents.middleware import ModelRequest
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from agent.identity import is_anonymous_identity
 
@@ -30,7 +30,20 @@ OPENAI_GUEST_RESPONSE_MODEL_NAMES = frozenset({OPENAI_GUEST_MODEL_NAME})
 OPENAI_GUEST_MAX_OUTPUT_TOKENS = 1_024
 OPENAI_GUEST_TIMEOUT_SECONDS = 60.0
 
-_OPENAI_API_BASE_URL = "https://api.openai.com/v1"
+OPENAI_API_BASE_URL = "https://api.openai.com/v1"
+_OPENAI_ROOT_CLIENT_BASE_URL = f"{OPENAI_API_BASE_URL}/"
+OPENAI_ROUTING_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "OPENAI_ADMIN_KEY",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "OPENAI_CUSTOM_HEADERS",
+        "OPENAI_ORGANIZATION",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
+        "OPENAI_PROXY",
+    }
+)
 _OPENAI_CAPTURE_API_KEY = "capture-only-no-provider-request"
 _OPENAI_CAPTURE_MAX_BODY_BYTES = 1024 * 1024
 _OPENAI_GUEST_MODEL_FIELDS_SET = frozenset(
@@ -92,6 +105,34 @@ class InputTokenCountError(RuntimeError):
 type InputTokenCounter = Callable[[ModelRequest[Any]], Awaitable[int]]
 
 
+@dataclass(frozen=True, slots=True)
+class OpenAIResponsesInputTokenContract:
+    """Reviewed request identity for exact Responses input-token counting."""
+
+    model_name: str
+    max_output_tokens: int
+    timeout_seconds: float
+    safety_identifier: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.model_name, str)
+            or not self.model_name
+            or not isinstance(self.max_output_tokens, int)
+            or isinstance(self.max_output_tokens, bool)
+            or self.max_output_tokens < 1
+            or not isinstance(self.timeout_seconds, (int, float))
+            or isinstance(self.timeout_seconds, bool)
+            or self.timeout_seconds <= 0
+            or not isinstance(self.safety_identifier, str)
+            or not self.safety_identifier
+            or len(self.safety_identifier) > OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH
+            or not self.safety_identifier.isascii()
+            or any(character.isspace() for character in self.safety_identifier)
+        ):
+            raise ValueError("OpenAI Responses input-token contract is malformed")
+
+
 def openai_guest_safety_identifier(identity: object) -> str:
     """Derive one stable, non-identifying OpenAI abuse-monitoring subject."""
     if not is_anonymous_identity(identity):
@@ -129,10 +170,50 @@ def require_openai_api_key() -> str:
     return api_key
 
 
+def require_official_openai_routing() -> None:
+    """Fail before credential access when ambient state could change provider identity."""
+    configured = sorted(
+        variable
+        for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES
+        if variable in os.environ
+    )
+    if configured:
+        raise InputTokenCountError(
+            "ambient OpenAI routing configuration is forbidden: "
+            + ", ".join(configured)
+        )
+
+
+def _require_exact_openai_root_client(
+    client: object,
+    *,
+    api_key: str,
+    expected_type: type[OpenAI] | type[AsyncOpenAI],
+) -> None:
+    """Require the SDK client that can transmit credentials to match one route."""
+    if (
+        type(client) is not expected_type
+        or str(client.base_url) != _OPENAI_ROOT_CLIENT_BASE_URL
+        or client.organization is not None
+        or client.project is not None
+        or client.admin_api_key is not None
+        or client.api_key != api_key
+        or client.auth_headers != {"Authorization": f"Bearer {api_key}"}
+        or client._custom_headers != {}
+        or client._custom_query != {}
+        or client._provider is not None
+        or client.workload_identity is not None
+    ):
+        raise InputTokenCountError(
+            "the OpenAI SDK client left the official host and credential contract"
+        )
+
+
 @dataclass(slots=True)
 class _OpenAIRequestCapture:
     """Capture one local SDK request without permitting provider I/O."""
 
+    contract: OpenAIResponsesInputTokenContract
     payload: dict[str, Any] | None = None
     calls: int = 0
 
@@ -171,8 +252,8 @@ class _OpenAIRequestCapture:
                 "error": None,
                 "incomplete_details": None,
                 "instructions": None,
-                "max_output_tokens": OPENAI_GUEST_MAX_OUTPUT_TOKENS,
-                "model": OPENAI_GUEST_MODEL_NAME,
+                "max_output_tokens": self.contract.max_output_tokens,
+                "model": self.contract.model_name,
                 "output": [
                     {
                         "id": "msg_local_capture",
@@ -217,17 +298,23 @@ class _OpenAIRequestCapture:
         )
 
 
-def _require_exact_openai_guest_model(model: object) -> ChatOpenAI:
-    """Reject any model whose generated payload could diverge from the capture."""
+def _require_exact_openai_model(
+    model: object,
+    *,
+    contract: OpenAIResponsesInputTokenContract,
+) -> ChatOpenAI:
+    """Reject any model whose generated payload could diverge from the contract."""
+    if not isinstance(contract, OpenAIResponsesInputTokenContract):
+        raise TypeError("contract must be an OpenAIResponsesInputTokenContract")
     if not isinstance(model, ChatOpenAI):
         raise InputTokenCountError(
             "exact OpenAI input counting requires the server-owned ChatOpenAI model"
         )
     if (
-        model.model_name != OPENAI_GUEST_MODEL_NAME
-        or model.max_tokens != OPENAI_GUEST_MAX_OUTPUT_TOKENS
+        model.model_name != contract.model_name
+        or model.max_tokens != contract.max_output_tokens
         or model.max_retries != 0
-        or model.request_timeout != OPENAI_GUEST_TIMEOUT_SECONDS
+        or model.request_timeout != contract.timeout_seconds
         or model.use_responses_api is not True
         or model.reasoning != {"context": "current_turn", "effort": "none"}
         or model.store is not False
@@ -244,40 +331,92 @@ def _require_exact_openai_guest_model(model: object) -> ChatOpenAI:
         or model.context_management is not None
         or not isinstance(model.extra_body, dict)
         or set(model.extra_body) != {"safety_identifier"}
-        or not _is_openai_guest_safety_identifier(
-            model.extra_body.get("safety_identifier")
-        )
+        or model.extra_body.get("safety_identifier") != contract.safety_identifier
         or model.model_kwargs != {}
-        or model.openai_api_base is not None
+        or model.openai_api_base != OPENAI_API_BASE_URL
         or model.openai_organization is not None
         or model.openai_proxy
+        or model.default_headers is not None
+        or model.default_query is not None
     ):
+        raise InputTokenCountError(
+            "the server-owned OpenAI Responses model left its exact request contract"
+        )
+    api_key = model.openai_api_key.get_secret_value()
+    _require_exact_openai_root_client(
+        model.root_client,
+        api_key=api_key,
+        expected_type=OpenAI,
+    )
+    _require_exact_openai_root_client(
+        model.root_async_client,
+        api_key=api_key,
+        expected_type=AsyncOpenAI,
+    )
+    return model
+
+
+def _require_exact_openai_guest_model(model: object) -> ChatOpenAI:
+    """Reject any public guest model outside its single reviewed contract."""
+    if not isinstance(model, ChatOpenAI):
+        raise InputTokenCountError(
+            "exact OpenAI input counting requires the server-owned ChatOpenAI model"
+        )
+    safety_identifier = (
+        model.extra_body.get("safety_identifier")
+        if isinstance(model.extra_body, dict)
+        else None
+    )
+    if not _is_openai_guest_safety_identifier(safety_identifier):
         raise InputTokenCountError(
             "the server-owned OpenAI guest model left its exact request contract"
         )
-    return model
+    contract = OpenAIResponsesInputTokenContract(
+        model_name=OPENAI_GUEST_MODEL_NAME,
+        max_output_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS,
+        timeout_seconds=OPENAI_GUEST_TIMEOUT_SECONDS,
+        safety_identifier=safety_identifier,
+    )
+    return _require_exact_openai_model(model, contract=contract)
+
+
+def require_exact_openai_responses_model(
+    model: object,
+    *,
+    contract: OpenAIResponsesInputTokenContract,
+) -> ChatOpenAI:
+    """Expose the reviewed generation-client contract to server constructors."""
+    return _require_exact_openai_model(model, contract=contract)
+
+
+def require_exact_openai_guest_model(model: object) -> ChatOpenAI:
+    """Expose the single reviewed anonymous generation-client contract."""
+    return _require_exact_openai_guest_model(model)
 
 
 def _openai_capture_model(
     model: ChatOpenAI,
     *,
+    contract: OpenAIResponsesInputTokenContract,
     sync_client: httpx.Client,
     async_client: httpx.AsyncClient,
 ) -> ChatOpenAI:
     """Recreate the reviewed model with documented no-network HTTP clients."""
     return ChatOpenAI(
-        model=model.model_name,
+        model=contract.model_name,
         api_key=_OPENAI_CAPTURE_API_KEY,
-        max_tokens=model.max_tokens,
+        base_url=OPENAI_API_BASE_URL,
+        stream_usage=True,
+        max_tokens=contract.max_output_tokens,
         max_retries=model.max_retries,
-        timeout=model.request_timeout,
+        timeout=contract.timeout_seconds,
         use_responses_api=model.use_responses_api,
         output_version=model.output_version,
         reasoning=model.reasoning,
         store=model.store,
         truncation=model.truncation,
         cache=model.cache,
-        extra_body=dict(model.extra_body),
+        extra_body={"safety_identifier": contract.safety_identifier},
         http_client=sync_client,
         http_async_client=async_client,
     )
@@ -285,21 +424,34 @@ def _openai_capture_model(
 
 async def _capture_openai_generation_payload(
     request: ModelRequest[Any],
+    *,
+    contract: OpenAIResponsesInputTokenContract | None = None,
 ) -> dict[str, Any]:
     """Use ChatOpenAI's public invocation path against an in-memory transport."""
-    model = _require_exact_openai_guest_model(request.model)
+    if contract is None:
+        model = _require_exact_openai_guest_model(request.model)
+        safety_identifier = model.extra_body["safety_identifier"]
+        contract = OpenAIResponsesInputTokenContract(
+            model_name=OPENAI_GUEST_MODEL_NAME,
+            max_output_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS,
+            timeout_seconds=OPENAI_GUEST_TIMEOUT_SECONDS,
+            safety_identifier=safety_identifier,
+        )
+    else:
+        model = _require_exact_openai_model(request.model, contract=contract)
     if request.response_format is not None or request.model_settings:
         raise InputTokenCountError(
-            "OpenAI guest requests cannot add runtime model settings or output formats"
+            "exact OpenAI Responses requests cannot add runtime settings or formats"
         )
 
-    capture = _OpenAIRequestCapture()
+    capture = _OpenAIRequestCapture(contract=contract)
     transport = httpx.MockTransport(capture)
     sync_client = httpx.Client(transport=transport)
     try:
         async with httpx.AsyncClient(transport=transport) as async_client:
             capture_model = _openai_capture_model(
                 model,
+                contract=contract,
                 sync_client=sync_client,
                 async_client=async_client,
             )
@@ -334,8 +486,24 @@ async def _capture_openai_generation_payload(
 
 def _openai_input_count_payload(
     generation_payload: dict[str, Any],
+    *,
+    contract: OpenAIResponsesInputTokenContract | None = None,
 ) -> dict[str, Any]:
     """Project only token-bearing fields accepted by `/responses/input_tokens`."""
+    expected_model_name = (
+        OPENAI_GUEST_MODEL_NAME if contract is None else contract.model_name
+    )
+    expected_max_output_tokens = (
+        OPENAI_GUEST_MAX_OUTPUT_TOKENS
+        if contract is None
+        else contract.max_output_tokens
+    )
+    safety_identifier = generation_payload.get("safety_identifier")
+    safety_identifier_valid = (
+        _is_openai_guest_safety_identifier(safety_identifier)
+        if contract is None
+        else safety_identifier == contract.safety_identifier
+    )
     unknown = (
         set(generation_payload)
         - _OPENAI_INPUT_TOKEN_FIELDS
@@ -346,16 +514,14 @@ def _openai_input_count_payload(
             "OpenAI generation payload contains unreviewed request fields"
         )
     if (
-        generation_payload.get("model") != OPENAI_GUEST_MODEL_NAME
-        or generation_payload.get("max_output_tokens") != OPENAI_GUEST_MAX_OUTPUT_TOKENS
+        generation_payload.get("model") != expected_model_name
+        or generation_payload.get("max_output_tokens") != expected_max_output_tokens
         or generation_payload.get("reasoning")
         != {"context": "current_turn", "effort": "none"}
         or generation_payload.get("store") is not False
         or generation_payload.get("stream") is not False
         or generation_payload.get("truncation") != "disabled"
-        or not _is_openai_guest_safety_identifier(
-            generation_payload.get("safety_identifier")
-        )
+        or not safety_identifier_valid
         or "input" not in generation_payload
         or "conversation" in generation_payload
         or "previous_response_id" in generation_payload
@@ -380,17 +546,23 @@ async def _count_openai_responses_input_tokens(
     http_client: httpx.AsyncClient | None = None,
 ) -> int:
     """Call only OpenAI's official Responses input-token endpoint."""
+    require_official_openai_routing()
     api_key = require_openai_api_key()
     if http_client is not None and not isinstance(http_client, httpx.AsyncClient):
         raise TypeError("http_client must be an httpx.AsyncClient")
     try:
         async with AsyncOpenAI(
             api_key=api_key,
-            base_url=_OPENAI_API_BASE_URL,
+            base_url=OPENAI_API_BASE_URL,
             max_retries=0,
             timeout=OPENAI_GUEST_TIMEOUT_SECONDS,
             http_client=http_client,
         ) as client:
+            _require_exact_openai_root_client(
+                client,
+                api_key=api_key,
+                expected_type=AsyncOpenAI,
+            )
             response = await client.responses.input_tokens.count(**payload)
     except Exception as exc:
         raise InputTokenCountError(
@@ -418,6 +590,34 @@ async def count_openai_input_tokens(request: ModelRequest[Any]) -> int:
     ):
         raise InputTokenCountError("OpenAI returned a malformed input token count")
     return token_count
+
+
+def openai_responses_input_token_counter(
+    contract: OpenAIResponsesInputTokenContract,
+) -> InputTokenCounter:
+    """Bind exact provider counting to one code-owned Responses contract."""
+    if not isinstance(contract, OpenAIResponsesInputTokenContract):
+        raise TypeError("contract must be an OpenAIResponsesInputTokenContract")
+
+    async def count(request: ModelRequest[Any]) -> int:
+        generation_payload = await _capture_openai_generation_payload(
+            request,
+            contract=contract,
+        )
+        count_payload = _openai_input_count_payload(
+            generation_payload,
+            contract=contract,
+        )
+        token_count = await _count_openai_responses_input_tokens(count_payload)
+        if (
+            not isinstance(token_count, int)
+            or isinstance(token_count, bool)
+            or token_count < 0
+        ):
+            raise InputTokenCountError("OpenAI returned a malformed input token count")
+        return token_count
+
+    return count
 
 
 async def count_anthropic_input_tokens(request: ModelRequest[Any]) -> int:
@@ -467,6 +667,8 @@ async def count_anthropic_input_tokens(request: ModelRequest[Any]) -> int:
 __all__ = [
     "InputTokenCountError",
     "InputTokenCounter",
+    "OpenAIResponsesInputTokenContract",
+    "OPENAI_API_BASE_URL",
     "OPENAI_GUEST_MAX_OUTPUT_TOKENS",
     "OPENAI_GUEST_MODEL_NAME",
     "OPENAI_GUEST_RESPONSE_MODEL_NAMES",
@@ -474,8 +676,13 @@ __all__ = [
     "OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH",
     "OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX",
     "OPENAI_GUEST_TIMEOUT_SECONDS",
+    "OPENAI_ROUTING_ENVIRONMENT_VARIABLES",
     "count_anthropic_input_tokens",
     "count_openai_input_tokens",
     "openai_guest_safety_identifier",
+    "openai_responses_input_token_counter",
+    "require_exact_openai_guest_model",
+    "require_exact_openai_responses_model",
+    "require_official_openai_routing",
     "require_openai_api_key",
 ]

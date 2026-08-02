@@ -158,14 +158,41 @@ _SUBAGENT_DEFINITIONS: tuple[
 SUBAGENT_NAMES = frozenset(
     name for name, _description, _prompt, _tools in _SUBAGENT_DEFINITIONS
 )
-NATIVE_SUBAGENT_SYSTEM_PROMPT = (
-    TASK_SYSTEM_PROMPT
-    + "\n\nAvailable subagent types:\n\n"
-    + "\n".join(
-        f"- {name}: {description}"
-        for name, description, _prompt, _tools in _SUBAGENT_DEFINITIONS
+
+
+def _selected_subagent_definitions(
+    allowed_subagents: frozenset[str],
+) -> tuple[tuple[str, str, str, tuple[BaseTool, ...]], ...]:
+    """Select one exact server-owned specialist inventory in canonical order."""
+    if (
+        not isinstance(allowed_subagents, frozenset)
+        or not allowed_subagents
+        or not allowed_subagents <= SUBAGENT_NAMES
+    ):
+        raise ValueError(
+            "allowed_subagents must be a non-empty subset of server specialists"
+        )
+    return tuple(
+        definition
+        for definition in _SUBAGENT_DEFINITIONS
+        if definition[0] in allowed_subagents
     )
-)
+
+
+def native_subagent_system_prompt(allowed_subagents: frozenset[str]) -> str:
+    """Return the pinned Deep Agents prompt for one exact specialist inventory."""
+    definitions = _selected_subagent_definitions(allowed_subagents)
+    return (
+        TASK_SYSTEM_PROMPT
+        + "\n\nAvailable subagent types:\n\n"
+        + "\n".join(
+            f"- {name}: {description}"
+            for name, description, _prompt, _tools in definitions
+        )
+    )
+
+
+NATIVE_SUBAGENT_SYSTEM_PROMPT = native_subagent_system_prompt(SUBAGENT_NAMES)
 
 _FORBIDDEN_CONFIG_KEYS = frozenset(
     {
@@ -287,6 +314,8 @@ def _compiled_subagent(
     model: BaseChatModel,
     budget: RunBudget,
     input_token_counter: InputTokenCounter,
+    model_provider: str,
+    expected_response_models: frozenset[str],
 ) -> CompiledSubAgent:
     skill_backend = _isolated_skill_backend()
     child = create_agent(
@@ -305,6 +334,8 @@ def _compiled_subagent(
                 allow_subagents=False,
                 allowed_subagents=frozenset(),
                 input_token_counter=input_token_counter,
+                model_provider=model_provider,
+                expected_response_models=expected_response_models,
                 quickjs_tool_name=QUICKJS_TOOL_NAME,
                 allow_quickjs=False,
             ),
@@ -328,8 +359,11 @@ def build_subagents(
     model: BaseChatModel,
     budget: RunBudget,
     input_token_counter: InputTokenCounter,
+    model_provider: str = "anthropic",
+    expected_response_models: frozenset[str] = frozenset(),
+    allowed_subagents: frozenset[str] = SUBAGENT_NAMES,
 ) -> list[CompiledSubAgent]:
-    """Return four public compiled specialists with isolated state/backends."""
+    """Return the selected compiled specialists with isolated state/backends."""
     return [
         _compiled_subagent(
             name=name,
@@ -339,8 +373,12 @@ def build_subagents(
             model=model,
             budget=budget,
             input_token_counter=input_token_counter,
+            model_provider=model_provider,
+            expected_response_models=expected_response_models,
         )
-        for name, description, system_prompt, tools in _SUBAGENT_DEFINITIONS
+        for name, description, system_prompt, tools in _selected_subagent_definitions(
+            allowed_subagents
+        )
     ]
 
 
@@ -352,6 +390,7 @@ __all__ = [
     "SUBAGENT_SKILLS",
     "build_subagents",
     "dynamic_subagents_allowed",
+    "native_subagent_system_prompt",
     "read_blog_retrieval_skill",
     "validate_capability_config",
 ]

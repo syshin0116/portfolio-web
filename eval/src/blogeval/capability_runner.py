@@ -23,18 +23,22 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from fcntl import LOCK_EX, LOCK_UN, flock
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid5
 
 from agent.capabilities.budget import (
+    TASK_TOOL_NAME,
     BudgetSnapshot,
     RunBudget,
     RunBudgetExceededError,
     RunBudgetPolicy,
     RunBudgetUnsettledError,
 )
+from agent.capabilities.quickjs import QUICKJS_TOOL_NAME
 from agent.capabilities.subagents import validate_capability_config
 from agent.retrieval.protocol import DocId
+from langchain_core.messages import ToolMessage
 
 from blogeval.jsonio import (
     StrictJsonError,
@@ -50,12 +54,38 @@ from blogeval.provenance import (
 )
 
 CAPABILITY_TASKSET_SCHEMA = "blogeval-capability-taskset-v1"
-CAPABILITY_RUN_SCHEMA = "blogeval-capability-run-v2"
-CAPABILITY_RUNNER_ID = "blogeval.capability_runner@2"
+CAPABILITY_RUN_SCHEMA = "blogeval-capability-run-v5"
+CAPABILITY_RUNNER_ID = "blogeval.capability_runner@5"
 CAPABILITY_EVIDENCE_STATUS = "synthetic-provider-free"
+CAPABILITY_PROVIDER_EVIDENCE_STATUS = "provider-backed-local-unattested"
+CAPABILITY_EVIDENCE_STATUSES = frozenset(
+    {CAPABILITY_EVIDENCE_STATUS, CAPABILITY_PROVIDER_EVIDENCE_STATUS}
+)
 CAPABILITY_MANIFEST_SCHEMA = "blogeval-capability-result-manifest-v1"
 CAPABILITY_RESULT_DIGEST_SCHEMA = "blogeval-capability-result-digest-v1"
 CAPABILITY_RESULT_FILES = ("capability-report.md", "run.json")
+CAPABILITY_EVAL_SUBAGENT_NAMES = frozenset({"evidence-checker"})
+CAPABILITY_GENERATION_COST_SCOPE = "generation-token-usage-only"
+OPENAI_INPUT_TOKEN_COUNT_ENDPOINT = "/responses/input_tokens"
+OPENAI_INPUT_TOKEN_COUNT_BILLING_STATUS = "provider-pricing-undocumented"
+OPENAI_CAPABILITY_EXECUTOR_ID = "blogeval.openai_responses_capability_executor@2"
+OPENAI_CAPABILITY_MODEL_ID = "openai:gpt-5.6-luna"
+OPENAI_CAPABILITY_PROVIDER_CONTRACT = (
+    "openai-responses:gpt-5.6-luna@2026-08-02:"
+    "reasoning-none-current-turn:store-false:"
+    "official-api-openai-v1:no-ambient-routing:"
+    "langchain-openai-1.3.5:openai-2.50.0"
+)
+OPENAI_CAPABILITY_CACHE_MODE = "openai-implicit-recorded"
+OPENAI_CAPABILITY_MAX_ATTEMPTS = 1
+OPENAI_CAPABILITY_PRICING = MappingProxyType(
+    {
+        "uncached_input_usd_micros_per_million_tokens": 200_000,
+        "cache_read_input_usd_micros_per_million_tokens": 20_000,
+        "cache_write_input_usd_micros_per_million_tokens": 250_000,
+        "output_usd_micros_per_million_tokens": 1_200_000,
+    }
+)
 _DATASET_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _TASK_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -63,11 +93,19 @@ _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_DATASET_ID_BYTES = 128
 _MAX_PROMPT_BYTES = 16_000
 _MAX_TASKS = 32
+_MAX_ROOT_TOOL_CALL_ID_BYTES = 1_024
+_MAX_ROOT_TOOL_NAME_BYTES = 128
 _RATE_SCALE = 1_000_000
 _MAX_ATTEMPTS = 3
-_MAX_EXPERIMENT_COST_USD_MICROS = 25_000_000
+_MAX_GENERATION_COST_USD_MICROS = 25_000_000
 _MAX_PRICE_USD_MICROS_PER_MILLION_TOKENS = 100_000_000
-_CACHE_MODES = frozenset({"disabled", "anthropic-ephemeral-5m-recorded"})
+_CACHE_MODES = frozenset(
+    {
+        "disabled",
+        "anthropic-ephemeral-5m-recorded",
+        "openai-implicit-recorded",
+    }
+)
 _CAPABILITY_POLICY_MAXIMA = {
     "max_model_calls": 12,
     "max_tool_calls": 24,
@@ -75,8 +113,8 @@ _CAPABILITY_POLICY_MAXIMA = {
     "max_quickjs_in_flight": 1,
     "max_quickjs_output_bytes": 4_096,
     "max_quickjs_total_output_bytes": 16_384,
-    "max_task_calls": 2,
-    "max_tasks_in_flight": 2,
+    "max_task_calls": 1,
+    "max_tasks_in_flight": 1,
     "max_depth": 1,
     "max_output_tokens": 2_048,
     "max_total_tokens": 48_000,
@@ -95,6 +133,109 @@ _FAILURE_CODES = frozenset(
 
 class CapabilityEvaluationError(ValueError):
     """Capability inputs or observations are incomplete, malformed, or unsafe."""
+
+
+_EXECUTOR_DIAGNOSTIC_PHASES = frozenset(
+    {
+        "final_json",
+        "graph_build",
+        "graph_invoke",
+        "persistence_preflight",
+        "quickjs_cleanup",
+        "result_shape",
+        "root_trace",
+        "subtype_trace",
+    }
+)
+_EXECUTOR_DIAGNOSTIC_REASONS = frozenset(
+    {
+        "budget",
+        "cleanup",
+        "delegation_contract",
+        "graph_other",
+        "input_count",
+        "provider",
+        "result_shape",
+        "root_tool_denied",
+        "strict_json",
+        "trace",
+    }
+)
+_EXECUTOR_DIAGNOSTIC_ROOT_EVENTS = frozenset(
+    {
+        "call:eval",
+        "call:other",
+        "call:task",
+        "completion:eval",
+        "completion:other",
+        "completion:task",
+    }
+)
+
+
+class CapabilityExecutorDiagnosticError(RuntimeError):
+    """Carry only bounded structural executor diagnostics across the runner boundary."""
+
+    def __init__(
+        self,
+        *,
+        phase: str,
+        reason_code: str = "graph_other",
+        root_tool_events: tuple[str, ...] = (),
+    ) -> None:
+        if phase not in _EXECUTOR_DIAGNOSTIC_PHASES:
+            raise ValueError("executor diagnostic phase is unsupported")
+        if reason_code not in _EXECUTOR_DIAGNOSTIC_REASONS:
+            raise ValueError("executor diagnostic reason is unsupported")
+        if (
+            not isinstance(root_tool_events, tuple)
+            or len(root_tool_events) > _CAPABILITY_POLICY_MAXIMA["max_tool_calls"] * 2
+            or any(
+                event not in _EXECUTOR_DIAGNOSTIC_ROOT_EVENTS
+                for event in root_tool_events
+            )
+        ):
+            raise ValueError("executor diagnostic root events are malformed")
+        self.phase = phase
+        self.reason_code = reason_code
+        self.root_tool_events = root_tool_events
+        super().__init__("capability executor failed with redacted diagnostics")
+
+
+def _sanitized_executor_diagnostic(
+    error: CapabilityExecutorDiagnosticError,
+) -> tuple[str, str, tuple[str, ...]]:
+    """Copy only fixed enum values so the original exception can be discarded."""
+
+    phase = error.phase
+    reason_code = error.reason_code
+    root_tool_events = error.root_tool_events
+    if phase not in _EXECUTOR_DIAGNOSTIC_PHASES:
+        phase = "graph_invoke"
+    if reason_code not in _EXECUTOR_DIAGNOSTIC_REASONS:
+        reason_code = "graph_other"
+    if (
+        not isinstance(root_tool_events, tuple)
+        or len(root_tool_events) > _CAPABILITY_POLICY_MAXIMA["max_tool_calls"] * 2
+        or any(
+            event not in _EXECUTOR_DIAGNOSTIC_ROOT_EVENTS for event in root_tool_events
+        )
+    ):
+        root_tool_events = ()
+    return phase, reason_code, root_tool_events
+
+
+@dataclass(frozen=True, slots=True)
+class RootToolTraceEvent:
+    """One root call or its matching ToolMessage completion boundary."""
+
+    message_index: int
+    phase: str
+    tool_call_id: str
+    tool_name: str
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,10 +312,11 @@ class CapabilityExecutorIdentity:
     execution_id: str
     content_tree_sha: str
     model_id: str
+    provider_contract: str
     random_seed: int
     max_attempts: int
     cache_mode: str
-    max_experiment_cost_usd_micros: int
+    max_generation_cost_usd_micros: int
     uncached_input_usd_micros_per_million_tokens: int
     output_usd_micros_per_million_tokens: int
     cache_read_input_usd_micros_per_million_tokens: int
@@ -197,14 +339,20 @@ class CapabilityExecutorIdentity:
             or not isinstance(self.model_id, str)
             or not self.model_id
             or self.model_id != self.model_id.strip()
+            or not isinstance(self.provider_contract, str)
+            or not self.provider_contract
+            or self.provider_contract != self.provider_contract.strip()
+            or not self.provider_contract.isascii()
+            or len(self.provider_contract) > 512
+            or any(character.isspace() for character in self.provider_contract)
             or not _is_non_negative_int(self.random_seed)
             or not isinstance(self.max_attempts, int)
             or isinstance(self.max_attempts, bool)
             or not 1 <= self.max_attempts <= _MAX_ATTEMPTS
             or not isinstance(self.cache_mode, str)
             or self.cache_mode not in _CACHE_MODES
-            or not _is_positive_int(self.max_experiment_cost_usd_micros)
-            or (self.max_experiment_cost_usd_micros > _MAX_EXPERIMENT_COST_USD_MICROS)
+            or not _is_positive_int(self.max_generation_cost_usd_micros)
+            or (self.max_generation_cost_usd_micros > _MAX_GENERATION_COST_USD_MICROS)
             or not _is_positive_int(self.uncached_input_usd_micros_per_million_tokens)
             or not _is_positive_int(self.output_usd_micros_per_million_tokens)
             or not _is_positive_int(self.cache_read_input_usd_micros_per_million_tokens)
@@ -228,8 +376,9 @@ class CapabilityExecutorIdentity:
             "execution_id": self.execution_id,
             "executor_id": self.executor_id,
             "max_attempts": self.max_attempts,
-            "max_experiment_cost_usd_micros": (self.max_experiment_cost_usd_micros),
+            "max_generation_cost_usd_micros": self.max_generation_cost_usd_micros,
             "model_id": self.model_id,
+            "provider_contract": self.provider_contract,
             "pricing": {
                 "cache_read_input_usd_micros_per_million_tokens": (
                     self.cache_read_input_usd_micros_per_million_tokens
@@ -257,6 +406,8 @@ class CapabilityObservation:
     citations: tuple[DocId, ...]
     persistence_empty: bool
     cache_mode: str
+    delegated_subagent_types: tuple[str, ...] = ()
+    root_tool_trace: tuple[RootToolTraceEvent, ...] = ()
     failure_code: str | None = None
 
 
@@ -303,7 +454,10 @@ class CapabilityTaskResult:
     output_tokens: int
     cache_read_input_tokens: int
     cache_write_input_tokens: int
-    estimated_cost_usd_micros: int
+    estimated_generation_cost_usd_micros: int
+    delegated_subagent_types: tuple[str, ...]
+    delegated_tool_calls: int
+    root_tool_trace: tuple[RootToolTraceEvent, ...]
     failure_code: str | None
     budget: BudgetSnapshot
 
@@ -318,13 +472,18 @@ class CapabilityTaskResult:
             "cache_write_input_tokens": self.cache_write_input_tokens,
             "citation_correct": self.citation_correct,
             "citations": [str(value) for value in self.citations],
-            "estimated_cost_usd_micros": self.estimated_cost_usd_micros,
+            "delegated_subagent_types": list(self.delegated_subagent_types),
+            "delegated_tool_calls": self.delegated_tool_calls,
+            "estimated_generation_cost_usd_micros": (
+                self.estimated_generation_cost_usd_micros
+            ),
             "failure_code": self.failure_code,
             "graph_run_id": self.graph_run_id,
             "input_tokens": self.input_tokens,
             "latency_ms": self.latency_ms,
             "output_tokens": self.output_tokens,
             "persistence_empty": self.persistence_empty,
+            "root_tool_trace": [event.as_dict() for event in self.root_tool_trace],
             "status": self.status,
             "task_id": self.task_id,
             "task_success": self.task_success,
@@ -351,7 +510,7 @@ class CapabilityArmMetrics:
     cache_read_input_tokens: int
     cache_write_input_tokens: int
     total_tokens: int
-    estimated_cost_usd_micros: int
+    estimated_generation_cost_usd_micros: int
 
     def as_dict(self) -> dict[str, int]:
         return asdict(self)
@@ -376,6 +535,7 @@ class CapabilityRun:
     run_id: str
     dataset: CapabilityTaskSet
     executor: CapabilityExecutorIdentity
+    evidence_status: str
     budget_policy: RunBudgetPolicy
     arms: tuple[CapabilityArmResult, ...]
     provenance: RunProvenance
@@ -384,6 +544,12 @@ class CapabilityRun:
         return {
             "arms": [arm.as_dict() for arm in self.arms],
             "budget_policy": asdict(self.budget_policy),
+            "cost_accounting": _cost_accounting(
+                evidence_status=self.evidence_status,
+                identity=self.executor,
+                policy=self.budget_policy,
+                task_count=len(self.dataset.tasks),
+            ),
             "dataset": {
                 "checksum": self.dataset.checksum,
                 "content_tree_sha": self.dataset.content_tree_sha,
@@ -391,7 +557,7 @@ class CapabilityRun:
                 "label_status": self.dataset.label_status,
                 "task_count": len(self.dataset.tasks),
             },
-            "evidence_status": CAPABILITY_EVIDENCE_STATUS,
+            "evidence_status": self.evidence_status,
             "executor": self.executor.as_dict(),
             "provenance": self.provenance.as_dict(),
             "run_id": self.run_id,
@@ -421,6 +587,79 @@ def _is_non_negative_int(value: object) -> bool:
 
 def _is_positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _evidence_status(value: object, *, location: str) -> str:
+    if not isinstance(value, str) or value not in CAPABILITY_EVIDENCE_STATUSES:
+        raise CapabilityEvaluationError(f"{location} is unsupported")
+    return value
+
+
+def _validate_evidence_contract(
+    evidence_status: str,
+    identity: CapabilityExecutorIdentity,
+) -> None:
+    if evidence_status == CAPABILITY_EVIDENCE_STATUS:
+        if identity.provider_contract != "synthetic:provider-free":
+            raise CapabilityEvaluationError(
+                "synthetic evidence requires the provider-free contract"
+            )
+        return
+    if evidence_status == CAPABILITY_PROVIDER_EVIDENCE_STATUS:
+        expected = {
+            "executor_id": OPENAI_CAPABILITY_EXECUTOR_ID,
+            "model_id": OPENAI_CAPABILITY_MODEL_ID,
+            "provider_contract": OPENAI_CAPABILITY_PROVIDER_CONTRACT,
+            "cache_mode": OPENAI_CAPABILITY_CACHE_MODE,
+            "max_attempts": OPENAI_CAPABILITY_MAX_ATTEMPTS,
+            **OPENAI_CAPABILITY_PRICING,
+        }
+        observed = {
+            "executor_id": identity.executor_id,
+            "model_id": identity.model_id,
+            "provider_contract": identity.provider_contract,
+            "cache_mode": identity.cache_mode,
+            "max_attempts": identity.max_attempts,
+            "uncached_input_usd_micros_per_million_tokens": (
+                identity.uncached_input_usd_micros_per_million_tokens
+            ),
+            "cache_read_input_usd_micros_per_million_tokens": (
+                identity.cache_read_input_usd_micros_per_million_tokens
+            ),
+            "cache_write_input_usd_micros_per_million_tokens": (
+                identity.cache_write_input_usd_micros_per_million_tokens
+            ),
+            "output_usd_micros_per_million_tokens": (
+                identity.output_usd_micros_per_million_tokens
+            ),
+        }
+        if observed != expected:
+            raise CapabilityEvaluationError(
+                "local provider evidence requires the exact reviewed OpenAI identity"
+            )
+        return
+    raise CapabilityEvaluationError("capability evidence status is unsupported")
+
+
+def _reviewed_provider_executor_type() -> type:
+    """Resolve the one code-owned live adapter lazily to avoid an import cycle."""
+
+    from blogeval.capability_openai import OpenAICapabilityExecutor
+
+    return OpenAICapabilityExecutor
+
+
+def _validate_executor_evidence_contract(
+    evidence_status: str,
+    executor: CapabilityExecutor,
+) -> None:
+    if (
+        evidence_status == CAPABILITY_PROVIDER_EVIDENCE_STATUS
+        and type(executor) is not _reviewed_provider_executor_type()
+    ):
+        raise CapabilityEvaluationError(
+            "local provider evidence requires the exact reviewed executor implementation"
+        )
 
 
 def _mapping(
@@ -676,11 +915,23 @@ def build_capability_graph(
     runtime: Any,
     model: Any,
     input_token_counter: Any | None = None,
+    model_provider: str | None = None,
+    expected_response_models: frozenset[str] | None = None,
     quickjs_middleware: Any | None = None,
 ):
     """Compile the actual topology-stable agent graph for one server-owned arm."""
 
     from agent.graph import create_graph
+
+    quickjs_active, subagents_active = activated_capabilities(context)
+    root_tool_allowlist = frozenset(
+        tool_name
+        for tool_name, enabled in (
+            (QUICKJS_TOOL_NAME, quickjs_active),
+            (TASK_TOOL_NAME, subagents_active),
+        )
+        if enabled
+    )
 
     return create_graph(
         runtime=runtime,
@@ -688,9 +939,13 @@ def build_capability_graph(
         budget=context.budget,
         model=model,
         input_token_counter=input_token_counter,
-        quickjs_enabled=context.arm.quickjs_enabled,
-        dynamic_subagents_enabled=context.arm.subagents_enabled,
+        model_provider=model_provider,
+        expected_response_models=expected_response_models,
+        quickjs_enabled=quickjs_active,
+        dynamic_subagents_enabled=subagents_active,
         quickjs_middleware=quickjs_middleware,
+        root_tool_allowlist=root_tool_allowlist,
+        experiment_subagent_allowlist=CAPABILITY_EVAL_SUBAGENT_NAMES,
     )
 
 
@@ -758,6 +1013,227 @@ def _task_capabilities(task: CapabilityTask) -> tuple[bool, bool]:
     quickjs_required = "quickjs" in task.tags or "combined" in task.tags
     subagents_required = "subagents" in task.tags or "combined" in task.tags
     return quickjs_required, subagents_required
+
+
+def activated_capabilities(
+    context: CapabilityExecutionContext,
+) -> tuple[bool, bool]:
+    """Return the arm capabilities authorized for this canonical task."""
+    if not isinstance(context, CapabilityExecutionContext):
+        raise TypeError("context must be a CapabilityExecutionContext")
+    quickjs_required, subagents_required = _task_capabilities(context.task)
+    if (
+        quickjs_required
+        and not context.arm.quickjs_enabled
+        or subagents_required
+        and not context.arm.subagents_enabled
+    ):
+        return False, False
+    return (
+        context.arm.quickjs_enabled and quickjs_required,
+        context.arm.subagents_enabled and subagents_required,
+    )
+
+
+def _root_tool_trace_text(
+    value: object,
+    *,
+    location: str,
+    maximum_bytes: int,
+) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise CapabilityEvaluationError(f"{location} is malformed")
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise CapabilityEvaluationError(f"{location} is malformed") from exc
+    if size > maximum_bytes:
+        raise CapabilityEvaluationError(f"{location} is malformed")
+    return value
+
+
+def _validated_root_tool_trace(
+    value: object,
+    *,
+    location: str,
+) -> tuple[RootToolTraceEvent, ...]:
+    if not isinstance(value, tuple):
+        raise CapabilityEvaluationError(f"{location} is not an auditable tuple")
+    if len(value) > _CAPABILITY_POLICY_MAXIMA["max_tool_calls"] * 2:
+        raise CapabilityEvaluationError(f"{location} exceeds the root tool-call budget")
+
+    calls: dict[str, tuple[str, int]] = {}
+    completed: set[str] = set()
+    previous_message_index = -1
+    previous_phase: str | None = None
+    for index, event in enumerate(value):
+        event_location = f"{location}[{index}]"
+        if not isinstance(event, RootToolTraceEvent):
+            raise CapabilityEvaluationError(f"{event_location} is malformed")
+        if (
+            not _is_non_negative_int(event.message_index)
+            or event.message_index < previous_message_index
+            or (
+                event.message_index == previous_message_index
+                and (event.phase != "call" or previous_phase != "call")
+            )
+        ):
+            raise CapabilityEvaluationError(
+                f"{location} does not preserve root message chronology"
+            )
+        phase = _root_tool_trace_text(
+            event.phase,
+            location=f"{event_location}.phase",
+            maximum_bytes=16,
+        )
+        if phase not in {"call", "completion"}:
+            raise CapabilityEvaluationError(f"{event_location}.phase is unsupported")
+        tool_call_id = _root_tool_trace_text(
+            event.tool_call_id,
+            location=f"{event_location}.tool_call_id",
+            maximum_bytes=_MAX_ROOT_TOOL_CALL_ID_BYTES,
+        )
+        tool_name = _root_tool_trace_text(
+            event.tool_name,
+            location=f"{event_location}.tool_name",
+            maximum_bytes=_MAX_ROOT_TOOL_NAME_BYTES,
+        )
+        if phase == "call":
+            if tool_call_id in calls:
+                raise CapabilityEvaluationError(
+                    f"{location} repeats a root tool-call ID"
+                )
+            calls[tool_call_id] = (tool_name, event.message_index)
+        else:
+            call = calls.get(tool_call_id)
+            if (
+                call is None
+                or tool_call_id in completed
+                or call[0] != tool_name
+                or call[1] >= event.message_index
+            ):
+                raise CapabilityEvaluationError(
+                    f"{location} has an unmatched ToolMessage completion"
+                )
+            completed.add(tool_call_id)
+        previous_message_index = event.message_index
+        previous_phase = phase
+    if completed != set(calls):
+        raise CapabilityEvaluationError(
+            f"{location} has a root call without a ToolMessage completion"
+        )
+    return value
+
+
+def recorded_root_tool_trace(messages: object) -> tuple[RootToolTraceEvent, ...]:
+    """Record root calls and their actual ToolMessage completion boundaries."""
+
+    if not isinstance(messages, Sequence) or isinstance(
+        messages,
+        (str, bytes, bytearray),
+    ):
+        raise CapabilityEvaluationError("graph messages are not an auditable sequence")
+    events: list[RootToolTraceEvent] = []
+    calls: dict[str, str] = {}
+    completed: set[str] = set()
+    for message_index, message in enumerate(messages):
+        tool_calls = getattr(message, "tool_calls", None)
+        if tool_calls is not None:
+            if not isinstance(tool_calls, list):
+                raise CapabilityEvaluationError("graph tool calls are not auditable")
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, Mapping):
+                    raise CapabilityEvaluationError("graph tool call is not auditable")
+                tool_call_id = _root_tool_trace_text(
+                    tool_call.get("id"),
+                    location="graph root tool-call ID",
+                    maximum_bytes=_MAX_ROOT_TOOL_CALL_ID_BYTES,
+                )
+                tool_name = _root_tool_trace_text(
+                    tool_call.get("name"),
+                    location="graph root tool name",
+                    maximum_bytes=_MAX_ROOT_TOOL_NAME_BYTES,
+                )
+                if tool_call_id in calls:
+                    raise CapabilityEvaluationError("graph repeats a root tool-call ID")
+                calls[tool_call_id] = tool_name
+                events.append(
+                    RootToolTraceEvent(
+                        message_index=message_index,
+                        phase="call",
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                    )
+                )
+        if isinstance(message, ToolMessage):
+            tool_call_id = _root_tool_trace_text(
+                message.tool_call_id,
+                location="graph ToolMessage tool-call ID",
+                maximum_bytes=_MAX_ROOT_TOOL_CALL_ID_BYTES,
+            )
+            tool_name = _root_tool_trace_text(
+                message.name,
+                location="graph ToolMessage tool name",
+                maximum_bytes=_MAX_ROOT_TOOL_NAME_BYTES,
+            )
+            expected_name = calls.get(tool_call_id)
+            if (
+                expected_name is None
+                or expected_name != tool_name
+                or tool_call_id in completed
+            ):
+                raise CapabilityEvaluationError(
+                    "graph ToolMessage does not complete one prior root call"
+                )
+            completed.add(tool_call_id)
+            events.append(
+                RootToolTraceEvent(
+                    message_index=message_index,
+                    phase="completion",
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                )
+            )
+    return _validated_root_tool_trace(
+        tuple(events),
+        location="recorded root tool trace",
+    )
+
+
+def recorded_subagent_types(messages: object) -> tuple[str, ...]:
+    """Extract the actual root task-call subtype sequence from graph messages."""
+
+    if not isinstance(messages, Sequence) or isinstance(
+        messages,
+        (str, bytes, bytearray),
+    ):
+        raise CapabilityEvaluationError("graph messages are not an auditable sequence")
+    result: list[str] = []
+    for message in messages:
+        tool_calls = getattr(message, "tool_calls", None)
+        if tool_calls is None:
+            continue
+        if not isinstance(tool_calls, list):
+            raise CapabilityEvaluationError("graph tool calls are not auditable")
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, Mapping):
+                raise CapabilityEvaluationError("graph tool call is not auditable")
+            if tool_call.get("name") != TASK_TOOL_NAME:
+                continue
+            args = tool_call.get("args")
+            subagent_type = (
+                args.get("subagent_type") if isinstance(args, Mapping) else None
+            )
+            if (
+                not isinstance(subagent_type, str)
+                or not subagent_type
+                or subagent_type != subagent_type.strip()
+            ):
+                raise CapabilityEvaluationError(
+                    "graph task call has no auditable subagent type"
+                )
+            result.append(subagent_type)
+    return tuple(result)
 
 
 def _isolated_task(task: CapabilityTask) -> CapabilityTask:
@@ -869,7 +1345,7 @@ def _measure_content_tree_sha(workspace_root: Path) -> str:
     return measured
 
 
-def _worst_case_experiment_cost(
+def _worst_case_generation_cost(
     identity: CapabilityExecutorIdentity,
     *,
     policy: RunBudgetPolicy,
@@ -885,7 +1361,7 @@ def _worst_case_experiment_cost(
     return maximum_task_cost * task_count * len(CAPABILITY_ARMS)
 
 
-def _estimated_cost(
+def _estimated_generation_cost(
     identity: CapabilityExecutorIdentity,
     *,
     input_tokens: int,
@@ -902,6 +1378,100 @@ def _estimated_cost(
         * identity.cache_write_input_usd_micros_per_million_tokens
     )
     return (numerator + 999_999) // 1_000_000
+
+
+def _cost_accounting(
+    *,
+    evidence_status: str,
+    identity: CapabilityExecutorIdentity,
+    policy: RunBudgetPolicy,
+    task_count: int,
+) -> dict[str, object]:
+    excluded_request_billing: list[dict[str, object]] = []
+    if evidence_status == CAPABILITY_PROVIDER_EVIDENCE_STATUS:
+        excluded_request_billing.append(
+            {
+                "billing_status": OPENAI_INPUT_TOKEN_COUNT_BILLING_STATUS,
+                "endpoint": OPENAI_INPUT_TOKEN_COUNT_ENDPOINT,
+                "included_in_generation_cost_ceiling": False,
+                "maximum_request_count": (
+                    policy.max_model_calls
+                    * identity.max_attempts
+                    * task_count
+                    * len(CAPABILITY_ARMS)
+                ),
+            }
+        )
+    return {
+        "excluded_request_billing": excluded_request_billing,
+        "generation_cost_ceiling_usd_micros": (identity.max_generation_cost_usd_micros),
+        "scope": CAPABILITY_GENERATION_COST_SCOPE,
+    }
+
+
+def _parse_cost_accounting(value: object) -> dict[str, object]:
+    location = "run.cost_accounting"
+    raw = _mapping(
+        value,
+        location=location,
+        keys=frozenset(
+            {
+                "excluded_request_billing",
+                "generation_cost_ceiling_usd_micros",
+                "scope",
+            }
+        ),
+    )
+    excluded: list[dict[str, object]] = []
+    for index, exclusion_value in enumerate(
+        _array(
+            raw["excluded_request_billing"],
+            location=f"{location}.excluded_request_billing",
+        )
+    ):
+        exclusion_location = f"{location}.excluded_request_billing[{index}]"
+        exclusion = _mapping(
+            exclusion_value,
+            location=exclusion_location,
+            keys=frozenset(
+                {
+                    "billing_status",
+                    "endpoint",
+                    "included_in_generation_cost_ceiling",
+                    "maximum_request_count",
+                }
+            ),
+        )
+        excluded.append(
+            {
+                "billing_status": _text(
+                    exclusion["billing_status"],
+                    location=f"{exclusion_location}.billing_status",
+                ),
+                "endpoint": _text(
+                    exclusion["endpoint"],
+                    location=f"{exclusion_location}.endpoint",
+                ),
+                "included_in_generation_cost_ceiling": _boolean(
+                    exclusion["included_in_generation_cost_ceiling"],
+                    location=(
+                        f"{exclusion_location}.included_in_generation_cost_ceiling"
+                    ),
+                ),
+                "maximum_request_count": _integer(
+                    exclusion["maximum_request_count"],
+                    location=f"{exclusion_location}.maximum_request_count",
+                ),
+            }
+        )
+    return {
+        "excluded_request_billing": excluded,
+        "generation_cost_ceiling_usd_micros": _integer(
+            raw["generation_cost_ceiling_usd_micros"],
+            location=f"{location}.generation_cost_ceiling_usd_micros",
+        ),
+        "scope": _text(raw["scope"], location=f"{location}.scope"),
+    }
 
 
 def _validate_observation(
@@ -964,7 +1534,7 @@ def _validate_observation(
         not _is_non_negative_int(value) for value in provider_buckets
     ):
         raise CapabilityEvaluationError(
-            "capability result requires complete Anthropic provider usage buckets"
+            "capability result requires complete provider-native usage buckets"
         )
     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = cast(
         tuple[int, int, int, int],
@@ -982,7 +1552,7 @@ def _validate_observation(
         != input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
     ):
         raise CapabilityEvaluationError(
-            "Anthropic provider usage differs from the shared RunBudget ledger"
+            "provider-native usage differs from the shared RunBudget ledger"
         )
     if not arm.quickjs_enabled and (
         budget.quickjs_calls != 0 or budget.quickjs_output_bytes != 0
@@ -994,18 +1564,110 @@ def _validate_observation(
         raise CapabilityEvaluationError(
             "QuickJS output was charged without an execution"
         )
+    root_capability_calls = budget.quickjs_calls + budget.task_calls
+    if budget.tool_calls < root_capability_calls:
+        raise CapabilityEvaluationError(
+            "shared RunBudget undercounts root capability calls"
+        )
+    delegated_tool_calls = budget.tool_calls - root_capability_calls
+    if budget.task_calls == 0 and delegated_tool_calls != 0:
+        raise CapabilityEvaluationError(
+            "capability task recorded a non-allowlisted root tool call"
+        )
     quickjs_required, subagents_required = _task_capabilities(task)
-    expected_quickjs = arm.quickjs_enabled and quickjs_required
-    expected_subagents = arm.subagents_enabled and subagents_required
-    if (budget.quickjs_calls > 0) is not expected_quickjs:
+    missing_required_capability = (
+        quickjs_required
+        and not arm.quickjs_enabled
+        or subagents_required
+        and not arm.subagents_enabled
+    )
+    structured_unavailable = (
+        observation.status == "failed"
+        and observation.failure_code == "capability_unavailable"
+    )
+    if structured_unavailable is not missing_required_capability:
         raise CapabilityEvaluationError(
-            "task-level QuickJS activity differs from its requested arm capability"
+            "structured capability availability differs from the requested arm "
+            f"for {arm.arm_id}/{task.task_id}"
         )
-    if (budget.task_calls > 0) is not expected_subagents:
+    expected_quickjs = (
+        not missing_required_capability and arm.quickjs_enabled and quickjs_required
+    )
+    expected_subagents = (
+        not missing_required_capability and arm.subagents_enabled and subagents_required
+    )
+    if budget.quickjs_calls != int(expected_quickjs):
         raise CapabilityEvaluationError(
-            "task-level subagent activity differs from its requested arm capability"
+            "task-level QuickJS activity differs from its requested arm capability "
+            f"for {arm.arm_id}/{task.task_id}"
         )
-
+    if budget.task_calls != int(expected_subagents):
+        raise CapabilityEvaluationError(
+            "task-level evidence-checker activity differs from its requested arm "
+            f"capability for {arm.arm_id}/{task.task_id}"
+        )
+    if expected_subagents and delegated_tool_calls < 1:
+        raise CapabilityEvaluationError(
+            "evidence-checker completed without delegated child tool activity"
+        )
+    root_tool_trace = _validated_root_tool_trace(
+        observation.root_tool_trace,
+        location="observation.root_tool_trace",
+    )
+    trace_calls = tuple(event for event in root_tool_trace if event.phase == "call")
+    if any(
+        event.tool_name not in {QUICKJS_TOOL_NAME, TASK_TOOL_NAME}
+        for event in trace_calls
+    ):
+        raise CapabilityEvaluationError(
+            "capability task recorded a non-allowlisted root tool call"
+        )
+    if (
+        len(trace_calls) != root_capability_calls
+        or sum(event.tool_name == QUICKJS_TOOL_NAME for event in trace_calls)
+        != budget.quickjs_calls
+        or sum(event.tool_name == TASK_TOOL_NAME for event in trace_calls)
+        != budget.task_calls
+    ):
+        raise CapabilityEvaluationError(
+            "recorded root tool trace differs from the shared RunBudget ledger"
+        )
+    expected_trace_signature: list[tuple[str, str]] = []
+    if expected_quickjs:
+        expected_trace_signature.extend(
+            (("call", QUICKJS_TOOL_NAME), ("completion", QUICKJS_TOOL_NAME))
+        )
+    if expected_subagents:
+        expected_trace_signature.extend(
+            (("call", TASK_TOOL_NAME), ("completion", TASK_TOOL_NAME))
+        )
+    actual_trace_signature = tuple(
+        (event.phase, event.tool_name) for event in root_tool_trace
+    )
+    if actual_trace_signature != tuple(expected_trace_signature):
+        raise CapabilityEvaluationError(
+            "root tool trace differs from the exact capability chronology for "
+            f"{arm.arm_id}/{task.task_id}"
+        )
+    delegated_subagent_types = observation.delegated_subagent_types
+    if (
+        not isinstance(delegated_subagent_types, tuple)
+        or any(
+            not isinstance(value, str) or not value or value != value.strip()
+            for value in delegated_subagent_types
+        )
+        or len(delegated_subagent_types) != budget.task_calls
+    ):
+        raise CapabilityEvaluationError(
+            "recorded subagent types differ from the shared RunBudget ledger"
+        )
+    expected_subagent_types = ("evidence-checker",) if expected_subagents else ()
+    if delegated_subagent_types != expected_subagent_types:
+        raise CapabilityEvaluationError(
+            "task-level evidence-checker delegation differs from its requested "
+            "arm capability "
+            f"for {arm.arm_id}/{task.task_id}"
+        )
     if observation.status == "completed":
         if observation.answer is None or observation.failure_code is not None:
             raise CapabilityEvaluationError(
@@ -1054,13 +1716,16 @@ def _validate_observation(
         output_tokens=output_tokens,
         cache_read_input_tokens=cache_read_tokens,
         cache_write_input_tokens=cache_write_tokens,
-        estimated_cost_usd_micros=_estimated_cost(
+        estimated_generation_cost_usd_micros=_estimated_generation_cost(
             identity,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_input_tokens=cache_read_tokens,
             cache_write_input_tokens=cache_write_tokens,
         ),
+        delegated_subagent_types=delegated_subagent_types,
+        delegated_tool_calls=delegated_tool_calls,
+        root_tool_trace=root_tool_trace,
         failure_code=observation.failure_code,
         budget=budget,
     )
@@ -1102,7 +1767,9 @@ def _summarize_arm(
         total_tokens=(
             input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
         ),
-        estimated_cost_usd_micros=sum(task.estimated_cost_usd_micros for task in tasks),
+        estimated_generation_cost_usd_micros=sum(
+            task.estimated_generation_cost_usd_micros for task in tasks
+        ),
     )
 
 
@@ -1112,6 +1779,7 @@ def _run_id(
     executor: CapabilityExecutorIdentity,
     policy: RunBudgetPolicy,
     provenance: RunProvenance,
+    evidence_status: str,
 ) -> str:
     payload = {
         "arms": [arm.as_dict() for arm in CAPABILITY_ARMS],
@@ -1123,7 +1791,7 @@ def _run_id(
             "label_status": dataset.label_status,
             "task_count": len(dataset.tasks),
         },
-        "evidence_status": CAPABILITY_EVIDENCE_STATUS,
+        "evidence_status": evidence_status,
         "executor": executor.as_dict(),
         "provenance": provenance.as_dict(),
         "runner": CAPABILITY_RUNNER_ID,
@@ -1132,7 +1800,7 @@ def _run_id(
     return json_checksum(canonical_json_bytes(payload))
 
 
-def _finalize_attempt_budget(
+def _terminal_attempt_budget(
     budget: RunBudget,
     *,
     arm: CapabilityArm,
@@ -1161,6 +1829,19 @@ def _finalize_attempt_budget(
         raise CapabilityEvaluationError(
             f"executor returned an unsettled terminal RunBudget for {label}"
         )
+    return snapshot
+
+
+def _finalize_attempt_budget(
+    budget: RunBudget,
+    *,
+    arm: CapabilityArm,
+    task: CapabilityTask,
+) -> BudgetSnapshot:
+    """Finalize a successful observation and require exact provider usage."""
+
+    label = f"{arm.arm_id}/{task.task_id}"
+    snapshot = _terminal_attempt_budget(budget, arm=arm, task=task)
     provider_buckets = (
         snapshot.provider_input_tokens,
         snapshot.provider_output_tokens,
@@ -1171,7 +1852,7 @@ def _finalize_attempt_budget(
         not _is_non_negative_int(value) for value in provider_buckets
     ):
         raise CapabilityEvaluationError(
-            f"executor returned incomplete Anthropic provider usage for {label}"
+            f"executor returned incomplete provider-native usage for {label}"
         )
     if sum(cast(tuple[int, int, int, int], provider_buckets)) != (
         snapshot.charged_tokens
@@ -1180,6 +1861,17 @@ def _finalize_attempt_budget(
             f"executor provider usage differs from RunBudget for {label}"
         )
     return snapshot
+
+
+def _finalize_failed_attempt_budget(
+    budget: RunBudget,
+    *,
+    arm: CapabilityArm,
+    task: CapabilityTask,
+) -> BudgetSnapshot:
+    """Finalize failure counters without claiming unavailable provider usage."""
+
+    return _terminal_attempt_budget(budget, arm=arm, task=task)
 
 
 def _attempt_has_zero_spend(snapshot: BudgetSnapshot) -> bool:
@@ -1204,6 +1896,7 @@ async def run_capability_experiment(
     executor_identity: CapabilityExecutorIdentity,
     budget_policy: RunBudgetPolicy,
     workspace_root: Path,
+    evidence_status: str = CAPABILITY_EVIDENCE_STATUS,
     provenance: RunProvenance | None = None,
     clock_ns: Callable[[], int] = time.monotonic_ns,
     budget_factory: Callable[[RunBudgetPolicy], RunBudget] = RunBudget,
@@ -1213,6 +1906,12 @@ async def run_capability_experiment(
     dataset = _validated_taskset(dataset, location="experiment dataset")
     if not isinstance(executor_identity, CapabilityExecutorIdentity):
         raise CapabilityEvaluationError("executor identity is required")
+    evidence_status = _evidence_status(
+        evidence_status,
+        location="experiment evidence status",
+    )
+    _validate_evidence_contract(evidence_status, executor_identity)
+    _validate_executor_evidence_contract(evidence_status, executor)
     budget_policy = _validated_capability_policy(budget_policy)
     measured_content_tree_sha = _measure_content_tree_sha(workspace_root)
     if (
@@ -1222,14 +1921,14 @@ async def run_capability_experiment(
         raise CapabilityEvaluationError(
             "measured content tree differs from the dataset or executor identity"
         )
-    worst_case_cost = _worst_case_experiment_cost(
+    worst_case_cost = _worst_case_generation_cost(
         executor_identity,
         policy=budget_policy,
         task_count=len(dataset.tasks),
     )
-    if worst_case_cost > executor_identity.max_experiment_cost_usd_micros:
+    if worst_case_cost > executor_identity.max_generation_cost_usd_micros:
         raise CapabilityEvaluationError(
-            "worst-case capability experiment cost exceeds the explicit ceiling"
+            "worst-case generation-token cost exceeds the explicit ceiling"
         )
     measured_provenance = provenance or collect_run_provenance()
 
@@ -1294,6 +1993,8 @@ async def run_capability_experiment(
                 started_ns = clock_ns()
                 if not _is_non_negative_int(started_ns):
                     raise CapabilityEvaluationError("experiment clock is malformed")
+                failure_cause: Exception | None = None
+                failure_diagnostic: tuple[str, str, tuple[str, ...]] | None = None
                 try:
                     async with asyncio.timeout(budget.remaining_seconds()):
                         observation = await executor.execute(context)
@@ -1308,11 +2009,16 @@ async def run_capability_experiment(
                         f"{arm.arm_id}/{task.task_id}"
                     ) from exc
                 except Exception as exc:
+                    if isinstance(exc, CapabilityExecutorDiagnosticError):
+                        failure_diagnostic = _sanitized_executor_diagnostic(exc)
+                    else:
+                        failure_cause = exc
+                if failure_cause is not None or failure_diagnostic is not None:
                     _require_task_unchanged(
                         attempt_task,
                         expected_payload=expected_task_payload,
                     )
-                    snapshot = _finalize_attempt_budget(
+                    snapshot = _finalize_failed_attempt_budget(
                         budget,
                         arm=arm,
                         task=task,
@@ -1321,11 +2027,30 @@ async def run_capability_experiment(
                         attempt_number < executor_identity.max_attempts
                         and _attempt_has_zero_spend(snapshot)
                     ):
+                        failure_cause = None
                         continue
-                    raise CapabilityEvaluationError(
-                        f"executor failed before a complete observation for "
-                        f"{arm.arm_id}/{task.task_id}"
-                    ) from exc
+                    diagnostic = ""
+                    if failure_diagnostic is not None:
+                        phase, reason_code, safe_root_events = failure_diagnostic
+                        root_events = ",".join(safe_root_events) or "none"
+                        diagnostic = (
+                            f"; phase={phase}; reason={reason_code}; "
+                            "budget_counts="
+                            f"model:{snapshot.model_calls},"
+                            f"tool:{snapshot.tool_calls},"
+                            f"quickjs:{snapshot.quickjs_calls},"
+                            f"task:{snapshot.task_calls}; "
+                            f"root_tool_events={root_events}"
+                        )
+                    failure_message = (
+                        "executor failed before a complete observation for "
+                        f"{arm.arm_id}/{task.task_id}{diagnostic}"
+                    )
+                    if failure_diagnostic is not None:
+                        failure_diagnostic = None
+                        raise CapabilityEvaluationError(failure_message)
+                    assert failure_cause is not None
+                    raise CapabilityEvaluationError(failure_message) from failure_cause
                 _require_task_unchanged(
                     attempt_task,
                     expected_payload=expected_task_payload,
@@ -1374,10 +2099,10 @@ async def run_capability_experiment(
         )
     if tuple(result.arm for result in arms) != CAPABILITY_ARMS:
         raise CapabilityEvaluationError("capability experiment is missing a fixed arm")
-    actual_cost = sum(arm.metrics.estimated_cost_usd_micros for arm in arms)
-    if actual_cost > executor_identity.max_experiment_cost_usd_micros:
+    actual_cost = sum(arm.metrics.estimated_generation_cost_usd_micros for arm in arms)
+    if actual_cost > executor_identity.max_generation_cost_usd_micros:
         raise CapabilityEvaluationError(
-            "capability experiment cost exceeds the explicit ceiling"
+            "capability generation-token cost exceeds the explicit ceiling"
         )
     return CapabilityRun(
         run_id=_run_id(
@@ -1385,9 +2110,11 @@ async def run_capability_experiment(
             executor=executor_identity,
             policy=budget_policy,
             provenance=measured_provenance,
+            evidence_status=evidence_status,
         ),
         dataset=dataset,
         executor=executor_identity,
+        evidence_status=evidence_status,
         budget_policy=budget_policy,
         arms=tuple(arms),
         provenance=measured_provenance,
@@ -1405,9 +2132,10 @@ def _parse_executor(value: object) -> CapabilityExecutorIdentity:
                 "execution_id",
                 "executor_id",
                 "max_attempts",
-                "max_experiment_cost_usd_micros",
+                "max_generation_cost_usd_micros",
                 "model_id",
                 "pricing",
+                "provider_contract",
                 "random_seed",
             }
         ),
@@ -1446,11 +2174,15 @@ def _parse_executor(value: object) -> CapabilityExecutorIdentity:
                 raw["max_attempts"],
                 location="run.executor.max_attempts",
             ),
-            max_experiment_cost_usd_micros=_integer(
-                raw["max_experiment_cost_usd_micros"],
-                location="run.executor.max_experiment_cost_usd_micros",
+            max_generation_cost_usd_micros=_integer(
+                raw["max_generation_cost_usd_micros"],
+                location="run.executor.max_generation_cost_usd_micros",
             ),
             model_id=_text(raw["model_id"], location="run.executor.model_id"),
+            provider_contract=_text(
+                raw["provider_contract"],
+                location="run.executor.provider_contract",
+            ),
             random_seed=_integer(
                 raw["random_seed"],
                 location="run.executor.random_seed",
@@ -1676,6 +2408,42 @@ def _parse_dataset_identity(value: object) -> dict[str, object]:
     }
 
 
+def _parse_root_tool_trace(
+    value: object,
+    *,
+    location: str,
+) -> tuple[RootToolTraceEvent, ...]:
+    events: list[RootToolTraceEvent] = []
+    for index, event_value in enumerate(_array(value, location=location)):
+        event_location = f"{location}[{index}]"
+        raw = _mapping(
+            event_value,
+            location=event_location,
+            keys=frozenset({"message_index", "phase", "tool_call_id", "tool_name"}),
+        )
+        events.append(
+            RootToolTraceEvent(
+                message_index=_integer(
+                    raw["message_index"],
+                    location=f"{event_location}.message_index",
+                ),
+                phase=_text(raw["phase"], location=f"{event_location}.phase"),
+                tool_call_id=_text(
+                    raw["tool_call_id"],
+                    location=f"{event_location}.tool_call_id",
+                ),
+                tool_name=_text(
+                    raw["tool_name"],
+                    location=f"{event_location}.tool_name",
+                ),
+            )
+        )
+    return _validated_root_tool_trace(
+        tuple(events),
+        location=location,
+    )
+
+
 def _parse_task_result(
     value: object,
     *,
@@ -1699,13 +2467,16 @@ def _parse_task_result(
                 "cache_write_input_tokens",
                 "citation_correct",
                 "citations",
-                "estimated_cost_usd_micros",
+                "delegated_subagent_types",
+                "delegated_tool_calls",
+                "estimated_generation_cost_usd_micros",
                 "failure_code",
                 "graph_run_id",
                 "input_tokens",
                 "latency_ms",
                 "output_tokens",
                 "persistence_empty",
+                "root_tool_trace",
                 "status",
                 "task_id",
                 "task_success",
@@ -1758,6 +2529,22 @@ def _parse_task_result(
             raw["cache_mode"],
             location=f"{location}.cache_mode",
         ),
+        delegated_subagent_types=tuple(
+            _text(
+                item,
+                location=f"{location}.delegated_subagent_types[{index}]",
+            )
+            for index, item in enumerate(
+                _array(
+                    raw["delegated_subagent_types"],
+                    location=f"{location}.delegated_subagent_types",
+                )
+            )
+        ),
+        root_tool_trace=_parse_root_tool_trace(
+            raw["root_tool_trace"],
+            location=f"{location}.root_tool_trace",
+        ),
         failure_code=cast(str | None, failure_code),
     )
     result = _validate_observation(
@@ -1784,9 +2571,9 @@ def _parse_task_result(
         raw["citation_correct"],
         location=f"{location}.citation_correct",
     )
-    estimated_cost = _integer(
-        raw["estimated_cost_usd_micros"],
-        location=f"{location}.estimated_cost_usd_micros",
+    estimated_generation_cost = _integer(
+        raw["estimated_generation_cost_usd_micros"],
+        location=f"{location}.estimated_generation_cost_usd_micros",
     )
     input_tokens = _integer(
         raw["input_tokens"],
@@ -1804,14 +2591,19 @@ def _parse_task_result(
         raw["cache_write_input_tokens"],
         location=f"{location}.cache_write_input_tokens",
     )
+    delegated_tool_calls = _integer(
+        raw["delegated_tool_calls"],
+        location=f"{location}.delegated_tool_calls",
+    )
     if (
         task_success is not result.task_success
         or citation_correct is not result.citation_correct
-        or estimated_cost != result.estimated_cost_usd_micros
+        or estimated_generation_cost != result.estimated_generation_cost_usd_micros
         or input_tokens != result.input_tokens
         or output_tokens != result.output_tokens
         or cache_read_tokens != result.cache_read_input_tokens
         or cache_write_tokens != result.cache_write_input_tokens
+        or delegated_tool_calls != result.delegated_tool_calls
     ):
         raise CapabilityEvaluationError(f"{location} derived scoring is inconsistent")
     return result
@@ -1832,6 +2624,7 @@ def parse_capability_run(
             {
                 "arms",
                 "budget_policy",
+                "cost_accounting",
                 "dataset",
                 "evidence_status",
                 "executor",
@@ -1844,10 +2637,10 @@ def parse_capability_run(
     )
     if raw["schema"] != CAPABILITY_RUN_SCHEMA or raw["runner"] != CAPABILITY_RUNNER_ID:
         raise CapabilityEvaluationError("capability run schema/runner is unsupported")
-    if raw["evidence_status"] != CAPABILITY_EVIDENCE_STATUS:
-        raise CapabilityEvaluationError(
-            "capability run cannot claim provider-backed evidence"
-        )
+    evidence_status = _evidence_status(
+        raw["evidence_status"],
+        location="run.evidence_status",
+    )
     expected_dataset = {
         "checksum": dataset.checksum,
         "content_tree_sha": dataset.content_tree_sha,
@@ -1860,21 +2653,32 @@ def parse_capability_run(
             "capability run dataset identity differs from the supplied task-set"
         )
     identity = _parse_executor(raw["executor"])
+    _validate_evidence_contract(evidence_status, identity)
     policy = _parse_policy(raw["budget_policy"])
+    expected_cost_accounting = _cost_accounting(
+        evidence_status=evidence_status,
+        identity=identity,
+        policy=policy,
+        task_count=len(dataset.tasks),
+    )
+    if _parse_cost_accounting(raw["cost_accounting"]) != expected_cost_accounting:
+        raise CapabilityEvaluationError(
+            "capability run cost accounting differs from its scoped contract"
+        )
     if identity.content_tree_sha != dataset.content_tree_sha:
         raise CapabilityEvaluationError(
             "executor content tree differs from the supplied task-set"
         )
     if (
-        _worst_case_experiment_cost(
+        _worst_case_generation_cost(
             identity,
             policy=policy,
             task_count=len(dataset.tasks),
         )
-        > identity.max_experiment_cost_usd_micros
+        > identity.max_generation_cost_usd_micros
     ):
         raise CapabilityEvaluationError(
-            "worst-case capability experiment cost exceeds the explicit ceiling"
+            "worst-case generation-token cost exceeds the explicit ceiling"
         )
     try:
         provenance = parse_run_provenance(raw["provenance"])
@@ -1946,22 +2750,24 @@ def parse_capability_run(
         executor=identity,
         policy=policy,
         provenance=provenance,
+        evidence_status=evidence_status,
     )
     if raw["run_id"] != expected_run_id:
         raise CapabilityEvaluationError(
             "capability run ID differs from its canonical experiment inputs"
         )
     if (
-        sum(arm.metrics.estimated_cost_usd_micros for arm in arms)
-        > identity.max_experiment_cost_usd_micros
+        sum(arm.metrics.estimated_generation_cost_usd_micros for arm in arms)
+        > identity.max_generation_cost_usd_micros
     ):
         raise CapabilityEvaluationError(
-            "capability experiment cost exceeds the explicit ceiling"
+            "capability generation-token cost exceeds the explicit ceiling"
         )
     return CapabilityRun(
         run_id=expected_run_id,
         dataset=dataset,
         executor=identity,
+        evidence_status=evidence_status,
         budget_policy=policy,
         arms=tuple(arms),
         provenance=provenance,
@@ -1987,18 +2793,55 @@ def _milliseconds(millis: int) -> str:
     return f"{whole}.{remainder:03d} ms"
 
 
+def _root_tool_trace_summary(trace: tuple[RootToolTraceEvent, ...]) -> str:
+    if not trace:
+        return "—"
+    return " → ".join(
+        f"{event.message_index}:{event.phase}:{event.tool_name}" for event in trace
+    )
+
+
 def render_capability_report(run: CapabilityRun) -> str:
     """Render a deterministic report that cannot be mistaken for a leaderboard."""
 
+    if run.evidence_status == CAPABILITY_EVIDENCE_STATUS:
+        evidence_banner = (
+            "> **SYNTHETIC PROVIDER-FREE EVIDENCE ONLY.** This report is not "
+            "provider quality/cost evidence, does not satisfy P4.5 acceptance, "
+            "cannot enable a public capability, and is intentionally excluded "
+            "from the retrieval leaderboard."
+        )
+    else:
+        evidence_banner = (
+            "> **PROVIDER-BACKED LOCAL EVIDENCE; UNATTESTED.** This report records "
+            "bounded live provider calls, but it was not produced by a signed CI "
+            "publication job, cannot enable a public capability, and remains "
+            "outside the retrieval leaderboard."
+        )
+    cost_accounting = _cost_accounting(
+        evidence_status=run.evidence_status,
+        identity=run.executor,
+        policy=run.budget_policy,
+        task_count=len(run.dataset.tasks),
+    )
+    exclusions = cast(
+        list[dict[str, object]],
+        cost_accounting["excluded_request_billing"],
+    )
+    excluded_billing_line = "- Excluded request billing: none"
+    if exclusions:
+        exclusion = exclusions[0]
+        excluded_billing_line = (
+            f"- Excluded request billing: `{exclusion['endpoint']}` "
+            f"(`{exclusion['billing_status']}`; outside the generation-token "
+            f"ceiling; at most {exclusion['maximum_request_count']} requests)"
+        )
     lines = [
         f"# Capability 2×2 report: {_markdown(run.dataset.dataset_id)}",
         "",
-        "> **SYNTHETIC PROVIDER-FREE EVIDENCE ONLY.** This report is not provider "
-        "quality/cost evidence, does not satisfy P4.5 acceptance, cannot enable a "
-        "public capability, and is intentionally excluded from the retrieval "
-        "leaderboard.",
+        evidence_banner,
         "",
-        f"- Evidence status: `{CAPABILITY_EVIDENCE_STATUS}`",
+        f"- Evidence status: `{run.evidence_status}`",
         f"- Run ID: `{run.run_id}`",
         f"- Task-set checksum: `{run.dataset.checksum}`",
         f"- Label status: `{run.dataset.label_status}`",
@@ -2006,20 +2849,23 @@ def render_capability_report(run: CapabilityRun) -> str:
         f"- Executor: `{_markdown(run.executor.executor_id)}`",
         f"- Execution ID: `{run.executor.execution_id}`",
         f"- Model: `{_markdown(run.executor.model_id)}`",
+        f"- Provider contract: `{_markdown(run.executor.provider_contract)}`",
         f"- Random seed: `{run.executor.random_seed}`",
         f"- Maximum zero-spend attempts: `{run.executor.max_attempts}`",
         f"- Cache mode: `{run.executor.cache_mode}`",
-        f"- Explicit experiment cost ceiling: "
-        f"`{_usd(run.executor.max_experiment_cost_usd_micros)}`",
-        f"- Conservative worst-case cost: "
-        f"`{_usd(_worst_case_experiment_cost(run.executor, policy=run.budget_policy, task_count=len(run.dataset.tasks)))}`",
+        f"- Cost scope: `{CAPABILITY_GENERATION_COST_SCOPE}`",
+        f"- Explicit generation-token cost ceiling: "
+        f"`{_usd(run.executor.max_generation_cost_usd_micros)}`",
+        f"- Conservative worst-case generation-token cost: "
+        f"`{_usd(_worst_case_generation_cost(run.executor, policy=run.budget_policy, task_count=len(run.dataset.tasks)))}`",
+        excluded_billing_line,
         f"- Shared budget policy: `{_markdown(run.budget_policy.policy_id)}`",
         "",
         "## Arm summary",
         "",
         "| Arm | QuickJS | Subagents | Task success | Citation correctness | "
         "Mean latency | Model/tool/task calls | Tokens (in/out/read/write/total) | "
-        "Estimated cost |",
+        "Estimated generation-token cost |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm in run.arms:
@@ -2037,7 +2883,7 @@ def render_capability_report(run: CapabilityRun) -> str:
             f"{metrics.input_tokens}/{metrics.output_tokens}/"
             f"{metrics.cache_read_input_tokens}/"
             f"{metrics.cache_write_input_tokens}/{metrics.total_tokens} | "
-            f"{_usd(metrics.estimated_cost_usd_micros)} |"
+            f"{_usd(metrics.estimated_generation_cost_usd_micros)} |"
         )
 
     lines.extend(["", "## Per-task observations", ""])
@@ -2047,8 +2893,10 @@ def render_capability_report(run: CapabilityRun) -> str:
                 f"### `{arm.arm.arm_id}`",
                 "",
                 "| Task | Status | Success | Citations | Latency | "
-                "Model/tool/QuickJS/task | Tokens (in/out/read/write/total) | Cost |",
-                "|---|---|---:|---:|---:|---:|---:|---:|",
+                "Model/tool/QuickJS/task/delegated | Delegated subagent types | "
+                "Root tool trace | Tokens (in/out/read/write/total) | "
+                "Generation-token cost |",
+                "|---|---|---:|---:|---:|---:|---|---|---:|---:|",
             ]
         )
         for task in arm.tasks:
@@ -2058,19 +2906,22 @@ def render_capability_report(run: CapabilityRun) -> str:
                 f"{'correct' if task.citation_correct else 'incorrect'} | "
                 f"{task.latency_ms} ms | "
                 f"{task.budget.model_calls}/{task.budget.tool_calls}/"
-                f"{task.budget.quickjs_calls}/{task.budget.task_calls} | "
+                f"{task.budget.quickjs_calls}/{task.budget.task_calls}/"
+                f"{task.delegated_tool_calls} | "
+                f"{', '.join(task.delegated_subagent_types) or '—'} | "
+                f"{_root_tool_trace_summary(task.root_tool_trace)} | "
                 f"{task.input_tokens}/{task.output_tokens}/"
                 f"{task.cache_read_input_tokens}/"
                 f"{task.cache_write_input_tokens}/"
                 f"{task.budget.charged_tokens} | "
-                f"{_usd(task.estimated_cost_usd_micros)} |"
+                f"{_usd(task.estimated_generation_cost_usd_micros)} |"
             )
         lines.append("")
     lines.extend(
         [
             "Latency is monotonic elapsed time rounded to the nearest millisecond. "
             "Rates use integer parts-per-million; model cost is rounded up once per "
-            "task to the nearest micro-US-dollar from finalized Anthropic uncached "
+            "task to the nearest micro-US-dollar from finalized provider-native uncached "
             "input, output, cache-read input, and cache-write input buckets.",
             "",
             "The canonical source of record is `run.json`.",
@@ -2111,7 +2962,7 @@ def _artifact_payloads(run: CapabilityRun) -> tuple[dict[str, bytes], bytes, str
     result_digest = _result_digest(files)
     manifest = canonical_json_bytes(
         {
-            "evidence_status": CAPABILITY_EVIDENCE_STATUS,
+            "evidence_status": run.evidence_status,
             "files": files,
             "result_digest": result_digest,
             "schema": CAPABILITY_MANIFEST_SCHEMA,
@@ -2159,10 +3010,10 @@ def verify_capability_run_directory(
     )
     if manifest["schema"] != CAPABILITY_MANIFEST_SCHEMA:
         raise CapabilityEvaluationError("unsupported capability result manifest schema")
-    if manifest["evidence_status"] != CAPABILITY_EVIDENCE_STATUS:
-        raise CapabilityEvaluationError(
-            "capability result manifest cannot claim provider-backed evidence"
-        )
+    manifest_evidence_status = _evidence_status(
+        manifest["evidence_status"],
+        location="capability result manifest.evidence_status",
+    )
     raw_files = _array(
         manifest["files"],
         location="capability result manifest.files",
@@ -2217,6 +3068,10 @@ def verify_capability_run_directory(
     if run_payload != payloads["run.json"]:
         raise CapabilityEvaluationError("capability run changed during verification")
     run = parse_capability_run(run_value, dataset=dataset)
+    if run.evidence_status != manifest_evidence_status:
+        raise CapabilityEvaluationError(
+            "capability result manifest evidence differs from the run"
+        )
     regenerated, _, regenerated_digest = _artifact_payloads(run)
     if regenerated_digest != expected_digest:
         raise CapabilityEvaluationError(
@@ -2357,12 +3212,17 @@ def write_capability_artifacts(
 
 __all__ = [
     "CAPABILITY_ARMS",
+    "CAPABILITY_EVAL_SUBAGENT_NAMES",
+    "CAPABILITY_EVIDENCE_STATUS",
+    "CAPABILITY_GENERATION_COST_SCOPE",
+    "CAPABILITY_PROVIDER_EVIDENCE_STATUS",
     "CAPABILITY_RUNNER_ID",
     "CAPABILITY_RUN_SCHEMA",
     "CAPABILITY_TASKSET_SCHEMA",
     "CapabilityArm",
     "CapabilityArtifacts",
     "CapabilityEvaluationError",
+    "CapabilityExecutorDiagnosticError",
     "CapabilityExecutionContext",
     "CapabilityExecutor",
     "CapabilityExecutorIdentity",
@@ -2370,12 +3230,16 @@ __all__ = [
     "CapabilityRun",
     "CapabilityTask",
     "CapabilityTaskSet",
+    "RootToolTraceEvent",
     "VerifiedCapabilityRun",
+    "activated_capabilities",
     "build_capability_graph",
     "load_capability_taskset",
     "parse_capability_run",
     "parse_capability_taskset",
+    "recorded_root_tool_trace",
     "render_capability_report",
+    "recorded_subagent_types",
     "run_capability_experiment",
     "verify_capability_run_directory",
     "write_capability_artifacts",

@@ -80,7 +80,7 @@ P6  Go public                        PUBLICATION GATE
 | P2 | Delivery code implemented: immutable image, Terraform, WIF, migration/grant jobs, release and rollback workflows | Apply and verify the exact dedicated GCP/Neon foundation, real Neon grants, secrets, preview revision, restart, and owner smoke |
 | P3 | Implemented: native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe wire projection, deterministic AP v2 integration, and Playwright browser evidence | Full deployed owner-authenticated Korean journey against real Cloud Run, Neon, and the provider |
 | P4 | Harness, first dense arm, and topic-review tooling implemented: the default provider-free sweep remains model-free; pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods; a versioned topic seed, deterministic blind pool, checksum seal, finalizer, and dataset-selectable publication gate are present | Owner completion/sealing of `topic-smoke-v1` qrels and a publication-qualified digest-pinned run |
-| P4.5 | Runtime and 2x2 harness implemented: bounded QuickJS and dynamic subagents share `RunBudget` and execute all four deterministic arms | A separately reviewed real-provider adapter and quality/cost result; synthetic evidence cannot enable either capability for guests |
+| P4.5 | Runtime, 2x2 harness, and manual Luna adapter implemented: bounded QuickJS and dynamic subagents share `RunBudget`, and the provider-free fixture executes all four deterministic arms | A complete retained v5 provider-backed quality/cost artifact plus owner/publication review; synthetic evidence and failed local attempts cannot enable either capability for guests |
 | P5 | Repository controls implemented: anonymous JWT/cookie, Turnstile bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secrets, and approved non-zero budget |
 | P6 | Disabled by design: all repository public flags and guest budget/model environment values remain fail-closed | Public-launch PR and live acceptance. The only accepted guest contract is `openai:gpt-5.6-luna`, which has no API Free tier, so a zero-spend requirement blocks launch |
 
@@ -871,12 +871,31 @@ capabilities, while anonymous access remains off until P5 budgets and P6 abuse t
 This run-local finalization evidence does not replace P5's lower guest policy,
 per-identity/global daily dollar ledger, rate limit, or provider-side spend cap.
 
-**Implemented evidence (2026-07-31):** the owner graph can exercise native bounded
-QuickJS and native Deep Agents `task`; the exact off/on x off/on experiment compiles the
-production graph in all four arms with fresh identities and one shared finalized budget.
-Its evidence tier remains `synthetic-provider-free`. There is deliberately no paid
-provider adapter, CLI, credential path, or quality/cost conclusion, and guests remain
-server-side denied both capabilities.
+**Implemented evidence (2026-08-01):** the owner graph exercises native bounded QuickJS
+and native Deep Agents `task`; the exact off/on x off/on experiment compiles the
+production graph in all four arms with fresh identities, empty per-attempt persistence,
+and one shared finalized budget. The provider-free fixture remains
+`synthetic-provider-free`. A separate manual adapter now fixes OpenAI Responses
+`gpt-5.6-luna`, exact SDK/pricing identity, provider-native input counting and usage
+settlement, a required paid-run acknowledgement, and an explicit worst-case
+generation-token cost cap. The paid path now binds the published-index manifest tree to
+the task set, compiles and advertises only `evidence-checker` in the native task surface,
+requires and records exactly one delegation for each subagent-required cell, and records
+`/responses/input_tokens` as structured billing excluded from the generation-only
+ceiling. Run schema v5 additionally records matching root call/`ToolMessage` completion
+boundaries, requires exactly one QuickJS call only for required cells, proves the
+combined `eval completion → later task call` chronology, and reconciles the root-tool
+trace exactly while reporting generic compiled-child calls separately from root
+QuickJS/task calls. An earlier schema-v4 local diagnostic completed all 16 cells, but it
+does not satisfy the superseding v5 evidence contract. Two bounded v5 attempts reached
+the combined cell and then failed closed; neither produced an artifact. The first exposed
+the child-tool accounting distinction now encoded by `delegated_tool_calls`, while the
+second ended before a complete combined observation. No v5 quality, result, or exact cost
+is claimed, and another paid attempt requires separate explicit owner acceptance.
+Official input-token-count request pricing is undocumented and requires a separate
+acknowledgement. Any complete future output is
+deliberately `provider-backed-local-unattested`, is not a signed publication or
+public-launch gate, and guests remain server-side denied both capabilities.
 
 ---
 

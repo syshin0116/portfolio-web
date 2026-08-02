@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+import traceback
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
@@ -18,20 +19,32 @@ from agent.capabilities.budget import (
     RunBudgetPolicy,
 )
 from agent.capabilities.quickjs import QUICKJS_TOOL_NAME, BoundedQuickJSMiddleware
+from agent.capabilities.token_counting import InputTokenCountError
 from agent.retrieval.protocol import DocId
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
+from openai import OpenAIError
 from pydantic import Field
 
+import blogeval.capability_openai as capability_openai
 import blogeval.capability_runner as capability_runner
 from blogeval.capability_runner import (
     CAPABILITY_ARMS,
+    CAPABILITY_PROVIDER_EVIDENCE_STATUS,
+    OPENAI_CAPABILITY_CACHE_MODE,
+    OPENAI_CAPABILITY_EXECUTOR_ID,
+    OPENAI_CAPABILITY_MAX_ATTEMPTS,
+    OPENAI_CAPABILITY_MODEL_ID,
+    OPENAI_CAPABILITY_PRICING,
+    OPENAI_CAPABILITY_PROVIDER_CONTRACT,
     CapabilityEvaluationError,
+    CapabilityExecutorDiagnosticError,
     CapabilityExecutorIdentity,
     CapabilityObservation,
+    activated_capabilities,
     build_capability_graph,
     load_capability_taskset,
     parse_capability_run,
@@ -64,25 +77,35 @@ FIXED_IDENTITY = CapabilityExecutorIdentity(
     execution_id="123e4567-e89b-42d3-a456-426614174000",
     content_tree_sha=CONTENT_TREE_SHA,
     model_id="fixture:structured-agent-v1",
+    provider_contract="synthetic:provider-free",
     random_seed=20260728,
     max_attempts=2,
     cache_mode="anthropic-ephemeral-5m-recorded",
-    max_experiment_cost_usd_micros=500_000,
+    max_generation_cost_usd_micros=500_000,
     uncached_input_usd_micros_per_million_tokens=3_000_000,
     output_usd_micros_per_million_tokens=15_000_000,
     cache_read_input_usd_micros_per_million_tokens=300_000,
     cache_write_input_usd_micros_per_million_tokens=3_750_000,
 )
+PROVIDER_IDENTITY = replace(
+    FIXED_IDENTITY,
+    executor_id=OPENAI_CAPABILITY_EXECUTOR_ID,
+    model_id=OPENAI_CAPABILITY_MODEL_ID,
+    provider_contract=OPENAI_CAPABILITY_PROVIDER_CONTRACT,
+    max_attempts=OPENAI_CAPABILITY_MAX_ATTEMPTS,
+    cache_mode=OPENAI_CAPABILITY_CACHE_MODE,
+    **OPENAI_CAPABILITY_PRICING,
+)
 FIXED_POLICY = RunBudgetPolicy(
     policy_id="capability-fixture-v1",
-    max_model_calls=4,
+    max_model_calls=5,
     max_tool_calls=8,
     max_quickjs_calls=2,
     max_quickjs_in_flight=1,
     max_quickjs_output_bytes=512,
     max_quickjs_total_output_bytes=1_024,
-    max_task_calls=2,
-    max_tasks_in_flight=2,
+    max_task_calls=1,
+    max_tasks_in_flight=1,
     max_depth=1,
     max_output_tokens=128,
     max_total_tokens=2_048,
@@ -186,8 +209,14 @@ def _responses_for(context) -> list[AIMessage]:
         "combined-metric-evidence",
         "subagent-evidence-verification",
     }
+    unavailable = (
+        needs_quickjs
+        and not context.arm.quickjs_enabled
+        or needs_subagent
+        and not context.arm.subagents_enabled
+    )
     responses: list[AIMessage] = []
-    if needs_quickjs and context.arm.quickjs_enabled:
+    if not unavailable and needs_quickjs and context.arm.quickjs_enabled:
         responses.append(
             _model_message(
                 "",
@@ -205,7 +234,7 @@ def _responses_for(context) -> list[AIMessage]:
                 ],
             )
         )
-    if needs_subagent and context.arm.subagents_enabled:
+    if not unavailable and needs_subagent and context.arm.subagents_enabled:
         responses.extend(
             [
                 _model_message(
@@ -222,15 +251,20 @@ def _responses_for(context) -> list[AIMessage]:
                         }
                     ],
                 ),
+                _model_message(
+                    "",
+                    tool_calls=[
+                        {
+                            "args": {},
+                            "id": f"{context.attempt_id}-child-skill",
+                            "name": "read_blog_retrieval_skill",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
                 _model_message('{"supported":true}'),
             ]
         )
-    unavailable = (
-        needs_quickjs
-        and not context.arm.quickjs_enabled
-        or needs_subagent
-        and not context.arm.subagents_enabled
-    )
     responses.append(_model_message(_final_payload(context, unavailable=unavailable)))
     return responses
 
@@ -238,8 +272,17 @@ def _responses_for(context) -> list[AIMessage]:
 class RecordingFakeModel(FakeMessagesListChatModel):
     """Provider-free model with exact normalized Anthropic usage metadata."""
 
+    model_name: str = "claude-sonnet-4-6"
     bound_tool_names: list[frozenset[str]] = Field(default_factory=list)
     invoked_messages: list[list[object]] = Field(default_factory=list)
+
+    def _get_ls_params(self, stop=None, **kwargs):
+        del stop, kwargs
+        return {
+            "ls_model_type": "chat",
+            "ls_model_name": self.model_name,
+            "ls_provider": "anthropic",
+        }
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         del tool_choice, kwargs
@@ -303,7 +346,8 @@ class DeterministicCapabilityExecutor:
             and store.list_namespaces() == []
         )
         model = RecordingFakeModel(responses=_responses_for(context))
-        quickjs = BoundedQuickJSMiddleware(enabled=context.arm.quickjs_enabled)
+        quickjs_active, _subagents_active = activated_capabilities(context)
+        quickjs = BoundedQuickJSMiddleware(enabled=quickjs_active)
         try:
             compiled = build_capability_graph(
                 context,
@@ -359,6 +403,12 @@ class DeterministicCapabilityExecutor:
             citations=tuple(DocId(value) for value in final["citations"]),
             persistence_empty=persistence_empty,
             cache_mode=FIXED_IDENTITY.cache_mode,
+            delegated_subagent_types=capability_runner.recorded_subagent_types(
+                result["messages"]
+            ),
+            root_tool_trace=capability_runner.recorded_root_tool_trace(
+                result["messages"]
+            ),
             failure_code=final["failure_code"],
         )
 
@@ -412,10 +462,33 @@ def _budget_factory(policy: RunBudgetPolicy) -> RunBudget:
     return RunBudget(policy, clock=lambda: 0.0)
 
 
+def _exception_graph_text(error: BaseException) -> str:
+    pending = [error]
+    seen: set[int] = set()
+    rendered: list[str] = []
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        rendered.append(f"{type(current).__name__}:{current}")
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return "\n".join(rendered)
+
+
 GRAPH_EXECUTOR = DeterministicCapabilityExecutor()
 
 
-def _run_dataset(dataset, *, executor=GRAPH_EXECUTOR, identity=FIXED_IDENTITY):
+def _run_dataset(
+    dataset,
+    *,
+    executor=GRAPH_EXECUTOR,
+    identity=FIXED_IDENTITY,
+    evidence_status="synthetic-provider-free",
+):
     return asyncio.run(
         run_capability_experiment(
             dataset=dataset,
@@ -423,6 +496,7 @@ def _run_dataset(dataset, *, executor=GRAPH_EXECUTOR, identity=FIXED_IDENTITY):
             executor_identity=identity,
             budget_policy=FIXED_POLICY,
             workspace_root=REPO_ROOT,
+            evidence_status=evidence_status,
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
             budget_factory=_budget_factory,
@@ -466,6 +540,125 @@ def _tree_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _recorded_task(value, *, arm_id: str, task_id: str):
+    return next(
+        task
+        for arm in value["arms"]
+        if arm["arm"]["arm_id"] == arm_id
+        for task in arm["tasks"]
+        if task["task_id"] == task_id
+    )
+
+
+def test_recorded_root_tool_trace_uses_actual_langchain_completion_boundaries() -> None:
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "args": {"code": "JSON.stringify([1,2])"},
+                    "id": "quickjs-call",
+                    "name": QUICKJS_TOOL_NAME,
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"status":"ok"}',
+            name=QUICKJS_TOOL_NAME,
+            tool_call_id="quickjs-call",
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "args": {
+                        "description": _TASK_DESCRIPTION,
+                        "subagent_type": "evidence-checker",
+                    },
+                    "id": "task-call",
+                    "name": "task",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        ToolMessage(
+            content='{"supported":true}',
+            name="task",
+            tool_call_id="task-call",
+        ),
+    ]
+
+    trace = capability_runner.recorded_root_tool_trace(messages)
+
+    assert [event.as_dict() for event in trace] == [
+        {
+            "message_index": 0,
+            "phase": "call",
+            "tool_call_id": "quickjs-call",
+            "tool_name": "eval",
+        },
+        {
+            "message_index": 1,
+            "phase": "completion",
+            "tool_call_id": "quickjs-call",
+            "tool_name": "eval",
+        },
+        {
+            "message_index": 2,
+            "phase": "call",
+            "tool_call_id": "task-call",
+            "tool_name": "task",
+        },
+        {
+            "message_index": 3,
+            "phase": "completion",
+            "tool_call_id": "task-call",
+            "tool_name": "task",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "completion",
+    [
+        None,
+        ToolMessage(
+            content="{}",
+            name=QUICKJS_TOOL_NAME,
+            tool_call_id="wrong-call-id",
+        ),
+        ToolMessage(
+            content="{}",
+            name="task",
+            tool_call_id="quickjs-call",
+        ),
+    ],
+    ids=["missing-completion", "call-id-mismatch", "tool-name-mismatch"],
+)
+def test_recorded_root_tool_trace_rejects_missing_or_mismatched_completion(
+    completion: ToolMessage | None,
+) -> None:
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "args": {"code": "JSON.stringify([1,2])"},
+                    "id": "quickjs-call",
+                    "name": QUICKJS_TOOL_NAME,
+                    "type": "tool_call",
+                }
+            ],
+        )
+    ]
+    if completion is not None:
+        messages.append(completion)
+
+    with pytest.raises(CapabilityEvaluationError, match="root call|ToolMessage"):
+        capability_runner.recorded_root_tool_trace(messages)
+
+
 def test_capability_taskset_is_canonical_and_content_tree_bound() -> None:
     dataset = load_capability_taskset(
         TASKSET_PATH,
@@ -482,7 +675,7 @@ def test_capability_taskset_is_canonical_and_content_tree_bound() -> None:
     ]
     assert (
         dataset.checksum
-        == "sha256:b1a42c620c099390eeada6069814b83885f4d5aac54425421cd15502aee1f348"
+        == "sha256:389f59fc8e1eab8931d529844f9f0993df397d51a75a03256bec83d552c55cd1"
     )
     with pytest.raises(CapabilityEvaluationError, match="content tree"):
         load_capability_taskset(TASKSET_PATH, content_tree_sha="f" * 40)
@@ -640,7 +833,7 @@ def test_factorial_runner_executes_all_distinct_arms_with_shared_budgets() -> No
         + combined.cache_read_input_tokens
         + combined.cache_write_input_tokens
     )
-    assert combined.estimated_cost_usd_micros > 0
+    assert combined.estimated_generation_cost_usd_micros > 0
     assert all(
         task.budget.finalized is True
         and task.budget.provider_usage_complete is True
@@ -681,15 +874,28 @@ def test_provider_free_graph_exercises_real_four_arm_topology_with_isolation() -
     assert all(record["content_tree_sha"] == CONTENT_TREE_SHA for record in records)
 
     quickjs_only = [
-        record for record in records if record["arm_id"] == "quickjs-on_subagents-off"
+        record
+        for record in records
+        if record["arm_id"] == "quickjs-on_subagents-off"
+        and record["task_id"] == "quickjs-ranked-list-overlap"
     ]
     assert quickjs_only
     assert all(
         all(
-            QUICKJS_TOOL_NAME in surface and "task" not in surface
+            surface == frozenset({QUICKJS_TOOL_NAME})
             for surface in record["bound_tool_names"]
         )
         for record in quickjs_only
+    )
+
+    baseline_combined_arm = next(
+        record
+        for record in records
+        if record["arm_id"] == "quickjs-on_subagents-on"
+        and record["task_id"] == "baseline-citation-shape"
+    )
+    assert all(
+        surface == frozenset() for surface in baseline_combined_arm["bound_tool_names"]
     )
 
     combined = next(
@@ -702,7 +908,7 @@ def test_provider_free_graph_exercises_real_four_arm_topology_with_isolation() -
         {"keyword_search", "read_blog_retrieval_skill", "read_post"}
     )
     assert any(
-        QUICKJS_TOOL_NAME in surface and "task" in surface
+        surface == frozenset({QUICKJS_TOOL_NAME, "task"})
         for surface in combined["bound_tool_names"]
     )
     assert child_surface in combined["bound_tool_names"]
@@ -729,11 +935,40 @@ def test_provider_free_graph_exercises_real_four_arm_topology_with_isolation() -
         ].budget.quickjs_calls
         > 0
     )
+    quickjs_only_result = by_task_and_arm[
+        ("quickjs-on_subagents-off", "quickjs-ranked-list-overlap")
+    ]
+    assert [
+        (event.message_index, event.phase, event.tool_name)
+        for event in quickjs_only_result.root_tool_trace
+    ] == [(1, "call", "eval"), (2, "completion", "eval")]
     combined_result = by_task_and_arm[
         ("quickjs-on_subagents-on", "combined-metric-evidence")
     ]
     assert combined_result.budget.quickjs_calls > 0
-    assert combined_result.budget.task_calls > 0
+    assert combined_result.budget.task_calls == 1
+    assert combined_result.delegated_tool_calls == 1
+    assert combined_result.budget.tool_calls == (
+        combined_result.budget.quickjs_calls
+        + combined_result.budget.task_calls
+        + combined_result.delegated_tool_calls
+    )
+    assert combined_result.delegated_subagent_types == ("evidence-checker",)
+    assert [
+        (event.message_index, event.phase, event.tool_name)
+        for event in combined_result.root_tool_trace
+    ] == [
+        (1, "call", "eval"),
+        (2, "completion", "eval"),
+        (3, "call", "task"),
+        (4, "completion", "task"),
+    ]
+    assert all(
+        task.root_tool_trace == ()
+        for arm in run.arms
+        for task in arm.tasks
+        if task.task_id == "baseline-citation-shape"
+    )
     assert all(task.attempt_number == 1 for arm in run.arms for task in arm.tasks)
 
 
@@ -774,25 +1009,57 @@ def test_capability_artifacts_are_byte_stable_and_not_a_retrieval_leaderboard(
     assert verified.run == first_run
 
 
-def test_capability_artifacts_reject_provider_backed_evidence_claims(
+def test_capability_artifact_verifier_rejects_manifest_consistent_trace_forgery(
+    tmp_path: Path,
+) -> None:
+    run = _run()
+    artifacts = write_capability_artifacts(run, output_root=tmp_path)
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    task["root_tool_trace"][0]["tool_name"] = "write_file"
+    task["root_tool_trace"][1]["tool_name"] = "write_file"
+    run_payload = canonical_json_bytes(value)
+    artifacts.run_json.write_bytes(run_payload)
+
+    manifest = json.loads(artifacts.result_manifest.read_bytes())
+    run_record = next(
+        record for record in manifest["files"] if record["path"] == "run.json"
+    )
+    run_record["bytes"] = len(run_payload)
+    run_record["sha256"] = json_checksum(run_payload)
+    manifest["result_digest"] = capability_runner._result_digest(manifest["files"])
+    artifacts.result_manifest.write_bytes(canonical_json_bytes(manifest))
+
+    with pytest.raises(CapabilityEvaluationError, match="non-allowlisted"):
+        verify_capability_run_directory(
+            artifacts.directory,
+            dataset=run.dataset,
+        )
+
+
+def test_synthetic_capability_artifacts_cannot_be_relabelled_as_provider_backed(
     tmp_path: Path,
 ) -> None:
     run = _run()
     value = copy.deepcopy(run.as_dict())
-    value["evidence_status"] = "provider-backed"
+    value["evidence_status"] = CAPABILITY_PROVIDER_EVIDENCE_STATUS
     with pytest.raises(
         CapabilityEvaluationError,
-        match="cannot claim provider-backed evidence",
+        match="local provider evidence requires the exact reviewed OpenAI identity",
     ):
         parse_capability_run(value, dataset=run.dataset)
 
     artifacts = write_capability_artifacts(run, output_root=tmp_path)
     manifest = json.loads(artifacts.result_manifest.read_bytes())
-    manifest["evidence_status"] = "provider-backed"
+    manifest["evidence_status"] = CAPABILITY_PROVIDER_EVIDENCE_STATUS
     artifacts.result_manifest.write_bytes(canonical_json_bytes(manifest))
     with pytest.raises(
         CapabilityEvaluationError,
-        match="cannot claim provider-backed evidence",
+        match="manifest evidence differs from the run",
     ):
         verify_capability_run_directory(
             artifacts.directory,
@@ -800,7 +1067,163 @@ def test_capability_artifacts_reject_provider_backed_evidence_claims(
         )
 
 
-def test_capability_foundation_exposes_no_provider_or_capability_cli() -> None:
+def test_local_provider_evidence_has_a_distinct_unattested_report_tier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProviderCacheExecutor(DeterministicCapabilityExecutor):
+        async def execute(self, context):
+            observation = await super().execute(context)
+            return replace(observation, cache_mode=OPENAI_CAPABILITY_CACHE_MODE)
+
+    monkeypatch.setattr(
+        capability_runner,
+        "_reviewed_provider_executor_type",
+        lambda: ProviderCacheExecutor,
+    )
+    dataset = load_capability_taskset(TASKSET_PATH)
+    run = _run_dataset(
+        dataset,
+        executor=ProviderCacheExecutor(),
+        identity=PROVIDER_IDENTITY,
+        evidence_status=CAPABILITY_PROVIDER_EVIDENCE_STATUS,
+    )
+    artifacts = write_capability_artifacts(run, output_root=tmp_path)
+    report = artifacts.report_markdown.read_text(encoding="utf-8")
+    run_value = run.as_dict()
+    assert run_value["cost_accounting"] == {
+        "excluded_request_billing": [
+            {
+                "billing_status": "provider-pricing-undocumented",
+                "endpoint": "/responses/input_tokens",
+                "included_in_generation_cost_ceiling": False,
+                "maximum_request_count": (
+                    FIXED_POLICY.max_model_calls
+                    * PROVIDER_IDENTITY.max_attempts
+                    * len(dataset.tasks)
+                    * len(CAPABILITY_ARMS)
+                ),
+            }
+        ],
+        "generation_cost_ceiling_usd_micros": (
+            PROVIDER_IDENTITY.max_generation_cost_usd_micros
+        ),
+        "scope": "generation-token-usage-only",
+    }
+    assert "PROVIDER-BACKED LOCAL EVIDENCE; UNATTESTED" in report
+    assert CAPABILITY_PROVIDER_EVIDENCE_STATUS in report
+    assert "cannot enable a public capability" in report
+    assert "Explicit experiment cost ceiling" not in report
+    assert "Explicit generation-token cost ceiling" in report
+    assert "/responses/input_tokens" in report
+    assert "outside the generation-token ceiling" in report
+    assert (
+        verify_capability_run_directory(
+            artifacts.directory,
+            dataset=dataset,
+        ).run
+        == run
+    )
+
+
+def test_synthetic_executor_cannot_claim_the_exact_live_provider_identity() -> None:
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="requires the exact reviewed executor implementation",
+    ):
+        _run_dataset(
+            _task_subset("baseline-citation-shape"),
+            identity=PROVIDER_IDENTITY,
+            evidence_status=CAPABILITY_PROVIDER_EVIDENCE_STATUS,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda accounting: accounting.__setitem__("scope", "provider-wide"),
+        lambda accounting: accounting["excluded_request_billing"].clear(),
+        lambda accounting: accounting["excluded_request_billing"][0].__setitem__(
+            "endpoint",
+            "/responses/forged-count",
+        ),
+        lambda accounting: accounting["excluded_request_billing"][0].__setitem__(
+            "included_in_generation_cost_ceiling",
+            True,
+        ),
+        lambda accounting: accounting["excluded_request_billing"][0].__setitem__(
+            "maximum_request_count",
+            65,
+        ),
+    ],
+    ids=[
+        "scope",
+        "missing-exclusion",
+        "endpoint",
+        "included-flag",
+        "request-bound",
+    ],
+)
+def test_provider_cost_accounting_mutations_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    mutate,
+) -> None:
+    class ProviderCacheExecutor(DeterministicCapabilityExecutor):
+        async def execute(self, context):
+            observation = await super().execute(context)
+            return replace(observation, cache_mode=OPENAI_CAPABILITY_CACHE_MODE)
+
+    monkeypatch.setattr(
+        capability_runner,
+        "_reviewed_provider_executor_type",
+        lambda: ProviderCacheExecutor,
+    )
+    dataset = load_capability_taskset(TASKSET_PATH)
+    run = _run_dataset(
+        dataset,
+        executor=ProviderCacheExecutor(),
+        identity=PROVIDER_IDENTITY,
+        evidence_status=CAPABILITY_PROVIDER_EVIDENCE_STATUS,
+    )
+    value = copy.deepcopy(run.as_dict())
+    mutate(value["cost_accounting"])
+
+    with pytest.raises(CapabilityEvaluationError, match="scoped contract"):
+        parse_capability_run(value, dataset=dataset)
+
+
+@pytest.mark.parametrize(
+    ("field", "forged_value"),
+    (
+        ("executor_id", "tests:forged-openai-executor@1"),
+        ("model_id", "openai:gpt-5.6-luna-forged"),
+        ("provider_contract", "openai-responses:forged-provider-free-executor"),
+        ("max_attempts", 2),
+        ("cache_mode", "disabled"),
+        ("uncached_input_usd_micros_per_million_tokens", 1),
+        ("cache_read_input_usd_micros_per_million_tokens", 1),
+        ("cache_write_input_usd_micros_per_million_tokens", 1),
+        ("output_usd_micros_per_million_tokens", 1),
+    ),
+)
+def test_local_provider_evidence_rejects_forged_identity_fields(
+    field: str,
+    forged_value: object,
+) -> None:
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="local provider evidence requires the exact reviewed OpenAI identity",
+    ):
+        _run_dataset(
+            _task_subset("baseline-citation-shape"),
+            identity=replace(PROVIDER_IDENTITY, **{field: forged_value}),
+            evidence_status=CAPABILITY_PROVIDER_EVIDENCE_STATUS,
+        )
+
+
+def test_capability_runner_stays_provider_independent_and_paid_cli_stays_local() -> (
+    None
+):
     runner_path = REPO_ROOT / "eval" / "src" / "blogeval" / "capability_runner.py"
     cli_path = REPO_ROOT / "eval" / "src" / "blogeval" / "cli.py"
 
@@ -817,13 +1240,13 @@ def test_capability_foundation_exposes_no_provider_or_capability_cli() -> None:
     assert imported_modules(runner_path).isdisjoint(
         {"anthropic", "langchain_anthropic"}
     )
-    assert "blogeval.capability_runner" not in imported_modules(cli_path)
+    assert "blogeval.capability_openai" in imported_modules(cli_path)
     workflow_source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
     )
     assert "capability-sweep" not in workflow_source
-    assert "blogeval.capability_runner" not in workflow_source
+    assert "capability-openai" not in workflow_source
 
 
 def test_capability_verifier_rejects_partial_result_directory(
@@ -894,6 +1317,237 @@ def test_recorded_run_fails_closed_on_incomplete_or_forged_arm_data(
 
 
 @pytest.mark.parametrize(
+    ("delegated_subagent_types", "message"),
+    [
+        (["general-purpose"], "evidence-checker delegation differs"),
+        ([], "recorded subagent types differ"),
+        (
+            ["evidence-checker", "evidence-checker"],
+            "recorded subagent types differ",
+        ),
+    ],
+    ids=["wrong-specialist", "missing-record", "duplicate-delegation"],
+)
+def test_recorded_subagent_type_mutations_fail_closed(
+    delegated_subagent_types: list[str],
+    message: str,
+) -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task_record = next(
+        task
+        for arm in value["arms"]
+        if arm["arm"]["arm_id"] == "quickjs-on_subagents-on"
+        for task in arm["tasks"]
+        if task["task_id"] == "combined-metric-evidence"
+    )
+    task_record["delegated_subagent_types"] = delegated_subagent_types
+
+    with pytest.raises(CapabilityEvaluationError, match=message):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_two_quickjs_calls_for_one_required_task() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    trace = task["root_tool_trace"]
+    duplicate_pair = copy.deepcopy(trace[:2])
+    for event in duplicate_pair:
+        event["tool_call_id"] += "-duplicate"
+    task["root_tool_trace"] = [*trace[:2], *duplicate_pair, *trace[2:]]
+    for message_index, event in enumerate(task["root_tool_trace"], start=1):
+        event["message_index"] = message_index
+    task["budget"]["quickjs_calls"] = 2
+    task["budget"]["tool_calls"] = 3
+
+    with pytest.raises(CapabilityEvaluationError, match="QuickJS activity"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_task_before_quickjs_chronology() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    trace = task["root_tool_trace"]
+    task["root_tool_trace"] = [trace[2], trace[3], trace[0], trace[1]]
+    for message_index, event in enumerate(task["root_tool_trace"], start=1):
+        event["message_index"] = message_index
+
+    with pytest.raises(CapabilityEvaluationError, match="exact capability chronology"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_parallel_quickjs_and_task_in_one_ai_message() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    trace = task["root_tool_trace"]
+    task["root_tool_trace"] = [trace[0], trace[2], trace[1], trace[3]]
+    for event, message_index in zip(
+        task["root_tool_trace"],
+        (1, 1, 2, 3),
+        strict=True,
+    ):
+        event["message_index"] = message_index
+
+    with pytest.raises(CapabilityEvaluationError, match="exact capability chronology"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_required_quickjs_without_completion() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    task["root_tool_trace"].pop(1)
+
+    with pytest.raises(CapabilityEvaluationError, match="without a ToolMessage"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_quickjs_for_a_nonrequired_task() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="baseline-citation-shape",
+    )
+    task["root_tool_trace"] = [
+        {
+            "message_index": 1,
+            "phase": "call",
+            "tool_call_id": "forged-quickjs-call",
+            "tool_name": "eval",
+        },
+        {
+            "message_index": 2,
+            "phase": "completion",
+            "tool_call_id": "forged-quickjs-call",
+            "tool_name": "eval",
+        },
+    ]
+    task["budget"]["quickjs_calls"] = 1
+    task["budget"]["tool_calls"] = 1
+
+    with pytest.raises(CapabilityEvaluationError, match="QuickJS activity"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_allowlist_external_root_call_trace() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    task["root_tool_trace"][0]["tool_name"] = "write_file"
+    task["root_tool_trace"][1]["tool_name"] = "write_file"
+
+    with pytest.raises(CapabilityEvaluationError, match="non-allowlisted"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_root_tool_trace_shape_forgery() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    task["root_tool_trace"][0]["forged"] = True
+
+    with pytest.raises(CapabilityEvaluationError, match="unexpected object shape"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_tool_call_ledger_sum_mismatch() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    task["budget"]["tool_calls"] = 1
+
+    with pytest.raises(CapabilityEvaluationError, match="undercounts"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_forged_delegated_tool_count() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    task["delegated_tool_calls"] += 1
+
+    with pytest.raises(CapabilityEvaluationError, match="derived scoring"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_subagent_without_child_tool_activity() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-on_subagents-on",
+        task_id="combined-metric-evidence",
+    )
+    task["budget"]["tool_calls"] = 2
+    task["delegated_tool_calls"] = 0
+    next(
+        arm
+        for arm in value["arms"]
+        if arm["arm"]["arm_id"] == "quickjs-on_subagents-on"
+    )["metrics"]["tool_calls"] -= 1
+
+    with pytest.raises(CapabilityEvaluationError, match="without delegated child"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+def test_recorded_run_rejects_delegated_tool_count_without_task() -> None:
+    run = _run()
+    value = copy.deepcopy(run.as_dict())
+    task = _recorded_task(
+        value,
+        arm_id="quickjs-off_subagents-off",
+        task_id="baseline-citation-shape",
+    )
+    task["budget"]["tool_calls"] = 1
+    task["delegated_tool_calls"] = 1
+    next(
+        arm
+        for arm in value["arms"]
+        if arm["arm"]["arm_id"] == "quickjs-off_subagents-off"
+    )["metrics"]["tool_calls"] += 1
+
+    with pytest.raises(CapabilityEvaluationError, match="non-allowlisted root"):
+        parse_capability_run(value, dataset=run.dataset)
+
+
+@pytest.mark.parametrize(
     ("mutate", "message"),
     [
         (
@@ -916,10 +1570,10 @@ def test_recorded_run_fails_closed_on_incomplete_or_forged_arm_data(
         ),
         (
             lambda value: value["arms"][0]["tasks"][0].__setitem__(
-                "estimated_cost_usd_micros",
+                "estimated_generation_cost_usd_micros",
                 True,
             ),
-            "estimated_cost_usd_micros must be a non-negative integer",
+            "estimated_generation_cost_usd_micros must be a non-negative integer",
         ),
         (
             lambda value: value["arms"][0]["tasks"][0].__setitem__(
@@ -984,7 +1638,7 @@ def _mark_incomplete_provider_usage_without_redaction(value) -> None:
         ),
         (
             _redact_provider_usage,
-            "complete Anthropic provider usage buckets",
+            "complete provider-native usage buckets",
         ),
         (
             lambda value: value["arms"][0]["tasks"][0]["budget"].__setitem__(
@@ -1088,7 +1742,7 @@ def test_runner_aborts_when_executor_does_not_return_a_complete_observation() ->
 @pytest.mark.parametrize(
     "changes",
     [
-        {"max_experiment_cost_usd_micros": 25_000_001},
+        {"max_generation_cost_usd_micros": 25_000_001},
         {"uncached_input_usd_micros_per_million_tokens": 0},
         {"output_usd_micros_per_million_tokens": 0},
         {"cache_read_input_usd_micros_per_million_tokens": 0},
@@ -1115,9 +1769,9 @@ def test_executor_identity_rejects_unbounded_or_zero_pricing(
     ("identity", "policy", "message"),
     [
         (
-            replace(FIXED_IDENTITY, max_experiment_cost_usd_micros=1),
+            replace(FIXED_IDENTITY, max_generation_cost_usd_micros=1),
             FIXED_POLICY,
-            "worst-case capability experiment cost exceeds",
+            "worst-case generation-token cost exceeds",
         ),
         (
             FIXED_IDENTITY,
@@ -1278,7 +1932,7 @@ def test_runner_rejects_incomplete_provider_usage_without_executor_accounting() 
     dataset = load_capability_taskset(TASKSET_PATH)
     with pytest.raises(
         CapabilityEvaluationError,
-        match="incomplete Anthropic provider usage",
+        match="incomplete provider-native usage",
     ):
         asyncio.run(
             run_capability_experiment(
@@ -1455,6 +2109,112 @@ def test_spent_executor_failure_is_never_retried_or_omitted_from_cost() -> None:
     assert len(executor.attempt_ids) == 1
 
 
+def test_runner_reports_only_typed_executor_diagnostics_and_final_budget_counts() -> (
+    None
+):
+    class DiagnosticFailureExecutor:
+        async def execute(self, context):
+            await _record_provider_usage(context)
+            private = RuntimeError("private provider body and prompt")
+            diagnostic = CapabilityExecutorDiagnosticError(
+                phase="graph_invoke",
+                reason_code="provider",
+                root_tool_events=("call:other",),
+            )
+            raise diagnostic from private
+
+    with pytest.raises(CapabilityEvaluationError) as raised:
+        asyncio.run(
+            run_capability_experiment(
+                dataset=_task_subset("baseline-citation-shape"),
+                executor=DiagnosticFailureExecutor(),
+                executor_identity=FIXED_IDENTITY,
+                budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
+                provenance=FIXED_PROVENANCE,
+                clock_ns=DeterministicClock(),
+                budget_factory=_budget_factory,
+            )
+        )
+
+    message = str(raised.value)
+    assert "phase=graph_invoke" in message
+    assert "reason=provider" in message
+    assert "budget_counts=model:1,tool:0,quickjs:0,task:0" in message
+    assert "root_tool_events=call:other" in message
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert "private" not in _exception_graph_text(raised.value)
+    assert "private" not in "".join(traceback.format_exception(raised.value))
+
+
+@pytest.mark.parametrize(
+    ("failure_point", "expected_reason"),
+    [("input_count", "input_count"), ("provider", "provider")],
+)
+def test_runner_preserves_diagnostic_when_failed_provider_usage_is_incomplete(
+    failure_point: str,
+    expected_reason: str,
+) -> None:
+    class FailedProviderExecutor:
+        async def execute(self, context):
+            async def count_input(_request):
+                if failure_point == "input_count":
+                    raise InputTokenCountError("private serialized prompt")
+                return 3
+
+            middleware = RunBudgetMiddleware(
+                context.budget,
+                depth=0,
+                allow_subagents=False,
+                allowed_subagents=frozenset(),
+                input_token_counter=count_input,
+                model_provider="openai",
+                expected_response_models=frozenset({"gpt-5.6-luna"}),
+            )
+            request = ModelRequest(
+                model=FakeMessagesListChatModel(
+                    responses=[AIMessage(content="unused")]
+                ),
+                messages=[],
+                tools=[],
+            )
+
+            async def failed_provider(_request):
+                raise OpenAIError("private provider response body")
+
+            try:
+                await middleware.awrap_model_call(request, failed_provider)
+            except BaseException as error:
+                raise CapabilityExecutorDiagnosticError(
+                    phase="graph_invoke",
+                    reason_code=capability_openai._executor_reason_code(error),
+                ) from None
+
+    with pytest.raises(CapabilityEvaluationError) as raised:
+        asyncio.run(
+            run_capability_experiment(
+                dataset=_task_subset("baseline-citation-shape"),
+                executor=FailedProviderExecutor(),
+                executor_identity=FIXED_IDENTITY,
+                budget_policy=FIXED_POLICY,
+                workspace_root=REPO_ROOT,
+                provenance=FIXED_PROVENANCE,
+                clock_ns=DeterministicClock(),
+                budget_factory=_budget_factory,
+            )
+        )
+
+    rendered = "".join(traceback.format_exception(raised.value))
+    assert f"reason={expected_reason}" in rendered
+    assert "budget_counts=model:1,tool:0,quickjs:0,task:0" in rendered
+    assert "incomplete provider-native usage" not in rendered
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert "private" not in _exception_graph_text(raised.value)
+    assert "private" not in rendered
+
+
 @pytest.mark.parametrize(
     ("observation_changes", "message"),
     [
@@ -1497,7 +2257,7 @@ def test_cost_uses_all_four_provider_buckets_and_rounds_once() -> None:
         baseline.cache_read_input_tokens,
         baseline.cache_write_input_tokens,
     ) == (4, 2, 1, 1)
-    assert baseline.estimated_cost_usd_micros == 47
+    assert baseline.estimated_generation_cost_usd_micros == 47
     quarter_micro_identity = replace(
         FIXED_IDENTITY,
         uncached_input_usd_micros_per_million_tokens=250_000,
@@ -1506,7 +2266,7 @@ def test_cost_uses_all_four_provider_buckets_and_rounds_once() -> None:
         cache_write_input_usd_micros_per_million_tokens=250_000,
     )
     assert (
-        capability_runner._estimated_cost(
+        capability_runner._estimated_generation_cost(
             quarter_micro_identity,
             input_tokens=1,
             output_tokens=1,
@@ -1521,6 +2281,15 @@ def test_enabled_arm_without_capability_activity_is_rejected_as_incomplete() -> 
     class CapabilityIgnoringExecutor:
         async def execute(self, context):
             await _record_provider_usage(context)
+            if not context.arm.quickjs_enabled:
+                return CapabilityObservation(
+                    status="failed",
+                    answer=None,
+                    citations=(),
+                    persistence_empty=True,
+                    cache_mode=FIXED_IDENTITY.cache_mode,
+                    failure_code="capability_unavailable",
+                )
             return _observation(context)
 
     dataset = _task_subset("quickjs-ranked-list-overlap")
@@ -1539,6 +2308,104 @@ def test_enabled_arm_without_capability_activity_is_rejected_as_incomplete() -> 
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
             )
+        )
+
+
+def test_missing_peer_capability_allows_an_early_structured_unavailable_stop() -> None:
+    class EarlyUnavailableExecutor(DeterministicCapabilityExecutor):
+        async def execute(self, context):
+            if (
+                context.arm.arm_id == "quickjs-on_subagents-off"
+                and context.task.task_id == "combined-metric-evidence"
+            ):
+                await _record_provider_usage(context)
+                return CapabilityObservation(
+                    status="failed",
+                    answer=None,
+                    citations=(),
+                    persistence_empty=True,
+                    cache_mode=FIXED_IDENTITY.cache_mode,
+                    failure_code="capability_unavailable",
+                )
+            return await super().execute(context)
+
+    run = _run_dataset(
+        _task_subset("combined-metric-evidence"),
+        executor=EarlyUnavailableExecutor(),
+    )
+    partial = next(
+        arm for arm in run.arms if arm.arm.arm_id == "quickjs-on_subagents-off"
+    ).tasks[0]
+
+    assert partial.failure_code == "capability_unavailable"
+    assert partial.budget.quickjs_calls == 0
+
+
+def test_missing_capability_rejects_executor_error_as_availability_evidence() -> None:
+    class ExecutorErrorOnMissing(DeterministicCapabilityExecutor):
+        async def execute(self, context):
+            if (
+                context.arm.arm_id == "quickjs-off_subagents-off"
+                and context.task.task_id == "combined-metric-evidence"
+            ):
+                await _record_provider_usage(context)
+                return CapabilityObservation(
+                    status="failed",
+                    answer=None,
+                    citations=(),
+                    persistence_empty=True,
+                    cache_mode=FIXED_IDENTITY.cache_mode,
+                    failure_code="executor_error",
+                )
+            return await super().execute(context)
+
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="structured capability availability",
+    ):
+        _run_dataset(
+            _task_subset("combined-metric-evidence"),
+            executor=ExecutorErrorOnMissing(),
+        )
+
+
+def test_unrequired_disabled_capabilities_cannot_be_reported_as_unavailable() -> None:
+    class FalseUnavailableExecutor:
+        async def execute(self, context):
+            await _record_provider_usage(context)
+            return CapabilityObservation(
+                status="failed",
+                answer=None,
+                citations=(),
+                persistence_empty=True,
+                cache_mode=FIXED_IDENTITY.cache_mode,
+                failure_code="capability_unavailable",
+            )
+
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="structured capability availability",
+    ):
+        _run_dataset(
+            _task_subset("baseline-citation-shape"),
+            executor=FalseUnavailableExecutor(),
+        )
+
+
+def test_provider_free_executor_cannot_forge_a_generic_root_tool_call() -> None:
+    class GenericRootToolExecutor(DeterministicCapabilityExecutor):
+        async def execute(self, context):
+            observation = await super().execute(context)
+            context.budget.reserve_tool()
+            return observation
+
+    with pytest.raises(
+        CapabilityEvaluationError,
+        match="non-allowlisted root tool call",
+    ):
+        _run_dataset(
+            _task_subset("baseline-citation-shape"),
+            executor=GenericRootToolExecutor(),
         )
 
 

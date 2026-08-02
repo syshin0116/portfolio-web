@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 from dataclasses import asdict
+from threading import Event, Lock
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -145,6 +146,82 @@ class YieldingInMemoryStore(InMemoryStore):
         item = await super().aget(namespace, key, refresh_ttl=refresh_ttl)
         await asyncio.sleep(0)
         return item
+
+
+class ObservedThreadLock:
+    """Delegate to one real lock while exposing deterministic acquire attempts."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._attempt_guard = Lock()
+        self._attempts = 0
+        self.second_attempted = Event()
+
+    def acquire(self) -> bool:
+        with self._attempt_guard:
+            self._attempts += 1
+            if self._attempts == 2:
+                self.second_attempted.set()
+        return self._lock.acquire()
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, exc_value, traceback
+        self.release()
+
+
+class SyncHoldingInMemoryStore(InMemoryStore):
+    """Hold the first synchronous read while an async create tries to enter."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = Event()
+        self.release = Event()
+        self.async_read_entered = Event()
+        self._hold_first_sync_read = True
+
+    def get(self, namespace, key, *, refresh_ttl=None):
+        if self._hold_first_sync_read:
+            self._hold_first_sync_read = False
+            self.entered.set()
+            if not self.release.wait(5):
+                raise TimeoutError("synchronous memory create was not released")
+        return super().get(namespace, key, refresh_ttl=refresh_ttl)
+
+    async def aget(self, namespace, key, *, refresh_ttl=None):
+        self.async_read_entered.set()
+        return await super().aget(namespace, key, refresh_ttl=refresh_ttl)
+
+
+class AsyncHoldingInMemoryStore(InMemoryStore):
+    """Hold the first asynchronous read while another create tries to enter."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.sync_read_entered = Event()
+        self._hold_first_async_read = True
+
+    def get(self, namespace, key, *, refresh_ttl=None):
+        self.sync_read_entered.set()
+        return super().get(namespace, key, refresh_ttl=refresh_ttl)
+
+    async def aget(self, namespace, key, *, refresh_ttl=None):
+        if self._hold_first_async_read:
+            self._hold_first_async_read = False
+            self.entered.set()
+            await self.release.wait()
+        return await super().aget(namespace, key, refresh_ttl=refresh_ttl)
 
 
 def _compiled_tool_names(compiled_graph: CompiledStateGraph) -> set[str]:
@@ -1407,6 +1484,129 @@ async def test_persistent_memory_concurrent_creates_have_one_winner():
         "first contender",
         "second contender",
     }
+
+
+async def test_persistent_memory_sync_create_blocks_async_create(
+    monkeypatch,
+):
+    lock = ObservedThreadLock()
+    store = SyncHoldingInMemoryStore()
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "sync-first-owner", "filesystem"),
+        store=store,
+    )
+    monkeypatch.setattr(graph_module, "_PERSISTENT_MEMORY_WRITE_LOCK", lock)
+
+    sync_create = asyncio.create_task(
+        asyncio.to_thread(backend.write, "/profile.txt", "sync winner")
+    )
+    assert await asyncio.to_thread(store.entered.wait, 2)
+    async_create = asyncio.create_task(
+        backend.awrite("/profile.txt", "async contender")
+    )
+    second_attempted = await asyncio.to_thread(lock.second_attempted.wait, 2)
+    async_read_blocked = store.async_read_entered.is_set() is False
+
+    store.release.set()
+    sync_result, async_result = await asyncio.wait_for(
+        asyncio.gather(sync_create, async_create),
+        timeout=2,
+    )
+
+    assert second_attempted is True
+    assert async_read_blocked is True
+    assert sync_result.path == "/profile.txt"
+    assert sync_result.error is None
+    assert async_result.path is None
+    assert "already exists" in (async_result.error or "")
+    persisted = await backend.aread("/profile.txt")
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] == "sync winner"
+
+
+async def test_persistent_memory_async_create_blocks_sync_create(
+    monkeypatch,
+):
+    lock = ObservedThreadLock()
+    store = AsyncHoldingInMemoryStore()
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "async-first-owner", "filesystem"),
+        store=store,
+    )
+    monkeypatch.setattr(graph_module, "_PERSISTENT_MEMORY_WRITE_LOCK", lock)
+
+    async_create = asyncio.create_task(backend.awrite("/profile.txt", "async winner"))
+    await asyncio.wait_for(store.entered.wait(), timeout=2)
+    sync_create = asyncio.create_task(
+        asyncio.to_thread(backend.write, "/profile.txt", "sync contender")
+    )
+    second_attempted = await asyncio.to_thread(lock.second_attempted.wait, 2)
+    sync_read_blocked = store.sync_read_entered.is_set() is False
+
+    store.release.set()
+    async_result, sync_result = await asyncio.wait_for(
+        asyncio.gather(async_create, sync_create),
+        timeout=2,
+    )
+
+    assert second_attempted is True
+    assert sync_read_blocked is True
+    assert async_result.path == "/profile.txt"
+    assert async_result.error is None
+    assert sync_result.path is None
+    assert "already exists" in (sync_result.error or "")
+    persisted = await backend.aread("/profile.txt")
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] == "async winner"
+
+
+async def test_cancelled_persistent_memory_waiter_releases_lock_for_reuse(
+    monkeypatch,
+):
+    lock = ObservedThreadLock()
+    store = AsyncHoldingInMemoryStore()
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "cancel-owner", "filesystem"),
+        store=store,
+    )
+    monkeypatch.setattr(graph_module, "_PERSISTENT_MEMORY_WRITE_LOCK", lock)
+
+    holder = asyncio.create_task(backend.awrite("/profile.txt", "winner"))
+    await asyncio.wait_for(store.entered.wait(), timeout=2)
+    cancelled_waiter = asyncio.create_task(
+        backend.awrite("/profile.txt", "cancelled contender")
+    )
+    second_attempted = await asyncio.to_thread(lock.second_attempted.wait, 2)
+
+    cancelled_waiter.cancel()
+    cancellation_waited_for_lock = False
+    try:
+        await asyncio.wait_for(asyncio.shield(cancelled_waiter), timeout=0.1)
+    except TimeoutError:
+        cancellation_waited_for_lock = True
+
+    store.release.set()
+    holder_result = await asyncio.wait_for(holder, timeout=2)
+    assert holder_result.path == "/profile.txt"
+    waiter_propagated_cancellation = False
+    try:
+        await asyncio.wait_for(cancelled_waiter, timeout=2)
+    except asyncio.CancelledError:
+        waiter_propagated_cancellation = True
+
+    assert lock.locked() is False
+    followup = await asyncio.wait_for(
+        backend.awrite("/profile.txt", "late contender"),
+        timeout=2,
+    )
+    assert second_attempted is True
+    assert cancellation_waited_for_lock is True
+    assert waiter_propagated_cancellation is True
+    assert followup.path is None
+    assert "already exists" in (followup.error or "")
+    persisted = await backend.aread("/profile.txt")
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] == "winner"
 
 
 def test_guest_runtime_rejects_caller_supplied_experiment_root_allowlist(monkeypatch):

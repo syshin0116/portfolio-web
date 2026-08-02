@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import multiprocessing
 import os
 import runpy
 import socket
@@ -39,6 +40,7 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.store.postgres import AsyncPostgresStore
 from langgraph.types import Command, StateSnapshot
 from pydantic import Field
 from sqlalchemy import text
@@ -53,6 +55,7 @@ from agent.auth import (
     TOKEN_AUDIENCE,
     TOKEN_ISSUER,
 )
+from agent.graph import CreateOnlyStoreBackend
 from agent.graph import graph as production_graph
 from agent.guest_budget import (
     GuestBudgetConfig,
@@ -102,6 +105,53 @@ INSPECTION_FIXTURE = (
 )
 _GUEST_INTERRUPT_ID = "0123456789abcdef0123456789abcdef"
 _GUEST_SUBMIT_NONCE = "123e4567-e89b-42d3-a456-426614174000"
+
+
+def _postgres_memory_create_process(
+    postgres_url: str,
+    namespace: tuple[str, ...],
+    file_path: str,
+    content: str,
+    mode: str,
+    ready_queue: Any,
+    start_event: Any,
+    result_queue: Any,
+) -> None:
+    """Compete for one persistent-memory key from an independent process."""
+
+    async def run() -> None:
+        async with AsyncPostgresStore.from_conn_string(postgres_url) as store:
+            backend = CreateOnlyStoreBackend(
+                namespace=lambda _runtime: namespace,
+                store=store,
+            )
+            ready_queue.put(mode)
+            started = await asyncio.to_thread(start_event.wait, 15)
+            if not started:
+                raise TimeoutError("cross-process create start signal timed out")
+            if mode == "async":
+                result = await backend.awrite(file_path, content)
+            elif mode == "sync":
+                result = await asyncio.to_thread(backend.write, file_path, content)
+            else:
+                raise ValueError(f"unsupported cross-process create mode: {mode}")
+            result_queue.put(
+                {
+                    "mode": mode,
+                    "path": result.path,
+                    "error": result.error,
+                }
+            )
+
+    try:
+        asyncio.run(run())
+    except BaseException as error:
+        result_queue.put(
+            {
+                "mode": mode,
+                "exception": f"{type(error).__name__}: {error}",
+            }
+        )
 
 
 def _canonical_inspection_payload() -> dict[str, object]:
@@ -744,6 +794,108 @@ async def test_project_migration_rejects_an_altered_recovery_boundary(
             )
         await migrate_agent_schema(db_manager.get_engine())
         await db_manager.close()
+        aegra_orm.async_session_maker = None
+        settings.db.DATABASE_URL = previous_url
+        db_manager._database_url = previous_manager_url
+
+
+async def test_persistent_memory_create_is_atomic_across_processes():
+    assert POSTGRES_URL is not None
+    previous_url = settings.db.DATABASE_URL
+    previous_manager_url = db_manager._database_url
+    settings.db.DATABASE_URL = POSTGRES_URL
+    db_manager._database_url = settings.db.database_url
+
+    unique = uuid4().hex
+    namespace = ("users", f"cross-process-{unique}", "filesystem")
+    file_path = "/profile.txt"
+    contenders = {
+        "async": "async process contender",
+        "sync": "sync process contender",
+    }
+    context = multiprocessing.get_context("spawn")
+    ready_queue = context.Queue()
+    start_event = context.Event()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_postgres_memory_create_process,
+            name=f"memory-create-{mode}-{unique}",
+            args=(
+                POSTGRES_URL,
+                namespace,
+                file_path,
+                content,
+                mode,
+                ready_queue,
+                start_event,
+                result_queue,
+            ),
+        )
+        for mode, content in contenders.items()
+    ]
+
+    try:
+        await migrate_database()
+        await db_manager.initialize()
+        for process in processes:
+            process.start()
+
+        ready = [
+            await asyncio.to_thread(ready_queue.get, True, 15) for _process in processes
+        ]
+        assert set(ready) == set(contenders)
+        start_event.set()
+        results = [
+            await asyncio.to_thread(result_queue.get, True, 15)
+            for _process in processes
+        ]
+        for process in processes:
+            await asyncio.to_thread(process.join, 15)
+
+        assert all(process.exitcode == 0 for process in processes)
+        assert all("exception" not in result for result in results)
+        assert {result["mode"] for result in results} == set(contenders)
+        assert sum(result["path"] == file_path for result in results) == 1
+        rejected = [result for result in results if result["path"] is None]
+        assert len(rejected) == 1
+        assert "already exists" in (rejected[0]["error"] or "")
+
+        persisted = await db_manager.get_store().aget(namespace, file_path)
+        assert persisted is not None
+        assert persisted.value["content"] in set(contenders.values())
+
+        backend = CreateOnlyStoreBackend(
+            namespace=lambda _runtime: namespace,
+            store=db_manager.get_store(),
+        )
+        edited = await backend.aedit(
+            file_path,
+            persisted.value["content"],
+            "reviewed edit",
+        )
+        assert edited.path == file_path
+        updated = await db_manager.get_store().aget(namespace, file_path)
+        assert updated is not None
+        assert updated.value["content"] == "reviewed edit"
+    finally:
+        start_event.set()
+        for process in processes:
+            if process.pid is None:
+                continue
+            if process.is_alive():
+                await asyncio.to_thread(process.join, 2)
+            if process.is_alive():
+                process.terminate()
+                await asyncio.to_thread(process.join, 2)
+        ready_queue.close()
+        ready_queue.cancel_join_thread()
+        result_queue.close()
+        result_queue.cancel_join_thread()
+        if db_manager.engine is not None:
+            with suppress(BaseException):
+                await db_manager.get_store().adelete(namespace, file_path)
+            await db_manager.close()
         aegra_orm.async_session_maker = None
         settings.db.DATABASE_URL = previous_url
         db_manager._database_url = previous_manager_url

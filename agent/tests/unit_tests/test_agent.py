@@ -1,5 +1,6 @@
 """Unit tests for the agent module."""
 
+import ast
 import asyncio
 import hashlib
 import inspect
@@ -746,9 +747,17 @@ async def test_graph_factory_cancellation_waits_for_quickjs_worker_shutdown(
 
 def test_graph_module_never_constructs_its_own_persistence():
     source = inspect.getsource(__import__("agent.graph", fromlist=["graph"]))
+    constructed_names = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            constructed_names.add(node.func.id)
+        elif isinstance(node.func, ast.Attribute):
+            constructed_names.add(node.func.attr)
 
-    assert "AsyncPostgresSaver" not in source
-    assert "AsyncPostgresStore" not in source
+    assert "AsyncPostgresSaver" not in constructed_names
+    assert "AsyncPostgresStore" not in constructed_names
     assert "checkpointer=" not in source
 
 
@@ -1459,6 +1468,65 @@ async def test_persistent_memory_write_is_create_only_and_edit_is_explicit():
     assert edited.path == "/memories/profile.txt"
     assert updated.file_data is not None
     assert updated.file_data["content"] == "reviewed edit"
+
+
+async def test_persistent_memory_unknown_store_fails_closed_without_dml():
+    class UnsupportedStore:
+        def __getattr__(self, name):
+            raise AssertionError(f"unsupported store DML was attempted through {name}")
+
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "unsupported-owner", "filesystem"),
+        store=UnsupportedStore(),
+    )
+
+    async_result = await backend.awrite("/profile.txt", "async content")
+    sync_result = await asyncio.to_thread(
+        backend.write,
+        "/other.txt",
+        "sync content",
+    )
+
+    for result in (async_result, sync_result):
+        assert result.path is None
+        assert result.error == graph_module._PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR
+
+
+async def test_persistent_memory_postgres_guard_failure_never_falls_back(
+    monkeypatch,
+):
+    store = graph_module.AsyncPostgresStore(conn=SimpleNamespace())
+    backend = graph_module.CreateOnlyStoreBackend(
+        namespace=lambda _runtime: ("users", "postgres-failure-owner", "filesystem"),
+        store=store,
+    )
+
+    async def fail_async(*_args, **_kwargs):
+        raise RuntimeError("injected async PostgreSQL guard failure")
+
+    def fail_sync(*_args, **_kwargs):
+        raise RuntimeError("injected sync PostgreSQL guard failure")
+
+    monkeypatch.setattr(
+        graph_module,
+        "_atomic_postgres_memory_create",
+        fail_async,
+    )
+    async_result = await backend.awrite("/profile.txt", "async content")
+    monkeypatch.setattr(
+        graph_module,
+        "_atomic_postgres_memory_create_sync",
+        fail_sync,
+    )
+    sync_result = await asyncio.to_thread(
+        backend.write,
+        "/other.txt",
+        "sync content",
+    )
+
+    for result in (async_result, sync_result):
+        assert result.path is None
+        assert result.error == graph_module._PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR
 
 
 async def test_persistent_memory_concurrent_creates_have_one_winner():

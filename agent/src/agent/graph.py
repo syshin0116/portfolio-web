@@ -28,13 +28,19 @@ from deepagents.backends import (
     StoreBackend,
 )
 from deepagents.backends.protocol import WriteResult
+from deepagents.backends.utils import create_file_data
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.runtime import Runtime
+from langgraph.store.memory import InMemoryStore
+from langgraph.store.postgres import AsyncPostgresStore
 from langgraph_sdk.runtime import ServerRuntime
+from psycopg import AsyncConnection
+from psycopg.types.json import Jsonb
+from psycopg_pool import AsyncConnectionPool
 
 from agent.auth import ANONYMOUS_PERMISSION, is_anonymous_identity
 from agent.capabilities.budget import (
@@ -98,10 +104,27 @@ NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
 )
 logger = logging.getLogger(__name__)
 
-# Cloud Run is deliberately constrained to one instance and one application worker.
-# Serialize persistent-memory creates at that server boundary so StoreBackend's
-# get/put pair cannot race after deepagents 0.7 changed write_file to overwrite.
+# Reduce duplicate work inside one process. PostgreSQL's unique (prefix, key)
+# constraint remains the correctness boundary across Cloud Run revisions.
 _PERSISTENT_MEMORY_WRITE_LOCK = threading.Lock()
+_PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR = (
+    "Persistent memory create was not attempted because shared PostgreSQL atomic "
+    "protection is unavailable."
+)
+_POSTGRES_CREATE_MEMORY_SQL = """
+    INSERT INTO store (
+        prefix,
+        key,
+        value,
+        created_at,
+        updated_at,
+        expires_at,
+        ttl_minutes
+    )
+    VALUES (%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL)
+    ON CONFLICT (prefix, key) DO NOTHING
+    RETURNING key
+"""
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     policy_id="anonymous-public-v2",
@@ -177,6 +200,61 @@ async def _acquire_persistent_memory_write_lock() -> None:
         raise interrupted
 
 
+async def _atomic_postgres_memory_create(
+    store: AsyncPostgresStore,
+    namespace: tuple[str, ...],
+    file_path: str,
+    value: dict[str, Any],
+) -> bool:
+    """Insert one memory without ever updating an existing PostgreSQL row."""
+    if store.index_config is not None:
+        raise RuntimeError(
+            "atomic persistent-memory create does not support an indexed store"
+        )
+
+    async def insert(connection: AsyncConnection) -> bool:
+        async with connection.transaction(), connection.cursor() as cursor:
+            await cursor.execute(
+                _POSTGRES_CREATE_MEMORY_SQL,
+                (".".join(namespace), file_path, Jsonb(value)),
+            )
+            return await cursor.fetchone() is not None
+
+    connection_source = store.conn
+    if isinstance(connection_source, AsyncConnectionPool):
+        async with connection_source.connection() as connection:
+            return await insert(connection)
+    if isinstance(connection_source, AsyncConnection):
+        async with store.lock:
+            return await insert(connection_source)
+    raise RuntimeError("AsyncPostgresStore has an unsupported connection source")
+
+
+def _atomic_postgres_memory_create_sync(
+    store: AsyncPostgresStore,
+    namespace: tuple[str, ...],
+    file_path: str,
+    value: dict[str, Any],
+) -> bool:
+    """Submit the atomic insert to the event loop that owns the async store."""
+    store_loop = store._loop
+    if store_loop.is_closed() or not store_loop.is_running():
+        raise RuntimeError("AsyncPostgresStore event loop is unavailable")
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if current_loop is store_loop:
+        raise RuntimeError(
+            "synchronous persistent-memory create cannot run on the store event loop"
+        )
+    future = asyncio.run_coroutine_threadsafe(
+        _atomic_postgres_memory_create(store, namespace, file_path, value),
+        store_loop,
+    )
+    return future.result()
+
+
 class CreateOnlyStoreBackend(StoreBackend):
     """Keep persistent write_file create-only; edit_file remains the update path."""
 
@@ -189,22 +267,71 @@ class CreateOnlyStoreBackend(StoreBackend):
             )
         )
 
+    @staticmethod
+    def _atomic_guard_unavailable() -> WriteResult:
+        return WriteResult(error=_PERSISTENT_MEMORY_ATOMIC_GUARD_ERROR)
+
+    def _new_store_value(self, content: str) -> dict[str, Any]:
+        return self._convert_file_data_to_store_value(create_file_data(content))
+
     def write(self, file_path: str, content: str) -> WriteResult:
         with _PERSISTENT_MEMORY_WRITE_LOCK:
             store = self._get_store()
             namespace = self._get_namespace()
-            if store.get(namespace, file_path) is not None:
-                return self._already_exists(file_path)
-            return super().write(file_path, content)
+            if isinstance(store, AsyncPostgresStore):
+                try:
+                    created = _atomic_postgres_memory_create_sync(
+                        store,
+                        namespace,
+                        file_path,
+                        self._new_store_value(content),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Persistent memory create failed closed because the shared "
+                        "PostgreSQL atomic guard was unavailable"
+                    )
+                    return self._atomic_guard_unavailable()
+                return (
+                    WriteResult(path=file_path)
+                    if created
+                    else self._already_exists(file_path)
+                )
+            if isinstance(store, InMemoryStore):
+                if store.get(namespace, file_path) is not None:
+                    return self._already_exists(file_path)
+                return super().write(file_path, content)
+            return self._atomic_guard_unavailable()
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
         await _acquire_persistent_memory_write_lock()
         try:
             store = self._get_store()
             namespace = self._get_namespace()
-            if await store.aget(namespace, file_path) is not None:
-                return self._already_exists(file_path)
-            return await super().awrite(file_path, content)
+            if isinstance(store, AsyncPostgresStore):
+                try:
+                    created = await _atomic_postgres_memory_create(
+                        store,
+                        namespace,
+                        file_path,
+                        self._new_store_value(content),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Persistent memory create failed closed because the shared "
+                        "PostgreSQL atomic guard was unavailable"
+                    )
+                    return self._atomic_guard_unavailable()
+                return (
+                    WriteResult(path=file_path)
+                    if created
+                    else self._already_exists(file_path)
+                )
+            if isinstance(store, InMemoryStore):
+                if await store.aget(namespace, file_path) is not None:
+                    return self._already_exists(file_path)
+                return await super().awrite(file_path, content)
+            return self._atomic_guard_unavailable()
         finally:
             _PERSISTENT_MEMORY_WRITE_LOCK.release()
 

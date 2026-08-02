@@ -216,6 +216,8 @@ AGENT_DOCKER_UV_IMAGE = (
     "sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
 )
 AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
+CI_CHANGES_JOB = "changes"
+CI_CHANGES_TIMEOUT_MINUTES = 10
 AGENT_CI_JOB = "agent"
 AGENT_CI_JOB_AST_SHA256 = (
     "9033845cf4855fdb77b98afa979ea099e40e05f30666fc70e4e800ce4284983d"
@@ -1313,6 +1315,28 @@ def _simple_shell_words(run: Node, *, context: str) -> tuple[str, ...]:
         raise GovernanceError(
             f"{context} run is not valid shell syntax: {exc}"
         ) from exc
+
+
+def validate_ci_changes_timeout_contract(document: YamlDocument) -> list[str]:
+    """Pin only the bootstrap suite's measured execution ceiling."""
+    jobs = _workflow_jobs(document)
+    changes = jobs.get(CI_CHANGES_JOB)
+    if changes is None:
+        return [f"{AGENT_CI_WORKFLOW}: required job {CI_CHANGES_JOB!r} is missing"]
+
+    timeout = _mapping_value(changes, "timeout-minutes")
+    if (
+        not isinstance(timeout, ScalarNode)
+        or timeout.value != str(CI_CHANGES_TIMEOUT_MINUTES)
+        or timeout.style is not None
+    ):
+        actual = None if timeout is None else _node_to_data(timeout)
+        return [
+            f"{AGENT_CI_WORKFLOW}: job 'changes' timeout-minutes must be "
+            f"the unquoted plain scalar {CI_CHANGES_TIMEOUT_MINUTES}; "
+            f"actual={actual!r}"
+        ]
+    return []
 
 
 def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
@@ -2750,6 +2774,15 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
 
     ci_workflow = (root.resolve() / AGENT_CI_WORKFLOW).resolve()
     if ci_workflow in documents:
+        try:
+            errors.extend(
+                f"local: {error}"
+                for error in validate_ci_changes_timeout_contract(
+                    documents[ci_workflow]
+                )
+            )
+        except GovernanceError as exc:
+            errors.append(f"local: invalid ci/changes timeout contract: {exc}")
         try:
             errors.extend(
                 f"local: {error}"

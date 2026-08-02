@@ -21,7 +21,7 @@ jobs:
   changes:
     name: ci/changes
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       web: ${{ steps.components.outputs.web }}
       agent: ${{ steps.components.outputs.agent }}

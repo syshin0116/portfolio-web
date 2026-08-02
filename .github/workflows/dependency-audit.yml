@@ -71,6 +71,46 @@ jobs:
           --progress-spinner=off
           --requirement "$RUNNER_TEMP/agent-requirements.txt"
 
+  eval:
+    name: dependency/eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.29"
+          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Verify and export the committed dense eval lock
+        run: |
+          uv lock --check
+          uv export \
+            --package syshin0116-dev-eval \
+            --extra dense \
+            --all-groups \
+            --frozen \
+            --no-emit-workspace \
+            --no-hashes \
+            --format requirements-txt \
+            --output-file "$RUNNER_TEMP/eval-requirements.txt"
+      - name: Audit the exact dense eval resolution
+        run: >-
+          uvx --from pip-audit==2.10.1
+          pip-audit
+          --vulnerability-service osv
+          --strict
+          --disable-pip
+          --no-deps
+          --progress-spinner=off
+          --requirement "$RUNNER_TEMP/eval-requirements.txt"
+
   upstream:
     name: dependency/upstream-versions
     runs-on: ubuntu-latest
@@ -94,6 +134,7 @@ jobs:
     needs:
       - web
       - agent
+      - eval
       - upstream
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -103,10 +144,12 @@ jobs:
         env:
           WEB_RESULT: ${{ needs.web.result }}
           AGENT_RESULT: ${{ needs.agent.result }}
+          EVAL_RESULT: ${{ needs.eval.result }}
           UPSTREAM_RESULT: ${{ needs.upstream.result }}
         shell: bash
         run: |
           echo "dependency/web=$WEB_RESULT"
           echo "dependency/agent=$AGENT_RESULT"
+          echo "dependency/eval=$EVAL_RESULT"
           echo "dependency/upstream-versions=$UPSTREAM_RESULT"
-          [[ "$WEB_RESULT" == "success" && "$AGENT_RESULT" == "success" && "$UPSTREAM_RESULT" == "success" ]]
+          [[ "$WEB_RESULT" == "success" && "$AGENT_RESULT" == "success" && "$EVAL_RESULT" == "success" && "$UPSTREAM_RESULT" == "success" ]]

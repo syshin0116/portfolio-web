@@ -17,7 +17,7 @@ from agent.guest_budget import (
     GuestDailyBudgetExhaustedError,
     PostgresGuestSpendLedger,
     guest_budget_config,
-    minimum_guest_generation_cost_micro_usd,
+    minimum_guest_run_reservation_micro_usd,
 )
 
 
@@ -67,7 +67,7 @@ class _Session:
         ("100000", "0", "canonical positive integer"),
         ("100000", "01", "canonical positive integer"),
         ("100000", "100001", "cannot exceed"),
-        ("100000", "6891", "generation floor"),
+        ("100000", "8867", "conservative accounting floor"),
     ],
 )
 def test_required_guest_budget_configuration_fails_closed(
@@ -93,23 +93,66 @@ def test_optional_guest_budget_is_absent_or_exact(monkeypatch):
     assert guest_budget_config(required=False) is None
 
     monkeypatch.setenv(GUEST_DAILY_BUDGET_ENV, "500000")
-    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "6892")
+    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "8868")
     assert guest_budget_config(required=False) == GuestBudgetConfig(
         daily_limit_micro_usd=500_000,
-        run_reservation_micro_usd=6_892,
+        run_reservation_micro_usd=8_868,
     )
 
 
-def test_guest_generation_floor_uses_exact_integer_ceiling():
-    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 6_892
+def test_guest_accounting_floor_double_counts_input_and_uses_exact_ceiling():
+    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 8_868
     assert (
-        minimum_guest_generation_cost_micro_usd(
+        minimum_guest_run_reservation_micro_usd(
             max_model_calls=4,
             max_output_tokens=1_024,
             max_total_tokens=12_000,
         )
         == GUEST_MIN_RUN_RESERVATION_MICRO_USD
     )
+
+
+def test_guest_accounting_floor_is_maximized_at_the_output_ceiling():
+    costs = [
+        minimum_guest_run_reservation_micro_usd(
+            max_model_calls=4,
+            max_output_tokens=output_tokens,
+            max_total_tokens=12_000,
+        )
+        for output_tokens in range(1, 1_025)
+    ]
+
+    assert costs[0] == 6_003
+    assert costs[-2] == 8_865
+    assert costs[-1] == 8_868
+    assert max(costs) == costs[-1]
+
+
+@pytest.mark.parametrize(
+    ("limits", "error"),
+    [
+        (
+            {"max_model_calls": True, "max_output_tokens": 1, "max_total_tokens": 1},
+            TypeError,
+        ),
+        (
+            {"max_model_calls": 0, "max_output_tokens": 1, "max_total_tokens": 1},
+            ValueError,
+        ),
+        (
+            {
+                "max_model_calls": 4,
+                "max_output_tokens": 3_001,
+                "max_total_tokens": 12_000,
+            },
+            ValueError,
+        ),
+    ],
+    ids=["boolean-call-limit", "zero-call-limit", "output-exceeds-total"],
+)
+def test_guest_accounting_floor_rejects_unreviewed_abuse_bounds(limits, error):
+    with pytest.raises(error):
+        minimum_guest_run_reservation_micro_usd(**limits)
 
 
 async def test_postgres_ledger_returns_the_committed_aggregate(monkeypatch):

@@ -65,6 +65,7 @@ from agent.capabilities.token_counting import (
     count_anthropic_input_tokens,
     count_openai_input_tokens,
     openai_guest_safety_identifier,
+    prepare_openai_input_token_count,
     require_exact_openai_guest_model,
     require_official_openai_routing,
     require_openai_api_key,
@@ -368,6 +369,15 @@ def create_graph(
         if model_spec == OPENAI_GUEST_MODEL_SPEC
         else count_anthropic_input_tokens
     )
+    exact_input_preparer = (
+        prepare_openai_input_token_count
+        if (
+            input_token_counter is None
+            and model_spec == OPENAI_GUEST_MODEL_SPEC
+            and isinstance(selected_model, ChatOpenAI)
+        )
+        else None
+    )
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool
@@ -443,6 +453,7 @@ def create_graph(
                 allow_subagents=allow_subagents,
                 allowed_subagents=selected_subagents,
                 input_token_counter=exact_input_counter,
+                input_token_count_preparer=exact_input_preparer,
                 model_provider=usage_model_provider,
                 expected_response_models=usage_response_models,
                 native_subagent_prompt=selected_native_subagent_prompt,
@@ -455,6 +466,7 @@ def create_graph(
             model=selected_model,
             budget=run_budget,
             input_token_counter=exact_input_counter,
+            input_token_count_preparer=exact_input_preparer,
             model_provider=usage_model_provider,
             expected_response_models=usage_response_models,
             allowed_subagents=selected_subagents,

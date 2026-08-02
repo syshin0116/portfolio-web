@@ -24,6 +24,8 @@ from langgraph.types import Command
 from agent.capabilities.token_counting import (
     InputTokenCounter,
     InputTokenCountError,
+    InputTokenCountPreparer,
+    PreparedInputTokenCount,
 )
 
 TASK_TOOL_NAME = "task"
@@ -215,6 +217,7 @@ class RunBudget:
         "_ledger_id",
         "_lock",
         "_model_calls",
+        "_model_input_upper_bounds",
         "_model_reservations_needing_input",
         "_next_reservation_id",
         "_next_quickjs_reservation_id",
@@ -262,6 +265,7 @@ class RunBudget:
         self._next_reservation_id = 0
         self._open_model_reservations: dict[int, int] = {}
         self._model_reservations_needing_input: set[int] = set()
+        self._model_input_upper_bounds: dict[int, int] = {}
         self._next_quickjs_reservation_id = 0
         self._open_quickjs_reservations: dict[int, int] = {}
         self._next_task_reservation_id = 0
@@ -346,16 +350,29 @@ class RunBudget:
     def reserve_model_attempt(
         self,
         *,
+        input_upper_bound: int | None = None,
         task_reservation: TaskReservation | None = None,
     ) -> ModelReservation:
-        """Reserve a call slot and maximum output before remote input counting."""
+        """Reserve output and an optional local input bound before remote count.
+
+        ``None`` preserves the exact-count extension flow used by providers whose
+        count endpoint is not part of the billable request envelope. An integer
+        reserves output plus that input amount atomically; settlement may only
+        shrink the input tranche after the provider returns an exact count.
+        """
         with self._lock:
             self._require_active_locked()
+            if input_upper_bound is not None and (
+                not isinstance(input_upper_bound, int)
+                or isinstance(input_upper_bound, bool)
+                or input_upper_bound < 0
+            ):
+                raise ValueError("input_upper_bound must be a non-negative integer")
             task_tranche = self._task_tranche_locked(task_reservation)
             if self._model_calls >= self._policy.max_model_calls:
                 self._exhausted = True
                 raise RunBudgetExceededError("model-call budget exhausted")
-            reserved = self._policy.max_output_tokens
+            reserved = self._policy.max_output_tokens + (input_upper_bound or 0)
             additional_charge = reserved - task_tranche
             if self._charged_tokens + additional_charge > self._policy.max_total_tokens:
                 self._exhausted = True
@@ -374,6 +391,10 @@ class RunBudget:
             )
             self._open_model_reservations[reservation.reservation_id] = reserved
             self._model_reservations_needing_input.add(reservation.reservation_id)
+            if input_upper_bound is not None:
+                self._model_input_upper_bounds[reservation.reservation_id] = (
+                    input_upper_bound
+                )
             return reservation
 
     def reserve_model_input(
@@ -399,7 +420,6 @@ class RunBudget:
                 reservation.reservation_id not in self._model_reservations_needing_input
                 or self._open_model_reservations.get(reservation.reservation_id)
                 != reservation.reserved_tokens
-                or reservation.reserved_tokens != self._policy.max_output_tokens
             ):
                 raise RuntimeError(
                     "model attempt reservation is unknown or already extended"
@@ -410,14 +430,38 @@ class RunBudget:
                 or input_tokens < 0
             ):
                 raise ValueError("input_tokens must be a non-negative integer")
-            if self._charged_tokens + input_tokens > self._policy.max_total_tokens:
-                self._exhausted = True
-                raise RunBudgetExceededError("token budget exhausted")
-
-            reserved = reservation.reserved_tokens + input_tokens
-            self._charged_tokens += input_tokens
+            input_upper_bound = self._model_input_upper_bounds.get(
+                reservation.reservation_id
+            )
+            if input_upper_bound is None:
+                if reservation.reserved_tokens != self._policy.max_output_tokens:
+                    raise RuntimeError(
+                        "model attempt reservation has an invalid output tranche"
+                    )
+                if self._charged_tokens + input_tokens > self._policy.max_total_tokens:
+                    self._exhausted = True
+                    raise RunBudgetExceededError("token budget exhausted")
+                reserved = reservation.reserved_tokens + input_tokens
+                self._charged_tokens += input_tokens
+            else:
+                if (
+                    reservation.reserved_tokens
+                    != self._policy.max_output_tokens + input_upper_bound
+                ):
+                    raise RuntimeError(
+                        "bounded model attempt has an invalid input tranche"
+                    )
+                if input_tokens > input_upper_bound:
+                    self._exhausted = True
+                    raise RunBudgetExceededError(
+                        "provider input count exceeded the local reservation"
+                    )
+                refund = input_upper_bound - input_tokens
+                reserved = reservation.reserved_tokens - refund
+                self._charged_tokens -= refund
             self._open_model_reservations[reservation.reservation_id] = reserved
             self._model_reservations_needing_input.remove(reservation.reservation_id)
+            self._model_input_upper_bounds.pop(reservation.reservation_id, None)
             return ModelReservation(
                 reservation.reservation_id,
                 reserved,
@@ -536,6 +580,7 @@ class RunBudget:
                 raise RuntimeError("model reservation is unknown or already settled")
             del self._open_model_reservations[reservation.reservation_id]
             self._model_reservations_needing_input.discard(reservation.reservation_id)
+            self._model_input_upper_bounds.pop(reservation.reservation_id, None)
             if needs_input and (
                 actual_tokens is not None or provider_usage is not None
             ):
@@ -1164,6 +1209,7 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         allow_subagents: bool,
         allowed_subagents: frozenset[str],
         input_token_counter: InputTokenCounter,
+        input_token_count_preparer: InputTokenCountPreparer | None = None,
         model_provider: str = "anthropic",
         expected_response_models: frozenset[str] = frozenset(),
         native_subagent_prompt: str | None = None,
@@ -1180,6 +1226,10 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             raise TypeError("allow_quickjs must be a boolean")
         if allow_quickjs and quickjs_tool_name is None:
             raise ValueError("allow_quickjs requires quickjs_tool_name")
+        if input_token_count_preparer is not None and not callable(
+            input_token_count_preparer
+        ):
+            raise TypeError("input_token_count_preparer must be callable or None")
         if root_tool_allowlist is not None and (
             depth != 0
             or not isinstance(root_tool_allowlist, frozenset)
@@ -1209,6 +1259,7 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         self._allow_subagents = allow_subagents
         self._allowed_subagents = allowed_subagents
         self._input_token_counter = input_token_counter
+        self._input_token_count_preparer = input_token_count_preparer
         self._model_provider = model_provider
         self._expected_response_models = expected_response_models
         self._native_subagent_prompt = native_subagent_prompt
@@ -1286,6 +1337,68 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             raise InputTokenCountError("input token counter returned a malformed value")
         return token_count
 
+    async def _prepare_input_token_count(
+        self,
+        request: ModelRequest[Any],
+    ) -> PreparedInputTokenCount:
+        preparer = self._input_token_count_preparer
+        if preparer is None:
+            raise AssertionError("input token count preparer is not configured")
+        try:
+            async with asyncio.timeout(self._budget.remaining_seconds()):
+                prepared = await preparer(request)
+        except TimeoutError as exc:
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "input token count preparation exceeded the run deadline"
+            ) from exc
+        except InputTokenCountError:
+            self._budget.exhaust()
+            raise
+        except Exception as exc:
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "input token count preparation failed before provider I/O"
+            ) from exc
+        if not isinstance(prepared, PreparedInputTokenCount):
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "input token count preparer returned a malformed value"
+            )
+        return prepared
+
+    async def _count_prepared_input_tokens(
+        self,
+        prepared: PreparedInputTokenCount,
+    ) -> int:
+        try:
+            async with asyncio.timeout(self._budget.remaining_seconds()):
+                token_count = await prepared.count()
+        except TimeoutError as exc:
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "input token counting exceeded the run deadline"
+            ) from exc
+        except InputTokenCountError:
+            self._budget.exhaust()
+            raise
+        except Exception as exc:
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "input token counting failed before generation"
+            ) from exc
+        if (
+            not isinstance(token_count, int)
+            or isinstance(token_count, bool)
+            or token_count < 0
+            or token_count > prepared.reserved_input_tokens
+        ):
+            self._budget.exhaust()
+            raise InputTokenCountError(
+                "prepared input token count exceeded its local reservation"
+            )
+        return token_count
+
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
@@ -1313,18 +1426,49 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
         async def count_then_generate(
             final_request: ModelRequest[Any],
         ) -> ModelResponse[Any]:
+            prepared = (
+                await self._prepare_input_token_count(final_request)
+                if self._input_token_count_preparer is not None
+                else None
+            )
             attempt = self._budget.reserve_model_attempt(
+                input_upper_bound=(
+                    prepared.reserved_input_tokens if prepared is not None else None
+                ),
                 task_reservation=(
                     _ACTIVE_TASK_RESERVATION.get() if self._depth > 0 else None
                 ),
             )
             try:
-                input_tokens = await self._count_input_tokens(final_request)
+                input_tokens = (
+                    await self._count_prepared_input_tokens(prepared)
+                    if prepared is not None
+                    else await self._count_input_tokens(final_request)
+                )
+                if prepared is not None:
+                    try:
+                        async with asyncio.timeout(self._budget.remaining_seconds()):
+                            await prepared.verify_generation_request(final_request)
+                    except TimeoutError as exc:
+                        self._budget.exhaust()
+                        raise InputTokenCountError(
+                            "generation parity verification exceeded the run deadline"
+                        ) from exc
+                    except InputTokenCountError:
+                        self._budget.exhaust()
+                        raise
+                    except Exception as exc:
+                        self._budget.exhaust()
+                        raise InputTokenCountError(
+                            "generation parity verification failed closed"
+                        ) from exc
                 reservation = self._budget.reserve_model_input(
                     attempt,
                     input_tokens=input_tokens,
                 )
             except BaseException:
+                if prepared is not None:
+                    self._budget.exhaust()
                 self._budget.settle_model(attempt, actual_tokens=None)
                 raise
             try:

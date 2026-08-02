@@ -36,10 +36,12 @@ from agent.capabilities.token_counting import (
     _capture_openai_generation_payload,
     _count_openai_responses_input_tokens,
     _openai_input_count_payload,
+    _openai_input_token_reservation,
     count_anthropic_input_tokens,
     count_openai_input_tokens,
     openai_guest_safety_identifier,
     openai_responses_input_token_counter,
+    prepare_openai_input_token_count,
     require_exact_openai_guest_model,
 )
 
@@ -184,6 +186,86 @@ def test_openai_guest_safety_identifier_is_stable_private_and_scoped():
     assert _GUEST_IDENTITY not in _GUEST_SAFETY_IDENTIFIER
     with pytest.raises(ValueError, match="canonical anonymous identity"):
         openai_guest_safety_identifier("owner@example.com")
+
+
+def test_openai_canonical_payload_reservation_includes_defense_in_depth_margin():
+    # Canonical UTF-8 is 14 bytes. The local admission heuristic reserves eight
+    # units for each JSON node/key plus 256 fixed units; it is not a provider
+    # tokenization guarantee.
+    assert _openai_input_token_reservation({"input": "é"}) == 14 + 3 * 8 + 256
+
+
+async def test_openai_oversized_count_payload_prepares_without_provider_io(
+    monkeypatch,
+):
+    credential_reads = 0
+    provider_calls = 0
+
+    def unexpected_credential_read() -> str:
+        nonlocal credential_reads
+        credential_reads += 1
+        raise AssertionError("local preflight reached credential access")
+
+    async def unexpected_provider_call(_self, **_payload):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("local preflight reached provider I/O")
+
+    monkeypatch.setattr(
+        token_counting,
+        "require_openai_api_key",
+        unexpected_credential_read,
+    )
+    monkeypatch.setattr(AsyncInputTokens, "count", unexpected_provider_call)
+    request = ModelRequest(
+        model=_openai_guest_model(),
+        messages=[HumanMessage(content="x" * 20_000)],
+        tools=[exact_count_tool],
+    )
+
+    prepared = await prepare_openai_input_token_count(request)
+
+    assert prepared.reserved_input_tokens > 10_976
+    assert credential_reads == 0
+    assert provider_calls == 0
+
+
+async def test_openai_prepared_count_reaches_provider_exactly_once(monkeypatch):
+    provider_calls = 0
+
+    async def official_count(_self, **_payload):
+        nonlocal provider_calls
+        provider_calls += 1
+        return SimpleNamespace(input_tokens=17)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
+    monkeypatch.setattr(AsyncInputTokens, "count", official_count)
+    request = ModelRequest(
+        model=_openai_guest_model(),
+        messages=[HumanMessage(content="bounded request")],
+        tools=[],
+    )
+    prepared = await prepare_openai_input_token_count(request)
+
+    assert await prepared.count() == 17
+    assert provider_calls == 1
+    with pytest.raises(InputTokenCountError, match="already attempted"):
+        await prepared.count()
+    assert provider_calls == 1
+
+
+async def test_openai_prepared_count_detects_token_bearing_generation_drift():
+    request = ModelRequest(
+        model=_openai_guest_model(),
+        messages=[HumanMessage(content="bounded request")],
+        tools=[],
+    )
+    prepared = await prepare_openai_input_token_count(request)
+
+    await prepared.verify_generation_request(request)
+    request.messages.append(HumanMessage(content="late mutation"))
+    with pytest.raises(InputTokenCountError, match="payload changed"):
+        await prepared.verify_generation_request(request)
 
 
 async def test_openai_official_counter_receives_final_stateless_payload(

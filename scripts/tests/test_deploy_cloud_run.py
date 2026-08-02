@@ -182,7 +182,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     ),
                     "GUEST_RUN_RESERVATION_MICRO_USD": os.environ.get(
                         "FAKE_GUEST_RUN_RESERVATION_MICRO_USD",
-                        "" if preview else "6892",
+                        "" if preview else "8868",
                     ),
                     "HOST": "0.0.0.0",
                     "LANGGRAPH_MAX_POOL_SIZE": "4",
@@ -992,7 +992,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "anonymous_access": {"FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED": "false"},
             "guest_model": {"FAKE_GUEST_MODEL": "openai:gpt-5.4-nano"},
             "guest_daily_budget": {"FAKE_GUEST_DAILY_BUDGET_MICRO_USD": "499999"},
-            "guest_run_reservation": {"FAKE_GUEST_RUN_RESERVATION_MICRO_USD": "6891"},
+            "guest_run_reservation": {"FAKE_GUEST_RUN_RESERVATION_MICRO_USD": "6892"},
             "background_retry_budget": {"FAKE_BG_JOB_MAX_RETRIES": "3"},
             "redis_broker": {"FAKE_REDIS_BROKER_ENABLED": "true"},
             "volumes": {"FAKE_RUNTIME_VOLUMES": "true"},
@@ -1309,6 +1309,19 @@ class CloudRunDeliveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             environment = self._fixture(directory)
             environment["FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED"] = "false"
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("runtime contract drifted", result.stderr)
+        self.assertNotIn("gcloud run jobs update", operations)
+
+    def test_generation_only_guest_reservation_fails_before_jobs_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAKE_GUEST_RUN_RESERVATION_MICRO_USD"] = "6892"
             result = self._run(directory, environment, "deploy")
             operations = (Path(directory) / "operations.log").read_text(
                 encoding="utf-8"

@@ -233,7 +233,7 @@ runtime_expectations() {
       readonly EXPECTED_ANONYMOUS_ACCESS_ENABLED="true"
       readonly EXPECTED_GUEST_DAILY_BUDGET_MICRO_USD="500000"
       readonly EXPECTED_GUEST_MODEL="openai:gpt-5.6-luna"
-      readonly EXPECTED_GUEST_RUN_RESERVATION_MICRO_USD="6892"
+      readonly EXPECTED_GUEST_RUN_RESERVATION_MICRO_USD="8868"
       ;;
   esac
   EXPECTED_PLAIN_ENV="$(

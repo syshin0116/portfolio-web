@@ -270,10 +270,13 @@ blocker, not an alternative retention policy.
   modules and does not require the runtime authentication secret.
 - LLM spend becomes a function of traffic rather than of one person's usage. The durable
   application daily reservation ledger is the repository-owned hard stop for the reviewed
-  Luna generation-cost envelope; process-local request limits only slow that burn. The
-  separately invoked input-token-count endpoint is outside that envelope, so verified
-  pricing and inclusion in the owner-approved ceiling remain launch blockers. This ADR
-  assumes no provider-side hard cap.
+  accepted Luna provider-request accounting envelope; process-local request limits only
+  slow that burn. Because OpenAI does not document input-count billing, the 8,868 µUSD run
+  reservation accounts for the same input twice at the highest input bucket—once for
+  counting and once for generation—plus maximum output. That is a conservative repository
+  assumption, not a provider price guarantee. Input-count billing evidence and
+  provider-account spend protection remain launch blockers; this ADR assumes no
+  provider-side hard cap.
 - Reputational surface: content generated under this domain by anonymous prompting.
   Cost controls do nothing about a screenshot.
 - `web/lib/allowed-user.ts` **fails open** in non-production when `AUTH_ALLOWED_EMAILS`

@@ -162,7 +162,10 @@ GitHub delivery attempts only; changing it does not pause Scheduler, revoke the 
 invoker, stop a running service, or guarantee zero cost.
 
 The owner/evaluation model remains Anthropic, while the reviewed Production guest model
-requires the restored `openai-api-key` resource and one positive numeric version. Preview
+uses the exact `openai:gpt-5.6-luna / 500000 / 8868` tuple, requires the restored
+`openai-api-key` resource and one positive numeric version, and conservatively accounts for
+each input once for counting and once for generation. This is not a documented count price
+or provider hard cap; the public billing and account-stop gates remain mandatory. Preview
 has no OpenAI credential; its reviewed `removed` block keeps the retired legacy Preview
 secret out of Terraform state with `destroy = false`.
 

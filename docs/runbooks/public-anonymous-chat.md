@@ -41,8 +41,8 @@ Production alone carries the owner-approved launch tuple:
 - `AGENT_ANONYMOUS_ACCESS_ENABLED=true`
 - `GUEST_MODEL=openai:gpt-5.6-luna`
 - `GUEST_DAILY_BUDGET_MICRO_USD=500000` ($0.50 per UTC day for the durable
-  generation reservation ledger)
-- `GUEST_RUN_RESERVATION_MICRO_USD=6892`
+  provider-request accounting ledger)
+- `GUEST_RUN_RESERVATION_MICRO_USD=8868`
 
 Do not make these values apply-time Terraform variables or change them in the
 console. An ordinary image delivery verifies and preserves the reviewed values;
@@ -56,22 +56,38 @@ The runtime accepts only `openai:gpt-5.6-luna` as the eventual non-empty
 `GUEST_MODEL`. It uses the OpenAI Responses API with reasoning disabled,
 `reasoning.context=current_turn` fixed explicitly to preserve the earlier
 stateless behavior, provider-side response storage disabled, and the official
-Responses input-token count endpoint before every generation. The run ledger
-atomically consumes a model-call slot and reserves that call's 1,024-token
-output ceiling before the remote count; only then may it extend the reservation
-by the exact counted input. The configured per-run reservation may never be below
-6,892 µUSD, the integer-ceiling generation cost for the
-12,000-token/four-call policy at
-$0.20/M uncached input and $1.20/M output. GPT-5.6 implicit cache writes cost
-1.25 times uncached input ($0.25/M), while cache reads cost $0.02/M, so the
-pre-dispatch floor conservatively prices all possible input as cache writes.
+Responses input-token count endpoint before every generation. Before provider I/O, the
+runtime captures the final token-bearing payload locally and computes a defense-in-depth
+admission reservation from its canonical UTF-8 bytes plus per-node and fixed framing
+margins. `RunBudget` then atomically reserves that input amount together with the call's
+1,024-token output ceiling. Concurrent calls cannot observe or reuse the same remaining
+capacity. The prepared canonical count payload is sent exactly once; the same request is
+recaptured and compared before generation, and only a valid exact count at or below the
+local reservation may refund `U - n`. Count errors, cancellation, an over-reservation
+result, or payload drift retain `U` and exhaust the run. The framing margin is a local
+heuristic, not a provider-documented hidden-token maximum or a last-mile wire proof.
+
+Independently, the durable spend ledger reserves the accepted provider accounting case
+before the first count request. The configured per-run reservation may never be below
+8,868 µUSD, the integer ceiling for the 12,000-token/four-call policy under the assumption
+below.
+
+At four calls, the output ceiling is 4,096 tokens and leaves 7,904 input tokens. Until
+OpenAI documents otherwise, the count endpoint is assumed to bill the same input as
+generation at the most expensive Luna input bucket. The bound is therefore
+`2 × 7,904 × $0.25/M + 4,096 × $1.20/M = 8,867.2 µUSD`, rounded up once to
+8,868 µUSD. The two pessimistic input copies cost $0.50/M together, still below the
+$1.20/M output rate, so maximum output remains the cost-maximizing allocation. Luna's
+ordinary uncached input is $0.20/M, implicit cache writes are $0.25/M, and cache reads
+are $0.02/M; a cheaper observed bucket never lowers the pre-dispatch reservation.
 Provider settlement accepts and records exact cache-read and cache-write buckets.
 Every generation also carries a stable 64-character, `guest_`-prefixed,
 SHA-256-derived safety identifier made with a domain separator from the canonical
 random anonymous subject; the raw subject and any account data never cross the
-provider boundary.
-This is a generation-only floor, not a claim about the count endpoint's currently
-undocumented billing.
+provider boundary. OpenAI still does not document the count endpoint's billing semantics
+or hidden framing maximum. The repository therefore accounts for duplicate input instead
+of assuming the endpoint is free, but that conservative choice does not remove the launch
+ambiguity or create a provider hard bound.
 
 Both generation and input-count SDK clients are pinned to
 `https://api.openai.com/v1` and must have no organization, project, custom header, or
@@ -132,13 +148,39 @@ The serialization boundary is pinned to `langchain-openai==1.3.5` and
 until `langchain-core` moves beyond 1.4.9. The model's
 [official catalogue entry](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
 does not support the API Free tier. The owner approved the exact non-zero
-500,000 µUSD UTC-day generation ceiling above, and the Production template now
+500,000 µUSD UTC-day accounting ceiling above, and the Production template now
 requires `OPENAI_API_KEY` from a reviewed positive numeric Secret Manager version.
-That approval and wiring still do **not** authorize the final browser launch: the
-input-count endpoint's billing semantics remain outside the generation ledger and
-must be confirmed, the separately reviewed Scheduler rollout must pass, the secret
-payload/version must be injected out of band, and all operational proofs below must
+That approval and wiring still do **not** authorize the final browser launch: input-count
+billing and observed framing behavior must be verified, the separately reviewed Scheduler
+rollout must pass, the secret payload/version must be injected out of band,
+provider-account spend protection must be verified, and all operational proofs below must
 succeed before either Vercel public flag becomes `true`.
+
+## Provider spend stop and rollback boundary
+
+The 8,868 µUSD calculation covers the accepted policy in which each count request has the
+same token-bearing input as its generation request and is billed once at the highest Luna
+input bucket. The atomic local `U` reservation blocks oversized and overlapping count
+requests before provider I/O and retains the reservation on failure. However, OpenAI does
+not publish a hard hidden-framing maximum or count-endpoint billing rate; a provider count
+could exceed the heuristic `U`, and the count request has already reached OpenAI when that
+is learned. The application ledger is therefore not the sole hard stop for that edge, and
+8,868 µUSD is not a provider-wide mathematical ceiling.
+
+Before either Vercel public flag becomes `true`, isolate the guest API key in its reviewed
+OpenAI project and verify a provider-enforced hard usage/spend stop that bounds count and
+generation together within the owner's approved exposure. A dashboard alert, emailed
+budget, or other soft notification does not qualify. Record only non-secret read-back
+evidence; never place the key or provider credential in a report. If the provider cannot
+enforce the reviewed stop, public issuance remains disabled.
+
+If provider telemetry exceeds the conservative reservation, the hard stop cannot be
+verified, or count behavior changes, close both Vercel flags first, revoke the guest key or
+set its provider stop to zero, and follow the exact-project emergency-close sequence below.
+Do not increase the cap to restore service. Do not roll back to a 6,892 µUSD revision:
+startup and delivery verification intentionally reject that generation-only contract. A
+Cloud Run rollback target must retain the exact 8,868 µUSD tuple; otherwise keep guest
+access closed and land a reviewed replacement.
 
 ## Cloudflare Turnstile
 
@@ -181,7 +223,7 @@ guest identity or spend state.
 2. After both environments' migration, grant-probe, and maintenance jobs pass, review
    and apply the exact services-stage plan. It must combine the active Production
    maintenance Scheduler with only Production's `true / openai:gpt-5.6-luna / 500000 /
-   6892` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
+   8868` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
 3. Verify Terraform read-back and the first bounded checkpoint-first scheduled
    maintenance execution. A paused or unverified Scheduler blocks launch.
 4. Release the exact reviewed revision, then run owner, PostgreSQL, public raw-wire,

@@ -32,7 +32,10 @@ from agent.capabilities.budget import (
     RunBudgetUnsettledError,
     TaskReservation,
 )
-from agent.capabilities.token_counting import InputTokenCountError
+from agent.capabilities.token_counting import (
+    InputTokenCountError,
+    PreparedInputTokenCount,
+)
 
 VALID_DESCRIPTION = """\
 Question:
@@ -414,6 +417,67 @@ def test_two_phase_model_attempt_consumes_the_task_output_tranche_once():
     budget.settle_model(reservation, actual_tokens=120)
     budget.finish_task(task)
     assert budget.snapshot().charged_tokens == 120
+
+
+def test_bounded_model_attempt_reserves_before_count_and_only_refunds_difference():
+    policy = replace(
+        DEFAULT_RUN_BUDGET_POLICY,
+        max_output_tokens=1_024,
+        max_total_tokens=12_000,
+    )
+    budget = RunBudget(policy, clock=lambda: 0.0)
+
+    attempt = budget.reserve_model_attempt(input_upper_bound=10_976)
+    assert attempt.reserved_tokens == 12_000
+    assert budget.snapshot().charged_tokens == 12_000
+
+    reservation = budget.reserve_model_input(attempt, input_tokens=2_000)
+    assert reservation.reserved_tokens == 3_024
+    assert budget.snapshot().charged_tokens == 3_024
+
+    budget.settle_model(reservation, actual_tokens=2_001)
+    assert budget.snapshot().charged_tokens == 2_001
+
+
+def test_bounded_model_attempt_retains_full_reservation_when_count_exceeds_it():
+    budget = RunBudget(clock=lambda: 0.0)
+    attempt = budget.reserve_model_attempt(input_upper_bound=1_000)
+
+    with pytest.raises(RunBudgetExceededError, match="local reservation"):
+        budget.reserve_model_input(attempt, input_tokens=1_001)
+
+    assert budget.snapshot().charged_tokens == 3_048
+    assert budget.snapshot().exhausted is True
+    budget.settle_model(attempt, actual_tokens=None)
+    assert budget.snapshot().charged_tokens == 3_048
+    assert budget.snapshot().model_reservations_in_flight == 0
+
+
+def test_concurrent_bounded_model_attempts_cannot_share_the_same_input_capacity():
+    policy = replace(
+        DEFAULT_RUN_BUDGET_POLICY,
+        max_model_calls=100,
+        max_output_tokens=1_024,
+        max_total_tokens=12_000,
+    )
+    budget = RunBudget(policy, clock=lambda: 0.0)
+    barrier = Barrier(100)
+
+    def reserve() -> object | None:
+        barrier.wait()
+        try:
+            return budget.reserve_model_attempt(input_upper_bound=10_976)
+        except RunBudgetExceededError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        attempts = list(executor.map(lambda _index: reserve(), range(100)))
+    reservations = [attempt for attempt in attempts if attempt is not None]
+
+    assert len(reservations) == 1
+    assert budget.snapshot().charged_tokens == 12_000
+    assert budget.snapshot().model_calls == 1
+    budget.settle_model(reservations[0], actual_tokens=None)
 
 
 @pytest.mark.parametrize("input_tokens", [0, 1])
@@ -1177,6 +1241,260 @@ async def test_input_counter_observes_an_atomic_call_and_output_reservation():
 
     await middleware.awrap_model_call(request, respond)
     assert budget.snapshot().charged_tokens == 2
+
+
+async def test_prepared_input_count_is_reserved_atomically_before_provider_io():
+    policy = replace(
+        DEFAULT_RUN_BUDGET_POLICY,
+        max_output_tokens=1_024,
+        max_total_tokens=12_000,
+    )
+    budget = RunBudget(policy)
+    provider_calls = 0
+    prepared_request = None
+
+    async def prepare(request):
+        nonlocal prepared_request
+        prepared_request = request
+
+        async def count():
+            nonlocal provider_calls
+            provider_calls += 1
+            snapshot = budget.snapshot()
+            assert snapshot.charged_tokens == 12_000
+            assert snapshot.model_reservations_in_flight == 1
+            return 1
+
+        async def verify(candidate):
+            assert candidate is prepared_request
+
+        return PreparedInputTokenCount(10_976, count, verify)
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=lambda _request: pytest.fail("legacy count must not run"),
+        input_token_count_preparer=prepare,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def respond(_request):
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="bounded",
+                    usage_metadata={
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(request, respond)
+    assert provider_calls == 1
+    assert budget.snapshot().charged_tokens == 2
+
+
+async def test_prepared_input_count_that_cannot_fit_never_reaches_provider():
+    policy = replace(
+        DEFAULT_RUN_BUDGET_POLICY,
+        max_output_tokens=1_024,
+        max_total_tokens=12_000,
+    )
+    budget = RunBudget(policy)
+    provider_calls = 0
+
+    async def prepare(_request):
+        async def count():
+            nonlocal provider_calls
+            provider_calls += 1
+            return 1
+
+        async def verify(_candidate):
+            return None
+
+        return PreparedInputTokenCount(10_977, count, verify)
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=_zero_input_tokens,
+        input_token_count_preparer=prepare,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    with pytest.raises(RunBudgetExceededError, match="token budget"):
+        await middleware.awrap_model_call(
+            request,
+            lambda _request: pytest.fail("generation must not run"),
+        )
+
+    snapshot = budget.snapshot()
+    assert provider_calls == 0
+    assert snapshot.model_calls == 0
+    assert snapshot.charged_tokens == 0
+    assert snapshot.exhausted is True
+
+
+@pytest.mark.parametrize("failure", ["error", "cancel"])
+async def test_prepared_count_failure_retains_full_atomic_reservation(failure):
+    budget = RunBudget()
+
+    async def prepare(_request):
+        async def count():
+            if failure == "cancel":
+                raise asyncio.CancelledError
+            raise InputTokenCountError("official count unavailable")
+
+        async def verify(_candidate):
+            pytest.fail("failed count must not reach parity verification")
+
+        return PreparedInputTokenCount(1_000, count, verify)
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=_zero_input_tokens,
+        input_token_count_preparer=prepare,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    error = asyncio.CancelledError if failure == "cancel" else InputTokenCountError
+    with pytest.raises(error):
+        await middleware.awrap_model_call(
+            request,
+            lambda _request: pytest.fail("generation must not run"),
+        )
+
+    snapshot = budget.snapshot()
+    assert snapshot.model_calls == 1
+    assert snapshot.charged_tokens == 3_048
+    assert snapshot.model_reservations_in_flight == 0
+    assert snapshot.exhausted is True
+
+
+async def test_prepared_generation_parity_failure_retains_reservation():
+    budget = RunBudget()
+    generated = False
+
+    async def prepare(_request):
+        async def count():
+            return 10
+
+        async def verify(_candidate):
+            raise InputTokenCountError("token-bearing payload changed")
+
+        return PreparedInputTokenCount(1_000, count, verify)
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=_zero_input_tokens,
+        input_token_count_preparer=prepare,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+
+    async def provider(_request):
+        nonlocal generated
+        generated = True
+        return ModelResponse(result=[AIMessage(content="unexpected")])
+
+    with pytest.raises(InputTokenCountError, match="payload changed"):
+        await middleware.awrap_model_call(request, provider)
+
+    snapshot = budget.snapshot()
+    assert generated is False
+    assert snapshot.charged_tokens == 3_048
+    assert snapshot.model_reservations_in_flight == 0
+    assert snapshot.exhausted is True
+
+
+async def test_concurrent_prepared_counts_cannot_reuse_unreserved_capacity():
+    policy = replace(
+        DEFAULT_RUN_BUDGET_POLICY,
+        max_output_tokens=1_024,
+        max_total_tokens=12_000,
+    )
+    budget = RunBudget(policy)
+    provider_entered = asyncio.Event()
+    release_provider = asyncio.Event()
+    provider_calls = 0
+
+    async def prepare(_request):
+        async def count():
+            nonlocal provider_calls
+            provider_calls += 1
+            provider_entered.set()
+            await release_provider.wait()
+            return 1
+
+        async def verify(_candidate):
+            return None
+
+        return PreparedInputTokenCount(10_976, count, verify)
+
+    middleware = RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=_zero_input_tokens,
+        input_token_count_preparer=prepare,
+    )
+    request = ModelRequest(
+        model=FakeMessagesListChatModel(responses=[AIMessage(content="unused")]),
+        messages=[],
+        tools=[],
+    )
+    first = asyncio.create_task(
+        middleware.awrap_model_call(
+            request,
+            lambda _request: pytest.fail("generation must not run"),
+        )
+    )
+    await provider_entered.wait()
+
+    with pytest.raises(RunBudgetExceededError):
+        await middleware.awrap_model_call(
+            request,
+            lambda _request: pytest.fail("generation must not run"),
+        )
+    release_provider.set()
+    with pytest.raises(InputTokenCountError):
+        await first
+
+    snapshot = budget.snapshot()
+    assert provider_calls == 1
+    assert snapshot.model_calls == 1
+    assert snapshot.charged_tokens == 12_000
+    assert snapshot.model_reservations_in_flight == 0
+    assert snapshot.exhausted is True
 
 
 async def test_native_prompt_cache_shape_is_counted_before_generation():

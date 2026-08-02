@@ -13,6 +13,11 @@ interface FixtureState {
     params?: unknown
   }>
   errors: string[]
+  messageIdMappings: Array<{
+    clientId: string
+    projectedId: string
+    storedId: string
+  }>
   reconnectDisconnects: number
   renameAttempts: number
   responses: Array<{
@@ -648,12 +653,28 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
   const composer = page.getByRole("textbox", {
     name: "AI에게 보낼 메시지",
   })
-  await composer.fill("공개 익명 경로에서 한글 질문")
+  const publicQuestion = "공개 익명 경로에서 한글 질문"
+  const publicQuestionBubble = page.getByText(publicQuestion, {
+    exact: true,
+  })
+  await composer.fill(publicQuestion)
   await composer.press("Enter")
   await expect(
     page.getByText("공개 fixture 검색을 계속할까요?")
   ).toBeVisible({ timeout: 12_000 })
+  await expect(publicQuestionBubble).toHaveCount(1)
   const interruptedState = await fixtureState(page)
+  expect(interruptedState.messageIdMappings).toHaveLength(1)
+  const messageIdMapping = interruptedState.messageIdMappings[0]
+  expect(messageIdMapping).toBeDefined()
+  if (!messageIdMapping) {
+    throw new Error("fixture did not record the guest message ID mapping")
+  }
+  expect(messageIdMapping.projectedId).toBe(messageIdMapping.clientId)
+  expect(messageIdMapping.storedId).not.toBe(messageIdMapping.clientId)
+  expect(messageIdMapping.storedId).toBe(
+    `guest-user:${messageIdMapping.clientId}:00000000000000000000000000000001`
+  )
   expect(interruptedState.stateRequests).toEqual(
     expect.arrayContaining([
       {
@@ -668,6 +689,7 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
   await expect(
     page.getByText("브라우저 fixture 응답이 완료되었습니다.")
   ).toBeVisible({ timeout: 12_000 })
+  await expect(publicQuestionBubble).toHaveCount(1)
   const resumedState = await fixtureState(page)
   expect(resumedState.errors).toEqual([])
   expect(resumedState.responses).toEqual([
@@ -685,6 +707,15 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
   await expect(
     page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
   ).toBeVisible({ timeout: 12_000 })
+  await page.getByRole("button", { name: "대화 목록 열기" }).click()
+  await page
+    .getByRole("button", { name: /브라우저 테스트 대화/ })
+    .click()
+  await page.getByRole("button", { name: "Close" }).click()
+  await expect(publicQuestionBubble).toHaveCount(1)
+  await expect(
+    page.getByText("브라우저 fixture 응답이 완료되었습니다.")
+  ).toBeVisible()
   expect(tokenRequests).toEqual([
     { body: null, intent: "anonymous" },
     {

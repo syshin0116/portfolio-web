@@ -11,6 +11,10 @@ import {
 const webRoot = resolve(import.meta.dir, "..")
 const packageJson = readFileSync(resolve(webRoot, "package.json"), "utf8")
 const bunLock = readFileSync(resolve(webRoot, "bun.lock"), "utf8")
+const assistantUiPatchAttributes = readFileSync(
+  resolve(webRoot, ASSISTANT_UI_STORE_PATCH.attributesPath),
+  "utf8",
+)
 const assistantUiStorePatch = readFileSync(
   resolve(webRoot, ASSISTANT_UI_STORE_PATCH.path),
   "utf8",
@@ -50,6 +54,7 @@ function evidence() {
     ignored: ignoredAudit,
     packageJson,
     bunLock,
+    assistantUiPatchAttributes,
     assistantUiStorePatch,
     now: new Date("2026-07-27T00:00:00Z"),
   }
@@ -194,6 +199,28 @@ describe("dependency audit exception policy", () => {
 
     expect(() => validateAuditPolicy(candidate)).toThrow(
       "assistant-ui store patch target drifted",
+    )
+  })
+
+  test("forces exact assistant-ui patch bytes across CRLF checkouts", () => {
+    const candidate = evidence()
+    candidate.assistantUiPatchAttributes =
+      "*.patch whitespace=-blank-at-eol,-space-before-tab\n"
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "patch checkout must force LF line endings",
+    )
+  })
+
+  test("requires matching source, distribution, and source-map postimages", () => {
+    const candidate = evidence()
+    candidate.assistantUiStorePatch = candidate.assistantUiStorePatch.replace(
+      "2090d3b792386d35e7ed30a8cee4cad391d558aa",
+      "0000000000000000000000000000000000000000",
+    )
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "patch postimage drifted for dist/utils/NotificationManager.js.map",
     )
   })
 

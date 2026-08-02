@@ -19,12 +19,12 @@ import upstream_version_audit as audit  # noqa: E402
 CORE_PYTHON_VERSIONS = {
     "aegra-api": "0.9.25",
     "aegra-cli": "0.9.25",
-    "deepagents": "0.6.12",
+    "deepagents": "0.7.1",
     "langgraph": "1.2.10",
     "langgraph-sdk": "0.4.2",
 }
 QUICKJS_VERSIONS = {
-    "langchain-quickjs": "0.3.4",
+    "langchain-quickjs": "0.3.5",
     "quickjs-rs": "0.2.5",
 }
 OPENAI_VERSIONS = {
@@ -736,8 +736,8 @@ class RepositoryAuditTests(unittest.TestCase):
         manifest = self.root / audit.PYTHON_MANIFEST
         original = manifest.read_text(encoding="utf-8")
         mutations = (
-            ('    "deepagents==0.6.12",\n', ""),
-            ("deepagents==0.6.12", "deepagents>=0.6.12"),
+            ('    "deepagents==0.7.1",\n', ""),
+            ("deepagents==0.7.1", "deepagents>=0.7.1"),
         )
         for old, new in mutations:
             with self.subTest(mutation=new or "missing"):
@@ -946,14 +946,14 @@ class RepositoryAuditTests(unittest.TestCase):
     def test_newer_stable_release_is_visible_and_fails_audit(self) -> None:
         document = audit.audit_repository(
             self.root,
-            fetch=OfflineFetcher(overrides={"deepagents": "0.6.13"}),
+            fetch=OfflineFetcher(overrides={"deepagents": "0.7.2"}),
         )
 
         self.assertEqual("outdated", document["status"])
         self.assertEqual(["deepagents"], document["outdatedTargets"])
         result = target(document, "deepagents")
-        self.assertEqual("0.6.12", result["installed"])
-        self.assertEqual("0.6.13", result["latest"])
+        self.assertEqual("0.7.1", result["installed"])
+        self.assertEqual("0.7.2", result["latest"])
         self.assertEqual(
             "https://pypi.org/pypi/deepagents/json",
             result["source"],
@@ -988,7 +988,7 @@ class RepositoryAuditTests(unittest.TestCase):
 
     def test_newer_quickjs_releases_are_visible_and_fail_the_audit(self) -> None:
         cases = (
-            ("langchain-quickjs", "0.3.5"),
+            ("langchain-quickjs", "0.3.6"),
             ("quickjs-rs", "0.2.6"),
         )
         for package, newer_version in cases:

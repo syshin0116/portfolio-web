@@ -26,6 +26,7 @@ from deepagents.backends import (
     StateBackend,
     StoreBackend,
 )
+from langchain.agents.middleware import TodoListMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
@@ -46,11 +47,11 @@ from agent.capabilities.quickjs import (
     quickjs_allowed,
 )
 from agent.capabilities.subagents import (
+    BOUNDED_TASK_TOOL_DESCRIPTION,
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
     build_subagents,
     dynamic_subagents_allowed,
-    native_subagent_system_prompt,
     validate_capability_config,
 )
 from agent.capabilities.token_counting import (
@@ -86,6 +87,8 @@ MODEL_TIMEOUT_SECONDS = OPENAI_GUEST_TIMEOUT_SECONDS
 SUPPORTED_OWNER_MODEL_PROVIDERS = frozenset({"anthropic"})
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
+    tool_description_overrides={"task": BOUNDED_TASK_TOOL_DESCRIPTION},
+    excluded_tools=frozenset({"delete"}),
     general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
     # This middleware performs its own provider call outside user middleware,
     # which would bypass the shared model reservation.
@@ -118,6 +121,7 @@ _GUEST_ROOT_TOOL_ORDER = (
     "list_posts",
     "read_post",
 )
+ROOT_TOOL_DENYLIST = frozenset({"delete"})
 GUEST_ROOT_TOOL_NAMES = frozenset(
     {
         "keyword_search",
@@ -429,7 +433,6 @@ def create_graph(
             "frozenset on an injected experiment graph"
         )
     selected_subagents = experiment_subagent_allowlist or SUBAGENT_NAMES
-    selected_native_subagent_prompt = native_subagent_system_prompt(selected_subagents)
     if quickjs_middleware is None:
         quickjs_middleware = BoundedQuickJSMiddleware(enabled=allow_quickjs)
     elif (
@@ -448,6 +451,7 @@ def create_graph(
         tools=TOOLS,
         system_prompt=system_prompt,
         middleware=[
+            TodoListMiddleware(),
             quickjs_middleware,
             RunBudgetMiddleware(
                 run_budget,
@@ -458,10 +462,10 @@ def create_graph(
                 input_token_count_preparer=exact_input_preparer,
                 model_provider=usage_model_provider,
                 expected_response_models=usage_response_models,
-                native_subagent_prompt=selected_native_subagent_prompt,
                 quickjs_tool_name=QUICKJS_TOOL_NAME,
                 allow_quickjs=allow_quickjs,
                 root_tool_allowlist=effective_root_tool_allowlist,
+                root_tool_denylist=ROOT_TOOL_DENYLIST,
             ),
         ],
         subagents=build_subagents(

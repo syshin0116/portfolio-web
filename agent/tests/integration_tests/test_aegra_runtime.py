@@ -109,9 +109,9 @@ def test_runtime_dependencies_are_the_spike_versions():
     } == {
         "aegra-api": "0.9.25",
         "aegra-cli": "0.9.25",
-        "deepagents": "0.6.12",
+        "deepagents": "0.7.1",
         "langchain": "1.3.14",
-        "langchain-core": "1.4.9",
+        "langchain-core": "1.5.2",
         "langgraph": "1.2.10",
         "langgraph-checkpoint-postgres": "3.1.0",
         "langgraph-sdk": "0.4.2",

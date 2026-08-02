@@ -9,7 +9,7 @@ from typing import Any
 from deepagents.backends import CompositeBackend, FilesystemBackend
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import (
-    TASK_SYSTEM_PROMPT,
+    TASK_TOOL_DESCRIPTION,
     CompiledSubAgent,
 )
 from langchain.agents import create_agent
@@ -53,6 +53,21 @@ two independent tasks, never ask a child to create another child, and synthesize
 visitor-facing answer in the root agent. Do not request a dynamic response schema through
 run configuration.
 """
+
+BOUNDED_TASK_TOOL_DESCRIPTION = (
+    TASK_TOOL_DESCRIPTION.rstrip()
+    + "\n\n"
+    + """\
+Server-enforced RAG harness contract:
+- The shared run budget permits at most two task dispatches, and may permit fewer for a
+  selected experiment. Calls beyond that budget fail closed.
+"""
+    + "- Every description must contain these exact headings, in order: Question:, "
+    + "Allowed corpus/method scope:, Expected output schema:, Stopping condition:.\n"
+    + """\
+- Children cannot delegate another task, use QuickJS, or retain state between calls.
+"""
+)
 
 _RETRIEVAL_RESEARCHER_PROMPT = """\
 You are the retrieval-researcher for a published-blog RAG evaluation testbed.
@@ -178,21 +193,6 @@ def _selected_subagent_definitions(
         if definition[0] in allowed_subagents
     )
 
-
-def native_subagent_system_prompt(allowed_subagents: frozenset[str]) -> str:
-    """Return the pinned Deep Agents prompt for one exact specialist inventory."""
-    definitions = _selected_subagent_definitions(allowed_subagents)
-    return (
-        TASK_SYSTEM_PROMPT
-        + "\n\nAvailable subagent types:\n\n"
-        + "\n".join(
-            f"- {name}: {description}"
-            for name, description, _prompt, _tools in definitions
-        )
-    )
-
-
-NATIVE_SUBAGENT_SYSTEM_PROMPT = native_subagent_system_prompt(SUBAGENT_NAMES)
 
 _FORBIDDEN_CONFIG_KEYS = frozenset(
     {
@@ -387,14 +387,13 @@ def build_subagents(
 
 
 __all__ = [
+    "BOUNDED_TASK_TOOL_DESCRIPTION",
     "DYNAMIC_SUBAGENT_PERMISSIONS",
-    "NATIVE_SUBAGENT_SYSTEM_PROMPT",
     "SUBAGENT_NAMES",
     "SUBAGENT_ROOT_PROMPT",
     "SUBAGENT_SKILLS",
     "build_subagents",
     "dynamic_subagents_allowed",
-    "native_subagent_system_prompt",
     "read_blog_retrieval_skill",
     "validate_capability_config",
 ]

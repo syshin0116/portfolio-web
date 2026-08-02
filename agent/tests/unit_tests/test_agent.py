@@ -54,10 +54,9 @@ from agent.capabilities.quickjs import (
     BoundedQuickJSMiddleware,
 )
 from agent.capabilities.subagents import (
-    NATIVE_SUBAGENT_SYSTEM_PROMPT,
+    BOUNDED_TASK_TOOL_DESCRIPTION,
     SUBAGENT_NAMES,
     SUBAGENT_ROOT_PROMPT,
-    native_subagent_system_prompt,
 )
 from agent.capabilities.token_counting import (
     OPENAI_API_BASE_URL,
@@ -681,6 +680,8 @@ def test_prebuilt_production_model_resolves_fail_closed_harness_profile(monkeypa
     assert isinstance(model, ChatAnthropic)
     assert profile.general_purpose_subagent.enabled is False
     assert "SummarizationMiddleware" in profile.excluded_middleware
+    assert profile.excluded_tools == frozenset({"delete"})
+    assert profile.tool_description_overrides == {"task": BOUNDED_TASK_TOOL_DESCRIPTION}
 
 
 def test_repeated_graph_creation_registers_profile_once_per_model(monkeypatch):
@@ -713,7 +714,7 @@ def test_compiled_graph_keeps_capability_topology_stable_while_opted_out():
     registered_tools = _compiled_tool_names(compiled)
 
     assert {tool.name for tool in TOOLS} <= registered_tools
-    assert {"task"} <= registered_tools
+    assert {"task", "write_todos"} <= registered_tools
     assert QUICKJS_TOOL_NAME in registered_tools
 
 
@@ -1064,13 +1065,12 @@ async def test_runtime_without_owner_permission_hides_task_and_delegation_prompt
     assert result["messages"][-1].content == "no delegation"
     assert len(model.bound_tool_names) == 1
     assert "task" not in model.bound_tool_names[0]
+    assert "write_todos" in model.bound_tool_names[0]
+    assert "delete" not in model.bound_tool_names[0]
     assert QUICKJS_TOOL_NAME not in model.bound_tool_names[0]
     assert len(root_prompts) == 1
     prompt_text = str(root_prompts[0])
     assert SUBAGENT_ROOT_PROMPT.strip() not in prompt_text
-    assert NATIVE_SUBAGENT_SYSTEM_PROMPT not in prompt_text
-    assert "## `task` (subagent spawner)" not in prompt_text
-    assert "Available subagent types" not in prompt_text
     assert all(name not in prompt_text for name in SUBAGENT_NAMES)
     assert QUICKJS_SYSTEM_PROMPT.strip() not in prompt_text
     assert budget.snapshot().model_calls == 1
@@ -1217,6 +1217,125 @@ async def test_canonical_guest_runtime_rejects_a_forged_filesystem_tool_call(
     assert budget.snapshot().tool_calls == 0
 
 
+async def test_owner_runtime_rejects_a_forged_recursive_delete_tool_call():
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "delete",
+                        "args": {"file_path": "/memories"},
+                        "id": "forged-owner-delete-call",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 1,
+                    "output_tokens": 9,
+                    "total_tokens": 10,
+                },
+            )
+        ]
+    )
+    budget = RunBudget()
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": "owner-forged-delete"}},
+        model=model,
+        budget=budget,
+    )
+
+    with pytest.raises(CapabilityDeniedError, match="reviewed root tool surface"):
+        await compiled.ainvoke(
+            {"messages": [{"role": "user", "content": "delete memories"}]},
+            {"configurable": {"thread_id": "owner-forged-delete"}},
+        )
+
+    assert len(model.bound_tool_names) == 1
+    assert {"task", "write_todos", "write_file", "edit_file"} <= (
+        model.bound_tool_names[0]
+    )
+    assert "delete" not in model.bound_tool_names[0]
+    assert budget.snapshot().tool_calls == 0
+
+
+async def test_owner_runtime_keeps_reviewed_write_overwrite_and_edit_semantics():
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {
+                            "file_path": "/draft.txt",
+                            "content": "after overwrite\n",
+                        },
+                        "id": "owner-overwrite-file",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "args": {
+                            "file_path": "/draft.txt",
+                            "old_string": "after overwrite",
+                            "new_string": "after reviewed edit",
+                        },
+                        "id": "owner-edit-file",
+                        "type": "tool_call",
+                    }
+                ],
+                usage_metadata={
+                    "input_tokens": 9,
+                    "output_tokens": 1,
+                    "total_tokens": 10,
+                },
+            ),
+            _final_message("Draft updated."),
+        ]
+    )
+    budget = RunBudget()
+    thread_id = "owner-reviewed-write-edit"
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": thread_id}},
+        model=model,
+        budget=budget,
+    )
+
+    result = await compiled.ainvoke(
+        {
+            "messages": [{"role": "user", "content": "update the draft"}],
+            "files": {
+                "/draft.txt": {
+                    "content": "before overwrite\n",
+                    "encoding": "utf-8",
+                }
+            },
+        },
+        {"configurable": {"thread_id": thread_id}},
+    )
+
+    assert result["files"]["/draft.txt"]["content"] == "after reviewed edit\n"
+    assert all("delete" not in names for names in model.bound_tool_names)
+    assert all(
+        {"write_todos", "write_file", "edit_file"} <= names
+        for names in model.bound_tool_names
+    )
+    assert budget.snapshot().tool_calls == 2
+
+
 def test_guest_runtime_rejects_caller_supplied_experiment_root_allowlist(monkeypatch):
     monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
 
@@ -1291,8 +1410,23 @@ async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model
         for tool in counted.tools
     )
     assert model.bound_tool_names == [counted_tool_names]
-    assert "## `task` (subagent spawner)" in str(counted.system_message.content)
-    assert "Available subagent types" in str(counted.system_message.content)
+    assert {"task", "write_todos", "write_file", "edit_file"} <= counted_tool_names
+    assert "delete" not in counted_tool_names
+    task_tools = [
+        tool
+        for tool in counted.tools
+        if (tool.get("name") if isinstance(tool, dict) else tool.name) == "task"
+    ]
+    assert len(task_tools) == 1
+    task_description = (
+        task_tools[0].get("description")
+        if isinstance(task_tools[0], dict)
+        else task_tools[0].description
+    )
+    assert isinstance(task_description, str)
+    assert "shared run budget" in task_description
+    assert "at most two task dispatches" in task_description
+    assert all(f"- {name}:" in task_description for name in SUBAGENT_NAMES)
 
 
 @pytest.mark.parametrize(
@@ -1473,10 +1607,8 @@ async def test_server_capability_axes_have_exact_prompt_and_tool_order(
         if block["type"] == "text"
     )
     root_prompt = SUBAGENT_ROOT_PROMPT.strip()
-    native_prompt = NATIVE_SUBAGENT_SYSTEM_PROMPT.strip()
     quickjs_prompt = QUICKJS_SYSTEM_PROMPT.strip()
     assert (root_prompt in system_text) is subagents_enabled
-    assert (native_prompt in system_text) is subagents_enabled
     assert (quickjs_prompt in system_text) is quickjs_enabled
     if subagents_enabled:
         task_tools = [
@@ -1492,13 +1624,13 @@ async def test_server_capability_axes_have_exact_prompt_and_tool_order(
         )
         assert isinstance(task_description, str)
         assert all(f"- {name}:" in task_description for name in SUBAGENT_NAMES)
+        assert "shared run budget" in task_description
+        assert "at most two task dispatches" in task_description
+        assert "Question:" in task_description
+        assert "Stopping condition:" in task_description
         assert system_text.count(root_prompt) == 1
-        assert system_text.count(native_prompt) == 1
-        assert system_text.index(root_prompt) < system_text.index(native_prompt)
     if quickjs_enabled:
         assert system_text.count(quickjs_prompt) == 1
-    if subagents_enabled and quickjs_enabled:
-        assert system_text.index(native_prompt) < system_text.index(quickjs_prompt)
 
 
 async def test_experiment_subagent_allowlist_rejects_other_specialists_before_reservation():
@@ -1566,14 +1698,6 @@ Stop after one verdict.
     finally:
         await quickjs_middleware.aclose()
 
-    system_text = "\n".join(
-        block["text"]
-        for block in model.invoked_messages[0][0].content_blocks
-        if block["type"] == "text"
-    )
-    eval_native_prompt = native_subagent_system_prompt(frozenset({"evidence-checker"}))
-    assert eval_native_prompt in system_text
-    assert NATIVE_SUBAGENT_SYSTEM_PROMPT not in system_text
     assert len(counted_requests) == 1
     task_tools = [
         tool
@@ -1587,6 +1711,9 @@ Stop after one verdict.
         else task_tools[0].description
     )
     assert isinstance(task_description, str)
+    assert "shared run budget" in task_description
+    assert "Question:" in task_description
+    assert "Stopping condition:" in task_description
     assert "- evidence-checker:" in task_description
     assert all(
         f"- {name}:" not in task_description

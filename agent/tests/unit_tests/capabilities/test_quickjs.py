@@ -164,7 +164,7 @@ async def test_native_tool_is_async_only_and_does_not_retain_call_state(middlewa
 
 
 async def test_exact_native_stack_is_imported_and_used_at_runtime(middleware):
-    assert version("langchain-quickjs") == "0.3.4"
+    assert version("langchain-quickjs") == "0.3.5"
     assert version("quickjs-rs") == "0.2.5"
     assert isinstance(middleware, CodeInterpreterMiddleware)
 

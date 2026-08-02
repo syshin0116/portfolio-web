@@ -120,6 +120,7 @@ def published_guest_transcripts(
     ]
     return {
         "post_path": post_path,
+        "initial_messages": [HumanMessage(content=_PUBLISHED_CORPUS_QUERY)],
         "semantic_messages": semantic_messages,
         "read_messages": read_messages,
     }
@@ -447,7 +448,9 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     published_guest_transcripts: dict[str, object],
 ) -> None:
     """Exercise semantic -> read_post -> answer in one shared guest budget."""
-    safe_exact_count_fixtures = iter((2_500, 4_100))
+    # 693 was observed in one provider-gated Luna smoke on 2026-08-03. It remains
+    # a non-network fixture here, not proof of tokenizer behavior or provider pricing.
+    safe_exact_count_fixtures = iter((693, 2_500, 4_100))
     observed_reservations: list[int] = []
 
     async def safe_exact_count(_self, **payload):
@@ -458,11 +461,17 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     monkeypatch.setattr(AsyncInputTokens, "count", safe_exact_count)
     budget = _guest_count_risk_budget()
     middleware = _guest_count_risk_middleware(budget)
+    initial_messages = published_guest_transcripts["initial_messages"]
     semantic_messages = published_guest_transcripts["semantic_messages"]
     read_messages = published_guest_transcripts["read_messages"]
+    assert isinstance(initial_messages, list)
     assert isinstance(semantic_messages, list)
     assert isinstance(read_messages, list)
 
+    await middleware.awrap_model_call(
+        _guest_request(initial_messages),
+        lambda _request: _async_response(input_tokens=693),
+    )
     await middleware.awrap_model_call(
         _guest_request(semantic_messages),
         lambda _request: _async_response(input_tokens=2_500),
@@ -470,19 +479,20 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
 
     async def answer(_request: ModelRequest) -> ModelResponse:
         snapshot = budget.snapshot()
-        assert snapshot.charged_tokens == 7_688
-        assert snapshot.count_risk_tokens == 6_600
+        assert snapshot.charged_tokens == 8_445
+        assert snapshot.count_risk_tokens == 7_293
         assert snapshot.count_risk_tokens_in_flight == 0
         return _openai_fixture_response(input_tokens=4_100)
 
     await middleware.awrap_model_call(_guest_request(read_messages), answer)
     snapshot = budget.finalize()
 
-    assert observed_reservations == [11_051, 16_303]
-    assert snapshot.charged_tokens == 6_728
-    assert snapshot.count_risk_tokens == 6_600
-    assert snapshot.provider_input_tokens == 6_600
-    assert snapshot.provider_output_tokens == 128
+    assert observed_reservations == [6_141, 11_051, 16_303]
+    assert snapshot.charged_tokens == 7_485
+    assert snapshot.count_risk_tokens == 7_293
+    assert snapshot.provider_input_tokens == 7_293
+    assert snapshot.provider_output_tokens == 192
+    assert snapshot.model_calls == 3
     assert snapshot.provider_usage_complete is True
 
 

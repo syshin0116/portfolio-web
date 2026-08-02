@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-07-31"
+updated: "2026-08-03"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -926,8 +926,9 @@ Cloud Run/Neon/provider proofs and the paid launch decision remain mandatory.
   no nodes, so anything expressible there is free to vary.
 - `/admin/gc` plus the dedicated maintenance job, quarantine, stale-run recovery, and
   Terraform-owned Cloud Scheduler. **Deleting a thread does not delete its checkpoints** -
-  sweep children before parents. Neon free has no `pg_cron`; Scheduler stays paused until
-  a separately approved launch and recurring-cost change.
+  sweep children before parents. Neon free has no `pg_cron`; after the separately approved
+  recurring-cost change, the production Scheduler is active in Terraform but remains an
+  external launch gate until its exact plan, apply, and first bounded execution pass.
 - Per-run model/token limits and a durable UTC-day micro-dollar ledger are implemented for
   the fixed `openai:gpt-5.6-luna` guest contract. The public flags, model, budgets, and
   OpenAI secret remain absent/disabled; Luna has no API Free tier. Provider-account spend

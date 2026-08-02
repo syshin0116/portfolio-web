@@ -8,7 +8,7 @@ when_to_read: >
   workflows or image, rotating agent database credentials, or rolling back a revision.
 tags: [operations, gcp, cloud-run, aegra, github-actions, neon, rollback]
 status: stable
-updated: "2026-07-29"
+updated: "2026-08-03"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
@@ -61,10 +61,11 @@ production image.
 The dedicated `agent-maintenance-scheduler` identity has no database secret and no
 project-wide role. It receives `roles/run.invoker` only on `agent-maintenance`. The
 production-only `agent-guest-maintenance` Cloud Scheduler job uses OAuth to call the
-Cloud Run Jobs v2 `:run` API on a 15-minute schedule, but Terraform creates it paused.
-It remains paused through bootstrap and owner-only operation. Unpausing requires a
-separate reviewed repository change, exact live plan, and explicit public-launch and
-billing approval; no environment variable or console-only toggle owns that desired state.
+Cloud Run Jobs v2 `:run` API on a 15-minute schedule. After explicit owner approval,
+Terraform now creates the production schedule active. Jobs-stage bootstrap still creates
+no schedule; before the services-stage apply, all six one-shot jobs must pass. Keep both
+web public flags disabled until the active schedule and its first bounded execution are
+verified. No environment variable or console-only toggle owns that desired state.
 Preview maintenance runs only as part of a reviewed preview release. The Google-managed
 Cloud Scheduler service agent must retain `roles/cloudscheduler.serviceAgent` or
 authenticated schedules fail with 403.
@@ -245,10 +246,12 @@ remote state and advance the explicit `agent_delivery_stage` in order:
 
 4. **Services.** Re-plan with `agent_delivery_stage=services`, the same two digests, and
    the same external version file. The only delivery-surface additions are the two
-   services, their resource IAM, and the production-only maintenance schedule in the
-   paused state. Reject a plan that starts the schedule. Apply only after both
-   environments' migration, grant probe, and maintenance job passed. Do not enable
-   delivery yet. `scripts/verify_ops_foundation.sh --live` is intentionally blocked
+   services, their resource IAM, and the active production-only maintenance schedule.
+   Reject a plan that leaves the schedule paused or changes its reviewed 15-minute/OAuth
+   contract. Apply only after both environments' migration, grant probe, and maintenance
+   job passed. Keep both web public flags disabled, verify the schedule is active, and
+   require its first bounded execution to succeed. Do not enable delivery yet.
+   `scripts/verify_ops_foundation.sh --live` is intentionally blocked
    because the repository has no pinned company-admin attestation key; the script
    contains no GCP request implementation to reactivate. Its unsigned v1 input can
    validate structure only and cannot approve this stage. A separate reviewed signed-v2
@@ -335,18 +338,15 @@ reducing a boundary, inventory revision digests again and first repeat the dry r
 
 ## Cost guard and incident containment
 
-The paused Scheduler prevents unattended 15-minute maintenance during bootstrap, but it
-does not make the stack free. Manually executed jobs, Cloud Run requests, Artifact
-Registry, Secret Manager, logging, Terraform state storage, Neon, and model calls can
-still incur usage or charges. Confirm billing and resource telemetry in the exact
-dedicated project rather than inferring zero cost from an idle service or paused schedule.
-
-Recurring guest maintenance is still part of the intended public anonymous launch.
-After every public wire, spend, retention, browser, and billing gate passes, a separate
-pull request may change the repository-owned Scheduler constant from paused to active.
-The owner must approve that public-launch and billing change and the exact project-scoped
-Terraform plan before apply. Do not introduce a runtime flag that can drift from
-Terraform and silently start recurrence.
+Jobs-stage bootstrap creates no Scheduler, so unattended maintenance cannot begin during
+that stage. The owner-approved services-stage contract creates the production Scheduler
+active; review the exact project-scoped plan before apply, then verify its first bounded
+execution while both web public flags remain disabled. The schedule does not make the
+stack free: Cloud Run jobs, requests, Artifact Registry, Secret Manager, logging,
+Terraform state storage, Neon, and model calls can still incur usage or charges. Confirm
+billing and resource telemetry in the exact dedicated project rather than inferring zero
+cost from low traffic or free-trial credit. Do not introduce a runtime flag or
+console-only toggle that can drift from Terraform and silently change recurrence.
 
 For a spend or exposure incident, preserve this exact order:
 
@@ -565,8 +565,8 @@ Restore a prior secret version only as a separately reviewed operation.
 - The real-Neon grant/denial result, provider-backed smoke, browser journey, and
   capability-policy evidence remain P2/P3 operational gates; the PostgreSQL 17 PR
   container smoke does not satisfy them.
-- Anonymous visitor access remains a later reviewed production release after ADR-0006's
-  isolation, concurrency, retention, and spend gates. An unreviewed preview build never
-  becomes the public guest path.
-- The production Scheduler remains paused until a separate public-launch and billing
-  approval changes its repository-owned Terraform constant and applies the exact plan.
+- Anonymous visitor access remains disabled until ADR-0006's isolation, concurrency,
+  retention, spend, exact-plan, and first scheduled-execution gates pass. An unreviewed
+  preview build never becomes the public guest path.
+- The production Scheduler's active repository contract still needs an exact-project
+  plan, apply, and verified first bounded execution before either web public flag changes.

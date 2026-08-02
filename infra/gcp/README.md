@@ -22,7 +22,7 @@ mutable aliases such as `latest` are forbidden.
   migration URL resource per environment;
 - production and preview Cloud Run services fixed to one instance/one Uvicorn worker;
 - same-image migration, real-Neon runtime-grant, and guest-retention maintenance jobs
-  for each service, with a production-only 15-minute Cloud Scheduler job created paused;
+  for each service, with an active production-only 15-minute Cloud Scheduler job;
 - each repository writable only by its matching builder and readable only by its matching
   deployer plus the Cloud Run service agent.
 
@@ -147,16 +147,17 @@ Initial setup is an explicit complete-root progression:
    version map creates only the two migration, two grant-probe, and two maintenance jobs
    plus resource IAM;
 3. after all six jobs pass, `services` adds the two serving surfaces, service IAM, and
-   the production-only 15-minute maintenance schedule in the paused state.
+   the active production-only 15-minute maintenance schedule.
 
 Never use `-target` to emulate a stage. After bootstrap, retain `services`, both current
 exact digests, and the complete external version file on every plan; omission proposes
 protected removal and fails closed. Payload injection and version creation remain
 out-of-band.
 
-The Scheduler `paused = true` value is a repository-owned Terraform constant, not an
-operator input. Unpausing requires a separate reviewed code change, exact live plan, and
-explicit public-launch and billing approval. `AGENT_CLOUD_RUN_ENABLED` gates future
+The Scheduler `paused = false` value is a repository-owned Terraform constant, not an
+operator input. Its reviewed activation still requires an exact live plan and a verified
+first bounded maintenance execution before the web public flags may be enabled. Pausing
+it again requires a matching reviewed code change. `AGENT_CLOUD_RUN_ENABLED` gates future
 GitHub delivery attempts only; changing it does not pause Scheduler, revoke the public
 invoker, stop a running service, or guarantee zero cost.
 

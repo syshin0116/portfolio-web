@@ -12,6 +12,8 @@ node_modules
 /web/coverage
 /web/test-results/
 /web/playwright-report/
+/web/playwright-site-report/
+/web/artifacts/
 /web/blob-report/
 
 # next.js

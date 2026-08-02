@@ -54,10 +54,18 @@ function addCopyButton(container: HTMLElement, codeEl: HTMLElement, elements: HT
 export function CopyCode() {
   useEffect(() => {
     const elements: HTMLElement[] = []
+    const focusableCodeBlocks: HTMLPreElement[] = []
+
+    const makeScrollableCodeFocusable = (pre: HTMLPreElement | null) => {
+      if (!pre || pre.hasAttribute("tabindex")) return
+      pre.tabIndex = 0
+      focusableCodeBlocks.push(pre)
+    }
 
     // 1. rehype-pretty-code figures (with language)
     document.querySelectorAll<HTMLElement>("[data-rehype-pretty-code-figure]").forEach((figure) => {
-      const pre = figure.querySelector("pre")
+      const pre = figure.querySelector<HTMLPreElement>("pre")
+      makeScrollableCodeFocusable(pre)
       const lang = pre?.getAttribute("data-language")
 
       if (lang && !figure.querySelector(".code-lang-label")) {
@@ -75,6 +83,7 @@ export function CopyCode() {
     // 2. Plain <pre> blocks (no language specified, not inside a figure)
     document.querySelectorAll<HTMLPreElement>(".prose pre").forEach((pre) => {
       if (pre.closest("[data-rehype-pretty-code-figure]")) return
+      makeScrollableCodeFocusable(pre)
 
       if (!pre.parentElement?.classList.contains("pre-wrapper")) {
         const wrapper = document.createElement("div")
@@ -90,6 +99,7 @@ export function CopyCode() {
 
     return () => {
       elements.forEach((el) => el.remove())
+      focusableCodeBlocks.forEach((pre) => pre.removeAttribute("tabindex"))
     }
   }, [])
 

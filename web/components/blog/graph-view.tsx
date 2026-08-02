@@ -171,16 +171,31 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
         .attr("stroke-opacity", 0.15)
         .attr("stroke-width", 1)
 
+      const openNode = (d: GraphNode) => {
+        if (d.type === "tag") {
+          router.push(`/blog/tags/${tagPath(d.id.replace("tag/", ""))}`)
+        } else {
+          router.push(`/blog/${d.id}`)
+        }
+      }
+
       const node = g.append("g")
         .selectAll<SVGGElement, GraphNode>("g")
         .data(nodesCopy)
         .join("g")
+        .attr("class", "graph-node")
         .attr("cursor", "pointer")
-        .on("click", (_, d) => {
-          if (d.type === "tag") {
-            router.push(`/blog/tags/${tagPath(d.id.replace("tag/", ""))}`)
+        .attr("role", "link")
+        .attr("tabindex", 0)
+        .attr("aria-label", d =>
+          `${d.title} ${d.type === "tag" ? "태그" : "글"} 열기`
+        )
+        .on("click", (_, d) => openNode(d))
+        .on("keydown", (event: KeyboardEvent, d) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            openNode(d)
           }
-          else router.push(`/blog/${d.id}`)
         })
         .on("mouseenter", (_, d) => {
           const connected = new Set<string>([d.id])
@@ -331,6 +346,8 @@ export function GraphView({ currentSlug }: { currentSlug?: string }) {
       <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Graph</p>
       <svg
         ref={svgRef}
+        role="group"
+        aria-label="관련 콘텐츠 그래프"
         className="w-full rounded-lg border bg-muted/5 animate-in fade-in-0 duration-500"
         style={{ height: 260 }}
       />

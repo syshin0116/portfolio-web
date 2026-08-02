@@ -20,6 +20,8 @@ export default defineConfig([
     "tests/browser/fixture/.next/**",
     "test-results/**",
     "playwright-report/**",
+    "playwright-site-report/**",
+    "artifacts/**",
     "out/**",
     "build/**",
     "public/pagefind/**",

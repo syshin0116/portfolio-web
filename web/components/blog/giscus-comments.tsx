@@ -2,7 +2,7 @@
 
 import Giscus from "@giscus/react"
 import { useTheme } from "next-themes"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 
 export function GiscusComments() {
@@ -13,7 +13,7 @@ export function GiscusComments() {
       <Separator className="mb-8" />
       <Card className="border-0 shadow-none">
         <CardHeader className="px-0 pt-0">
-          <CardTitle className="text-lg font-semibold">Comments</CardTitle>
+          <h2 className="text-lg font-semibold">Comments</h2>
         </CardHeader>
         <CardContent className="px-0 pb-0">
           <Giscus

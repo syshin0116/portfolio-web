@@ -324,13 +324,16 @@ function PrevNextNav({
   if (!prev && !next) return null
 
   return (
-    <nav className="mt-12 flex items-stretch gap-4 border-t pt-6">
+    <nav
+      aria-label="이전 및 다음 글"
+      className="mt-12 flex items-stretch gap-4 border-t pt-6"
+    >
       {prev ? (
         <Link
           href={`/blog/${prev.slug}`}
-          className="group flex flex-1 items-center gap-2 rounded-lg border px-4 py-3 transition-colors hover:bg-muted/50"
+          className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-4 py-3 transition-colors hover:bg-muted/50"
         >
-          <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground">Previous</div>
             <div className="truncate text-sm font-medium group-hover:underline">
@@ -344,7 +347,7 @@ function PrevNextNav({
       {next ? (
         <Link
           href={`/blog/${next.slug}`}
-          className="group flex flex-1 items-center justify-end gap-2 rounded-lg border px-4 py-3 text-right transition-colors hover:bg-muted/50"
+          className="group flex min-w-0 flex-1 items-center justify-end gap-2 rounded-lg border px-4 py-3 text-right transition-colors hover:bg-muted/50"
         >
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground">Next</div>
@@ -352,7 +355,7 @@ function PrevNextNav({
               {next.title}
             </div>
           </div>
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         </Link>
       ) : (
         <div className="flex-1" />

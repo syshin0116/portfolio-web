@@ -18,7 +18,8 @@
     "test": "bun test",
     "test:aegra-sdk": "bun tests/integration/aegra-sdk-apv2.ts",
     "test:auth-postgres": "bun tests/integration/auth-postgres.ts",
-    "test:browser": "env -u NO_COLOR playwright test --config=playwright.config.ts"
+    "test:browser": "env -u NO_COLOR playwright test --config=playwright.config.ts",
+    "test:site-browser": "env -u NO_COLOR playwright test --config=playwright.site.config.ts"
   },
   "dependencies": {
     "@assistant-ui/react": "0.15.0",

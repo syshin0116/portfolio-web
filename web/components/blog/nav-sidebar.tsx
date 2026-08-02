@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useId } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { ChevronRight } from "lucide-react"
@@ -17,7 +17,7 @@ export function NavSidebar({ tree }: NavSidebarProps) {
   const currentSlug = getBlogSlug(pathname)
 
   return (
-    <nav className="space-y-0.5 text-sm">
+    <nav aria-label="블로그 탐색" className="space-y-0.5 text-sm">
       <Link
         href="/blog"
         aria-current={pathname === "/blog" ? "page" : undefined}
@@ -41,7 +41,15 @@ export function NavSidebar({ tree }: NavSidebarProps) {
 }
 
 /** Animated collapse wrapper — measures child height and transitions */
-function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
+function Collapse({
+  id,
+  open,
+  children,
+}: {
+  id: string
+  open: boolean
+  children: React.ReactNode
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const [height, setHeight] = useState<number | undefined>(open ? undefined : 0)
   const isInitial = useRef(true)
@@ -71,7 +79,10 @@ function Collapse({ open, children }: { open: boolean; children: React.ReactNode
 
   return (
     <div
+      id={id}
       ref={ref}
+      aria-hidden={!open}
+      inert={!open}
       className="overflow-hidden"
       style={{
         height: height === undefined ? "auto" : height,
@@ -98,6 +109,8 @@ function NavNode({
   const isActive = node.type === "file" && currentSlug === node.path
   const isAncestor = node.type === "folder" && currentSlug.startsWith(node.path + "/")
   const [open, setOpen] = useState(isAncestor)
+  const reactId = useId().replaceAll(":", "")
+  const childrenId = `blog-tree-children-${reactId}`
   const indent = depth * 12
 
   if (node.type === "folder") {
@@ -110,9 +123,12 @@ function NavNode({
           <button
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
+            aria-controls={childrenId}
+            aria-label={`${node.name} ${open ? "접기" : "펼치기"}`}
             className="flex items-center py-1.5 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
           >
             <ChevronRight
+              aria-hidden="true"
               className={cn(
                 "h-3 w-3 shrink-0 transition-transform duration-200",
                 open && "rotate-90"
@@ -132,7 +148,7 @@ function NavNode({
           </Link>
         </div>
 
-        <Collapse open={open}>
+        <Collapse id={childrenId} open={open}>
           {node.children && (
             <div style={{ paddingLeft: `${8 + indent + 12}px` }} className="space-y-0.5">
               {node.children.map((child) => (

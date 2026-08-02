@@ -1,5 +1,41 @@
+import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
+
+export const ASSISTANT_UI_STORE_PATCH = {
+  target: "@assistant-ui/store@0.3.2",
+  path: "patches/@assistant-ui%2Fstore@0.3.2.patch",
+  attributesPath: "patches/.gitattributes",
+  attributes:
+    "*.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab",
+  sha256: "ac77e9bbe13f204f3ac27435322ff4d752fc35d6427292792bb41972e4e4109b",
+  // Exact NotificationManager fix merged upstream in assistant-ui PR #5411.
+  upstreamCommit: "90b3003b943e083fa6cd81e30181bf5b88904361",
+} as const
+
+const ASSISTANT_UI_STORE_PATCH_FILES = new Map([
+  [
+    "dist/utils/NotificationManager.js",
+    {
+      before: "572041797dd447788048d24b29320d3e18986e16",
+      after: "80b4b62716be5782092577e52f3e9b19e8852369",
+    },
+  ],
+  [
+    "dist/utils/NotificationManager.js.map",
+    {
+      before: "33ea8d795445cf6bbd03e359ba62344cb80d3962",
+      after: "2090d3b792386d35e7ed30a8cee4cad391d558aa",
+    },
+  ],
+  [
+    "src/utils/NotificationManager.ts",
+    {
+      before: "df1f393e541ea25aae6d98d7861d913e1532295b",
+      after: "202fed60f28b4de2c257407a071f83beb6d2d370",
+    },
+  ],
+])
 
 export const TEMPORARY_ADVISORY = {
   cve: "CVE-2026-14257",
@@ -40,10 +76,10 @@ const EXPECTED_ESLINT_PLUGIN_RECORDS = new Map([
 ])
 
 const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
-  ["@assistant-ui/react", "@assistant-ui/react@0.15.0"],
+  ["@assistant-ui/react", "@assistant-ui/react@0.15.1"],
   [
     "@assistant-ui/react-langgraph",
-    "@assistant-ui/react-langgraph@0.14.15",
+    "@assistant-ui/react-langgraph@0.14.17",
   ],
   ["@auth/neon-adapter", "@auth/neon-adapter@1.11.3"],
   ["@langchain/core", "@langchain/core@1.2.3"],
@@ -59,8 +95,8 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
 ])
 
 const EXPECTED_NATIVE_AGENT_PINS = new Map([
-  ["@assistant-ui/react", "0.15.0"],
-  ["@assistant-ui/react-langgraph", "0.14.15"],
+  ["@assistant-ui/react", "0.15.1"],
+  ["@assistant-ui/react-langgraph", "0.14.17"],
   ["@langchain/langgraph-sdk", "1.9.28"],
   ["@langchain/protocol", "0.0.18"],
 ])
@@ -153,6 +189,8 @@ export interface AuditPolicyEvidence {
   ignored: AuditCommandResult
   packageJson: string
   bunLock: string
+  assistantUiPatchAttributes: string
+  assistantUiStorePatch: string
   now: Date
 }
 
@@ -357,7 +395,97 @@ function requireAuthDatabasePins(
   }
 }
 
-function requireDevOnlyException(packageJson: string, bunLock: string): void {
+function requireExactAssistantUiStorePatch(
+  manifest: Record<string, unknown>,
+  records: Map<string, { resolved: string; line: string }>,
+  bunLock: string,
+  patchAttributes: string,
+  patch: string,
+): void {
+  if (patchAttributes.trim() !== ASSISTANT_UI_STORE_PATCH.attributes) {
+    fail("assistant-ui patch checkout must force LF line endings")
+  }
+
+  const patchedDependencies = manifest.patchedDependencies
+  if (!isRecord(patchedDependencies)) {
+    fail("package.json must contain one patchedDependencies object")
+  }
+  const manifestEntries = Object.entries(patchedDependencies)
+  const expectedEntry = [
+    ASSISTANT_UI_STORE_PATCH.target,
+    ASSISTANT_UI_STORE_PATCH.path,
+  ]
+  if (
+    manifestEntries.length !== 1 ||
+    JSON.stringify(manifestEntries[0]) !== JSON.stringify(expectedEntry)
+  ) {
+    fail(
+      `assistant-ui store patch target drifted; ` +
+        `actual=${JSON.stringify(manifestEntries)}, ` +
+        `expected=${JSON.stringify([expectedEntry])}`,
+    )
+  }
+
+  const lockSections = [
+    ...bunLock.matchAll(
+      /^  "patchedDependencies": \{\r?\n([\s\S]*?)^  \},$/gmu,
+    ),
+  ]
+  const expectedLockLine =
+    `    "${ASSISTANT_UI_STORE_PATCH.target}": ` +
+    `"${ASSISTANT_UI_STORE_PATCH.path}",`
+  if (
+    lockSections.length !== 1 ||
+    lockSections[0]?.[1]?.trim() !== expectedLockLine.trim()
+  ) {
+    fail("bun.lock assistant-ui store patchedDependencies entry drifted")
+  }
+  if (
+    records.get("@assistant-ui/store")?.resolved !==
+    ASSISTANT_UI_STORE_PATCH.target
+  ) {
+    fail("assistant-ui store patch must apply only to resolved store 0.3.2")
+  }
+
+  const actualPatchedFiles = [
+    ...patch.matchAll(/^diff --git a\/(\S+) b\/\1$/gmu),
+  ].map((match) => match[1])
+  if (
+    JSON.stringify(actualPatchedFiles) !==
+    JSON.stringify([...ASSISTANT_UI_STORE_PATCH_FILES.keys()])
+  ) {
+    fail(
+      `assistant-ui store patch file set drifted; ` +
+        `actual=${JSON.stringify(actualPatchedFiles)}`,
+    )
+  }
+  for (const [file, hashes] of ASSISTANT_UI_STORE_PATCH_FILES) {
+    const expectedHeader =
+      `diff --git a/${file} b/${file}\n` +
+      `index ${hashes.before}..${hashes.after} 100644\n` +
+      `--- a/${file}\n` +
+      `+++ b/${file}\n`
+    if (!patch.includes(expectedHeader)) {
+      fail(`assistant-ui store patch postimage drifted for ${file}`)
+    }
+  }
+
+  const actualSha256 = createHash("sha256").update(patch).digest("hex")
+  if (actualSha256 !== ASSISTANT_UI_STORE_PATCH.sha256) {
+    fail(
+      `assistant-ui store patch content drifted from upstream commit ` +
+        `${ASSISTANT_UI_STORE_PATCH.upstreamCommit}; ` +
+        `actual=${actualSha256}`,
+    )
+  }
+}
+
+function requireDevOnlyException(
+  packageJson: string,
+  bunLock: string,
+  assistantUiPatchAttributes: string,
+  assistantUiStorePatch: string,
+): void {
   let manifest: unknown
   try {
     manifest = JSON.parse(packageJson)
@@ -407,6 +535,13 @@ function requireDevOnlyException(packageJson: string, bunLock: string): void {
   }
 
   const records = packageRecords(bunLock)
+  requireExactAssistantUiStorePatch(
+    manifest,
+    records,
+    bunLock,
+    assistantUiPatchAttributes,
+    assistantUiStorePatch,
+  )
   requireNativeAgentPins(records, dependencies)
   requireAuthDatabasePins(records, dependencies)
   requireExactRecords(
@@ -503,7 +638,12 @@ export function validateAuditPolicy(evidence: AuditPolicyEvidence): void {
   requireEmptySuccessfulAudit(evidence.production, "production")
   requireExactTemporaryAdvisory(evidence.complete)
   requireUnexpiredException(evidence.now)
-  requireDevOnlyException(evidence.packageJson, evidence.bunLock)
+  requireDevOnlyException(
+    evidence.packageJson,
+    evidence.bunLock,
+    evidence.assistantUiPatchAttributes,
+    evidence.assistantUiStorePatch,
+  )
   requireSuccessfulIgnoredAudit(evidence.ignored)
 }
 
@@ -534,6 +674,14 @@ async function main(): Promise<void> {
     ], false),
     packageJson: await readFile(resolve(webRoot, "package.json"), "utf8"),
     bunLock: await readFile(resolve(webRoot, "bun.lock"), "utf8"),
+    assistantUiPatchAttributes: await readFile(
+      resolve(webRoot, ASSISTANT_UI_STORE_PATCH.attributesPath),
+      "utf8",
+    ),
+    assistantUiStorePatch: await readFile(
+      resolve(webRoot, ASSISTANT_UI_STORE_PATCH.path),
+      "utf8",
+    ),
     now: new Date(),
   }
   validateAuditPolicy(evidence)

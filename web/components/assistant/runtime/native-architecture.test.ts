@@ -11,8 +11,8 @@ describe("native assistant-ui architecture contract", () => {
       dependencies: Record<string, string>
     }
     expect(packageJson.dependencies).toMatchObject({
-      "@assistant-ui/react": "0.15.0",
-      "@assistant-ui/react-langgraph": "0.14.15",
+      "@assistant-ui/react": "0.15.1",
+      "@assistant-ui/react-langgraph": "0.14.17",
       "@langchain/core": "1.2.3",
       "@langchain/langgraph-sdk": "1.9.28",
       "@langchain/protocol": "0.0.18",

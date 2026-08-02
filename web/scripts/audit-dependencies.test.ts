@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
 import {
+  ASSISTANT_UI_STORE_PATCH,
   type AuditCommandResult,
   validateAuditPolicy,
 } from "./audit-dependencies"
@@ -10,6 +11,14 @@ import {
 const webRoot = resolve(import.meta.dir, "..")
 const packageJson = readFileSync(resolve(webRoot, "package.json"), "utf8")
 const bunLock = readFileSync(resolve(webRoot, "bun.lock"), "utf8")
+const assistantUiPatchAttributes = readFileSync(
+  resolve(webRoot, ASSISTANT_UI_STORE_PATCH.attributesPath),
+  "utf8",
+)
+const assistantUiStorePatch = readFileSync(
+  resolve(webRoot, ASSISTANT_UI_STORE_PATCH.path),
+  "utf8",
+)
 
 const emptyAudit: AuditCommandResult = {
   exitCode: 0,
@@ -45,6 +54,8 @@ function evidence() {
     ignored: ignoredAudit,
     packageJson,
     bunLock,
+    assistantUiPatchAttributes,
+    assistantUiStorePatch,
     now: new Date("2026-07-27T00:00:00Z"),
   }
 }
@@ -174,6 +185,57 @@ describe("dependency audit exception policy", () => {
     )
   })
 
+  test("applies the upstream StrictMode patch only to store 0.3.2", () => {
+    const candidate = evidence()
+    const manifest = JSON.parse(candidate.packageJson)
+    manifest.patchedDependencies["@assistant-ui/store@0.3.3"] =
+      manifest.patchedDependencies[ASSISTANT_UI_STORE_PATCH.target]
+    delete manifest.patchedDependencies[ASSISTANT_UI_STORE_PATCH.target]
+    candidate.packageJson = JSON.stringify(manifest)
+    candidate.bunLock = candidate.bunLock.replace(
+      ASSISTANT_UI_STORE_PATCH.target,
+      "@assistant-ui/store@0.3.3",
+    )
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "assistant-ui store patch target drifted",
+    )
+  })
+
+  test("forces exact assistant-ui patch bytes across CRLF checkouts", () => {
+    const candidate = evidence()
+    candidate.assistantUiPatchAttributes =
+      "*.patch whitespace=-blank-at-eol,-space-before-tab\n"
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "patch checkout must force LF line endings",
+    )
+  })
+
+  test("requires matching source, distribution, and source-map postimages", () => {
+    const candidate = evidence()
+    candidate.assistantUiStorePatch = candidate.assistantUiStorePatch.replace(
+      "2090d3b792386d35e7ed30a8cee4cad391d558aa",
+      "0000000000000000000000000000000000000000",
+    )
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "patch postimage drifted for dist/utils/NotificationManager.js.map",
+    )
+  })
+
+  test("rejects any drift from the exact merged upstream patch", () => {
+    const candidate = evidence()
+    candidate.assistantUiStorePatch = candidate.assistantUiStorePatch.replace(
+      'import { useState } from "react";',
+      'import { useMemo } from "react";',
+    )
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "patch content drifted from upstream commit",
+    )
+  })
+
   test.each([
     "@assistant-ui/react",
     "@assistant-ui/react-langgraph",
@@ -217,8 +279,8 @@ describe("dependency audit exception policy", () => {
   })
 
   test.each([
-    ["@assistant-ui/react", "0.15.0", "0.14.28"],
-    ["@assistant-ui/react-langgraph", "0.14.15", "0.14.13"],
+    ["@assistant-ui/react", "0.15.1", "0.15.0"],
+    ["@assistant-ui/react-langgraph", "0.14.17", "0.14.15"],
     ["@langchain/langgraph-sdk", "1.9.28", "1.9.27"],
     ["@langchain/protocol", "0.0.18", "0.0.17"],
   ])(

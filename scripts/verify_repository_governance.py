@@ -208,7 +208,7 @@ SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
 EXPECTED_SETUP_UV_WORKFLOW_COUNTS = {
     ".github/workflows/agent-release.yml": 1,
     ".github/workflows/ci.yml": 5,
-    ".github/workflows/dependency-audit.yml": 1,
+    ".github/workflows/dependency-audit.yml": 2,
     ".github/workflows/protocol-compat.yml": 1,
 }
 AGENT_DOCKER_UV_IMAGE = (
@@ -281,10 +281,11 @@ UPSTREAM_VERSION_AUDIT_SCRIPT_SHA256 = (
     "c8c60905b320bd8263496d096cc30f86c5b1e10b40956ec25539390b8bb45b2f"
 )
 EXPECTED_DEPENDENCY_AUDIT_JOB_AST_SHA256 = {
+    "eval": "0f30e485cd03d016c0a4e871286e92d7f5222bea590aa6c2cbeda3e6a9296ba6",
     "upstream": "69d71776cf99461e058269b3aec66b5730c661a820d6360b355f6031c13601f3",
-    "check": "2d800e0c036d1864cdd81c1771d280d49612483ded70171ef0dca13786fbca8e",
+    "check": "ccebb8e1c855a2f3fd87a3156b6de7335cfb252f5c16899d9132743b359cf117",
 }
-EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP = [
+EXPECTED_DEPENDENCY_AUDIT_PYTHON_SETUP = [
     {
         "uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
         "with": {
@@ -1498,39 +1499,48 @@ def validate_vercel_production_observer_contract(
     return errors
 
 
-def validate_dependency_audit_agent_setup(document: YamlDocument) -> list[str]:
+def validate_dependency_audit_python_setup(document: YamlDocument) -> list[str]:
     """Require the reviewed interpreter and checksummed uv setup sequence."""
+    errors: list[str] = []
     jobs = _workflow_jobs(document)
-    agent = jobs.get("agent")
-    if agent is None:
-        return [f"{document.path}: required dependency audit job 'agent' is missing"]
-
-    steps = _mapping_value(agent, "steps")
-    if not isinstance(steps, SequenceNode):
-        return [f"{document.path}: dependency audit job 'agent' steps must be a list"]
-
-    actual_setup: list[dict[str, Any]] = []
-    setup_prefixes = ("actions/setup-python@", "astral-sh/setup-uv@")
-    for step in steps.value:
-        if not isinstance(step, MappingNode):
+    for job_name in ("agent", "eval"):
+        job = jobs.get(job_name)
+        if job is None:
+            errors.append(
+                f"{document.path}: required dependency audit job {job_name!r} is missing"
+            )
             continue
-        data = _node_to_data(step)
-        uses = data.get("uses")
-        if isinstance(uses, str) and uses.startswith(setup_prefixes):
-            actual_setup.append(data)
 
-    if _json_exact(actual_setup, EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP):
-        return []
-    return [
-        f"{document.path}: dependency audit agent setup differs from the "
-        "reviewed interpreter/checksum baseline; "
-        f"expected={EXPECTED_DEPENDENCY_AUDIT_AGENT_SETUP!r}, "
-        f"actual={actual_setup!r}"
-    ]
+        steps = _mapping_value(job, "steps")
+        if not isinstance(steps, SequenceNode):
+            errors.append(
+                f"{document.path}: dependency audit job {job_name!r} "
+                "steps must be a list"
+            )
+            continue
+
+        actual_setup: list[dict[str, Any]] = []
+        setup_prefixes = ("actions/setup-python@", "astral-sh/setup-uv@")
+        for step in steps.value:
+            if not isinstance(step, MappingNode):
+                continue
+            data = _node_to_data(step)
+            uses = data.get("uses")
+            if isinstance(uses, str) and uses.startswith(setup_prefixes):
+                actual_setup.append(data)
+
+        if not _json_exact(actual_setup, EXPECTED_DEPENDENCY_AUDIT_PYTHON_SETUP):
+            errors.append(
+                f"{document.path}: dependency audit job {job_name!r} setup "
+                "differs from the reviewed interpreter/checksum baseline; "
+                f"expected={EXPECTED_DEPENDENCY_AUDIT_PYTHON_SETUP!r}, "
+                f"actual={actual_setup!r}"
+            )
+    return errors
 
 
 def validate_dependency_audit_job_contract(document: YamlDocument) -> list[str]:
-    """Bind the upstream audit and final aggregation to reviewed exact jobs."""
+    """Bind the eval/upstream audits and final aggregation to reviewed exact jobs."""
     errors: list[str] = []
     jobs = _workflow_jobs(document)
     for job_name, expected_digest in EXPECTED_DEPENDENCY_AUDIT_JOB_AST_SHA256.items():
@@ -2844,7 +2854,7 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
                 )
             errors.extend(
                 f"local: {error}"
-                for error in validate_dependency_audit_agent_setup(
+                for error in validate_dependency_audit_python_setup(
                     documents[dependency_audit]
                 )
             )

@@ -2399,8 +2399,132 @@ runs:
 
             self.assertTrue(
                 any(
-                    "dependency audit agent setup differs" in error for error in errors
+                    "dependency audit job 'agent' setup differs" in error
+                    for error in errors
                 ),
+                errors,
+            )
+
+    def test_dependency_audit_eval_setup_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "checksum",
+                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829",
+                "0" * 64,
+            ),
+            (
+                "uv-version",
+                'version: "0.11.29"',
+                'version: "0.11.28"',
+            ),
+            (
+                "setup-python",
+                "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+                "actions/setup-python@" + "a" * 40,
+            ),
+            (
+                "setup-uv",
+                "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9",
+                "astral-sh/setup-uv@" + "b" * 40,
+            ),
+        )
+        for label, old, new in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/dependency-audit.yml"
+                original = workflow.read_text(encoding="utf-8")
+                eval_start = original.index("  eval:\n")
+                eval_end = original.index("\n  upstream:\n", eval_start)
+                eval_job = original[eval_start:eval_end]
+                mutated_eval = eval_job.replace(old, new, 1)
+                self.assertNotEqual(eval_job, mutated_eval)
+                workflow.write_text(
+                    original[:eval_start] + mutated_eval + original[eval_end:],
+                    encoding="utf-8",
+                )
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(
+                    "dependency audit job 'eval' setup differs" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_dependency_audit_eval_resolution_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "package",
+                "            --package syshin0116-dev-eval \\\n",
+                "            --package syshin0116-dev-agent \\\n",
+            ),
+            (
+                "dense-extra",
+                "            --extra dense \\\n",
+                "",
+            ),
+            (
+                "all-groups",
+                "            --all-groups \\\n",
+                "",
+            ),
+            (
+                "workspace-projects",
+                "            --no-emit-workspace \\\n",
+                "",
+            ),
+            (
+                "audit-version",
+                "uvx --from pip-audit==2.10.1",
+                "uvx --from pip-audit==2.9.0",
+            ),
+            (
+                "pypi-skip-fallback",
+                "          --vulnerability-service osv\n",
+                "          --vulnerability-service pypi\n",
+            ),
+            (
+                "implicit-service",
+                "          --vulnerability-service osv\n",
+                "",
+            ),
+            (
+                "non-strict-skip-bypass",
+                "          --strict\n",
+                "",
+            ),
+            (
+                "dependency-resolution",
+                "          --no-deps\n",
+                "",
+            ),
+            (
+                "shell-success-bypass",
+                '          --requirement "$RUNNER_TEMP/eval-requirements.txt"\n',
+                '          --requirement "$RUNNER_TEMP/eval-requirements.txt" || true\n',
+            ),
+        )
+        for label, old, new in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = copy_local_governance_fixture(directory)
+                workflow = root / ".github/workflows/dependency-audit.yml"
+                original = workflow.read_text(encoding="utf-8")
+                eval_start = original.index("  eval:\n")
+                eval_end = original.index("\n  upstream:\n", eval_start)
+                eval_job = original[eval_start:eval_end]
+                mutated_eval = eval_job.replace(old, new, 1)
+                self.assertNotEqual(eval_job, mutated_eval)
+                workflow.write_text(
+                    original[:eval_start] + mutated_eval + original[eval_end:],
+                    encoding="utf-8",
+                )
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any("job 'eval' exact AST differs" in error for error in errors),
                 errors,
             )
 
@@ -2427,8 +2551,20 @@ runs:
                 "job 'check' exact AST differs",
             ),
             (
+                "eval-needs",
+                "      - eval\n",
+                "",
+                "job 'check' exact AST differs",
+            ),
+            (
                 "result",
                 "          UPSTREAM_RESULT: ${{ needs.upstream.result }}\n",
+                "",
+                "job 'check' exact AST differs",
+            ),
+            (
+                "eval-result",
+                "          EVAL_RESULT: ${{ needs.eval.result }}\n",
                 "",
                 "job 'check' exact AST differs",
             ),

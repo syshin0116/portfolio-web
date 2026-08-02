@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 from urllib.parse import parse_qsl
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from aegra_api.core.orm import Thread as ThreadORM
 from aegra_api.core.orm import get_session_maker
@@ -42,6 +42,11 @@ from agent.guest_budget import (
     GuestSpendLedger,
     PostgresGuestSpendLedger,
     guest_budget_config,
+)
+from agent.guest_thread_admission import (
+    GuestThreadAdmissionUnavailableError,
+    GuestThreadCreateDecision,
+    admit_guest_thread_creation,
 )
 from agent.guest_thread_lock import (
     COMMAND_GUEST_THREAD_LOCK_TIMEOUT_SECONDS,
@@ -82,15 +87,32 @@ _GUEST_RATE_CAPACITY = 4
 _GUEST_RATE_WINDOW_SECONDS = 60.0
 _GUEST_GLOBAL_RATE_CAPACITY = 24
 _GUEST_GLOBAL_RATE_WINDOW_SECONDS = 60.0
+_GUEST_REQUEST_RATE_CAPACITY = 30
+_GUEST_REQUEST_RATE_WINDOW_SECONDS = 60.0
+_GUEST_GLOBAL_REQUEST_RATE_CAPACITY = 180
+_GUEST_GLOBAL_REQUEST_RATE_WINDOW_SECONDS = 60.0
+_GUEST_THREAD_CREATE_RATE_CAPACITY = 6
+_GUEST_THREAD_CREATE_RATE_WINDOW_SECONDS = 60.0 * 60.0
+_GUEST_GLOBAL_THREAD_CREATE_RATE_CAPACITY = 60
+_GUEST_GLOBAL_THREAD_CREATE_RATE_WINDOW_SECONDS = 60.0 * 60.0
+_GUEST_STREAM_IDENTITY_LIMIT = 2
+_GUEST_STREAM_GLOBAL_LIMIT = 4
 _GUEST_INTERRUPT_VALIDATION_TIMEOUT_SECONDS = 5.0
 _GUEST_THREAD_LOCK_SCOPE_KEY = "agent.guest_thread_lock"
+_GUEST_INGRESS_SCOPE_KEY = "agent.guest_ingress"
+_GUEST_INGRESS_MARKER = object()
 _GUEST_SESSION_RETENTION_DAYS = 14
 _GUEST_SUBMIT_NONCE_KEY = "syshin_ui_submit_nonce"
+_GUEST_MAX_USER_TEXT_BYTES = 16 * 1024
+_GUEST_MAX_USER_TEXT_BLOCKS = 8
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_NONCE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 _SAFE_INTERRUPT_ID = re.compile(r"^[0-9a-f]{32}$")
+_SAFE_STORED_GUEST_MESSAGE_ID = re.compile(
+    r"^guest-user:([A-Za-z0-9][A-Za-z0-9._:-]{0,127}):[0-9a-f]{32}$"
+)
 _GUEST_THREAD_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$")
 _GUEST_STATE_PATH = re.compile(r"^/threads/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})/state$")
 _GUEST_HISTORY_PATH = re.compile(
@@ -144,6 +166,21 @@ class _GuestThreadNotFoundError(LookupError):
 class _Bucket:
     tokens: float
     updated_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _RatePolicy:
+    identity_capacity: int
+    identity_refill_per_second: float
+    global_capacity: int
+    global_refill_per_second: float
+
+
+@dataclass(slots=True)
+class _IdentityTrafficState:
+    buckets: dict[str, _Bucket]
+    last_seen: float
+    active_streams: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,15 +262,16 @@ def _bounded_string(
     field: str,
     allow_newlines: bool = False,
 ) -> str:
-    if (
-        not isinstance(value, str)
-        or not value
-        or len(value.encode("utf-8")) > max_bytes
-        or any(
-            ord(character) < 32
-            and (not allow_newlines or character not in {"\n", "\r", "\t"})
-            for character in value
-        )
+    if not isinstance(value, str) or not value:
+        raise GuestRequestError(f"{field} is invalid")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise GuestRequestError(f"{field} is invalid") from exc
+    if len(encoded) > max_bytes or any(
+        ord(character) < 32
+        and (not allow_newlines or character not in {"\n", "\r", "\t"})
+        for character in value
     ):
         raise GuestRequestError(f"{field} is invalid")
     return value
@@ -326,52 +364,92 @@ def _run_nonce(
     return nonce, normalized_metadata, {"metadata": normalized_metadata.copy()}
 
 
-def _guest_messages(value: object) -> dict[str, list[dict[str, Any]]]:
+def _guest_user_content(value: object) -> str | list[dict[str, str]]:
+    """Accept only plain text or assistant-ui's exact text-block shape."""
+    if isinstance(value, str):
+        return _bounded_string(
+            value,
+            max_bytes=_GUEST_MAX_USER_TEXT_BYTES,
+            field="user message content",
+            allow_newlines=True,
+        )
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > _GUEST_MAX_USER_TEXT_BLOCKS
+    ):
+        raise GuestRequestError("user message content is invalid")
+    normalized: list[dict[str, str]] = []
+    total_bytes = 0
+    for block in value:
+        if (
+            not isinstance(block, dict)
+            or set(block) != {"text", "type"}
+            or block.get("type") != "text"
+        ):
+            raise GuestRequestError("user message content block is invalid")
+        text = _bounded_string(
+            block.get("text"),
+            max_bytes=_GUEST_MAX_USER_TEXT_BYTES,
+            field="user message text block",
+            allow_newlines=True,
+        )
+        total_bytes += len(text.encode("utf-8"))
+        if total_bytes > _GUEST_MAX_USER_TEXT_BYTES:
+            raise GuestRequestError("user message content is too large")
+        normalized.append({"text": text, "type": "text"})
+    return normalized
+
+
+def _guest_messages(
+    value: object,
+    *,
+    rewrite_message_id: bool,
+) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(value, dict) or set(value) != {"messages"}:
         raise GuestRequestError("run input must contain only messages")
     messages = value["messages"]
-    if not isinstance(messages, list) or not messages or len(messages) > 64:
-        raise GuestRequestError("run messages are invalid")
-    normalized: list[dict[str, Any]] = []
-    for message in messages:
-        if not isinstance(message, dict):
-            raise GuestRequestError("run message is invalid")
-        allowed = {"role", "content", "id", "name", "tool_call_id"}
-        if not set(message) <= allowed or not {"role", "content", "id"} <= set(message):
-            raise GuestRequestError("run message fields are invalid")
-        role = message["role"]
-        if not isinstance(role, str) or role not in {"user", "assistant", "tool"}:
-            raise GuestRequestError("run message role is invalid")
-        message_id = _bounded_string(
-            message["id"],
-            max_bytes=128,
-            field="message id",
-        )
-        normalized_message: dict[str, Any] = {
-            "content": _bounded_json_value(message["content"]),
-            "id": message_id,
-            "role": role,
-        }
-        if role == "tool":
-            normalized_message["name"] = _bounded_string(
-                message.get("name"),
-                max_bytes=128,
-                field="tool name",
-            )
-            normalized_message["tool_call_id"] = _bounded_string(
-                message.get("tool_call_id"),
-                max_bytes=128,
-                field="tool call id",
-            )
-        elif "name" in message or "tool_call_id" in message:
-            raise GuestRequestError("tool fields are not allowed for this role")
-        normalized.append(normalized_message)
-    if normalized[-1]["role"] != "user":
-        raise GuestRequestError("the final run message must be from the user")
-    return {"messages": normalized}
+    if not isinstance(messages, list) or len(messages) != 1:
+        raise GuestRequestError("run input must contain exactly one user message")
+    message = messages[0]
+    if (
+        not isinstance(message, dict)
+        or set(message) != {"content", "id", "role"}
+        or message.get("role") != "user"
+    ):
+        raise GuestRequestError("run input must contain exactly one user message")
+    raw_message_id = _bounded_string(
+        message["id"],
+        max_bytes=256 if not rewrite_message_id else 128,
+        field="message id",
+    )
+    if rewrite_message_id:
+        if _SAFE_ID.fullmatch(raw_message_id) is None:
+            raise GuestRequestError("message id is invalid")
+        message_id = f"guest-user:{raw_message_id}:{uuid4().hex}"
+    else:
+        if (
+            _SAFE_ID.fullmatch(raw_message_id) is None
+            and _SAFE_STORED_GUEST_MESSAGE_ID.fullmatch(raw_message_id) is None
+        ):
+            raise GuestRequestError("message id is invalid")
+        message_id = raw_message_id
+    return {
+        "messages": [
+            {
+                "content": _guest_user_content(message["content"]),
+                "id": message_id,
+                "role": "user",
+            }
+        ]
+    }
 
 
-def _guest_command(body: bytes) -> tuple[bytes, bool]:
+def _guest_command(
+    body: bytes,
+    *,
+    rewrite_message_id: bool = True,
+) -> tuple[bytes, bool]:
     command = _json_object(body)
     if set(command) != {"id", "method", "params"}:
         raise GuestRequestError("command fields are invalid")
@@ -413,7 +491,10 @@ def _guest_command(body: bytes) -> tuple[bytes, bool]:
             "params": {
                 "assistant_id": "agent",
                 "config": config,
-                "input": _guest_messages(params["input"]),
+                "input": _guest_messages(
+                    params["input"],
+                    rewrite_message_id=rewrite_message_id,
+                ),
                 "metadata": metadata,
                 "multitask_strategy": "reject",
             },
@@ -853,8 +934,9 @@ async def _json_response(
 class GuestRunGuard:
     """Pure-ASGI public guest boundary outside every Aegra route.
 
-    The limiter is deliberately process-local. Cloud Run remains fixed to one instance
-    until the durable P5 spend ledger and a distributed serialization primitive land.
+    Traffic limiters are deliberately process-local while the daily spend ledger is
+    durable. Cloud Run remains fixed to one instance until a distributed traffic
+    limiter and serialization primitive land.
     """
 
     def __init__(
@@ -868,6 +950,20 @@ class GuestRunGuard:
         identity_window_seconds: float = _GUEST_RATE_WINDOW_SECONDS,
         global_capacity: int = _GUEST_GLOBAL_RATE_CAPACITY,
         global_window_seconds: float = _GUEST_GLOBAL_RATE_WINDOW_SECONDS,
+        request_identity_capacity: int = _GUEST_REQUEST_RATE_CAPACITY,
+        request_identity_window_seconds: float = _GUEST_REQUEST_RATE_WINDOW_SECONDS,
+        request_global_capacity: int = _GUEST_GLOBAL_REQUEST_RATE_CAPACITY,
+        request_global_window_seconds: float = _GUEST_GLOBAL_REQUEST_RATE_WINDOW_SECONDS,
+        thread_create_identity_capacity: int = _GUEST_THREAD_CREATE_RATE_CAPACITY,
+        thread_create_identity_window_seconds: float = (
+            _GUEST_THREAD_CREATE_RATE_WINDOW_SECONDS
+        ),
+        thread_create_global_capacity: int = _GUEST_GLOBAL_THREAD_CREATE_RATE_CAPACITY,
+        thread_create_global_window_seconds: float = (
+            _GUEST_GLOBAL_THREAD_CREATE_RATE_WINDOW_SECONDS
+        ),
+        stream_identity_limit: int = _GUEST_STREAM_IDENTITY_LIMIT,
+        stream_global_limit: int = _GUEST_STREAM_GLOBAL_LIMIT,
         spend_ledger: GuestSpendLedger | None = None,
         enforce_daily_budget: bool = False,
     ) -> None:
@@ -875,8 +971,21 @@ class GuestRunGuard:
             max_identities,
             identity_capacity,
             global_capacity,
+            request_identity_capacity,
+            request_global_capacity,
+            thread_create_identity_capacity,
+            thread_create_global_capacity,
+            stream_identity_limit,
+            stream_global_limit,
         )
-        numeric_values = (identity_window_seconds, global_window_seconds)
+        numeric_values = (
+            identity_window_seconds,
+            global_window_seconds,
+            request_identity_window_seconds,
+            request_global_window_seconds,
+            thread_create_identity_window_seconds,
+            thread_create_global_window_seconds,
+        )
         if any(type(value) is not int or value < 1 for value in integer_values) or any(
             not isinstance(value, (int, float))
             or isinstance(value, bool)
@@ -900,13 +1009,50 @@ class GuestRunGuard:
         self._clock = clock
         self._wall_clock = wall_clock
         self._max_identities = max_identities
-        self._identity_capacity = identity_capacity
-        self._identity_refill_per_second = identity_capacity / identity_window_seconds
-        self._global_capacity = global_capacity
-        self._global_refill_per_second = global_capacity / global_window_seconds
+        self._rate_policies = {
+            "run": _RatePolicy(
+                identity_capacity=identity_capacity,
+                identity_refill_per_second=(
+                    identity_capacity / identity_window_seconds
+                ),
+                global_capacity=global_capacity,
+                global_refill_per_second=global_capacity / global_window_seconds,
+            ),
+            "request": _RatePolicy(
+                identity_capacity=request_identity_capacity,
+                identity_refill_per_second=(
+                    request_identity_capacity / request_identity_window_seconds
+                ),
+                global_capacity=request_global_capacity,
+                global_refill_per_second=(
+                    request_global_capacity / request_global_window_seconds
+                ),
+            ),
+            "thread-create": _RatePolicy(
+                identity_capacity=thread_create_identity_capacity,
+                identity_refill_per_second=(
+                    thread_create_identity_capacity
+                    / thread_create_identity_window_seconds
+                ),
+                global_capacity=thread_create_global_capacity,
+                global_refill_per_second=(
+                    thread_create_global_capacity / thread_create_global_window_seconds
+                ),
+            ),
+        }
+        self._longest_identity_window = max(
+            policy.identity_capacity / policy.identity_refill_per_second
+            for policy in self._rate_policies.values()
+        )
         now = float(clock())
-        self._global_bucket = _Bucket(float(global_capacity), now)
-        self._identity_buckets: dict[str, _Bucket] = {}
+        self._global_buckets = {
+            name: _Bucket(float(policy.global_capacity), now)
+            for name, policy in self._rate_policies.items()
+        }
+        self._identity_states: dict[str, _IdentityTrafficState] = {}
+        self._stream_identity_limit = stream_identity_limit
+        self._stream_global_limit = stream_global_limit
+        self._active_streams = 0
         self._lock = Lock()
         self._spend_ledger = spend_ledger
 
@@ -927,45 +1073,125 @@ class GuestRunGuard:
         bucket.updated_at = now
         return bucket.tokens
 
-    def _consume_run(self, identity: str) -> tuple[bool, int]:
+    def _consume(self, identity: str, *, policy_name: str) -> tuple[bool, int]:
         now = float(self._clock())
         if not math.isfinite(now):
             return False, 1
         identity_key = self._identity_key(identity)
+        policy = self._rate_policies[policy_name]
         with self._lock:
-            bucket = self._identity_buckets.get(identity_key)
-            if bucket is None:
-                if len(self._identity_buckets) >= self._max_identities:
+            state = self._identity_states.get(identity_key)
+            if state is None:
+                if len(self._identity_states) >= self._max_identities:
+                    self._prune_inactive_identities(now)
+                if len(self._identity_states) >= self._max_identities:
                     return False, 60
-                bucket = _Bucket(float(self._identity_capacity), now)
-                self._identity_buckets[identity_key] = bucket
+                state = _IdentityTrafficState(buckets={}, last_seen=now)
+                self._identity_states[identity_key] = state
+            state.last_seen = now
+            bucket = state.buckets.get(policy_name)
+            if bucket is None:
+                bucket = _Bucket(float(policy.identity_capacity), now)
+                state.buckets[policy_name] = bucket
             identity_tokens = self._refill(
                 bucket,
                 now=now,
-                capacity=self._identity_capacity,
-                rate=self._identity_refill_per_second,
+                capacity=policy.identity_capacity,
+                rate=policy.identity_refill_per_second,
             )
             global_tokens = self._refill(
-                self._global_bucket,
+                self._global_buckets[policy_name],
                 now=now,
-                capacity=self._global_capacity,
-                rate=self._global_refill_per_second,
+                capacity=policy.global_capacity,
+                rate=policy.global_refill_per_second,
             )
             if identity_tokens >= 1.0 and global_tokens >= 1.0:
                 bucket.tokens -= 1.0
-                self._global_bucket.tokens -= 1.0
+                self._global_buckets[policy_name].tokens -= 1.0
                 return True, 0
             identity_wait = (
                 0.0
                 if identity_tokens >= 1.0
-                else (1.0 - identity_tokens) / self._identity_refill_per_second
+                else (1.0 - identity_tokens) / policy.identity_refill_per_second
             )
             global_wait = (
                 0.0
                 if global_tokens >= 1.0
-                else (1.0 - global_tokens) / self._global_refill_per_second
+                else (1.0 - global_tokens) / policy.global_refill_per_second
             )
-        return False, max(1, min(60, math.ceil(max(identity_wait, global_wait))))
+        return False, max(1, min(3_600, math.ceil(max(identity_wait, global_wait))))
+
+    def _prune_inactive_identities(self, now: float) -> None:
+        """Evict only fully replenished identities inactive for the longest window."""
+        candidates = sorted(
+            self._identity_states.items(),
+            key=lambda item: item[1].last_seen,
+        )
+        for identity_key, state in candidates:
+            if (
+                state.active_streams != 0
+                or now - state.last_seen < self._longest_identity_window
+            ):
+                continue
+            fully_refilled = True
+            for policy_name, bucket in state.buckets.items():
+                policy = self._rate_policies[policy_name]
+                tokens = self._refill(
+                    bucket,
+                    now=now,
+                    capacity=policy.identity_capacity,
+                    rate=policy.identity_refill_per_second,
+                )
+                if tokens < float(policy.identity_capacity):
+                    fully_refilled = False
+                    break
+            if fully_refilled:
+                self._identity_states.pop(identity_key, None)
+
+    def _acquire_stream_lease(self, identity: str) -> bool:
+        now = float(self._clock())
+        if not math.isfinite(now):
+            return False
+        identity_key = self._identity_key(identity)
+        with self._lock:
+            state = self._identity_states.get(identity_key)
+            if state is None:
+                return False
+            state.last_seen = now
+            if (
+                state.active_streams >= self._stream_identity_limit
+                or self._active_streams >= self._stream_global_limit
+            ):
+                return False
+            state.active_streams += 1
+            self._active_streams += 1
+            return True
+
+    def _release_stream_lease(self, identity: str) -> None:
+        identity_key = self._identity_key(identity)
+        now = float(self._clock())
+        with self._lock:
+            state = self._identity_states.get(identity_key)
+            if state is None or state.active_streams < 1 or self._active_streams < 1:
+                raise RuntimeError("guest stream lease accounting is inconsistent")
+            state.active_streams -= 1
+            self._active_streams -= 1
+            if math.isfinite(now):
+                state.last_seen = now
+
+    def _consume_run(self, identity: str) -> tuple[bool, int]:
+        return self._consume(identity, policy_name="run")
+
+    def _consume_non_spending(
+        self,
+        identity: str,
+        *,
+        thread_create: bool,
+    ) -> tuple[bool, int]:
+        return self._consume(
+            identity,
+            policy_name="thread-create" if thread_create else "request",
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method") == "OPTIONS":
@@ -979,6 +1205,37 @@ class GuestRunGuard:
         if not _is_guest_user(user):
             await self.app(scope, receive, send)
             return
+
+        identity = user["identity"]
+        outer_ingress_admitted = (
+            scope.get(_GUEST_INGRESS_SCOPE_KEY) is _GUEST_INGRESS_MARKER
+        )
+        if not outer_ingress_admitted:
+            is_thread_create_ingress = (
+                scope.get("method") == "POST" and scope.get("path") == "/threads"
+            )
+            allowed, retry_after = self._consume_non_spending(
+                identity,
+                thread_create=is_thread_create_ingress,
+            )
+            if not allowed:
+                message = (
+                    "Guest thread creation rate limit exceeded"
+                    if is_thread_create_ingress
+                    else "Guest request rate limit exceeded"
+                )
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=429,
+                    content={
+                        "error": "rate_limited",
+                        "message": message,
+                    },
+                    headers={"Retry-After": str(retry_after)},
+                )
+                return
 
         try:
             kind = _guest_route_kind(scope)
@@ -1002,7 +1259,9 @@ class GuestRunGuard:
             "thread-search",
             "thread-update",
         }
+        bodyless_kinds = {"cancel", "run", "runs", "state", "thread-read"}
         spends = False
+        normalized_body: bytes | None = None
         if kind in body_kinds:
             max_bytes = (
                 _GUEST_MAX_STREAM_BODY_BYTES
@@ -1019,7 +1278,7 @@ class GuestRunGuard:
                     float(self._wall_clock()),
                     tz=UTC,
                 ) + timedelta(days=_GUEST_SESSION_RETENTION_DAYS)
-                body, spends = _guest_route_body(
+                normalized_body, spends = _guest_route_body(
                     kind,
                     body,
                     expires_at=expires_at.isoformat().replace("+00:00", "Z"),
@@ -1036,9 +1295,29 @@ class GuestRunGuard:
                     },
                 )
                 return
-            receive = _replay(body)
+            receive = _replay(normalized_body)
+        elif kind in bodyless_kinds:
+            try:
+                length = _content_length(scope)
+                if length not in {None, 0}:
+                    raise GuestRequestError("request body is not allowed")
+                body = await _read_body(receive, max_bytes=0)
+                if body:
+                    raise GuestRequestError("request body is not allowed")
+            except (GuestRequestError, ValueError):
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=400,
+                    content={
+                        "error": "invalid_argument",
+                        "message": "Guest request is invalid",
+                    },
+                )
+                return
+            receive = _replay(b"")
 
-        identity = user["identity"]
         if spends:
             allowed, retry_after = self._consume_run(identity)
             if not allowed:
@@ -1102,12 +1381,161 @@ class GuestRunGuard:
                     )
                     return
 
-        projected_send: Send
-        if kind == "stream":
-            projected_send = GuestSSEResponseSend(send)
-        else:
-            projected_send = GuestJSONResponseSend(send, kind=kind)
-        await self.app(scope, receive, projected_send)
+        async def dispatch() -> None:
+            projected_send: Send
+            if kind == "stream":
+                projected_send = GuestSSEResponseSend(send)
+            else:
+                projected_send = GuestJSONResponseSend(send, kind=kind)
+            await self.app(scope, receive, projected_send)
+
+        if kind == "thread-create":
+            assert normalized_body is not None
+            thread_id = _json_object(normalized_body)["thread_id"]
+            assert isinstance(thread_id, str)
+            try:
+                async with admit_guest_thread_creation(
+                    thread_id=thread_id,
+                    identity=identity,
+                ) as decision:
+                    if decision == GuestThreadCreateDecision.FOREIGN:
+                        await _json_response(
+                            scope,
+                            receive,
+                            send,
+                            status_code=404,
+                            content={"detail": "Not Found"},
+                        )
+                        return
+                    if decision in {
+                        GuestThreadCreateDecision.IDENTITY_LIMIT,
+                        GuestThreadCreateDecision.GLOBAL_LIMIT,
+                    }:
+                        message = (
+                            "Guest stored thread limit exceeded"
+                            if decision == GuestThreadCreateDecision.IDENTITY_LIMIT
+                            else "Guest thread storage is at capacity"
+                        )
+                        await _json_response(
+                            scope,
+                            receive,
+                            send,
+                            status_code=429,
+                            content={
+                                "error": "thread_limit_exceeded",
+                                "message": message,
+                            },
+                            headers={"Retry-After": "3600"},
+                        )
+                        return
+                    await dispatch()
+            except GuestThreadAdmissionUnavailableError as error:
+                logger.error(
+                    "guest thread admission failed error_type=%s",
+                    type(error.__cause__).__name__
+                    if error.__cause__ is not None
+                    else type(error).__name__,
+                )
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=503,
+                    content={
+                        "error": "service_unavailable",
+                        "message": "Guest thread storage admission is unavailable",
+                    },
+                    headers={"Retry-After": "1"},
+                )
+            return
+
+        if kind == "stream" and not outer_ingress_admitted:
+            if not self._acquire_stream_lease(identity):
+                await _json_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=429,
+                    content={
+                        "error": "rate_limited",
+                        "message": "Guest stream concurrency limit exceeded",
+                    },
+                    headers={"Retry-After": "1"},
+                )
+                return
+            try:
+                await dispatch()
+            finally:
+                self._release_stream_lease(identity)
+            return
+
+        await dispatch()
+
+
+class GuestIngressGuard(GuestRunGuard):
+    """Authenticate and shape every guest request before DB/body-aware middleware."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+        user = await _authenticated_user(scope)
+        if user is None or not _is_guest_user(user):
+            await self.app(scope, receive, send)
+            return
+
+        identity = user["identity"]
+        is_thread_create = (
+            scope.get("method") == "POST" and scope.get("path") == "/threads"
+        )
+        allowed, retry_after = self._consume_non_spending(
+            identity,
+            thread_create=is_thread_create,
+        )
+        if not allowed:
+            await _json_response(
+                scope,
+                receive,
+                send,
+                status_code=429,
+                content={
+                    "error": "rate_limited",
+                    "message": (
+                        "Guest thread creation rate limit exceeded"
+                        if is_thread_create
+                        else "Guest request rate limit exceeded"
+                    ),
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+            return
+
+        guarded_scope = dict(scope)
+        guarded_scope[_GUEST_INGRESS_SCOPE_KEY] = _GUEST_INGRESS_MARKER
+        is_stream = bool(
+            scope.get("method") == "POST"
+            and _GUEST_STREAM_PATH.fullmatch(scope.get("path", "")) is not None
+        )
+        if not is_stream:
+            await self.app(guarded_scope, receive, send)
+            return
+        if not self._acquire_stream_lease(identity):
+            await _json_response(
+                scope,
+                receive,
+                send,
+                status_code=429,
+                content={
+                    "error": "rate_limited",
+                    "message": "Guest stream concurrency limit exceeded",
+                },
+                headers={"Retry-After": "1"},
+            )
+            return
+        try:
+            await self.app(guarded_scope, receive, send)
+        finally:
+            self._release_stream_lease(identity)
 
 
 class NativeThreadGuard:
@@ -1187,7 +1615,10 @@ class NativeThreadGuard:
         guest_resume_id: str | None = None
         if is_guest:
             try:
-                normalized_body, _spends = _guest_command(body)
+                normalized_body, _spends = _guest_command(
+                    body,
+                    rewrite_message_id=False,
+                )
             except GuestRequestError:
                 # Invalid paid guest wires never take either the PostgreSQL or local
                 # mutation claim. Preserve the hidden-resource response for a foreign
@@ -1540,11 +1971,25 @@ async def collect_guest_threads(request: Request) -> JSONResponse:
     )
 
 
+def _validate_production_middleware_order() -> None:
+    """Pin guest admission outside every DB/body-aware native mutation guard."""
+    order = [
+        middleware.cls
+        for middleware in app.user_middleware
+        if middleware.cls in {GuestIngressGuard, GuestRunGuard, NativeThreadGuard}
+    ]
+    if order != [GuestIngressGuard, NativeThreadGuard, GuestRunGuard]:
+        raise RuntimeError("guest HTTP middleware order is not fail-closed")
+
+
 app.add_middleware(GuestRunGuard, enforce_daily_budget=True)
 app.add_middleware(NativeThreadGuard)
+app.add_middleware(GuestIngressGuard)
+_validate_production_middleware_order()
 
 __all__ = [
     "GuestRequestError",
+    "GuestIngressGuard",
     "GuestRunGuard",
     "GuestStreamLimitError",
     "GuestWireProjectionError",

@@ -70,7 +70,7 @@ from agent.capabilities.token_counting import (
     require_openai_api_key,
 )
 from agent.inspection import InspectionEventTransformer
-from agent.prompts import SYSTEM_PROMPT
+from agent.prompts import GUEST_SYSTEM_PROMPT, SYSTEM_PROMPT
 from agent.run_liveness import (
     GUEST_RUN_MAX_ELAPSED_SECONDS,
     acquire_guest_execution_fence,
@@ -106,6 +106,24 @@ GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     max_output_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
     max_total_tokens=12_000,
     max_elapsed_seconds=GUEST_RUN_MAX_ELAPSED_SECONDS,
+)
+_GUEST_ROOT_TOOL_ORDER = (
+    "keyword_search",
+    "semantic_search",
+    "metadata_filter",
+    "graph_traverse",
+    "list_posts",
+    "read_post",
+)
+GUEST_ROOT_TOOL_NAMES = frozenset(
+    {
+        "keyword_search",
+        "semantic_search",
+        "metadata_filter",
+        "graph_traverse",
+        "list_posts",
+        "read_post",
+    }
 )
 
 AGENT_DIR = Path(__file__).resolve().parent.parent.parent  # agent/
@@ -151,6 +169,17 @@ def _filesystem_permissions() -> list[FilesystemPermission]:
             mode="deny",
         )
     ]
+
+
+def _validate_guest_root_tool_contract() -> None:
+    """Fail startup/compilation when the reviewed guest tool surface drifts."""
+    actual = tuple(tool.name for tool in TOOLS)
+    if len(actual) != len(set(actual)):
+        raise RuntimeError("guest root tools contain a duplicate name")
+    if actual != _GUEST_ROOT_TOOL_ORDER or frozenset(actual) != GUEST_ROOT_TOOL_NAMES:
+        raise RuntimeError(
+            "guest root tools must equal the reviewed six-name ordered allowlist"
+        )
 
 
 def _normalize_model_spec(
@@ -285,6 +314,7 @@ def create_graph(
     store after this function returns. Capability authorization comes only
     from ``ServerRuntime.user.permissions``; client config cannot enable it.
     """
+    _validate_guest_root_tool_contract()
     validate_capability_config(config)
     is_guest = _runtime_is_guest(runtime)
     if model_provider is not None and model is None:
@@ -371,6 +401,9 @@ def create_graph(
             raise ValueError(
                 "experiment root tool allowlist must exactly match server capabilities"
             )
+    effective_root_tool_allowlist = (
+        GUEST_ROOT_TOOL_NAMES if is_guest else root_tool_allowlist
+    )
     if experiment_subagent_allowlist is not None and (
         model is None
         or is_guest
@@ -394,7 +427,7 @@ def create_graph(
         raise ValueError(
             "quickjs_middleware must match server-side QuickJS authorization"
         )
-    system_prompt = SYSTEM_PROMPT
+    system_prompt = GUEST_SYSTEM_PROMPT if is_guest else SYSTEM_PROMPT
     if allow_subagents:
         system_prompt = f"{system_prompt}\n\n{SUBAGENT_ROOT_PROMPT}"
 
@@ -415,7 +448,7 @@ def create_graph(
                 native_subagent_prompt=selected_native_subagent_prompt,
                 quickjs_tool_name=QUICKJS_TOOL_NAME,
                 allow_quickjs=allow_quickjs,
-                root_tool_allowlist=root_tool_allowlist,
+                root_tool_allowlist=effective_root_tool_allowlist,
             ),
         ],
         subagents=build_subagents(
@@ -427,7 +460,7 @@ def create_graph(
             allowed_subagents=selected_subagents,
         ),
         backend=_build_backend(persistent_memory=not is_guest),
-        skills=["/skills/"],
+        skills=[] if is_guest else ["/skills/"],
         permissions=_filesystem_permissions(),
     )
     return compiled.copy(
@@ -545,6 +578,7 @@ def _validate_aegra_registration() -> None:
     """Cover startup even when config discovery omits the custom HTTP app."""
     from agent.preflight import validate_runtime_preflight
 
+    _validate_guest_root_tool_contract()
     validate_runtime_preflight()
     validate_guest_execution_fencing_factory(graph)
     if os.environ.get("AGENT_ANONYMOUS_ACCESS_ENABLED", "false") == "true":
@@ -558,6 +592,7 @@ _validate_aegra_registration()
 
 __all__ = [
     "GUEST_MODEL_MAX_OUTPUT_TOKENS",
+    "GUEST_ROOT_TOOL_NAMES",
     "GUEST_RUN_BUDGET_POLICY",
     "MODEL_MAX_OUTPUT_TOKENS",
     "MODEL_TIMEOUT_SECONDS",

@@ -31,12 +31,20 @@ interface Subscriber {
   threadId: string
 }
 
+interface MessageIdMapping {
+  clientId: string
+  projectedId: string
+  storedId: string
+}
+
 interface FixtureState {
   cancellations: Array<{ runId: string; threadId: string }>
   commands: JsonRecord[]
   errors: string[]
+  messageIdMappings: MessageIdMapping[]
   nextRun: number
   nextSequence: number
+  nextStoredMessage: number
   nextSubscriber: number
   renameAttempts: number
   reconnectDisconnects: number
@@ -101,8 +109,10 @@ function resetState(
     cancellations: [],
     commands: [],
     errors: [],
+    messageIdMappings: [],
     nextRun: 1,
     nextSequence: 1,
+    nextStoredMessage: 1,
     nextSubscriber: 1,
     renameAttempts: 0,
     reconnectDisconnects: 0,
@@ -276,12 +286,13 @@ async function waitForStreams(threadId: string): Promise<void> {
 function messageEvents(
   runId: string,
   text = "브라우저 fixture 응답이 완료되었습니다.",
-  messageId = `browser-answer-${state.nextSequence}`
+  messageId = `browser-answer-${state.nextSequence}`,
+  role: "ai" | "human" = "ai"
 ): JsonRecord[] {
   return [
     protocolEvent("messages", [], {
       event: "message-start",
-      role: "ai",
+      role,
       id: messageId,
     }, undefined, runId),
     protocolEvent("messages", [], {
@@ -473,6 +484,39 @@ async function emitPublicRootStateFallback(
       run.run_id
     )
   )
+  const mapping = state.messageIdMappings.at(-1)
+  const thread = state.threads.get(threadId)
+  const storedMessage = thread?.messages.find(
+    (message) => message.id === mapping?.storedId
+  )
+  if (
+    mapping &&
+    storedMessage &&
+    (typeof storedMessage.content === "string" ||
+      Array.isArray(storedMessage.content))
+  ) {
+    const text =
+      typeof storedMessage.content === "string"
+        ? storedMessage.content
+        : storedMessage.content
+            .map((part) =>
+              part &&
+              typeof part === "object" &&
+              !Array.isArray(part) &&
+              typeof (part as JsonRecord).text === "string"
+                ? ((part as JsonRecord).text as string)
+                : ""
+            )
+            .join("")
+    for (const event of messageEvents(
+      run.run_id,
+      text,
+      mapping.projectedId,
+      "human"
+    )) {
+      emit(threadId, event)
+    }
+  }
   // Reproduce the pinned Aegra nested-first/root-dedupe failure: the
   // terminal lifecycle reaches the native client, but no input.requested
   // event survives in ThreadStream. The public state endpoint below is
@@ -491,7 +535,6 @@ async function emitPublicRootStateFallback(
     )
   )
   run.status = "interrupted"
-  const thread = state.threads.get(threadId)
   if (thread) thread.status = "interrupted"
 }
 
@@ -536,6 +579,9 @@ async function emitCompletedRun(
   if (thread) {
     thread.status = "idle"
     thread.messages = [
+      ...(state.scenario === "public-root-state-fallback"
+        ? thread.messages
+        : []),
       {
         id: "browser-persisted-answer",
         role: "assistant",
@@ -565,6 +611,42 @@ function newRun(threadId: string, metadata: JsonRecord): RunRow {
   return run
 }
 
+function capturePublicGuestMessage(
+  threadId: string,
+  params: JsonRecord
+): void {
+  if (state.scenario !== "public-root-state-fallback") return
+  const input = params.input
+  if (!input || typeof input !== "object" || Array.isArray(input)) return
+  const messages = (input as JsonRecord).messages
+  if (!Array.isArray(messages) || messages.length !== 1) return
+  const message = messages[0]
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return
+  }
+  const record = message as JsonRecord
+  if (typeof record.id !== "string") return
+  const storedId = `guest-user:${record.id}:${state.nextStoredMessage
+    .toString(16)
+    .padStart(32, "0")}`
+  state.nextStoredMessage += 1
+  state.messageIdMappings.push({
+    clientId: record.id,
+    projectedId: record.id,
+    storedId,
+  })
+  const thread = state.threads.get(threadId)
+  if (thread) {
+    thread.messages = [
+      {
+        ...record,
+        id: storedId,
+        role: "user",
+      },
+    ]
+  }
+}
+
 function threadState(threadId: string): JsonRecord {
   const thread = state.threads.get(threadId)
   const publicInterrupts =
@@ -586,8 +668,15 @@ function threadState(threadId: string): JsonRecord {
           },
         ]
       : []
+  const messages = (thread?.messages ?? []).map((message) => {
+    if (state.scenario !== "public-root-state-fallback") return message
+    const mapping = state.messageIdMappings.find(
+      (candidate) => candidate.storedId === message.id
+    )
+    return mapping ? { ...message, id: mapping.projectedId } : message
+  })
   return {
-    values: { messages: thread?.messages ?? [] },
+    values: { messages },
     next: [],
     checkpoint: {
       thread_id: threadId,
@@ -615,6 +704,7 @@ function publicState(): JsonRecord {
     cancellations: state.cancellations,
     commands: state.commands,
     errors: state.errors,
+    messageIdMappings: state.messageIdMappings,
     renameAttempts: state.renameAttempts,
     reconnectDisconnects: state.reconnectDisconnects,
     responses: state.responses,
@@ -762,6 +852,7 @@ const server = Bun.serve({
             ? (params.metadata as JsonRecord)
             : {}
         const run = newRun(threadId, metadata)
+        capturePublicGuestMessage(threadId, params)
         const serialized = JSON.stringify(params.input ?? "")
         if (state.scenario === "delayed-replay") {
           void emitDelayedReplayThenInitial(threadId, run).catch(

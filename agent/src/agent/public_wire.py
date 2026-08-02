@@ -51,6 +51,9 @@ _SAFE_SUBMIT_NONCE = re.compile(
     r"[0-9a-f]{12}$"
 )
 _SAFE_INTERRUPT_ID = re.compile(r"^[0-9a-f]{32}$")
+_GUEST_STORED_USER_MESSAGE_ID = re.compile(
+    r"^guest-user:([A-Za-z0-9][A-Za-z0-9._:-]{0,127}):[0-9a-f]{32}$"
+)
 _THREAD_STATUSES = frozenset({"idle", "busy", "interrupted", "error"})
 _RUN_STATUSES = frozenset(
     {"pending", "running", "error", "success", "timeout", "interrupted"}
@@ -189,6 +192,17 @@ def _safe_id(value: object, *, field_name: str, allow_none: bool = False) -> str
     if _SAFE_ID.fullmatch(text) is None:
         raise GuestWireProjectionError(f"{field_name} is not a safe identifier")
     return text
+
+
+def _project_message_id(value: object, *, message_type: str, field_name: str) -> str:
+    """Keep checkpoint IDs server-owned while preserving assistant-ui correlation."""
+    message_id = _safe_id(value, field_name=field_name)
+    assert message_id is not None
+    if message_type == "human":
+        match = _GUEST_STORED_USER_MESSAGE_ID.fullmatch(message_id)
+        if match is not None:
+            return match.group(1)
+    return message_id
 
 
 def _safe_optional_text(
@@ -457,8 +471,9 @@ def _project_state_messages(value: object) -> list[dict[str, Any]]:
         if content is None:
             continue
         try:
-            message_id = _safe_id(
+            message_id = _project_message_id(
                 candidate.get("id"),
+                message_type=message_type,
                 field_name="state message id",
             )
         except GuestWireProjectionError:
@@ -972,7 +987,11 @@ class GuestEventProjector:
             )
             if normalized_role is None:
                 raise GuestWireProjectionError("message role is invalid")
-            message_id = _safe_id(data.get("id"), field_name="message id")
+            message_id = _project_message_id(
+                data.get("id"),
+                message_type=normalized_role,
+                field_name="message id",
+            )
             suppressed = normalized_role == "system"
             self._message = _MessageProjectionState(suppressed=suppressed)
             if suppressed:

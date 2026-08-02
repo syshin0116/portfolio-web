@@ -25,13 +25,19 @@ from agent.auth import (
     TOKEN_ISSUER,
 )
 from agent.guest_budget import GuestDailyBudgetExhaustedError
+from agent.guest_thread_admission import (
+    GuestThreadAdmissionUnavailableError,
+    GuestThreadCreateDecision,
+)
 from agent.http import (
+    GuestIngressGuard,
     GuestRunGuard,
     GuestStreamLimitError,
     GuestWireProjectionError,
     NativeThreadGuard,
 )
 from agent.maintenance import GUEST_RETENTION_POLICY
+from agent.public_wire import GuestEventProjector
 
 _NONCE = "123e4567-e89b-42d3-a456-426614174000"
 _INTERRUPT_ID = "0123456789abcdef0123456789abcdef"
@@ -55,6 +61,12 @@ def _enable_guest_agent(monkeypatch):
         assert identity.startswith("anon:")
         return False
 
+    @asynccontextmanager
+    async def allow_thread_creation(*, thread_id, identity):
+        assert isinstance(thread_id, str) and thread_id
+        assert identity.startswith("anon:")
+        yield GuestThreadCreateDecision.NEW
+
     monkeypatch.setattr(
         http_extension,
         "guest_thread_advisory_lock",
@@ -64,6 +76,11 @@ def _enable_guest_agent(monkeypatch):
         http_extension,
         "guest_thread_has_unresolved_quarantine",
         no_unresolved_quarantine,
+    )
+    monkeypatch.setattr(
+        http_extension,
+        "admit_guest_thread_creation",
+        allow_thread_creation,
     )
 
 
@@ -209,6 +226,15 @@ def _run_command(
             "metadata": metadata,
         },
     }
+
+
+def _assert_server_owned_message_id(value: object, client_id: str) -> None:
+    assert isinstance(value, str)
+    prefix = f"guest-user:{client_id}:"
+    assert value.startswith(prefix)
+    suffix = value.removeprefix(prefix)
+    assert len(suffix) == 32
+    assert set(suffix) <= set("0123456789abcdef")
 
 
 def _input_respond_command(
@@ -529,13 +555,235 @@ async def test_run_start_is_rebuilt_from_the_public_wire_contract():
         )
 
     assert response.status_code == 200
-    assert json.loads(records[0]["body"]) == {
+    forwarded = json.loads(records[0]["body"])
+    stored_message_id = forwarded["params"]["input"]["messages"][0]["id"]
+    _assert_server_owned_message_id(stored_message_id, "guest-message-1")
+    expected = {
         **_run_command(),
         "params": {
             **_run_command()["params"],
             "multitask_strategy": "reject",
         },
     }
+    expected["params"]["input"]["messages"][0]["id"] = stored_message_id
+    assert forwarded == expected
+
+
+async def test_reused_assistant_ui_message_id_gets_unique_checkpoint_ids_and_correlates():
+    records: list[dict[str, Any]] = []
+    headers = _guest_headers()
+    app = GuestRunGuard(_capturing_app(records), global_capacity=10)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        responses = [
+            await client.post(
+                "/threads/guest-thread/commands",
+                headers=headers,
+                json=_run_command(),
+            )
+            for _index in range(2)
+        ]
+
+    assert [response.status_code for response in responses] == [200, 200]
+    stored_ids = [
+        json.loads(record["body"])["params"]["input"]["messages"][0]["id"]
+        for record in records
+    ]
+    assert stored_ids[0] != stored_ids[1]
+    for index, stored_id in enumerate(stored_ids):
+        _assert_server_owned_message_id(stored_id, "guest-message-1")
+        projected = GuestEventProjector().project(
+            {
+                "event_id": f"run-{index}_event_1:0",
+                "method": "messages",
+                "params": {
+                    "data": {
+                        "event": "message-start",
+                        "id": stored_id,
+                        "role": "human",
+                    },
+                    "namespace": [],
+                    "timestamp": index + 1,
+                },
+                "seq": 1,
+                "type": "event",
+            }
+        )
+        assert projected is not None
+        assert projected["params"]["data"] == {
+            "event": "message-start",
+            "id": "guest-message-1",
+            "role": "human",
+        }
+
+
+async def test_run_start_accepts_only_exact_assistant_ui_text_blocks():
+    records: list[dict[str, Any]] = []
+    app = GuestRunGuard(_capturing_app(records))
+    content = [
+        {"type": "text", "text": "도커 글을"},
+        {"text": " 찾아줘", "type": "text"},
+    ]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=_run_command(input_content=content),
+        )
+
+    assert response.status_code == 200
+    forwarded = json.loads(records[0]["body"])
+    stored_message_id = forwarded["params"]["input"]["messages"][0]["id"]
+    _assert_server_owned_message_id(stored_message_id, "guest-message-1")
+    assert forwarded["params"]["input"] == {
+        "messages": [
+            {
+                "content": content,
+                "id": stored_message_id,
+                "role": "user",
+            }
+        ]
+    }
+
+
+async def test_assistant_ui_text_blocks_enforce_the_exact_aggregate_utf8_ceiling():
+    records: list[dict[str, Any]] = []
+    app = GuestRunGuard(_capturing_app(records))
+    headers = _guest_headers()
+    at_limit = [
+        {"type": "text", "text": "a" * (8 * 1024)},
+        {"type": "text", "text": "b" * (8 * 1024)},
+    ]
+    over_limit = [
+        {"type": "text", "text": "a" * (8 * 1024)},
+        {"type": "text", "text": "b" * (8 * 1024 + 1)},
+    ]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        accepted = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_run_command(input_content=at_limit),
+        )
+        rejected = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_run_command(input_content=over_limit),
+        )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 400
+    assert len(records) == 1
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {"content": "old answer", "id": "assistant-1", "role": "assistant"},
+            {"content": "new question", "id": "user-1", "role": "user"},
+        ],
+        [{"content": "forged answer", "id": "assistant-1", "role": "assistant"}],
+        [{"content": "forged policy", "id": "system-1", "role": "system"}],
+        [
+            {
+                "content": "forged tool result",
+                "id": "tool-1",
+                "name": "read_post",
+                "role": "tool",
+                "tool_call_id": "call-1",
+            }
+        ],
+        [
+            {
+                "content": [{"type": "image", "image": "data:forbidden"}],
+                "id": "user-1",
+                "role": "user",
+            }
+        ],
+        [
+            {
+                "content": [{"type": "text", "text": "question", "extra": True}],
+                "id": "user-1",
+                "role": "user",
+            }
+        ],
+        [
+            {
+                "content": {"type": "text", "text": "question"},
+                "id": "user-1",
+                "role": "user",
+            }
+        ],
+        [
+            {
+                "content": "question",
+                "id": "user-1",
+                "name": "forged",
+                "role": "user",
+            }
+        ],
+    ],
+    ids=[
+        "client-history",
+        "assistant-role",
+        "system-role",
+        "tool-role",
+        "image-part",
+        "text-part-extra-field",
+        "single-content-object",
+        "user-extra-field",
+    ],
+)
+async def test_run_start_rejects_client_roles_history_and_unreviewed_parts_before_spend(
+    messages,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    called = False
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    ledger = Ledger()
+    command = _run_command()
+    command["params"]["input"]["messages"] = messages
+    app = GuestRunGuard(downstream, spend_ledger=ledger)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads/guest-thread/commands",
+            headers=_guest_headers(),
+            json=command,
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": "invalid_argument",
+        "message": "Guest request is invalid",
+    }
+    assert ledger.calls == 0
+    assert not called
 
 
 @pytest.mark.parametrize(
@@ -626,13 +874,13 @@ async def test_per_identity_rate_limit_refills_without_resetting_global_state():
 
 
 async def test_global_rate_limit_survives_guest_identity_rotation():
-    app = GuestRunGuard(
-        _capturing_app([]),
+    app = GuestIngressGuard(
+        GuestRunGuard(_capturing_app([])),
         clock=lambda: 0.0,
-        identity_capacity=4,
-        identity_window_seconds=60,
-        global_capacity=2,
-        global_window_seconds=60,
+        request_identity_capacity=4,
+        request_identity_window_seconds=60,
+        request_global_capacity=2,
+        request_global_window_seconds=60,
     )
 
     async with httpx.AsyncClient(
@@ -680,6 +928,523 @@ async def test_identity_bucket_cardinality_fails_closed():
     assert first.status_code == 200
     assert second.status_code == 429
     assert second.headers["retry-after"] == "60"
+
+
+async def test_fully_refilled_long_inactive_identity_is_pruned_at_cardinality_cap():
+    first_subject = f"anon:{UUID(int=1, version=4)}"
+    second_subject = f"anon:{UUID(int=2, version=4)}"
+    now = [0.0]
+    app = GuestIngressGuard(
+        GuestRunGuard(_capturing_app([])),
+        clock=lambda: now[0],
+        max_identities=1,
+        identity_capacity=1,
+        identity_window_seconds=60,
+        global_capacity=10,
+        request_identity_capacity=1,
+        request_identity_window_seconds=60,
+        request_global_capacity=10,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        first = await client.get(
+            "/threads/guest-thread",
+            headers=_guest_headers(first_subject),
+        )
+        now[0] = 3_599.0
+        still_active_window = await client.get(
+            "/threads/guest-thread",
+            headers=_guest_headers(second_subject),
+        )
+        now[0] = 3_600.0
+        admitted_after_prune = await client.get(
+            "/threads/guest-thread",
+            headers=_guest_headers(second_subject),
+        )
+
+    assert [
+        first.status_code,
+        still_active_window.status_code,
+        admitted_after_prune.status_code,
+    ] == [200, 429, 200]
+
+
+async def test_active_stream_identity_is_not_pruned_until_lease_release_and_inactivity():
+    first_subject = f"anon:{UUID(int=1, version=4)}"
+    second_subject = f"anon:{UUID(int=2, version=4)}"
+    now = [0.0]
+    stream_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def downstream(scope, receive, send):
+        if scope["path"].endswith("/stream/events"):
+            await _request_body(receive)
+            stream_entered.set()
+            await release.wait()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"text/event-stream")],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b"",
+                    "more_body": False,
+                }
+            )
+            return
+        await JSONResponse(_thread_response("guest-thread"))(
+            scope,
+            receive,
+            send,
+        )
+
+    app = GuestIngressGuard(
+        GuestRunGuard(downstream),
+        clock=lambda: now[0],
+        max_identities=1,
+        request_global_capacity=10,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        held = asyncio.create_task(
+            client.post(
+                "/threads/guest-thread/stream/events",
+                headers=_guest_headers(first_subject),
+                json={"channels": ["messages", "lifecycle"]},
+            )
+        )
+        await asyncio.wait_for(stream_entered.wait(), timeout=2)
+        now[0] = 3_600.0
+        blocked_while_leased = await client.get(
+            "/threads/guest-thread",
+            headers=_guest_headers(second_subject),
+        )
+        release.set()
+        assert (await held).status_code == 200
+        now[0] = 7_200.0
+        admitted_after_release = await client.get(
+            "/threads/guest-thread",
+            headers=_guest_headers(second_subject),
+        )
+
+    assert blocked_while_leased.status_code == 429
+    assert admitted_after_release.status_code == 200
+
+
+async def test_invalid_and_unknown_guest_requests_consume_outer_ingress_before_parse():
+    called = False
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    headers = _guest_headers()
+    app = GuestIngressGuard(
+        GuestRunGuard(downstream),
+        clock=lambda: 0.0,
+        request_identity_capacity=2,
+        request_identity_window_seconds=60,
+        request_global_capacity=10,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        malformed = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json={"id": 1},
+        )
+        unknown = await client.get("/models", headers=headers)
+        valid_after_exhaustion = await client.get(
+            "/threads/guest-thread",
+            headers=headers,
+        )
+
+    assert [
+        malformed.status_code,
+        unknown.status_code,
+        valid_after_exhaustion.status_code,
+    ] == [400, 404, 429]
+    assert not called
+
+
+async def test_invalid_thread_create_consumes_the_thread_ingress_bucket():
+    headers = _guest_headers()
+    app = GuestIngressGuard(
+        GuestRunGuard(_capturing_app([])),
+        clock=lambda: 0.0,
+        thread_create_identity_capacity=1,
+        thread_create_identity_window_seconds=3_600,
+        thread_create_global_capacity=10,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        malformed = await client.post(
+            "/threads",
+            headers=headers,
+            json={"thread_id": "missing-policy-and-metadata"},
+        )
+        retry = await client.post(
+            "/threads",
+            headers=headers,
+            json={
+                "if_exists": "do_nothing",
+                "metadata": {"graph_id": "agent"},
+                "thread_id": "valid-but-rate-limited",
+            },
+        )
+
+    assert [malformed.status_code, retry.status_code] == [400, 429]
+    assert retry.json()["message"] == "Guest thread creation rate limit exceeded"
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/threads/guest-thread"),
+        (
+            "POST",
+            "/threads/guest-thread/runs/run-1/cancel?action=interrupt&wait=0",
+        ),
+    ],
+    ids=["read", "cancel"],
+)
+async def test_bodyless_guest_routes_reject_actual_payload_bytes(method, path):
+    records: list[dict[str, Any]] = []
+    app = GuestIngressGuard(GuestRunGuard(_capturing_app(records)))
+    headers = _guest_headers()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        rejected = await client.request(
+            method,
+            path,
+            headers=headers,
+            content=b"{}",
+        )
+        accepted = await client.request(method, path, headers=headers)
+
+    assert [rejected.status_code, accepted.status_code] == [400, 200]
+    assert len(records) == 1
+    assert records[0]["body"] == b""
+
+
+async def test_thread_creation_has_a_separate_per_identity_rate_without_spend():
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    records: list[dict[str, Any]] = []
+    ledger = Ledger()
+    headers = _guest_headers()
+    app = GuestRunGuard(
+        _capturing_app(records),
+        clock=lambda: 0.0,
+        identity_capacity=1,
+        global_capacity=10,
+        thread_create_identity_capacity=1,
+        thread_create_identity_window_seconds=3_600,
+        thread_create_global_capacity=10,
+        spend_ledger=ledger,
+    )
+    create_body = {
+        "if_exists": "do_nothing",
+        "metadata": {"graph_id": "agent"},
+        "thread_id": "guest-created-once",
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        created = await client.post("/threads", headers=headers, json=create_body)
+        rejected = await client.post("/threads", headers=headers, json=create_body)
+        paid_run = await client.post(
+            "/threads/guest-created-once/commands",
+            headers=headers,
+            json=_run_command(),
+        )
+
+    assert [created.status_code, rejected.status_code, paid_run.status_code] == [
+        200,
+        429,
+        200,
+    ]
+    assert rejected.json() == {
+        "error": "rate_limited",
+        "message": "Guest thread creation rate limit exceeded",
+    }
+    assert rejected.headers["retry-after"] == "3600"
+    assert ledger.calls == 1
+    assert [record["path"] for record in records] == [
+        "/threads",
+        "/threads/guest-created-once/commands",
+    ]
+
+
+async def test_global_thread_creation_rate_survives_guest_identity_rotation():
+    app = GuestRunGuard(
+        _capturing_app([]),
+        clock=lambda: 0.0,
+        thread_create_identity_capacity=5,
+        thread_create_global_capacity=2,
+        thread_create_global_window_seconds=3_600,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        responses = [
+            await client.post(
+                "/threads",
+                headers=_guest_headers(),
+                json={
+                    "if_exists": "do_nothing",
+                    "metadata": {"graph_id": "agent"},
+                    "thread_id": f"guest-created-{index}",
+                },
+            )
+            for index in range(3)
+        ]
+
+    assert [response.status_code for response in responses] == [200, 200, 429]
+    assert responses[-1].headers["retry-after"] == "1800"
+
+
+async def test_owned_thread_create_is_idempotent_and_holds_durable_lock_through_response(
+    monkeypatch,
+):
+    timeline: list[str] = []
+
+    @asynccontextmanager
+    async def existing_owned(*, thread_id, identity):
+        assert thread_id == "guest-existing"
+        assert identity.startswith("anon:")
+        timeline.append("lock-enter")
+        try:
+            yield GuestThreadCreateDecision.EXISTING_OWNED
+        finally:
+            timeline.append("lock-exit")
+
+    async def downstream(scope, receive, send):
+        body = json.loads(await _request_body(receive))
+        assert body["thread_id"] == "guest-existing"
+        timeline.append("downstream-enter")
+        await JSONResponse(_thread_response("guest-existing"))(
+            scope,
+            receive,
+            send,
+        )
+        timeline.append("response-sent")
+
+    monkeypatch.setattr(
+        http_extension,
+        "admit_guest_thread_creation",
+        existing_owned,
+    )
+    app = GuestRunGuard(downstream)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads",
+            headers=_guest_headers(),
+            json={
+                "if_exists": "do_nothing",
+                "metadata": {"graph_id": "agent"},
+                "thread_id": "guest-existing",
+            },
+        )
+
+    assert response.status_code == 200
+    assert timeline == [
+        "lock-enter",
+        "downstream-enter",
+        "response-sent",
+        "lock-exit",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_status", "expected_body"),
+    [
+        (
+            GuestThreadCreateDecision.FOREIGN,
+            404,
+            {"detail": "Not Found"},
+        ),
+        (
+            GuestThreadCreateDecision.IDENTITY_LIMIT,
+            429,
+            {
+                "error": "thread_limit_exceeded",
+                "message": "Guest stored thread limit exceeded",
+            },
+        ),
+        (
+            GuestThreadCreateDecision.GLOBAL_LIMIT,
+            429,
+            {
+                "error": "thread_limit_exceeded",
+                "message": "Guest thread storage is at capacity",
+            },
+        ),
+    ],
+    ids=["foreign-hidden", "identity-six", "global-256"],
+)
+async def test_durable_thread_create_decision_stops_before_aegra_dispatch(
+    monkeypatch,
+    decision,
+    expected_status,
+    expected_body,
+):
+    called = False
+
+    @asynccontextmanager
+    async def decide(*, thread_id, identity):
+        assert thread_id == "guest-capped"
+        assert identity.startswith("anon:")
+        yield decision
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(http_extension, "admit_guest_thread_creation", decide)
+    app = GuestRunGuard(downstream)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads",
+            headers=_guest_headers(),
+            json={
+                "if_exists": "do_nothing",
+                "metadata": {"graph_id": "agent"},
+                "thread_id": "guest-capped",
+            },
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == expected_body
+    assert not called
+
+
+async def test_durable_thread_admission_failure_is_redacted_and_fails_closed(
+    monkeypatch,
+):
+    @asynccontextmanager
+    async def unavailable(*, thread_id, identity):
+        del thread_id, identity
+        raise GuestThreadAdmissionUnavailableError("private database detail")
+        yield GuestThreadCreateDecision.NEW
+
+    monkeypatch.setattr(
+        http_extension,
+        "admit_guest_thread_creation",
+        unavailable,
+    )
+    app = GuestRunGuard(_capturing_app([]))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/threads",
+            headers=_guest_headers(),
+            json={
+                "if_exists": "do_nothing",
+                "metadata": {"graph_id": "agent"},
+                "thread_id": "guest-unavailable",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "service_unavailable",
+        "message": "Guest thread storage admission is unavailable",
+    }
+    assert "private" not in response.text
+
+
+async def test_nonspending_read_rate_is_bounded_without_charging_paid_ledger():
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    records: list[dict[str, Any]] = []
+    ledger = Ledger()
+    headers = _guest_headers()
+    now = [0.0]
+    app = GuestRunGuard(
+        _capturing_app(records),
+        clock=lambda: now[0],
+        identity_capacity=1,
+        global_capacity=10,
+        request_identity_capacity=2,
+        request_identity_window_seconds=60,
+        request_global_capacity=10,
+        spend_ledger=ledger,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        reads = [
+            await client.get("/threads/guest-thread", headers=headers)
+            for _index in range(3)
+        ]
+        now[0] = 60.0
+        paid_run = await client.post(
+            "/threads/guest-thread/commands",
+            headers=headers,
+            json=_run_command(),
+        )
+
+    assert [response.status_code for response in reads] == [200, 200, 429]
+    assert reads[-1].json() == {
+        "error": "rate_limited",
+        "message": "Guest request rate limit exceeded",
+    }
+    assert reads[-1].headers["retry-after"] == "30"
+    assert paid_run.status_code == 200
+    assert ledger.calls == 1
+    assert [record["path"] for record in records] == [
+        "/threads/guest-thread",
+        "/threads/guest-thread",
+        "/threads/guest-thread/commands",
+    ]
 
 
 async def test_native_stream_filters_allow_only_reviewed_public_channels():
@@ -762,6 +1527,134 @@ async def test_native_stream_filters_allow_only_reviewed_public_channels():
             "namespaces": [[]],
         },
     ]
+
+
+async def test_guest_stream_lease_allows_two_per_identity_and_releases_after_close():
+    entered = 0
+    two_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_stream(scope, receive, send):
+        nonlocal entered
+        await _request_body(receive)
+        entered += 1
+        if entered == 2:
+            two_entered.set()
+        await release.wait()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"",
+                "more_body": False,
+            }
+        )
+
+    app = GuestIngressGuard(GuestRunGuard(blocking_stream))
+    headers = _guest_headers()
+    subscription = {"channels": ["messages", "lifecycle"]}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        held = [
+            asyncio.create_task(
+                client.post(
+                    "/threads/guest-thread/stream/events",
+                    headers=headers,
+                    json=subscription,
+                )
+            )
+            for _index in range(2)
+        ]
+        await asyncio.wait_for(two_entered.wait(), timeout=2)
+        third = await client.post(
+            "/threads/guest-thread/stream/events",
+            headers=headers,
+            json=subscription,
+        )
+        release.set()
+        completed = await asyncio.gather(*held)
+        admitted_after_close = await client.post(
+            "/threads/guest-thread/stream/events",
+            headers=headers,
+            json=subscription,
+        )
+
+    assert [response.status_code for response in completed] == [200, 200]
+    assert third.status_code == 429
+    assert third.json() == {
+        "error": "rate_limited",
+        "message": "Guest stream concurrency limit exceeded",
+    }
+    assert admitted_after_close.status_code == 200
+    assert app._active_streams == 0
+
+
+async def test_guest_stream_lease_enforces_four_global_across_rotated_identities():
+    entered = 0
+    four_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_stream(scope, receive, send):
+        nonlocal entered
+        await _request_body(receive)
+        entered += 1
+        if entered == 4:
+            four_entered.set()
+        await release.wait()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"",
+                "more_body": False,
+            }
+        )
+
+    app = GuestIngressGuard(GuestRunGuard(blocking_stream))
+    subscription = {"channels": ["messages", "lifecycle"]}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        held = [
+            asyncio.create_task(
+                client.post(
+                    "/threads/guest-thread/stream/events",
+                    headers=_guest_headers(),
+                    json=subscription,
+                )
+            )
+            for _index in range(4)
+        ]
+        await asyncio.wait_for(four_entered.wait(), timeout=2)
+        rotated_fifth = await client.post(
+            "/threads/guest-thread/stream/events",
+            headers=_guest_headers(),
+            json=subscription,
+        )
+        release.set()
+        completed = await asyncio.gather(*held)
+
+    assert [response.status_code for response in completed] == [200] * 4
+    assert rotated_fifth.status_code == 429
+    assert rotated_fifth.headers["retry-after"] == "1"
+    assert app._active_streams == 0
 
 
 async def test_guest_state_projects_only_public_messages_and_interrupt_identity():
@@ -1672,10 +2565,11 @@ async def test_invalid_guest_resume_reaches_inner_400_before_status_or_capacity(
         forbidden_lookup,
     )
     ledger = Ledger()
-    app = NativeThreadGuard(
-        GuestRunGuard(downstream, spend_ledger=ledger),
+    native_guard = NativeThreadGuard(
+        downstream,
         max_active_threads=0,
     )
+    app = GuestRunGuard(native_guard, spend_ledger=ledger)
     command = _input_respond_command()
     if invalid_kind == "interrupt-id":
         command["params"]["interrupt_id"] = "stale-not-hex"
@@ -1699,7 +2593,7 @@ async def test_invalid_guest_resume_reaches_inner_400_before_status_or_capacity(
     }
     assert ledger.calls == 0
     assert downstream_calls == 0
-    assert app._active == set()
+    assert native_guard._active == set()
 
 
 async def test_deep_guest_resume_json_is_canonical_400_before_any_claim_or_spend(
@@ -1740,10 +2634,11 @@ async def test_deep_guest_resume_json_is_canonical_400_before_any_claim_or_spend
         forbidden_lock,
     )
     ledger = Ledger()
-    app = NativeThreadGuard(
-        GuestRunGuard(downstream, spend_ledger=ledger),
+    native_guard = NativeThreadGuard(
+        downstream,
         max_active_threads=0,
     )
+    app = GuestRunGuard(native_guard, spend_ledger=ledger)
     depth = 10_000
     body = (
         b'{"id":8,"method":"input.respond","params":'
@@ -1776,7 +2671,7 @@ async def test_deep_guest_resume_json_is_canonical_400_before_any_claim_or_spend
     }
     assert ledger.calls == 0
     assert downstream_calls == 0
-    assert app._active == set()
+    assert native_guard._active == set()
 
 
 async def test_invalid_guest_run_start_is_400_before_claim_capacity_or_spend(
@@ -1821,10 +2716,11 @@ async def test_invalid_guest_run_start_is_400_before_claim_capacity_or_spend(
         forbidden_lock,
     )
     ledger = Ledger()
-    app = NativeThreadGuard(
-        GuestRunGuard(downstream, spend_ledger=ledger),
+    native_guard = NativeThreadGuard(
+        downstream,
         max_active_threads=0,
     )
+    app = GuestRunGuard(native_guard, spend_ledger=ledger)
     command = _run_command()
     command["params"]["quickjs_enabled"] = True
 
@@ -1843,10 +2739,10 @@ async def test_invalid_guest_run_start_is_400_before_claim_capacity_or_spend(
         "error": "invalid_argument",
         "message": "Guest request is invalid",
     }
-    assert ownership_checks == 1
+    assert ownership_checks == 0
     assert ledger.calls == 0
     assert downstream_calls == 0
-    assert app._active == set()
+    assert native_guard._active == set()
 
 
 async def test_guest_resume_status_is_checked_before_reservation_and_schedule(
@@ -2252,6 +3148,156 @@ async def test_guest_root_interrupt_lookup_fails_closed_when_thread_fence_change
         )
 
 
+async def test_production_order_foreign_valid_command_spends_only_outer_ingress(
+    monkeypatch,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    ownership_checks: list[str] = []
+
+    async def ownership(thread_id, _user_id):
+        ownership_checks.append(thread_id)
+        if thread_id == "foreign-thread":
+            return False, None
+        return True, "idle"
+
+    dispatched: list[str] = []
+
+    async def downstream(scope, receive, send):
+        dispatched.append(scope["path"])
+        command = json.loads(await _request_body(receive))
+        await JSONResponse(
+            {
+                "id": command["id"],
+                "meta": {"applied_through_seq": 0},
+                "result": {"run_id": "run-owned"},
+                "type": "success",
+            }
+        )(scope, receive, send)
+
+    monkeypatch.setattr(
+        http_extension,
+        "_owned_or_new_thread_status",
+        ownership,
+    )
+    ledger = Ledger()
+    inner = GuestRunGuard(
+        downstream,
+        clock=lambda: 0.0,
+        identity_capacity=1,
+        global_capacity=10,
+        spend_ledger=ledger,
+    )
+    app = GuestIngressGuard(
+        NativeThreadGuard(inner),
+        clock=lambda: 0.0,
+        request_identity_capacity=2,
+        request_global_capacity=10,
+    )
+    headers = _guest_headers()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        foreign = await client.post(
+            "/threads/foreign-thread/commands",
+            headers=headers,
+            json=_run_command(),
+        )
+        owned = await client.post(
+            "/threads/owned-thread/commands",
+            headers=headers,
+            json=_run_command(),
+        )
+
+    assert foreign.status_code == 404
+    assert foreign.json() == {"detail": "Not Found"}
+    assert owned.status_code == 200
+    assert ownership_checks == ["foreign-thread", "owned-thread"]
+    assert ledger.calls == 1
+    assert dispatched == ["/threads/owned-thread/commands"]
+
+
+async def test_production_order_malformed_command_db_work_is_outer_quota_bounded(
+    monkeypatch,
+):
+    class Ledger:
+        def __init__(self):
+            self.calls = 0
+
+        async def reserve_run(self):
+            self.calls += 1
+
+    ownership_checks = 0
+
+    async def owned(_thread_id, _user_id):
+        nonlocal ownership_checks
+        ownership_checks += 1
+        return True, "idle"
+
+    downstream_calls = 0
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_calls
+        downstream_calls += 1
+        await JSONResponse({"unreachable": True})(scope, receive, send)
+
+    monkeypatch.setattr(http_extension, "_owned_or_new_thread_status", owned)
+    ledger = Ledger()
+    inner = GuestRunGuard(downstream, spend_ledger=ledger)
+    app = GuestIngressGuard(
+        NativeThreadGuard(inner),
+        clock=lambda: 0.0,
+        request_identity_capacity=1,
+        request_global_capacity=10,
+    )
+    command = _run_command()
+    command["params"]["quickjs_enabled"] = True
+    headers = _guest_headers()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        malformed = await client.post(
+            "/threads/owned-thread/commands",
+            headers=headers,
+            json=command,
+        )
+        bounded = await client.post(
+            "/threads/owned-thread/commands",
+            headers=headers,
+            json=command,
+        )
+
+    assert malformed.status_code == 400
+    assert bounded.status_code == 429
+    assert ownership_checks == 1
+    assert ledger.calls == 0
+    assert downstream_calls == 0
+
+
+def test_production_middleware_order_validator_rejects_mutation(monkeypatch):
+    monkeypatch.setattr(
+        http_extension.app,
+        "user_middleware",
+        [
+            SimpleNamespace(cls=NativeThreadGuard),
+            SimpleNamespace(cls=GuestIngressGuard),
+            SimpleNamespace(cls=GuestRunGuard),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="middleware order"):
+        http_extension._validate_production_middleware_order()
+
+
 async def test_foreign_guest_thread_is_hidden_before_reservation_and_dispatch(
     monkeypatch,
 ):
@@ -2621,13 +3667,18 @@ async def test_accepted_native_thread_reserves_immediately_before_schedule(
 
     assert response.status_code == 200
     assert timeline == ["reserve", "schedule"]
-    assert json.loads(received_body) == {
+    forwarded = json.loads(received_body)
+    stored_message_id = forwarded["params"]["input"]["messages"][0]["id"]
+    _assert_server_owned_message_id(stored_message_id, "guest-message-1")
+    expected = {
         **_run_command(),
         "params": {
             **_run_command()["params"],
             "multitask_strategy": "reject",
         },
     }
+    expected["params"]["input"]["messages"][0]["id"] = stored_message_id
+    assert forwarded == expected
 
 
 async def test_guest_thread_lock_brackets_ownership_reservation_and_schedule(

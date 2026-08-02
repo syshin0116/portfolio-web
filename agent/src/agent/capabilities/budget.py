@@ -1364,7 +1364,7 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
             and tool_name not in self._root_tool_allowlist
         ):
             raise CapabilityDeniedError(
-                "root tool is outside the server-owned experiment allowlist"
+                "root tool is outside the server-owned root tool allowlist"
             )
         if self._quickjs_tool_name is not None and tool_name == self._quickjs_tool_name:
             if not self._allow_quickjs:

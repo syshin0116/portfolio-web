@@ -40,6 +40,7 @@ from langgraph.runtime import Runtime, ServerInfo
 from langgraph.store.memory import InMemoryStore
 from pydantic import Field
 
+import agent.graph as graph_module
 from agent.capabilities.budget import (
     CapabilityDeniedError,
     InvalidDelegationError,
@@ -70,6 +71,7 @@ from agent.capabilities.token_counting import (
 from agent.graph import (
     DEFAULT_MODEL,
     GUEST_MODEL_MAX_OUTPUT_TOKENS,
+    GUEST_ROOT_TOOL_NAMES,
     GUEST_RUN_BUDGET_POLICY,
     MODEL_MAX_OUTPUT_TOKENS,
     MODEL_TIMEOUT_SECONDS,
@@ -886,9 +888,61 @@ def test_guest_and_owner_graphs_route_distinct_server_owned_counters(monkeypatch
     assert (
         guest_middleware._expected_response_models == OPENAI_GUEST_RESPONSE_MODEL_NAMES
     )
+    assert guest_middleware._root_tool_allowlist == GUEST_ROOT_TOOL_NAMES
     assert owner_middleware._input_token_counter is _exact_anthropic_test_input_tokens
     assert owner_middleware._model_provider == "anthropic"
     assert owner_middleware._expected_response_models == frozenset()
+    assert owner_middleware._root_tool_allowlist is None
+    assert captured[0]["skills"] == []
+    assert captured[1]["skills"] == ["/skills/"]
+    guest_prompt = captured[0]["system_prompt"]
+    assert "semantic_search" in guest_prompt
+    assert "keyword_search" in guest_prompt
+    assert "no mounted skill" in guest_prompt
+    assert "Use the mounted blog-retrieval skill" not in guest_prompt
+
+
+def test_guest_root_tool_contract_is_literal_ordered_unique_and_exact():
+    expected = (
+        "keyword_search",
+        "semantic_search",
+        "metadata_filter",
+        "graph_traverse",
+        "list_posts",
+        "read_post",
+    )
+    actual = tuple(tool.name for tool in TOOLS)
+
+    assert actual == expected
+    assert len(actual) == len(set(actual)) == 6
+    assert frozenset(expected) == GUEST_ROOT_TOOL_NAMES
+
+
+def test_seventh_root_tool_fails_graph_creation_before_compilation(monkeypatch):
+    called = False
+
+    def forbidden_compile(**_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("a mutated root surface must fail before compilation")
+
+    monkeypatch.setattr(
+        graph_module,
+        "TOOLS",
+        [*TOOLS, SimpleNamespace(name="write_file")],
+    )
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
+    monkeypatch.setattr(graph_module, "create_deep_agent", forbidden_compile)
+
+    with pytest.raises(RuntimeError, match="reviewed six-name ordered allowlist"):
+        create_graph(
+            runtime=_guest_runtime(),
+            config={"configurable": {"thread_id": "guest-seventh-tool"}},
+            model=ToolCapableFakeModel(responses=[_final_message("unused")]),
+            budget=RunBudget(GUEST_RUN_BUDGET_POLICY),
+        )
+
+    assert called is False
 
 
 @pytest.mark.parametrize(
@@ -1002,9 +1056,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     )
 
     assert result["messages"][-1].content == "guest answer"
-    assert len(model.bound_tool_names) == 1
-    assert "task" not in model.bound_tool_names[0]
-    assert QUICKJS_TOOL_NAME not in model.bound_tool_names[0]
+    assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
     snapshot = budget.snapshot()
     assert snapshot.policy_id == "anonymous-public-v1"
     assert snapshot.model_calls == 1
@@ -1067,6 +1119,73 @@ def test_provider_contract_override_requires_an_injected_exact_model():
             model=ToolCapableFakeModel(responses=[_final_message("unused")]),
             model_provider="openai",
             expected_response_models=frozenset({"gpt-5.4-mini"}),
+        )
+
+
+async def test_canonical_guest_runtime_rejects_a_forged_filesystem_tool_call(
+    monkeypatch,
+):
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
+    model = ToolCapableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {
+                            "file_path": "/guest-injected.txt",
+                            "content": "forbidden",
+                        },
+                        "id": "forged-guest-filesystem-call",
+                        "type": "tool_call",
+                    }
+                ],
+                response_metadata={
+                    "model_provider": "openai",
+                    "model_name": "gpt-5.6-luna",
+                },
+                usage_metadata={
+                    "input_tokens": 1,
+                    "output_tokens": 9,
+                    "total_tokens": 10,
+                    "input_token_details": {
+                        "cache_creation": 0,
+                        "cache_read": 0,
+                    },
+                    "output_token_details": {"reasoning": 0},
+                },
+            )
+        ]
+    )
+    budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
+    compiled = create_graph(
+        runtime=_guest_runtime(),
+        config={"configurable": {"thread_id": "guest-forged-filesystem"}},
+        model=model,
+        budget=budget,
+    )
+
+    with pytest.raises(CapabilityDeniedError, match="server-owned root tool allowlist"):
+        await compiled.ainvoke(
+            {"messages": [{"role": "user", "content": "write a file"}]},
+            {"configurable": {"thread_id": "guest-forged-filesystem"}},
+        )
+
+    assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
+    assert budget.snapshot().tool_calls == 0
+
+
+def test_guest_runtime_rejects_caller_supplied_experiment_root_allowlist(monkeypatch):
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
+
+    with pytest.raises(ValueError, match="experiment root tool allowlist"):
+        create_graph(
+            runtime=_guest_runtime(),
+            config={"configurable": {"thread_id": "guest-experiment-root-tools"}},
+            model=ToolCapableFakeModel(responses=[_openai_final_message("unused")]),
+            budget=RunBudget(GUEST_RUN_BUDGET_POLICY),
+            root_tool_allowlist=frozenset(),
         )
 
 

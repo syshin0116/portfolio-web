@@ -73,6 +73,50 @@ of `OPENAI_ADMIN_KEY`, `OPENAI_API_BASE`, `OPENAI_BASE_URL`,
 eight absent from Cloud Run; standard platform HTTPS proxy policy remains a separate
 infrastructure decision.
 
+The agent's repository-owned production order is exact:
+`GuestIngressGuard -> NativeThreadGuard -> GuestRunGuard`. After authentication, the
+outer guard charges before route lookup, query/body parsing, or database access:
+
+- exact `POST /threads`: 6 per anonymous identity and 60 globally per hour;
+- every other path, including paid commands, malformed routes, and unknown routes:
+  30 per anonymous identity and 180 globally per minute;
+- a valid `run.start` or `input.respond` that passes Native ownership/status: an
+  additional paid token at 4 per identity and 24 globally per minute, followed by the
+  durable daily spend reservation.
+
+A valid command against a foreign thread consumes only the outer request token and
+returns the same hidden 404; it cannot consume the paid bucket or ledger. Invalid guest
+wires can perform at most the database work allowed by the outer bucket and never reach
+paid reservation or dispatch. Non-spending exhaustion neither charges nor resets the
+paid ledger.
+
+The process-local identity table is capped at 1,024 SHA-256 subject digests. An entry may
+be pruned only after the longest configured identity window, when every used bucket is
+fully refilled and no stream lease remains. Each guest SSE response holds one
+`finally`-released lease, capped at 2 per identity and 4 globally. These traffic controls
+authorize only the reviewed single-instance deployment; cold starts do not make them a
+durable limit. The durable spend ledger, four PostgreSQL execution slots, and stored-thread
+admission below are independent controls.
+
+`POST /threads` also takes a domain-separated global PostgreSQL transaction advisory lock,
+counts all stored rows for that identity and all exact canonical `anon:<uuid>` subjects,
+and holds the lock through the downstream response/commit. The durable caps are 6 stored
+threads per identity and 256 globally. Expired rows count until checkpoint-first GC removes
+them. An existing owned ID is idempotent even at cap; a foreign collision is hidden; lock
+or count failure returns 503. Before launch, the real-PostgreSQL proof must demonstrate
+that a concurrent second admission sees the first committed create before deciding.
+
+Guest `run.start` carries exactly one `user` message containing plain UTF-8 text or only
+assistant-ui text blocks. It must reject client assistant/tool history and non-text
+content before any paid rate or spend consumption. Each accepted client message ID is
+wrapped in a server-unique checkpoint ID; public state/SSE projection restores the safe
+client ID for native assistant-ui correlation. Bodyless guest GET and cancel routes reject
+any payload bytes. The root model's bound tools must equal, in this literal order,
+`keyword_search`, `semantic_search`, `metadata_filter`, `graph_traverse`, `list_posts`,
+and `read_post`; startup and graph creation must reject duplicates, reordering, or a
+seventh tool. The guest prompt contains this retrieval workflow inline and mounts no
+skill. A forged filesystem/todo/task/QuickJS call must fail before execution.
+
 The serialization boundary is pinned to `langchain-openai==1.3.5` and
 `openai==2.50.0`; the dependency audit isolates both and keeps
 `langchain-openai` below the reviewed exclusive 1.4.0 compatibility ceiling
@@ -123,18 +167,22 @@ guest identity or spend state.
 1. Deploy and verify the agent with anonymous access still false.
 2. Run owner, PostgreSQL, public raw-wire, rate, concurrency, spend, retention,
    and maintenance proofs against the exact revision.
-3. Land the separately approved repository change that selects the guest model,
+3. While both public surfaces remain disabled, obtain the separate owner approval for
+   recurring billing, land the repository change that activates the currently paused
+   Terraform-owned production maintenance Scheduler, review its exact dedicated-project
+   plan, apply it, and verify the first bounded checkpoint-first maintenance execution.
+   A paused or unverified Scheduler blocks launch.
+4. Land the separately approved repository change that selects the guest model,
    fixes both reviewed micro-dollar ceilings, splits Preview from Production,
    and sets the Production `AGENT_ANONYMOUS_ACCESS_ENABLED=true`; apply it while
    Vercel still cannot mint or display anonymous access.
-4. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
+5. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
    real browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.
-5. Keep the production maintenance Scheduler paused until the owner separately approves
-   public launch and recurring billing. Then land the repository change that activates
-   the Terraform-owned schedule, review its exact dedicated-project plan, apply it, and
-   verify the first bounded maintenance execution. Do not activate it with an
-   untracked console-only toggle.
+
+This repository change intentionally leaves the production maintenance Scheduler paused.
+Do not activate it with an untracked console-only toggle, and do not interpret application
+hardening as approval to enable either public flag before step 3 completes.
 
 The web gate first attempts a bodyless cookie resume. A missing or expired
 cookie returns to Turnstile. A successful challenge injects its returned

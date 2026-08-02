@@ -32,7 +32,8 @@ template: plan
 > **Status: in progress.** The repository-side runtime, retrieval layer, native UI,
 > deterministic evaluation harness, capability lab, and anonymous-safety controls are
 > implemented. The remaining gates are external deployment acceptance, provider-backed
-> evidence, owner-reviewed evaluation data, and the separately approved public launch.
+> evidence, owner-reviewed evaluation data, and live activation of the approved
+> Production guest and retention desired state.
 > The table below distinguishes merged code from live acceptance; neither deterministic CI
 > nor a checked-in Terraform plan is evidence that Cloud Run, Neon, OAuth, or a provider
 > works in production. Read [How to dispatch](#how-to-dispatch) first.
@@ -71,7 +72,7 @@ P5  Public hardening                 anonymous identity, guard, GC, budget caps
 P6  Go public                        PUBLICATION GATE
 ```
 
-### Phase status as of 2026-08-01
+### Phase status as of 2026-08-03
 
 | Phase | Repository status | Exact remaining gate |
 |---|---|---|
@@ -81,8 +82,8 @@ P6  Go public                        PUBLICATION GATE
 | P3 | Implemented: native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe wire projection, deterministic AP v2 integration, and Playwright browser evidence | Full deployed owner-authenticated Korean journey against real Cloud Run, Neon, and the provider |
 | P4 | Harness, first dense arm, and topic-review tooling implemented: the default provider-free sweep remains model-free; pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods; a versioned topic seed, deterministic blind pool, checksum seal, finalizer, and dataset-selectable publication gate are present | Owner completion/sealing of `topic-smoke-v1` qrels and a publication-qualified digest-pinned run |
 | P4.5 | Runtime, 2x2 harness, and manual Luna adapter implemented: bounded QuickJS and dynamic subagents share `RunBudget`, and the provider-free fixture executes all four deterministic arms | A complete retained v5 provider-backed quality/cost artifact plus owner/publication review; synthetic evidence and failed local attempts cannot enable either capability for guests |
-| P5 | Repository controls implemented: anonymous JWT/cookie, Turnstile bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secrets, and approved non-zero budget |
-| P6 | Disabled by design: all repository public flags and guest budget/model environment values remain fail-closed | Public-launch PR and live acceptance. The only accepted guest contract is `openai:gpt-5.6-luna`, which has no API Free tier, so a zero-spend requirement blocks launch |
+| P5 | Repository controls implemented: anonymous JWT/cookie, Turnstile bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secret payload/version, and input-count billing confirmation |
+| P6 | Production desired state approved: anonymous Agent access uses `openai:gpt-5.6-luna`, 500,000 µUSD/day, 6,892 µUSD/run, and a numeric OpenAI secret version; Preview and both Vercel public flags remain fail-closed | Exact-project plan/apply, first bounded Scheduler execution, input-count billing confirmation, Turnstile/Vercel configuration, deployed abuse/spend/browser proofs, and provider-side spend protection |
 
 The operational source of truth for those live gates is the
 [GCP/Neon foundation](../runbooks/gcp-neon-foundation.md),
@@ -114,11 +115,12 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 | `@langchain/protocol` | `0.0.18` | Exact upstream schema/binding release recorded with its commit and hashes in the protocol lock |
 
 The anonymous model is a separate fail-closed runtime contract, not an install-time
-dependency. When anonymous access is eventually enabled it accepts only
-`openai:gpt-5.6-luna`, with `reasoning.effort=none`, provider storage disabled, and
-bounded token and micro-dollar reservations. The committed Cloud Run values keep
-anonymous access false and leave the guest model and budget empty. Luna has no API Free
-tier, so this contract does not authorize a public launch under a zero-spend constraint.
+dependency. Production accepts only `openai:gpt-5.6-luna`, with
+`reasoning.effort=none`, provider storage disabled, a 500,000 µUSD UTC-day ceiling,
+and a 6,892 µUSD per-run reservation. Preview remains disabled, unpriced, and
+OpenAI-free. These committed Cloud Run values are desired state, not proof of a live
+public launch; Luna has no API Free tier, so Turnstile/Vercel issuance stays disabled
+until every operational and provider-spend gate passes.
 
 **Already dropped:** `chromadb` (zero call sites).
 
@@ -906,7 +908,8 @@ Nothing here is optional. Full detail in
 
 **Repository status:** the code controls below are implemented and covered by unit,
 PostgreSQL, protocol, and browser fixtures. They do not authorize public traffic. Real
-Cloud Run/Neon/provider proofs and the paid launch decision remain mandatory.
+Cloud Run/Neon/provider proofs, the exact secret payload/version, provider-side spend
+protection, and input-count billing confirmation remain mandatory.
 
 - **The governing constraint:** authorization must not depend on `@auth.on.*` dispatch.
   Legacy streaming paths skip handlers, and AP v2 thread-stream/commands coverage must be
@@ -926,13 +929,15 @@ Cloud Run/Neon/provider proofs and the paid launch decision remain mandatory.
   no nodes, so anything expressible there is free to vary.
 - `/admin/gc` plus the dedicated maintenance job, quarantine, stale-run recovery, and
   Terraform-owned Cloud Scheduler. **Deleting a thread does not delete its checkpoints** -
-  sweep children before parents. Neon free has no `pg_cron`; after the separately approved
-  recurring-cost change, the production Scheduler is active in Terraform but remains an
-  external launch gate until its exact plan, apply, and first bounded execution pass.
+  sweep children before parents. Neon free has no `pg_cron`; the approved production
+  Scheduler desired state is active, but remains a live launch gate until its exact plan,
+  apply, and first bounded execution pass.
 - Per-run model/token limits and a durable UTC-day micro-dollar ledger are implemented for
-  the fixed `openai:gpt-5.6-luna` guest contract. The public flags, model, budgets, and
-  OpenAI secret remain absent/disabled; Luna has no API Free tier. Provider-account spend
-  protection and an approved non-zero ceiling remain live launch gates.
+  the fixed `openai:gpt-5.6-luna` guest contract. Production now owns the exact model,
+  500,000/6,892 µUSD ceilings, anonymous Agent flag, and numeric OpenAI secret
+  reference while Preview remains absent/disabled. Provider-account spend protection,
+  input-count billing confirmation, and the disabled Vercel issuance flags remain live
+  launch gates.
 - Public capability policy is evidence-based: retrieval is always available; QuickJS and
   dynamic subagents remain owner-only unless P4.5 shows a material quality gain and the
   deployed anonymous abuse tests prove the shared budget cannot be bypassed. If enabled
@@ -967,7 +972,7 @@ Cloud Run/Neon/provider proofs and the paid launch decision remain mandatory.
 | `HIGH` | Auth dispatch differs across legacy and AP v2 streaming/commands paths | Protocol fixtures test every production endpoint; SQL identity predicate plus outer ASGI guard is the boundary. Pin `aegra-api >= 0.9.7` |
 | `HIGH` | Client-supplied `configurable.user_id` wins over the server's | The graph reads the authoritative server runtime identity; PostgreSQL isolation tests retain a forged field and prove it cannot cross namespaces |
 | `HIGH` | Aegra thread deletion strands checkpoints and cannot commit both stores atomically | Native DELETE is fail-closed with 403. Do not expose a faux-safe route; design admin GC separately |
-| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | Public flags and guest secret/model/budgets stay fail-closed; the implemented ledger and guard plus a separately verified OpenAI account cap are all required. Luna has no Free tier |
+| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | The Production Agent desired state is capped at 500,000 µUSD/day and 6,892 µUSD/run, but Vercel issuance stays disabled until the implemented ledger/guard, input-count billing semantics, and a separately verified OpenAI account cap all pass. Luna has no Free tier |
 | `MED` | **Regressing the corrected baseline.** A tokenizer or fitted-artifact change would invalidate every comparison | P1.3 executable literal-term, raw-score, determinism, memory, and registry tests remain required |
 | `MED` | Pre-1.0 churn. Aegra and assistant-ui compatibility can change between patch releases; three `unstable_` assistant-ui options remain on the happy path | Exact pins, committed lockfiles, protocol/browser replay, and `smoke.py` as the bump gate |
 | `MED` | Eval cost creep - embedding N models × M queries × K retrievers plus judge calls | Cache embeddings by fingerprint; local results as system of record; `upload_results=False` while iterating |
@@ -978,8 +983,10 @@ Cloud Run/Neon/provider proofs and the paid launch decision remain mandatory.
 1. **Region:** dedicated GCP project and Cloud Run use `us-east4`; each Neon project must
    be created in the matching reviewed US region.
 2. **Guest model:** the only accepted contract is `openai:gpt-5.6-luna`, distinct from the
-   Anthropic owner model. It is disabled and cannot satisfy a zero-spend launch because it
-   has no API Free tier.
+   Anthropic owner model. Production desired state enables it at the reviewed
+   500,000/6,892 µUSD ceilings while Preview remains disabled and OpenAI-free; live
+   visitor issuance stays closed until the external gates pass because Luna has no API
+   Free tier.
 3. **Guest persistence:** an httpOnly anonymous-session cookie resumes the pseudonymous
    subject; the single-use Turnstile token is never retained.
 4. **Version policy:** use the repository-tested exact pins, including

@@ -46,19 +46,6 @@ import {
 }
 
 moved {
-  from = google_secret_manager_secret.runtime["openai-api-key"]
-  to   = google_secret_manager_secret.retired_openai_production
-}
-
-removed {
-  from = google_secret_manager_secret.retired_openai_production
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-moved {
   from = google_secret_manager_secret.preview_runtime["agent-preview-openai-api-key"]
   to   = google_secret_manager_secret.retired_openai_preview
 }

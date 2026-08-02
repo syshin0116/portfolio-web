@@ -50,8 +50,8 @@ After this foundation is reviewed and applied, the target is:
 - the managed direct act-as role on each runtime containing only its matching deployer,
   with known project- and resource-level bypasses rejected by the live verifier;
 - no project-wide Cloud Run role and no image-writer role on either deployer;
-- five disjoint empty Secret Manager resources per environment, each with one managed
-  direct `secretAccessor` member for the matching runtime;
+- five Production and four disjoint Preview runtime Secret Manager resources, each with
+  one managed direct `secretAccessor` member for the matching runtime;
 - a separate migration-only database secret per environment, readable only by its
   migrator;
 - one canonical active `github-production` federation provider that explicitly maps the
@@ -264,9 +264,12 @@ Production resource names:
 - `agent-database-url`;
 - `agent-auth-secret`;
 - `anthropic-api-key`;
-- `langsmith-api-key`.
+- `langsmith-api-key`;
+- `openai-api-key` (Production guest runtime only).
 
-Preview resource names use the same suffixes with the `agent-preview-` prefix. Terraform
+Preview owns `agent-preview-database-url`, `agent-preview-auth-secret`,
+`agent-preview-anthropic-api-key`, and `agent-preview-langsmith-api-key`; it has no
+OpenAI runtime credential. Terraform
 manages resource metadata and required additive runtime IAM members only; it never manages
 secret payloads or creates versions. It does manage the non-secret positive numeric
 version ID selected by each Cloud Run service and job. `latest`, `0`, and aliases are
@@ -274,10 +277,11 @@ rejected so scale-to-zero restart cannot silently change a revision's environmen
 Effective direct-policy and numeric-reference acceptance remains unavailable until the
 signed company-admin attestation gate lands.
 
-The Cloud Run model is fixed to Anthropic. OpenAI credentials are not part of either
-environment's runtime inventory. Any previously managed OpenAI secret is forgotten from
-Terraform state without destroying the external Secret Manager object; removal of that
-object is a separate, explicitly approved cleanup.
+The owner/evaluation Cloud Run model remains Anthropic. Production additionally pins the
+reviewed Luna guest tier to `openai-api-key`; Preview remains OpenAI-free. The previously
+managed Preview OpenAI secret stays forgotten from Terraform state without destroying the
+external Secret Manager object; removal of that object is a separate, explicitly
+approved cleanup.
 
 Inject each value out of band:
 
@@ -332,8 +336,9 @@ separate least-privileged grant-probe and guest-retention maintenance jobs. Runt
 disabled with the non-secret setting
 `RUN_MIGRATIONS_ON_STARTUP=false`; a service revision is never the migration runner.
 The serving template also fixes `REDIS_BROKER_ENABLED=false` and
-`BG_JOB_MAX_RETRIES=0`; together with the other reviewed values and four numeric secret
-references, each service has exactly 17 environment entries. The migration, grant-probe,
+`BG_JOB_MAX_RETRIES=0`; together with the other reviewed values, Preview has four numeric
+secret references and 21 total environment entries, while Production has five and 22.
+The migration, grant-probe,
 and maintenance entrypoints do not import `agent.graph` or its runtime preflight and retain
 their separate exact three-entry Job environment.
 

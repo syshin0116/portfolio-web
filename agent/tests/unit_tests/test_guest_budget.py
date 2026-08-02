@@ -93,10 +93,10 @@ def test_optional_guest_budget_is_absent_or_exact(monkeypatch):
     assert guest_budget_config(required=False) is None
 
     monkeypatch.setenv(GUEST_DAILY_BUDGET_ENV, "500000")
-    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "25000")
+    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "6892")
     assert guest_budget_config(required=False) == GuestBudgetConfig(
         daily_limit_micro_usd=500_000,
-        run_reservation_micro_usd=25_000,
+        run_reservation_micro_usd=6_892,
     )
 
 

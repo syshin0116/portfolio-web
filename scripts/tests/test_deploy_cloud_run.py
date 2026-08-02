@@ -18,25 +18,35 @@ DELIVERY_RUN_ATTEMPT = "1"
 IMAGE_DIGEST = (
     "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:" + "2" * 64
 )
+PREVIEW_IMAGE_DIGEST = (
+    "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
+    + "3" * 64
+)
 ACCESS_TOKEN = "test-token-that-must-never-enter-the-operation-log"
 
 
 class CloudRunDeliveryTests(unittest.TestCase):
     def _fixture(
-        self, directory: str, *, fail_protocol: bool = False
+        self,
+        directory: str,
+        *,
+        fail_protocol: bool = False,
+        preview: bool = False,
     ) -> dict[str, str]:
         root = Path(directory)
+        service = "agent-preview" if preview else "agent"
+        image_digest = PREVIEW_IMAGE_DIGEST if preview else IMAGE_DIGEST
         binary = root / "bin"
         binary.mkdir()
         state = root / "state.json"
         state.write_text(
             json.dumps(
                 {
-                    "latest_created": "agent-old",
-                    "latest_ready": "agent-old",
-                    "serving": "agent-old",
+                    "latest_created": f"{service}-old",
+                    "latest_ready": f"{service}-old",
+                    "serving": f"{service}-old",
                     "smoke": False,
-                    "service_image": IMAGE_DIGEST,
+                    "service_image": image_digest,
                     "job_images": {},
                     "job_etags": {},
                     "run_requests": [],
@@ -75,7 +85,8 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 elif args[:3] == ["run", "services", "update"]:
                     state["service_image"] = args[args.index("--image") + 1]
                     state["latest_created"] = (
-                        "agent-g"
+                        os.environ["CLOUD_RUN_SERVICE"]
+                        + "-g"
                         + os.environ["SOURCE_SHA"][:8]
                         + "-r"
                         + os.environ["DELIVERY_RUN_ID"]
@@ -144,13 +155,17 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 state = json.loads(state_path.read_text(encoding="utf-8"))
                 project = "festive-ally-503605-v7"
                 region = "us-east4"
-                service_name = "agent"
-                service_path = f"projects/{project}/locations/{region}/services/agent"
+                service_name = os.environ["CLOUD_RUN_SERVICE"]
+                preview = service_name == "agent-preview"
+                service_path = (
+                    f"projects/{project}/locations/{region}/services/{service_name}"
+                )
 
                 plain_env = {
                     "AEGRA_CONFIG": "/app/aegra.json",
                     "AGENT_ANONYMOUS_ACCESS_ENABLED": os.environ.get(
-                        "FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED", "false"
+                        "FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED",
+                        "false" if preview else "true",
                     ),
                     "BG_JOB_MAX_RETRIES": os.environ.get(
                         "FAKE_BG_JOB_MAX_RETRIES", "0"
@@ -158,11 +173,16 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "ENV_MODE": os.environ.get("FAKE_ENV_MODE", "PRODUCTION"),
                     "FF_V2_EVENT_STREAMING": "true",
                     "GUEST_DAILY_BUDGET_MICRO_USD": os.environ.get(
-                        "FAKE_GUEST_DAILY_BUDGET_MICRO_USD", ""
+                        "FAKE_GUEST_DAILY_BUDGET_MICRO_USD",
+                        "" if preview else "500000",
                     ),
-                    "GUEST_MODEL": os.environ.get("FAKE_GUEST_MODEL", ""),
+                    "GUEST_MODEL": os.environ.get(
+                        "FAKE_GUEST_MODEL",
+                        "" if preview else "openai:gpt-5.6-luna",
+                    ),
                     "GUEST_RUN_RESERVATION_MICRO_USD": os.environ.get(
-                        "FAKE_GUEST_RUN_RESERVATION_MICRO_USD", ""
+                        "FAKE_GUEST_RUN_RESERVATION_MICRO_USD",
+                        "" if preview else "6892",
                     ),
                     "HOST": "0.0.0.0",
                     "LANGGRAPH_MAX_POOL_SIZE": "4",
@@ -177,13 +197,43 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "SQLALCHEMY_POOL_SIZE": "2",
                 }
                 secrets = [
-                    ("AGENT_AUTH_SECRET", "agent-auth-secret", os.environ.get(
-                        "FAKE_RUNTIME_SECRET_VERSION", "11"
-                    )),
-                    ("ANTHROPIC_API_KEY", "anthropic-api-key", "12"),
-                    ("DATABASE_URL", "agent-database-url", "13"),
-                    ("LANGCHAIN_API_KEY", "langsmith-api-key", "14"),
+                    (
+                        "AGENT_AUTH_SECRET",
+                        "agent-preview-auth-secret" if preview else "agent-auth-secret",
+                        os.environ.get("FAKE_RUNTIME_SECRET_VERSION", "11"),
+                    ),
+                    (
+                        "ANTHROPIC_API_KEY",
+                        (
+                            "agent-preview-anthropic-api-key"
+                            if preview
+                            else "anthropic-api-key"
+                        ),
+                        "12",
+                    ),
+                    (
+                        "DATABASE_URL",
+                        "agent-preview-database-url" if preview else "agent-database-url",
+                        "13",
+                    ),
+                    (
+                        "LANGCHAIN_API_KEY",
+                        (
+                            "agent-preview-langsmith-api-key"
+                            if preview
+                            else "langsmith-api-key"
+                        ),
+                        "14",
+                    ),
                 ]
+                if not preview:
+                    secrets.append(
+                        (
+                            "OPENAI_API_KEY",
+                            "openai-api-key",
+                            os.environ.get("FAKE_OPENAI_SECRET_VERSION", "15"),
+                        )
+                    )
 
                 def runtime_template(image):
                     env = [
@@ -223,7 +273,13 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     template = {
                         "serviceAccount": os.environ.get(
                             "FAKE_RUNTIME_SERVICE_ACCOUNT",
-                            "agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com",
+                            (
+                                "agent-preview-runtime@festive-ally-503605-v7."
+                                "iam.gserviceaccount.com"
+                                if preview
+                                else "agent-runtime@festive-ally-503605-v7."
+                                "iam.gserviceaccount.com"
+                            ),
                         ),
                         "timeout": os.environ.get("FAKE_RUNTIME_TIMEOUT", "300s"),
                         "executionEnvironment": "EXECUTION_ENVIRONMENT_GEN2",
@@ -391,15 +447,34 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     migration = job.endswith("-migrate")
                     maintenance = job.endswith("-maintenance")
                     expected_secret = (
-                        "agent-migration-database-url"
-                        if migration else "agent-database-url"
+                        (
+                            "agent-preview-migration-database-url"
+                            if preview
+                            else "agent-migration-database-url"
+                        )
+                        if migration
+                        else (
+                            "agent-preview-database-url"
+                            if preview
+                            else "agent-database-url"
+                        )
                     )
                     expected_sa = (
-                        "agent-prod-migrator@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
-                        if migration else
-                        "agent-runtime@festive-ally-503605-v7."
-                        "iam.gserviceaccount.com"
+                        (
+                            "agent-preview-migrator@festive-ally-503605-v7."
+                            "iam.gserviceaccount.com"
+                            if preview
+                            else "agent-prod-migrator@festive-ally-503605-v7."
+                            "iam.gserviceaccount.com"
+                        )
+                        if migration
+                        else (
+                            "agent-preview-runtime@festive-ally-503605-v7."
+                            "iam.gserviceaccount.com"
+                            if preview
+                            else "agent-runtime@festive-ally-503605-v7."
+                            "iam.gserviceaccount.com"
+                        )
                     )
                     module = (
                         "agent.migrate"
@@ -668,17 +743,17 @@ class CloudRunDeliveryTests(unittest.TestCase):
         environment = os.environ.copy()
         environment.update(
             {
-                "CLOUD_RUN_SERVICE": "agent",
+                "CLOUD_RUN_SERVICE": service,
                 "DELIVERY_RUN_ID": DELIVERY_RUN_ID,
                 "DELIVERY_RUN_ATTEMPT": DELIVERY_RUN_ATTEMPT,
                 "FAKE_LOG": str(log),
                 "FAKE_STATE": str(state),
                 "GCP_PROJECT_ID": "festive-ally-503605-v7",
                 "GCP_REGION": "us-east4",
-                "GRANT_PROBE_JOB": "agent-grants",
-                "IMAGE_DIGEST": IMAGE_DIGEST,
-                "MAINTENANCE_JOB": "agent-maintenance",
-                "MIGRATION_JOB": "agent-migrate",
+                "GRANT_PROBE_JOB": f"{service}-grants",
+                "IMAGE_DIGEST": image_digest,
+                "MAINTENANCE_JOB": f"{service}-maintenance",
+                "MIGRATION_JOB": f"{service}-migrate",
                 "PATH": f"{binary}:{environment['PATH']}",
                 "RUNNER_TEMP": str(root),
                 "SMOKE_BEARER_TOKEN": "opaque-test-token",
@@ -779,17 +854,27 @@ class CloudRunDeliveryTests(unittest.TestCase):
 
     def test_official_v2_omitted_empty_environment_values_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            environment = self._fixture(directory)
+            environment = self._fixture(directory, preview=True)
             environment["FAKE_OMIT_EMPTY_ENV_VALUES"] = "true"
-            result = self._run(directory, environment, "rollback", "agent-target")
+            result = self._run(
+                directory,
+                environment,
+                "rollback",
+                "agent-preview-target",
+            )
 
         self.assertEqual(0, result.returncode, result.stderr)
 
     def test_official_v2_null_empty_environment_values_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            environment = self._fixture(directory)
+            environment = self._fixture(directory, preview=True)
             environment["FAKE_NULL_EMPTY_ENV_VALUES"] = "true"
-            result = self._run(directory, environment, "rollback", "agent-target")
+            result = self._run(
+                directory,
+                environment,
+                "rollback",
+                "agent-preview-target",
+            )
             operations = (Path(directory) / "operations.log").read_text(
                 encoding="utf-8"
             )
@@ -904,10 +989,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "port": {"FAKE_RUNTIME_PORT": "9090"},
             "timeout": {"FAKE_RUNTIME_TIMEOUT": "301s"},
             "plain_environment": {"FAKE_ENV_MODE": "PREVIEW"},
-            "anonymous_access": {"FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED": "true"},
-            "guest_model": {"FAKE_GUEST_MODEL": "openai:gpt-5.6-luna"},
-            "guest_daily_budget": {"FAKE_GUEST_DAILY_BUDGET_MICRO_USD": "500000"},
-            "guest_run_reservation": {"FAKE_GUEST_RUN_RESERVATION_MICRO_USD": "25000"},
+            "anonymous_access": {"FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED": "false"},
+            "guest_model": {"FAKE_GUEST_MODEL": "openai:gpt-5.4-nano"},
+            "guest_daily_budget": {"FAKE_GUEST_DAILY_BUDGET_MICRO_USD": "499999"},
+            "guest_run_reservation": {"FAKE_GUEST_RUN_RESERVATION_MICRO_USD": "6891"},
             "background_retry_budget": {"FAKE_BG_JOB_MAX_RETRIES": "3"},
             "redis_broker": {"FAKE_REDIS_BROKER_ENABLED": "true"},
             "volumes": {"FAKE_RUNTIME_VOLUMES": "true"},
@@ -1223,7 +1308,20 @@ class CloudRunDeliveryTests(unittest.TestCase):
     def test_anonymous_access_drift_fails_before_jobs_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             environment = self._fixture(directory)
-            environment["FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED"] = "true"
+            environment["FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED"] = "false"
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("runtime contract drifted", result.stderr)
+        self.assertNotIn("gcloud run jobs update", operations)
+
+    def test_openai_secret_alias_fails_before_jobs_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAKE_OPENAI_SECRET_VERSION"] = "latest"
             result = self._run(directory, environment, "deploy")
             operations = (Path(directory) / "operations.log").read_text(
                 encoding="utf-8"

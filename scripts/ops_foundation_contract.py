@@ -32,7 +32,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "665688a5beab134de5d1378ab96debecace89a9d28030d7ab604d91c8710083b"
+        "a1d3172cafbaa058ff62cdbd4f8224f10cfa38d202167c77d2f0925986c56264"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -40,7 +40,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "f541c635dc6ed8d96a9d31972729db967197ae40bad06c077bae184e44cb4c06"
+        "b7d7792d98faf65843d57847d376dc0df9fb8f2dac1b6af6f7cae33c779a66e1"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
@@ -247,10 +247,6 @@ EXPECTED_IMPORT_BLOCKS = [
 ]
 EXPECTED_MOVED_BLOCKS = [
     {
-        "from": '${google_secret_manager_secret.runtime["openai-api-key"]}',
-        "to": "${google_secret_manager_secret.retired_openai_production}",
-    },
-    {
         "from": (
             "${google_secret_manager_secret.preview_runtime["
             '"agent-preview-openai-api-key"]}'
@@ -259,10 +255,6 @@ EXPECTED_MOVED_BLOCKS = [
     },
 ]
 EXPECTED_REMOVED_BLOCKS = [
-    {
-        "from": "${google_secret_manager_secret.retired_openai_production}",
-        "lifecycle": [{"destroy": False}],
-    },
     {
         "from": "${google_secret_manager_secret.retired_openai_preview}",
         "lifecycle": [{"destroy": False}],
@@ -442,7 +434,7 @@ EXPECTED_VARIABLES = {
     },
     "agent_secret_versions": {
         "description": (
-            "Reviewed Secret Manager numeric versions keyed by all ten managed "
+            "Reviewed Secret Manager numeric versions keyed by all eleven managed "
             "secret IDs; null only during foundation bootstrap. Secret payloads "
             "never enter Terraform."
         ),
@@ -471,10 +463,10 @@ EXPECTED_VARIABLES = {
                     "agent-preview-database-url, "
                     "agent-preview-langsmith-api-key, "
                     "agent-preview-migration-database-url, "
-                    "anthropic-api-key, langsmith-api-key])}"
+                    "anthropic-api-key, langsmith-api-key, openai-api-key])}"
                 ),
                 "error_message": (
-                    "agent_secret_versions must contain exactly the ten "
+                    "agent_secret_versions must contain exactly the eleven "
                     "managed secret IDs, with no missing or extra keys."
                 ),
             },
@@ -801,7 +793,7 @@ EXPECTED_LOCALS_BY_FILE = {
             ),
             "production_secret_names": (
                 "${toset([agent-auth-secret, agent-database-url, anthropic-api-key, "
-                "langsmith-api-key])}"
+                "langsmith-api-key, openai-api-key])}"
             ),
             "preview_secret_names": (
                 "${toset([agent-preview-anthropic-api-key, "
@@ -952,7 +944,7 @@ EXPECTED_CHECK_BLOCKS = [
                         "local.required_agent_secret_names)}"
                     ),
                     "error_message": (
-                        "jobs and services require exactly the ten managed "
+                        "jobs and services require exactly the eleven managed "
                         "secret IDs, with no missing or extra version keys."
                     ),
                 }

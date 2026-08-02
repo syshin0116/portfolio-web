@@ -18,8 +18,8 @@ mutable aliases such as `latest` are forbidden.
   claims to four disjoint builder/deployer roles, plus the managed but disabled legacy
   preview provider;
 - environment-specific act-as, service/job update, and secret-access bindings;
-- five disjoint empty runtime Secret Manager resources plus one separately scoped
-  migration URL resource per environment;
+- five Production and four disjoint Preview runtime Secret Manager resources, plus one
+  separately scoped migration URL resource per environment;
 - production and preview Cloud Run services fixed to one instance/one Uvicorn worker;
 - same-image migration, real-Neon runtime-grant, and guest-retention maintenance jobs
   for each service, with an active production-only 15-minute Cloud Scheduler job;
@@ -142,8 +142,8 @@ member removals; any resource replacement or persistent-resource destroy is a bl
 Initial setup is an explicit complete-root progression:
 
 1. `foundation` with null image/version inputs creates the registries, identities, WIF,
-   IAM, state bucket, and ten empty secrets, but no Cloud Run resources;
-2. `jobs` with isolated production and preview digests plus the exact ten-key numeric
+   IAM, state bucket, and eleven empty secrets, but no Cloud Run resources;
+2. `jobs` with isolated production and preview digests plus the exact eleven-key numeric
    version map creates only the two migration, two grant-probe, and two maintenance jobs
    plus resource IAM;
 3. after all six jobs pass, `services` adds the two serving surfaces, service IAM, and
@@ -161,9 +161,10 @@ it again requires a matching reviewed code change. `AGENT_CLOUD_RUN_ENABLED` gat
 GitHub delivery attempts only; changing it does not pause Scheduler, revoke the public
 invoker, stop a running service, or guarantee zero cost.
 
-The serving model is fixed to Anthropic, so the managed inventory has no OpenAI credential.
-The reviewed `removed` blocks forget any legacy OpenAI secret instances from Terraform
-state with `destroy = false`; external secret deletion is a separate operator action.
+The owner/evaluation model remains Anthropic, while the reviewed Production guest model
+requires the restored `openai-api-key` resource and one positive numeric version. Preview
+has no OpenAI credential; its reviewed `removed` block keeps the retired legacy Preview
+secret out of Terraform state with `destroy = false`.
 
 Use an ephemeral access token or Application Default Credentials. Never pass a service
 account JSON key to Terraform. Do not run `apply` from CI.
@@ -224,9 +225,10 @@ structure described in
 `scripts/verify_ops_foundation.sh --offline-admin-evidence-structure` to validate its
 shape without a network call; success prints `STRUCTURE ONLY / NOT AUTHENTICATED`.
 Any future live-read contract belongs in the separate signed-v2 change and must preserve
-the exact project boundary. The production Scheduler must remain `PAUSED`; `ENABLED` is
-drift until the separately approved public-launch change updates the repository
-contract. Secret injection and state recovery remain in
+the exact project boundary. After explicit owner approval, the repository contract now
+requires the production Scheduler to be `ENABLED`; `PAUSED` is drift. Keep both Vercel
+public flags disabled until the exact services-stage plan is applied and the first
+bounded scheduled execution passes. Secret injection and state recovery remain in
 [`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md).
 Bootstrap, normal delivery, and rollback are in
 [`docs/runbooks/cloud-run-delivery.md`](../../docs/runbooks/cloud-run-delivery.md).

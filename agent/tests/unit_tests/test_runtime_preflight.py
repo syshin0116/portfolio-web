@@ -170,14 +170,14 @@ def test_runtime_accepts_exact_quickjs_opt_in(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_runtime_accepts_anonymous_access_only_with_an_explicit_guest_model(tmp_path):
+def test_runtime_accepts_exact_production_luna_launch_tuple(tmp_path):
     result = _import_runtime(
         tmp_path,
         VALID_CONFIG,
         AGENT_ANONYMOUS_ACCESS_ENABLED="true",
         GUEST_MODEL="openai:gpt-5.6-luna",
         GUEST_DAILY_BUDGET_MICRO_USD="500000",
-        GUEST_RUN_RESERVATION_MICRO_USD="25000",
+        GUEST_RUN_RESERVATION_MICRO_USD="6892",
         OPENAI_API_KEY="test-openai-runtime-key",
     )
 

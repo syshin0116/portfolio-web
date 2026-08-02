@@ -50,21 +50,28 @@ DELIVERY_ROLE_MAPPING_LINE = (
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
-    def test_cloud_runtime_contract_has_no_openai_credential(self) -> None:
-        reviewed_paths = (
-            REPO_ROOT / ".github/workflows/ci.yml",
-            REPO_ROOT / "infra/gcp/cloud_run.tf",
-            REPO_ROOT / "infra/gcp/main.tf",
-            REPO_ROOT / "infra/gcp/variables.tf",
-            REPO_ROOT / "scripts/deploy_cloud_run.sh",
-            REPO_ROOT / "scripts/verify_ops_foundation.sh",
+    def test_cloud_runtime_contract_has_production_only_openai_credential(self) -> None:
+        cloud_run_source = (REPO_ROOT / "infra/gcp/cloud_run.tf").read_text(
+            encoding="utf-8"
         )
+        preview, production = cloud_run_source.split("    production = {", 1)
 
-        for path in reviewed_paths:
-            source = path.read_text(encoding="utf-8")
-            with self.subTest(path=path.relative_to(REPO_ROOT)):
-                self.assertNotIn("OPENAI_API_KEY", source)
-                self.assertNotIn("openai-api-key", source)
+        self.assertNotIn("OPENAI_API_KEY", preview)
+        self.assertNotIn("agent-preview-openai-api-key", preview)
+        self.assertEqual(1, production.count("OPENAI_API_KEY"))
+        self.assertEqual(2, production.count('"openai-api-key"'))
+
+        deploy_source = (REPO_ROOT / "scripts/deploy_cloud_run.sh").read_text(
+            encoding="utf-8"
+        )
+        preview_expectation, production_expectation = deploy_source.split(
+            "    agent)", 1
+        )
+        self.assertNotIn("OPENAI_API_KEY", preview_expectation)
+        self.assertIn(
+            '{"name":"OPENAI_API_KEY","secret":"openai-api-key"}',
+            production_expectation,
+        )
 
     def test_broad_cloud_run_developer_role_is_absent(self) -> None:
         reviewed_paths = (
@@ -1236,12 +1243,12 @@ removed {
             )
             self.assertIn(expected_error, result.stderr)
 
-    def test_retired_openai_secrets_cannot_be_destroyed(self) -> None:
+    def test_retired_preview_openai_secret_cannot_be_destroyed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory)
             imports_path = root / "infra/gcp/imports.tf"
             source = imports_path.read_text(encoding="utf-8")
-            self.assertEqual(2, source.count("    destroy = false"))
+            self.assertEqual(1, source.count("    destroy = false"))
             imports_path.write_text(
                 source.replace("    destroy = false", "    destroy = true", 1),
                 encoding="utf-8",

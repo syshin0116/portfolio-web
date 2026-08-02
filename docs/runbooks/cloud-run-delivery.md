@@ -91,8 +91,9 @@ request timeout, `max_instances=1`, concurrency 8, and one Uvicorn worker. The i
 and worker limits are correctness constraints, not cost optimizations: Aegra 0.9.24's
 same-thread mutation guard is process-local.
 
-Each service revision has exactly 17 environment entries: 13 reviewed plain values and
-four numeric-version secret references. The plain set includes
+Each service revision has exactly 17 reviewed plain values. Preview adds four
+numeric-version secret references for 21 total entries; Production adds a fifth,
+`OPENAI_API_KEY`, for 22. The plain set includes
 `REDIS_BROKER_ENABLED=false` and `BG_JOB_MAX_RETRIES=0`, reserving the runtime boundary
 required by the bounded background-work preflight. The one-shot modules
 `agent.migrate`, `agent.neon_grant_probe`, and `agent.maintenance` load through the side-effect-free
@@ -161,9 +162,10 @@ environment is rejected.
 
 ## Secret Manager payloads
 
-The foundation owns four runtime secrets per environment. The deployed model is fixed to
-Anthropic, so no OpenAI credential is managed, version-pinned, or injected. Add one separate
-migration URL secret per environment:
+The foundation owns four runtime secrets for Preview and five for Production. The
+owner/evaluation model remains Anthropic; only Production adds the numeric-version-pinned
+`openai-api-key` required by the reviewed Luna guest tuple. Preview owns no OpenAI
+credential. Add one separate migration URL secret per environment:
 
 ```text
 agent-preview-migration-database-url
@@ -206,12 +208,12 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    ```
 
    The plan must create/import both registries, identities, WIF, IAM, state bucket, and
-   ten empty secret resources, with **zero** Cloud Run services or jobs. For the
+   eleven empty secret resources, with **zero** Cloud Run services or jobs. For the
    existing production registry, complete the cleanup-policy dry run below before
    approving its metadata change. Reject every persistent replacement/destroy and apply
    only the saved, owner-reviewed plan.
 
-2. **Payloads and images.** Add all ten first secret versions out of band without
+2. **Payloads and images.** Add all eleven first secret versions out of band without
    printing payloads. Record only each positive numeric enabled version ID. Build the
    reviewed commit for Linux x86-64 with the checked-in Dockerfile once into each
    environment's isolated repository. Record and independently inspect both
@@ -226,7 +228,7 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    but bootstrap must still prove each path exists and is readable by only the matching
    delivery identities.
 
-3. **Jobs.** Put the ten non-secret version IDs in a mode-`0600` variable file outside
+3. **Jobs.** Put the eleven non-secret version IDs in a mode-`0600` variable file outside
    the repository as `agent_secret_versions = { ... }`. Plan and apply with both reviewed
    digests:
 
@@ -266,13 +268,15 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    [the foundation runbook](gcp-neon-foundation.md#evidence-and-target-state).
 
 After bootstrap, every Terraform plan must explicitly retain `stage=services`, both
-current exact digests, and the complete ten-key numeric version map. Omitting them
+current exact digests, and the complete eleven-key numeric version map. Omitting them
 proposes protected resource removal and fails closed. Never “simplify” an apply with
 `-target`; each stage is a complete, repeatable root-module plan.
 
-The two retired OpenAI Secret Manager objects are removed from Terraform state with
-`destroy = false`. This repository does not delete their external payloads or versions.
-Delete them only as a separately approved GCP cleanup after confirming no consumer remains.
+Only the retired Preview OpenAI Secret Manager object remains removed from Terraform
+state with `destroy = false`. Production restores `openai-api-key` through the existing
+import set. This repository does not delete the Preview object's external payloads or
+versions; delete it only as a separately approved GCP cleanup after confirming no
+consumer remains.
 
 Terraform ignores subsequent image and traffic drift because the delivery workflow owns
 those revision fields. Every other service/job field—including the selected numeric

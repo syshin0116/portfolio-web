@@ -111,7 +111,7 @@ variable "agent_preview_bootstrap_image" {
 }
 
 variable "agent_secret_versions" {
-  description = "Reviewed Secret Manager numeric versions keyed by all ten managed secret IDs; null only during foundation bootstrap. Secret payloads never enter Terraform."
+  description = "Reviewed Secret Manager numeric versions keyed by all eleven managed secret IDs; null only during foundation bootstrap. Secret payloads never enter Terraform."
   type        = map(string)
   default     = null
 
@@ -135,7 +135,8 @@ variable "agent_secret_versions" {
       "agent-preview-migration-database-url",
       "anthropic-api-key",
       "langsmith-api-key",
+      "openai-api-key",
     ])
-    error_message = "agent_secret_versions must contain exactly the ten managed secret IDs, with no missing or extra keys."
+    error_message = "agent_secret_versions must contain exactly the eleven managed secret IDs, with no missing or extra keys."
   }
 }

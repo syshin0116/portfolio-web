@@ -19,31 +19,38 @@ template: runbook
 
 # Public anonymous chat rollout
 
-Both public flags stay exactly `false` in repository examples. Enabling the
+Both Vercel public flags stay exactly `false` until the final browser rollout.
+Preview also remains fail closed. The repository now records the separately
+approved Production agent launch values, but merging this configuration does not
+apply Terraform, create a secret version, or enable the browser gate. Enabling the
 browser gate before the agent's public-safe state/history/SSE projection is
 verified violates ADR-0005 even if the visible UI appears sanitized.
 
-## Cloud Run fail-closed baseline
+## Cloud Run repository-owned launch contract
 
-The repository-owned Cloud Run template and delivery verifier require this exact
-pre-launch environment:
+The repository-owned Cloud Run template and delivery verifier require these exact
+Preview values:
 
 - `AGENT_ANONYMOUS_ACCESS_ENABLED=false`
 - `GUEST_MODEL=` (empty)
 - `GUEST_DAILY_BUDGET_MICRO_USD=` (empty)
 - `GUEST_RUN_RESERVATION_MICRO_USD=` (empty)
 
+Production alone carries the owner-approved launch tuple:
+
+- `AGENT_ANONYMOUS_ACCESS_ENABLED=true`
+- `GUEST_MODEL=openai:gpt-5.6-luna`
+- `GUEST_DAILY_BUDGET_MICRO_USD=500000` ($0.50 per UTC day for the durable
+  generation reservation ledger)
+- `GUEST_RUN_RESERVATION_MICRO_USD=6892`
+
 Do not make these values apply-time Terraform variables or change them in the
-console. Selecting a guest model and its worst-case per-run and UTC-day
-micro-dollar ceilings is a paid public-launch decision. Land those three exact
-values and the `true` opt-in together in a separate reviewed PR, then apply its
-exact plan. An ordinary image delivery verifies and preserves the reviewed
-values; it must refuse a revision with console or out-of-band drift.
-Preview and Production now have separate repository-owned runtime maps even though
-both carry the same disabled values before launch. The launch PR must replace only
-the Production constants and keep Preview disabled unless its own model, budget,
-and public-test gate are approved. Do not replace those reviewed constants with
-apply-time launch variables or a generic runtime toggle.
+console. An ordinary image delivery verifies and preserves the reviewed values;
+it must refuse a revision with console or out-of-band drift. Preview and Production
+have separate repository-owned runtime maps, and Preview must not inherit the paid
+model, budget, credential, or access flag unless it receives its own reviewed
+public-test contract. Do not replace the reviewed constants with apply-time launch
+variables or a generic runtime toggle.
 
 The runtime accepts only `openai:gpt-5.6-luna` as the eventual non-empty
 `GUEST_MODEL`. It uses the OpenAI Responses API with reasoning disabled,
@@ -124,11 +131,14 @@ The serialization boundary is pinned to `langchain-openai==1.3.5` and
 `langchain-openai` below the reviewed exclusive 1.4.0 compatibility ceiling
 until `langchain-core` moves beyond 1.4.9. The model's
 [official catalogue entry](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
-does not support the API Free tier. Therefore this code contract does **not**
-authorize launch: Production remains disabled until the owner explicitly
-approves a non-zero provider budget, the input-count endpoint's billing
-semantics are confirmed, and the separately reviewed launch PR supplies the
-OpenAI secret and all spend ceilings atomically.
+does not support the API Free tier. The owner approved the exact non-zero
+500,000 µUSD UTC-day generation ceiling above, and the Production template now
+requires `OPENAI_API_KEY` from a reviewed positive numeric Secret Manager version.
+That approval and wiring still do **not** authorize the final browser launch: the
+input-count endpoint's billing semantics remain outside the generation ledger and
+must be confirmed, the separately reviewed Scheduler rollout must pass, the secret
+payload/version must be injected out of band, and all operational proofs below must
+succeed before either Vercel public flag becomes `true`.
 
 ## Cloudflare Turnstile
 
@@ -166,17 +176,17 @@ guest identity or spend state.
 
 ## Enable order
 
-1. Deploy and verify the agent with anonymous access still false.
-2. Run owner, PostgreSQL, public raw-wire, rate, concurrency, spend, retention,
-   and maintenance proofs against the exact revision.
-3. While both public surfaces remain disabled, review the exact dedicated-project plan
-   for the repository-configured active production maintenance Scheduler, apply it, and
-   verify the first bounded checkpoint-first maintenance execution. A paused or
-   unverified Scheduler blocks launch.
-4. Land the separately approved repository change that selects the Production
-   guest model, fixes both reviewed micro-dollar ceilings, and sets only the
-   Production `AGENT_ANONYMOUS_ACCESS_ENABLED=true` while Preview remains
-   disabled; apply it while Vercel still cannot mint or display anonymous access.
+1. Keep both Vercel public flags false. Inject the reviewed Production OpenAI payload and
+   record only its positive numeric version alongside the other exact secret versions.
+2. After both environments' migration, grant-probe, and maintenance jobs pass, review
+   and apply the exact services-stage plan. It must combine the active Production
+   maintenance Scheduler with only Production's `true / openai:gpt-5.6-luna / 500000 /
+   6892` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
+3. Verify Terraform read-back and the first bounded checkpoint-first scheduled
+   maintenance execution. A paused or unverified Scheduler blocks launch.
+4. Release the exact reviewed revision, then run owner, PostgreSQL, public raw-wire,
+   rate, concurrency, spend, retention, input-count billing, and provider-cap proofs
+   while Vercel still cannot mint or display anonymous access.
 5. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
    real browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.

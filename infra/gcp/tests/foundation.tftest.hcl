@@ -134,6 +134,10 @@ override_resource {
 }
 
 override_resource {
+  target = google_secret_manager_secret.runtime["openai-api-key"]
+}
+
+override_resource {
   target = google_secret_manager_secret.migration["preview"]
 }
 
@@ -159,6 +163,7 @@ run "foundation_security_contract" {
       agent-preview-migration-database-url = "25"
       anthropic-api-key                    = "14"
       langsmith-api-key                    = "15"
+      openai-api-key                       = "16"
     }
   }
 
@@ -316,8 +321,8 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = length(google_secret_manager_secret.runtime) == 4 && length(google_secret_manager_secret.preview_runtime) == 4 && length(google_secret_manager_secret.migration) == 2
-    error_message = "Each runtime environment must own exactly four runtime secrets and one separate migration URL."
+    condition     = length(google_secret_manager_secret.runtime) == 5 && length(google_secret_manager_secret.preview_runtime) == 4 && length(google_secret_manager_secret.migration) == 2
+    error_message = "Production must own its five launch runtime secrets while Preview remains limited to four, plus one separate migration URL per environment."
   }
 
   assert {
@@ -326,8 +331,8 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = length(google_secret_manager_secret_iam_member.runtime_accessor) == 4 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
-    error_message = "Each environment must bind only its four runtime secrets."
+    condition     = length(google_secret_manager_secret_iam_member.runtime_accessor) == 5 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
+    error_message = "Production must bind only its five launch runtime secrets and Preview only its four fail-closed runtime secrets."
   }
 
   assert {
@@ -402,7 +407,9 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
-      && length(service.template[0].containers[0].env) == 21
+      && length(service.template[0].containers[0].env) == (
+        environment == "production" ? 22 : 21
+      )
       && {
         for env in service.template[0].containers[0].env :
         env.name => env.value
@@ -411,7 +418,7 @@ run "foundation_security_contract" {
       && length([
         for env in service.template[0].containers[0].env : env
         if try(env.value_source[0].secret_key_ref[0].version, null) != null
-      ]) == 4
+      ]) == (environment == "production" ? 5 : 4)
       && alltrue([
         for env in service.template[0].containers[0].env :
         try(
@@ -425,8 +432,9 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition = alltrue([
-      for service in google_cloud_run_v2_service.agent :
+    condition = {
+      for environment, service in google_cloud_run_v2_service.agent :
+      environment =>
       {
         for env in service.template[0].containers[0].env :
         env.name => env.value
@@ -436,22 +444,30 @@ run "foundation_security_contract" {
           "GUEST_MODEL",
           "GUEST_RUN_RESERVATION_MICRO_USD",
         ], env.name)
-        } == {
+      }
+      } == {
+      preview = {
         AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
         GUEST_DAILY_BUDGET_MICRO_USD    = ""
         GUEST_MODEL                     = ""
         GUEST_RUN_RESERVATION_MICRO_USD = ""
       }
-    ])
-    error_message = "Anonymous access must remain repository-owned, disabled, and unpriced until a separate reviewed public-launch change."
+      production = {
+        AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"
+        GUEST_DAILY_BUDGET_MICRO_USD    = "500000"
+        GUEST_MODEL                     = "openai:gpt-5.6-luna"
+        GUEST_RUN_RESERVATION_MICRO_USD = "6892"
+      }
+    }
+    error_message = "Production must atomically enable the reviewed Luna guest budget while Preview remains fail closed and unpriced."
   }
 
   assert {
     condition = (
       toset(keys(local.cloud_run_runtime_environments)) == toset(["preview", "production"])
-      && alltrue([
+      && {
         for environment in ["preview", "production"] :
-        {
+        environment => {
           for name, value in local.cloud_run_runtime_environments[environment] :
           name => value
           if contains([
@@ -460,15 +476,23 @@ run "foundation_security_contract" {
             "GUEST_MODEL",
             "GUEST_RUN_RESERVATION_MICRO_USD",
           ], name)
-          } == {
+        }
+        } == {
+        preview = {
           AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
           GUEST_DAILY_BUDGET_MICRO_USD    = ""
           GUEST_MODEL                     = ""
           GUEST_RUN_RESERVATION_MICRO_USD = ""
         }
-      ])
+        production = {
+          AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"
+          GUEST_DAILY_BUDGET_MICRO_USD    = "500000"
+          GUEST_MODEL                     = "openai:gpt-5.6-luna"
+          GUEST_RUN_RESERVATION_MICRO_USD = "6892"
+        }
+      }
     )
-    error_message = "Preview and Production must own separate fail-closed anonymous runtime maps before the reviewed Production launch patch."
+    error_message = "Preview and Production must keep separate repository-owned anonymous runtime maps with only Production launched."
   }
 
   assert {
@@ -657,7 +681,7 @@ run "foundation_bootstrap_contract" {
 
   assert {
     condition = (
-      length(google_secret_manager_secret.runtime) == 4
+      length(google_secret_manager_secret.runtime) == 5
       && length(google_secret_manager_secret.preview_runtime) == 4
       && length(google_secret_manager_secret.migration) == 2
       && google_artifact_registry_repository.agent.repository_id == "agent"
@@ -700,6 +724,7 @@ run "jobs_bootstrap_contract" {
       agent-preview-migration-database-url = "25"
       anthropic-api-key                    = "14"
       langsmith-api-key                    = "15"
+      openai-api-key                       = "16"
     }
   }
 

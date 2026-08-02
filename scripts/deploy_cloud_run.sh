@@ -210,6 +210,10 @@ runtime_expectations() {
       readonly EXPECTED_MIGRATION_JOB="agent-preview-migrate"
       readonly EXPECTED_GRANT_JOB="agent-preview-grants"
       readonly EXPECTED_MAINTENANCE_JOB="agent-preview-maintenance"
+      readonly EXPECTED_ANONYMOUS_ACCESS_ENABLED="false"
+      readonly EXPECTED_GUEST_DAILY_BUDGET_MICRO_USD=""
+      readonly EXPECTED_GUEST_MODEL=""
+      readonly EXPECTED_GUEST_RUN_RESERVATION_MICRO_USD=""
       ;;
     agent)
       readonly EXPECTED_IMAGE_PREFIX="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
@@ -218,34 +222,47 @@ runtime_expectations() {
         {"name":"AGENT_AUTH_SECRET","secret":"agent-auth-secret"},
         {"name":"ANTHROPIC_API_KEY","secret":"anthropic-api-key"},
         {"name":"DATABASE_URL","secret":"agent-database-url"},
-        {"name":"LANGCHAIN_API_KEY","secret":"langsmith-api-key"}
+        {"name":"LANGCHAIN_API_KEY","secret":"langsmith-api-key"},
+        {"name":"OPENAI_API_KEY","secret":"openai-api-key"}
       ]'
       readonly EXPECTED_MIGRATOR_SERVICE_ACCOUNT="agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
       readonly EXPECTED_MIGRATION_SECRET="agent-migration-database-url"
       readonly EXPECTED_MIGRATION_JOB="agent-migrate"
       readonly EXPECTED_GRANT_JOB="agent-grants"
       readonly EXPECTED_MAINTENANCE_JOB="agent-maintenance"
+      readonly EXPECTED_ANONYMOUS_ACCESS_ENABLED="true"
+      readonly EXPECTED_GUEST_DAILY_BUDGET_MICRO_USD="500000"
+      readonly EXPECTED_GUEST_MODEL="openai:gpt-5.6-luna"
+      readonly EXPECTED_GUEST_RUN_RESERVATION_MICRO_USD="6892"
       ;;
   esac
-  readonly EXPECTED_PLAIN_ENV='{
-    "AEGRA_CONFIG":"/app/aegra.json",
-    "AGENT_ANONYMOUS_ACCESS_ENABLED":"false",
-    "BG_JOB_MAX_RETRIES":"0",
-    "ENV_MODE":"PRODUCTION",
-    "FF_V2_EVENT_STREAMING":"true",
-    "GUEST_DAILY_BUDGET_MICRO_USD":"",
-    "GUEST_MODEL":"",
-    "GUEST_RUN_RESERVATION_MICRO_USD":"",
-    "HOST":"0.0.0.0",
-    "LANGGRAPH_MAX_POOL_SIZE":"4",
-    "LANGGRAPH_MIN_POOL_SIZE":"1",
-    "MODEL":"anthropic:claude-sonnet-4-6",
-    "PORT":"8080",
-    "REDIS_BROKER_ENABLED":"false",
-    "RUN_MIGRATIONS_ON_STARTUP":"false",
-    "SQLALCHEMY_MAX_OVERFLOW":"0",
-    "SQLALCHEMY_POOL_SIZE":"2"
-  }'
+  EXPECTED_PLAIN_ENV="$(
+    jq -cn \
+      --arg anonymous_access "$EXPECTED_ANONYMOUS_ACCESS_ENABLED" \
+      --arg guest_daily_budget "$EXPECTED_GUEST_DAILY_BUDGET_MICRO_USD" \
+      --arg guest_model "$EXPECTED_GUEST_MODEL" \
+      --arg guest_run_reservation "$EXPECTED_GUEST_RUN_RESERVATION_MICRO_USD" \
+      '{
+        AEGRA_CONFIG:"/app/aegra.json",
+        AGENT_ANONYMOUS_ACCESS_ENABLED:$anonymous_access,
+        BG_JOB_MAX_RETRIES:"0",
+        ENV_MODE:"PRODUCTION",
+        FF_V2_EVENT_STREAMING:"true",
+        GUEST_DAILY_BUDGET_MICRO_USD:$guest_daily_budget,
+        GUEST_MODEL:$guest_model,
+        GUEST_RUN_RESERVATION_MICRO_USD:$guest_run_reservation,
+        HOST:"0.0.0.0",
+        LANGGRAPH_MAX_POOL_SIZE:"4",
+        LANGGRAPH_MIN_POOL_SIZE:"1",
+        MODEL:"anthropic:claude-sonnet-4-6",
+        PORT:"8080",
+        REDIS_BROKER_ENABLED:"false",
+        RUN_MIGRATIONS_ON_STARTUP:"false",
+        SQLALCHEMY_MAX_OVERFLOW:"0",
+        SQLALCHEMY_POOL_SIZE:"2"
+      }'
+  )"
+  readonly EXPECTED_PLAIN_ENV
 }
 
 verify_runtime_template() {
@@ -384,7 +401,8 @@ verify_runtime_template() {
       )
       and (
         (.containers[0].env // []) as $env
-        | ($env | length) == 21
+        | ($env | length)
+          == (($expected_plain_env | length) + ($expected_runtime_secrets | length))
           and ([$env[].name] | length) == ([$env[].name] | unique | length)
           and (
             # Cloud Run proto JSON may omit EnvVar.value for its empty default.

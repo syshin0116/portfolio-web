@@ -20,10 +20,12 @@ template: adr
 
 # ADR-0006: The chatbot is public, with Turnstile-gated anonymous subjects
 
-> **status: accepted; the application hardening is implemented, but public rollout is
-> still gated.** The recurring retention Scheduler is repository-configured active, while
-> the production guest flags remain disabled until its exact-project apply and first
-> bounded execution plus the remaining launch, billing, and browser gates pass.
+> **status: accepted; the application hardening and repository-owned Production launch
+> tuple plus active retention Scheduler are implemented, but public rollout is still
+> gated.** Preview and both Vercel public flags remain disabled. Repository desired state
+> does not prove live Terraform, the numeric Secret Manager payload/version, the first
+> bounded scheduled execution, input-count billing, provider spend protection, browser,
+> or exact-project operational state; those gates remain in the public rollout runbook.
 
 ## Context
 
@@ -177,10 +179,12 @@ Once accepted, the guest guard canonicalizes the request, consumes the process-l
 rate token, reserves the durable worst-case amount, and calls Aegra immediately;
 post-dispatch failures remain intentionally charged.
 
-**Rollout remains gated.** The code boundary does not activate guest flags, inject an
-OpenAI credential, or approve a paid budget. The repository configures recurring GC
-active, but its exact-project apply and first bounded execution must be proven before
-anonymous token issuance is enabled; a paused or unverified Scheduler is a launch
+**Rollout remains gated.** The repository now selects only Production's reviewed Luna
+guest tuple and a numeric-version `OPENAI_API_KEY` reference while leaving Preview fail
+closed, and configures recurring GC active. It does not create a Secret Manager
+payload/version, apply Terraform, enable the two Vercel public flags, verify the first
+bounded scheduled execution, or prove provider billing/spend protection. A paused or
+unverified Scheduler is a launch
 blocker, not an alternative retention policy.
 
 ## Consequences

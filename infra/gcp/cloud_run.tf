@@ -62,6 +62,10 @@ locals {
           secret  = google_secret_manager_secret.runtime["langsmith-api-key"].secret_id
           version = try(var.agent_secret_versions["langsmith-api-key"], null)
         }
+        OPENAI_API_KEY = {
+          secret  = google_secret_manager_secret.runtime["openai-api-key"].secret_id
+          version = try(var.agent_secret_versions["openai-api-key"], null)
+        }
       }
     }
   }
@@ -90,10 +94,10 @@ locals {
       GUEST_RUN_RESERVATION_MICRO_USD = ""
     })
     production = merge(local.cloud_run_runtime_environment_common, {
-      AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
-      GUEST_DAILY_BUDGET_MICRO_USD    = ""
-      GUEST_MODEL                     = ""
-      GUEST_RUN_RESERVATION_MICRO_USD = ""
+      AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"
+      GUEST_DAILY_BUDGET_MICRO_USD    = "500000"
+      GUEST_MODEL                     = "openai:gpt-5.6-luna"
+      GUEST_RUN_RESERVATION_MICRO_USD = "6892"
     })
   }
 }

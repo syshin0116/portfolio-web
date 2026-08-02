@@ -20,6 +20,7 @@ locals {
     "agent-database-url",
     "anthropic-api-key",
     "langsmith-api-key",
+    "openai-api-key",
   ])
 
   preview_secret_names = toset([
@@ -342,7 +343,7 @@ check "agent_secret_version_inventory" {
       var.agent_secret_versions != null
       && toset(keys(var.agent_secret_versions)) == local.required_agent_secret_names
     )
-    error_message = "jobs and services require exactly the ten managed secret IDs, with no missing or extra version keys."
+    error_message = "jobs and services require exactly the eleven managed secret IDs, with no missing or extra version keys."
   }
 }
 

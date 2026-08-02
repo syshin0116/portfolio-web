@@ -53,6 +53,47 @@ DELIVERY_ROLE_MAPPING_LINE = (
 )
 
 
+def _foundation_fixture(directory: str | Path) -> Path:
+    root = Path(directory)
+    for relative_path in FIXTURE_FILES:
+        source = REPO_ROOT / relative_path
+        destination = root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+    verifier = root / "scripts/verify_ops_foundation.sh"
+    verifier.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(
+        REPO_ROOT / "scripts/verify_ops_foundation.sh",
+        verifier,
+    )
+    verifier.chmod(0o755)
+    shutil.copyfile(
+        REPO_ROOT / "scripts/ops_foundation_contract.py",
+        root / "scripts/ops_foundation_contract.py",
+    )
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "infra/gcp", "scripts/gcp_project_readiness_contract.json"],
+        cwd=root,
+        check=True,
+    )
+    return root
+
+
+def _write_secure_python_wrapper(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+
+
 class StaticVerifierMutationTests(unittest.TestCase):
     def test_cloud_runtime_contract_has_production_only_openai_credential(self) -> None:
         cloud_run_source = (REPO_ROOT / "infra/gcp/cloud_run.tf").read_text(
@@ -94,35 +135,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
                 )
 
     def _fixture(self, directory: str) -> Path:
-        root = Path(directory)
-        for relative_path in FIXTURE_FILES:
-            source = REPO_ROOT / relative_path
-            destination = root / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
-
-        verifier = root / "scripts/verify_ops_foundation.sh"
-        verifier.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(
-            REPO_ROOT / "scripts/verify_ops_foundation.sh",
-            verifier,
-        )
-        verifier.chmod(0o755)
-        shutil.copyfile(
-            REPO_ROOT / "scripts/ops_foundation_contract.py",
-            root / "scripts/ops_foundation_contract.py",
-        )
-        subprocess.run(
-            ["git", "init", "--quiet"],
-            cwd=root,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "add", "infra/gcp", "scripts/gcp_project_readiness_contract.json"],
-            cwd=root,
-            check=True,
-        )
-        return root
+        return _foundation_fixture(directory)
 
     def _run(self, root: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -850,7 +863,7 @@ output "unreviewed_sensitive_value" {
             workspace_bin = root / ".venv/bin"
             workspace_bin.mkdir(parents=True)
             workspace_python = workspace_bin / "python3"
-            workspace_python.symlink_to(sys.executable)
+            _write_secure_python_wrapper(workspace_python)
 
             fake_bin = root / "fake-bin"
             fake_bin.mkdir()
@@ -974,7 +987,7 @@ output "unreviewed_sensitive_value" {
             workspace_bin = root / ".venv/bin"
             workspace_bin.mkdir(parents=True)
             workspace_python = workspace_bin / "python3"
-            workspace_python.symlink_to(sys.executable)
+            _write_secure_python_wrapper(workspace_python)
             replacement = root / "replacement-python"
             replacement.write_text(
                 "#!/bin/sh\n"
@@ -985,9 +998,11 @@ output "unreviewed_sensitive_value" {
 
             fake_bin = root / "fake-bin"
             fake_bin.mkdir()
+            uv_marker = root / "uv-ran"
             fake_uv = fake_bin / "uv"
             fake_uv.write_text(
                 "#!/bin/sh\n"
+                f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(uv_marker))}\n"
                 f"exec /bin/mv {shlex.quote(str(replacement))} "
                 f"{shlex.quote(str(workspace_python))}\n",
                 encoding="utf-8",
@@ -1010,6 +1025,7 @@ output "unreviewed_sensitive_value" {
 
             self.assertNotEqual(0, result.returncode)
             self.assertIn("group/other writable", result.stderr)
+            self.assertTrue(uv_marker.exists())
             self.assertFalse(marker.exists())
 
     def test_governance_live_missing_workspace_python_stops_before_sync(self) -> None:
@@ -1631,7 +1647,10 @@ class LiveShellGuardTests(unittest.TestCase):
         extra_env: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], str]:
         with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
-            root = Path(directory)
+            live_mode = arguments == ("--live",)
+            root = _foundation_fixture(directory) if live_mode else Path(directory)
+            if live_mode:
+                _write_secure_python_wrapper(root / ".venv/bin/python3")
             binary_dir = root / "bin"
             binary_dir.mkdir()
             log_path = root / "gcloud.log"
@@ -1645,6 +1664,10 @@ class LiveShellGuardTests(unittest.TestCase):
             fake_gh = binary_dir / "gh"
             fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
             fake_gh.chmod(0o755)
+            if live_mode:
+                fake_uv = binary_dir / "uv"
+                fake_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                fake_uv.chmod(0o755)
             environment = {
                 key: value
                 for key, value in os.environ.items()
@@ -1663,7 +1686,7 @@ class LiveShellGuardTests(unittest.TestCase):
                 environment.update(extra_env)
             result = subprocess.run(
                 ["scripts/verify_ops_foundation.sh", *arguments],
-                cwd=REPO_ROOT,
+                cwd=root if live_mode else REPO_ROOT,
                 env=environment,
                 check=False,
                 capture_output=True,
@@ -1872,7 +1895,8 @@ exit "$source_status"
 
     def test_direct_live_ignores_exported_functions_and_bash_env(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
-            root = Path(directory)
+            root = _foundation_fixture(directory)
+            _write_secure_python_wrapper(root / ".venv/bin/python3")
             binary_dir = root / "bin"
             binary_dir.mkdir()
             log_path = root / "gcloud.log"
@@ -1887,6 +1911,9 @@ exit "$source_status"
             fake_gh = binary_dir / "gh"
             fake_gh.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
             fake_gh.chmod(0o755)
+            fake_uv = binary_dir / "uv"
+            fake_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_uv.chmod(0o755)
             hostile_bash_env = root / "hostile-bash-env"
             hostile_bash_env.write_text(
                 ("/usr/bin/printf '%s\\n' BASH_ENV_LOADED >>\"$HOSTILE_MARKER\"\n"),
@@ -1908,7 +1935,7 @@ exit "$source_status"
                     "HOSTILE_MARKER": str(hostile_marker),
                     "OPS_FOUNDATION_ADMIN_EVIDENCE_FILE": str(evidence),
                     "PATH": f"{binary_dir}:{environment['PATH']}",
-                    "VERIFIER": str(REPO_ROOT / "scripts/verify_ops_foundation.sh"),
+                    "VERIFIER": str(root / "scripts/verify_ops_foundation.sh"),
                 }
             )
             result = subprocess.run(
@@ -1939,7 +1966,7 @@ export BASH_ENV="$HOSTILE_BASH_ENV"
 exec "$VERIFIER" --live
 """,
                 ],
-                cwd=REPO_ROOT,
+                cwd=root,
                 env=environment,
                 check=False,
                 capture_output=True,

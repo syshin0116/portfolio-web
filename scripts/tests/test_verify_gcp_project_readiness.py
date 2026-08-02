@@ -795,6 +795,10 @@ class GCloudReaderTests(unittest.TestCase):
             binary = Path(directory) / "gcloud"
             binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             binary.chmod(0o700)
+            python = Path(directory) / "python3"
+            python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            python.chmod(0o700)
+            python_path = str(python.resolve())
             completed = subprocess.CompletedProcess(
                 args=(), returncode=0, stdout="{}\n", stderr=""
             )
@@ -817,6 +821,10 @@ class GCloudReaderTests(unittest.TestCase):
                     "scripts.verify_gcp_project_readiness."
                     "EXPECTED_GCLOUD_ACCOUNT_SHA256",
                     TEST_ACCOUNT_SHA256,
+                ),
+                patch(
+                    "scripts.verify_gcp_project_readiness.sys.executable",
+                    python_path,
                 ),
                 patch(
                     "scripts.verify_gcp_project_readiness.subprocess.run",
@@ -850,7 +858,7 @@ class GCloudReaderTests(unittest.TestCase):
             {
                 "CLOUDSDK_CORE_DISABLE_PROMPTS": "1",
                 "CLOUDSDK_ENCODING": "UTF-8",
-                "CLOUDSDK_PYTHON": str(Path(os.sys.executable).resolve()),
+                "CLOUDSDK_PYTHON": python_path,
                 "CLOUDSDK_PYTHON_ARGS": "-I -S",
                 "HOME": str(Path.home().resolve()),
                 "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",

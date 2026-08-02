@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -412,9 +413,11 @@ async def test_published_semantic_top10_answer_fits_both_guest_ledgers(
     """Pin one real-corpus capture while keeping the provider count offline."""
     exact_count_fixture = 2_500
     observed_reservations: list[int] = []
+    ledger_reservations: list[int] = []
 
     async def safe_exact_count(_self, **payload):
         observed_reservations.append(_openai_input_token_reservation(payload))
+        ledger_reservations.append(budget.snapshot().count_risk_tokens_in_flight)
         return SimpleNamespace(input_tokens=exact_count_fixture)
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
@@ -435,7 +438,14 @@ async def test_published_semantic_top10_answer_fits_both_guest_ledgers(
     await middleware.awrap_model_call(_guest_request(messages), respond)
     snapshot = budget.finalize()
 
-    assert observed_reservations == [11_051]
+    # ChatOpenAI's runtime-generated tool schema contributes 76-77 more
+    # canonical bytes on pinned CPython 3.12 than on local CPython 3.13. This
+    # independently reviewed literal interval accepts both and rejects material
+    # payload/schema drift without becoming a production-derived constant.
+    assert len(observed_reservations) == 1
+    assert 11_000 <= observed_reservations[0] <= 11_200
+    assert observed_reservations == ledger_reservations
+    assert sum(observed_reservations) < 48_000
     assert snapshot.charged_tokens == 2_564
     assert snapshot.count_risk_tokens == exact_count_fixture
     assert snapshot.provider_input_tokens == exact_count_fixture
@@ -452,9 +462,11 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     # a non-network fixture here, not proof of tokenizer behavior or provider pricing.
     safe_exact_count_fixtures = iter((693, 2_500, 4_100))
     observed_reservations: list[int] = []
+    ledger_reservations: list[int] = []
 
     async def safe_exact_count(_self, **payload):
         observed_reservations.append(_openai_input_token_reservation(payload))
+        ledger_reservations.append(budget.snapshot().count_risk_tokens_in_flight)
         return SimpleNamespace(input_tokens=next(safe_exact_count_fixtures))
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
@@ -487,7 +499,16 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     await middleware.awrap_model_call(_guest_request(read_messages), answer)
     snapshot = budget.finalize()
 
-    assert observed_reservations == [6_141, 11_051, 16_303]
+    assert len(observed_reservations) == 3
+    assert all(earlier < later for earlier, later in pairwise(observed_reservations))
+    for reservation, (minimum, maximum) in zip(
+        observed_reservations,
+        ((6_100, 6_250), (11_000, 11_200), (16_250, 16_450)),
+        strict=True,
+    ):
+        assert minimum <= reservation <= maximum
+    assert observed_reservations == ledger_reservations
+    assert sum(observed_reservations) < 48_000
     assert snapshot.charged_tokens == 7_485
     assert snapshot.count_risk_tokens == 7_293
     assert snapshot.provider_input_tokens == 7_293
@@ -497,13 +518,14 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
 
 
 @pytest.mark.parametrize(
-    ("attack", "expected_reservation"),
-    [("user", 22_478), ("read-post", 22_827)],
+    ("attack", "minimum_reservation", "maximum_reservation"),
+    [("user", 22_400, 22_650), ("read-post", 22_750, 23_000)],
 )
 async def test_16_kib_guest_input_fails_closed_at_the_actual_token_cap(
     monkeypatch: pytest.MonkeyPatch,
     attack: str,
-    expected_reservation: int,
+    minimum_reservation: int,
+    maximum_reservation: int,
 ) -> None:
     """A bounded 16 KiB payload cannot borrow capacity from count risk."""
     if attack == "user":
@@ -527,9 +549,11 @@ async def test_16_kib_guest_input_fails_closed_at_the_actual_token_cap(
             ToolMessage(content=read_output, tool_call_id="call_read_attack"),
         ]
     observed_reservations: list[int] = []
+    ledger_reservations: list[int] = []
 
     async def safe_exact_count(_self, **payload):
         observed_reservations.append(_openai_input_token_reservation(payload))
+        ledger_reservations.append(budget.snapshot().count_risk_tokens_in_flight)
         return SimpleNamespace(input_tokens=12_000)
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
@@ -544,9 +568,13 @@ async def test_16_kib_guest_input_fails_closed_at_the_actual_token_cap(
         )
 
     snapshot = budget.snapshot()
-    assert observed_reservations == [expected_reservation]
+    assert len(observed_reservations) == 1
+    reservation = observed_reservations[0]
+    assert minimum_reservation <= reservation <= maximum_reservation
+    assert observed_reservations == ledger_reservations
+    assert reservation < 48_000
     assert snapshot.charged_tokens == 1_024
-    assert snapshot.count_risk_tokens == expected_reservation
+    assert snapshot.count_risk_tokens == reservation
     assert snapshot.count_risk_tokens_in_flight == 0
     assert snapshot.model_reservations_in_flight == 0
     assert snapshot.exhausted is True

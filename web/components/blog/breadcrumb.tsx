@@ -13,13 +13,17 @@ export function Breadcrumb({ slug }: BreadcrumbProps) {
   }))
 
   return (
-    <nav className="flex items-center gap-1 text-sm text-muted-foreground">
-      <Link href="/blog" className="hover:text-foreground transition-colors">
-        <Home className="h-3.5 w-3.5" />
+    <nav aria-label="현재 위치" className="flex items-center gap-1 text-sm text-muted-foreground">
+      <Link
+        href="/blog"
+        aria-label="블로그 홈"
+        className="hover:text-foreground transition-colors"
+      >
+        <Home className="h-3.5 w-3.5" aria-hidden="true" />
       </Link>
       {crumbs.map((crumb) => (
         <span key={crumb.href} className="flex items-center gap-1">
-          <ChevronRight className="h-3.5 w-3.5 opacity-50" />
+          <ChevronRight className="h-3.5 w-3.5 opacity-50" aria-hidden="true" />
           {crumb.isLast ? (
             <span className="text-foreground">{crumb.label}</span>
           ) : (

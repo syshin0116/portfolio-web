@@ -56,7 +56,7 @@ export function TableOfContents({ toc, className, children }: TocProps) {
         {children}
         {toc.length > 0 && (
           <nav aria-label="Table of contents">
-            <p className="mb-3 mt-4 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+            <p className="mb-3 mt-4 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
               On this page
             </p>
             <TocList entries={toc} activeId={activeId} depth={0} />

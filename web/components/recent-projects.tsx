@@ -12,9 +12,10 @@ export function RecentProjects() {
         <h2 className="text-xl font-semibold">최근 프로젝트</h2>
         <Link
           href="/projects"
+          aria-label="최근 프로젝트 전체 보기"
           className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
         >
-          전체 보기 <ArrowRight className="h-3.5 w-3.5" />
+          전체 보기 <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
         </Link>
       </div>
       <ul className="space-y-3">
@@ -25,14 +26,14 @@ export function RecentProjects() {
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xs text-muted-foreground">{project.period}</span>
                   {!project.isCompleted && (
-                    <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
                       진행 중
                     </span>
                   )}
                 </div>
-                <p className="font-medium text-sm leading-snug group-hover:text-primary transition-colors line-clamp-1">
+                <h3 className="font-medium text-sm leading-snug group-hover:text-primary transition-colors line-clamp-1">
                   {project.title}
-                </p>
+                </h3>
                 <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
                   {project.description}
                 </p>

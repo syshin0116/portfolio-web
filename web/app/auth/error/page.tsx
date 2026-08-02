@@ -9,7 +9,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card"
 import { authErrorMessage } from "@/lib/auth-error"
 
@@ -18,12 +17,12 @@ function ErrorContent() {
   const message = authErrorMessage(searchParams.get("error"))
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4">
+    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle className="text-2xl font-bold text-center">
+          <h1 className="text-2xl font-bold text-center">
             로그인 오류
-          </CardTitle>
+          </h1>
           <CardDescription className="text-center">{message}</CardDescription>
         </CardHeader>
         <CardContent className="flex gap-2 pt-4">
@@ -35,7 +34,7 @@ function ErrorContent() {
           </Button>
         </CardContent>
       </Card>
-    </div>
+    </main>
   )
 }
 

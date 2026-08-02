@@ -155,6 +155,9 @@ jobs:
       - name: Exercise the production assistant runtime in a browser
         if: needs.changes.outputs.web == 'true'
         run: bun run test:browser
+      - name: Exercise the real site routes for accessibility and responsive layout
+        if: needs.changes.outputs.web == 'true'
+        run: bun run test:site-browser
       - name: Upload revision-bound browser evidence
         if: always() && needs.changes.outputs.web == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -163,6 +166,8 @@ jobs:
           path: |
             web/playwright-report/${{ github.sha }}
             web/test-results/${{ github.sha }}
+            web/playwright-site-report/${{ github.sha }}
+            web/test-results/site/${{ github.sha }}
           if-no-files-found: error
           retention-days: 14
 

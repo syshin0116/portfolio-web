@@ -14,16 +14,30 @@ const ThemeToggle = () => {
   }, []);
 
   if (!mounted) {
-    return <Button variant="ghost" size="icon" />;
+    return (
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="테마 전환"
+        disabled
+      />
+    );
   }
+
+  const nextTheme = resolvedTheme === "dark" ? "light" : "dark";
 
   return (
     <Button
       variant="ghost"
       size="icon"
-      onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+      aria-label={`${nextTheme === "light" ? "라이트" : "다크"} 모드로 전환`}
+      onClick={() => setTheme(nextTheme)}
     >
-      {resolvedTheme === "dark" ? <SunIcon /> : <MoonIcon />}
+      {resolvedTheme === "dark" ? (
+        <SunIcon aria-hidden="true" />
+      ) : (
+        <MoonIcon aria-hidden="true" />
+      )}
     </Button>
   );
 };

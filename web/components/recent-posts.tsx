@@ -19,9 +19,10 @@ export function RecentPosts() {
         <h2 className="text-xl font-semibold">최근 블로그 포스트</h2>
         <Link
           href="/blog"
+          aria-label="최근 블로그 포스트 전체 보기"
           className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
         >
-          전체 보기 <ArrowRight className="h-3.5 w-3.5" />
+          전체 보기 <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
         </Link>
       </div>
       <ul className="space-y-3">
@@ -30,12 +31,12 @@ export function RecentPosts() {
             <Link href={`/blog/${post.slug}`} className="block group">
               <div className="rounded-lg border bg-card p-4 hover:border-primary/50 transition-colors">
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
-                  <Calendar className="h-3 w-3" />
+                  <Calendar className="h-3 w-3" aria-hidden="true" />
                   {formatDate(post.dateRaw ?? post.date)}
                 </div>
-                <p className="font-medium text-sm leading-snug group-hover:text-primary transition-colors line-clamp-2">
+                <h3 className="font-medium text-sm leading-snug group-hover:text-primary transition-colors line-clamp-2">
                   {post.title}
-                </p>
+                </h3>
                 {post.tags && post.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-2">
                     {post.tags.slice(0, 3).map((tag: string) => (

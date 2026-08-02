@@ -70,7 +70,7 @@ def _permissions(claims: dict[str, Any]) -> list[str]:
 
 @auth.authenticate
 async def authenticate(headers: dict[str, str]) -> Auth.types.MinimalUserDict:
-    """Verify the signed frontend JWT using Aegra 0.9.24's headers contract."""
+    """Verify the signed frontend JWT using Aegra 0.9.25's headers contract."""
     try:
         claims = jwt.decode(
             _bearer_token(headers),
@@ -134,7 +134,7 @@ async def deny_unsafe_core_thread_delete(
     ctx: Auth.types.AuthContext,
     value: Any,
 ) -> bool:
-    """Disable deletion: Aegra 0.9.24 cannot atomically delete metadata/checkpoints."""
+    """Disable deletion: Aegra 0.9.25 cannot atomically delete metadata/checkpoints."""
     del ctx, value
     return False
 

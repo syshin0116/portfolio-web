@@ -854,7 +854,7 @@ protocol_smoke() {
     python scripts/smoke.py \
       --base-url "$base_url" \
       --assistant-id agent \
-      --profile aegra-0.9.24 \
+      --profile aegra-0.9.25 \
       --token-env LIVE_SMOKE_TOKEN \
       --timeout 180
 }

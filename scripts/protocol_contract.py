@@ -738,7 +738,7 @@ def validate_protocol_event(
 
 
 def normalize_aegra_event(payload: dict[str, Any]) -> dict[str, Any]:
-    """Translate the verified Aegra 0.9.24 event dialect at one boundary.
+    """Translate the verified Aegra 0.9.25 event dialect at one boundary.
 
     Aegra emits ``input.requested.params.data.value`` for the stock LangGraph
     SDK. The locked official generated binding calls the same opaque interrupt

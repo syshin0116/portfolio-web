@@ -1776,7 +1776,7 @@ class NativeThreadGuard:
             envelope = build_error(
                 command_id if isinstance(command_id, int) else None,
                 "invalid_argument",
-                "Aegra 0.9.24 does not support input.respond update or goto",
+                "Aegra 0.9.25 does not support input.respond update or goto",
             )
             await _json_response(
                 scope,

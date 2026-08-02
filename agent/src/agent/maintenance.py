@@ -284,7 +284,7 @@ async def reconcile_stale_guest_runs(
 ) -> StaleGuestRunResult:
     """Fail orphaned Redis-off guest runs and release their busy threads.
 
-    Aegra 0.9.24's local executor has no crash reaper. A hard process exit can
+    Aegra 0.9.25's local executor has no crash reaper. A hard process exit can
     therefore leave ``pending``/``running`` runs and ``busy`` threads forever.
     Redis worker rows carry lease state and are deliberately outside this
     project-owned recovery path. ``batch_size`` caps successful reconciliations;

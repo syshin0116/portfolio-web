@@ -129,6 +129,14 @@ def test_openai_executor_pins_exact_sync_and_async_sdk_routing(
     assert model.openai_api_base == OPENAI_API_BASE_URL
     assert "openai_api_base" in model.model_fields_set
     assert "stream_usage" in model.model_fields_set
+    assert model.max_retries == 0
+    assert model.reasoning == {"context": "current_turn", "effort": "none"}
+    assert model.store is False
+    assert model.truncation == "disabled"
+    assert model.cache is False
+    assert model.extra_body == {
+        "safety_identifier": capability_openai._SAFETY_IDENTIFIER
+    }
     for client in (model.root_client, model.root_async_client):
         assert str(client.base_url) == f"{OPENAI_API_BASE_URL}/"
         assert client.organization is None
@@ -200,6 +208,12 @@ def test_openai_identity_derives_exact_luna_contract_and_fresh_execution_ids() -
 
     assert first.model_id == OPENAI_CAPABILITY_MODEL_ID
     assert first.provider_contract == OPENAI_CAPABILITY_PROVIDER_CONTRACT
+    assert first.provider_contract.endswith("langchain-openai-1.3.5:openai-2.52.0")
+    assert capability_openai._EXPECTED_DISTRIBUTIONS == {
+        "deepagents": "0.6.12",
+        "langchain-openai": "1.3.5",
+        "openai": "2.52.0",
+    }
     assert first.execution_id != second.execution_id
     assert UUID(first.execution_id).version == 4
     assert first.cache_mode == "openai-implicit-recorded"

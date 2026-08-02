@@ -1,4 +1,4 @@
-"""Fail-closed checks around Aegra 0.9.24's permissive auth loader."""
+"""Fail-closed checks around Aegra 0.9.25's permissive auth loader."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def _require_auth_handler() -> None:
         or parameters[0].default is not inspect.Parameter.empty
     ):
         raise RuntimeError(
-            "Aegra 0.9.24 authenticate must accept one positional headers mapping"
+            "Aegra 0.9.25 authenticate must accept one positional headers mapping"
         )
 
 

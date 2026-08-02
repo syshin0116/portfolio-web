@@ -512,7 +512,7 @@ async def graph(
     config: RunnableConfig,
     runtime: ServerRuntime[Any],
 ) -> AsyncIterator[Any]:
-    """Aegra 0.9.24 factory: one non-serializable ledger per run/access call."""
+    """Aegra 0.9.25 factory: one non-serializable ledger per run/access call."""
     is_guest = _runtime_is_guest(runtime)
     budget = RunBudget(GUEST_RUN_BUDGET_POLICY) if is_guest else RunBudget()
     quickjs_middleware = BoundedQuickJSMiddleware(

@@ -762,6 +762,7 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
     alice_thread = f"postgres-alice-{unique}"
     bob_thread = f"postgres-bob-{unique}"
     alice_memory_thread = f"postgres-memory-alice-{unique}"
+    alice_memory_overwrite_thread = f"postgres-memory-overwrite-alice-{unique}"
     bob_memory_thread = f"postgres-memory-bob-{unique}"
     budget_thread = f"postgres-budget-{unique}"
     isolation_thread = f"postgres-isolation-{unique}"
@@ -804,6 +805,11 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
         alice_memory_thread,
         alice,
         additional_config={"configurable": {"user_id": "bob"}},
+    )
+    alice_memory_overwrite_config = create_run_config(
+        f"memory-alice-overwrite-{unique}",
+        alice_memory_overwrite_thread,
+        alice,
     )
     bob_memory_config = create_run_config(
         f"memory-bob-{unique}",
@@ -1040,6 +1046,26 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
 
         assert alice_memory_write["result"] == "/memories/preference.txt"
         assert bob_memory_write["result"] == "/memories/preference.txt"
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Cannot write to /preference\.txt because it already exists",
+        ):
+            async with memory_service.get_graph(
+                "memory_fixture",
+                config=alice_memory_overwrite_config,
+                user=alice,
+            ) as alice_memory_graph:
+                await alice_memory_graph.ainvoke(
+                    {"operation": "write", "content": "blind overwrite"},
+                    alice_memory_overwrite_config,
+                )
+        alice_stored_memory = await db_manager.get_store().aget(
+            alice_namespace,
+            "/preference.txt",
+        )
+        assert alice_stored_memory is not None
+        assert alice_stored_memory.value["content"] == "alice-only"
 
         async with memory_service.get_graph(
             "memory_fixture",
@@ -1328,6 +1354,9 @@ Stop after one verdict.
         await db_manager.get_checkpointer().adelete_thread(alice_thread)
         await db_manager.get_checkpointer().adelete_thread(bob_thread)
         await db_manager.get_checkpointer().adelete_thread(alice_memory_thread)
+        await db_manager.get_checkpointer().adelete_thread(
+            alice_memory_overwrite_thread
+        )
         await db_manager.get_checkpointer().adelete_thread(bob_memory_thread)
         await db_manager.get_checkpointer().adelete_thread(budget_thread)
         await db_manager.get_checkpointer().adelete_thread(isolation_thread)

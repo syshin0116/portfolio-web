@@ -27,6 +27,7 @@ from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.profiles.harness.harness_profiles import (
     _harness_profile_for_model,
 )
+from langchain.agents.middleware.todo import WRITE_TODOS_SYSTEM_PROMPT
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
@@ -135,6 +136,15 @@ class PayloadRecordingFakeModel(ToolCapableFakeModel):
             run_manager=run_manager,
             **kwargs,
         )
+
+
+class YieldingInMemoryStore(InMemoryStore):
+    """Force concurrent create attempts to overlap at the read boundary."""
+
+    async def aget(self, namespace, key, *, refresh_ttl=None):
+        item = await super().aget(namespace, key, refresh_ttl=refresh_ttl)
+        await asyncio.sleep(0)
+        return item
 
 
 def _compiled_tool_names(compiled_graph: CompiledStateGraph) -> set[str]:
@@ -1080,7 +1090,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     monkeypatch,
 ):
     monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
-    model = ToolCapableFakeModel(responses=[_openai_final_message("guest answer")])
+    model = PayloadRecordingFakeModel(responses=[_openai_final_message("guest answer")])
     budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
     compiled = create_graph(
         runtime=_guest_runtime(),
@@ -1098,6 +1108,13 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
 
     assert result["messages"][-1].content == "guest answer"
     assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
+    assert len(model.invoked_messages) == 1
+    guest_system_text = "\n".join(
+        block["text"]
+        for block in model.invoked_messages[0][0].content_blocks
+        if block["type"] == "text"
+    )
+    assert WRITE_TODOS_SYSTEM_PROMPT not in guest_system_text
     snapshot = budget.snapshot()
     assert snapshot.policy_id == "anonymous-public-v2"
     assert snapshot.model_calls == 1
@@ -1336,6 +1353,62 @@ async def test_owner_runtime_keeps_reviewed_write_overwrite_and_edit_semantics()
     assert budget.snapshot().tool_calls == 2
 
 
+async def test_persistent_memory_write_is_create_only_and_edit_is_explicit():
+    backend = _build_backend()
+    memory_backend = backend.routes["/memories/"]
+    memory_backend._store = InMemoryStore()
+    memory_backend._namespace = lambda _runtime: (
+        "users",
+        "test-owner",
+        "filesystem",
+    )
+
+    created = await backend.awrite("/memories/profile.txt", "first")
+    overwritten = await backend.awrite("/memories/profile.txt", "blind overwrite")
+    unchanged = await backend.aread("/memories/profile.txt")
+    edited = await backend.aedit(
+        "/memories/profile.txt",
+        "first",
+        "reviewed edit",
+    )
+    updated = await backend.aread("/memories/profile.txt")
+
+    assert created.path == "/memories/profile.txt"
+    assert overwritten.path is None
+    assert overwritten.error is not None
+    assert "already exists" in overwritten.error
+    assert unchanged.file_data is not None
+    assert unchanged.file_data["content"] == "first"
+    assert edited.path == "/memories/profile.txt"
+    assert updated.file_data is not None
+    assert updated.file_data["content"] == "reviewed edit"
+
+
+async def test_persistent_memory_concurrent_creates_have_one_winner():
+    backend = _build_backend()
+    memory_backend = backend.routes["/memories/"]
+    memory_backend._store = YieldingInMemoryStore()
+    memory_backend._namespace = lambda _runtime: (
+        "users",
+        "concurrent-owner",
+        "filesystem",
+    )
+
+    results = await asyncio.gather(
+        backend.awrite("/memories/profile.txt", "first contender"),
+        backend.awrite("/memories/profile.txt", "second contender"),
+    )
+    persisted = await backend.aread("/memories/profile.txt")
+
+    assert sum(result.path is not None for result in results) == 1
+    assert sum(result.error is not None for result in results) == 1
+    assert persisted.file_data is not None
+    assert persisted.file_data["content"] in {
+        "first contender",
+        "second contender",
+    }
+
+
 def test_guest_runtime_rejects_caller_supplied_experiment_root_allowlist(monkeypatch):
     monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
 
@@ -1412,6 +1485,12 @@ async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model
     assert model.bound_tool_names == [counted_tool_names]
     assert {"task", "write_todos", "write_file", "edit_file"} <= counted_tool_names
     assert "delete" not in counted_tool_names
+    owner_system_text = "\n".join(
+        block["text"]
+        for block in counted.system_message.content_blocks
+        if block["type"] == "text"
+    )
+    assert WRITE_TODOS_SYSTEM_PROMPT in owner_system_text
     task_tools = [
         tool
         for tool in counted.tools

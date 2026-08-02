@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -26,6 +27,7 @@ from deepagents.backends import (
     StateBackend,
     StoreBackend,
 )
+from deepagents.backends.protocol import WriteResult
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
@@ -96,6 +98,11 @@ NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
 )
 logger = logging.getLogger(__name__)
 
+# Cloud Run is deliberately constrained to one instance and one application worker.
+# Serialize persistent-memory creates at that server boundary so StoreBackend's
+# get/put pair cannot race after deepagents 0.7 changed write_file to overwrite.
+_PERSISTENT_MEMORY_WRITE_LOCK = threading.Lock()
+
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     policy_id="anonymous-public-v2",
     max_model_calls=4,
@@ -151,6 +158,57 @@ def _memory_namespace(runtime: Runtime[Any]) -> tuple[str, str, str]:
     )
 
 
+async def _acquire_persistent_memory_write_lock() -> None:
+    """Acquire the cross-mode memory lock without blocking the event loop."""
+    acquire_task = asyncio.create_task(
+        asyncio.to_thread(_PERSISTENT_MEMORY_WRITE_LOCK.acquire)
+    )
+    interrupted: asyncio.CancelledError | None = None
+    while not acquire_task.done():
+        try:
+            await asyncio.shield(acquire_task)
+        except asyncio.CancelledError as error:
+            interrupted = error
+
+    acquired = acquire_task.result()
+    if interrupted is not None:
+        if acquired:
+            _PERSISTENT_MEMORY_WRITE_LOCK.release()
+        raise interrupted
+
+
+class CreateOnlyStoreBackend(StoreBackend):
+    """Keep persistent write_file create-only; edit_file remains the update path."""
+
+    @staticmethod
+    def _already_exists(file_path: str) -> WriteResult:
+        return WriteResult(
+            error=(
+                f"Cannot write to {file_path} because it already exists. "
+                "Read and then make an edit, or write to a new path."
+            )
+        )
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        with _PERSISTENT_MEMORY_WRITE_LOCK:
+            store = self._get_store()
+            namespace = self._get_namespace()
+            if store.get(namespace, file_path) is not None:
+                return self._already_exists(file_path)
+            return super().write(file_path, content)
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        await _acquire_persistent_memory_write_lock()
+        try:
+            store = self._get_store()
+            namespace = self._get_namespace()
+            if await store.aget(namespace, file_path) is not None:
+                return self._already_exists(file_path)
+            return await super().awrite(file_path, content)
+        finally:
+            _PERSISTENT_MEMORY_WRITE_LOCK.release()
+
+
 def _build_backend(*, persistent_memory: bool = True) -> CompositeBackend:
     """Build the instance backend used by every Aegra graph copy.
 
@@ -162,7 +220,7 @@ def _build_backend(*, persistent_memory: bool = True) -> CompositeBackend:
         "/skills/": FilesystemBackend(root_dir=SKILLS_DIR, virtual_mode=True),
     }
     if persistent_memory:
-        routes["/memories/"] = StoreBackend(namespace=_memory_namespace)
+        routes["/memories/"] = CreateOnlyStoreBackend(namespace=_memory_namespace)
     return CompositeBackend(default=StateBackend(), routes=routes)
 
 
@@ -445,13 +503,16 @@ def create_graph(
     system_prompt = GUEST_SYSTEM_PROMPT if is_guest else SYSTEM_PROMPT
     if allow_subagents:
         system_prompt = f"{system_prompt}\n\n{SUBAGENT_ROOT_PROMPT}"
+    todo_middleware = (
+        TodoListMiddleware(system_prompt="") if is_guest else TodoListMiddleware()
+    )
 
     compiled = create_deep_agent(
         model=selected_model,
         tools=TOOLS,
         system_prompt=system_prompt,
         middleware=[
-            TodoListMiddleware(),
+            todo_middleware,
             quickjs_middleware,
             RunBudgetMiddleware(
                 run_budget,

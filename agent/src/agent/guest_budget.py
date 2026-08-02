@@ -21,7 +21,7 @@ _OPENAI_GUEST_OUTPUT_USD_MICROS_PER_MILLION_TOKENS = 1_200_000
 _OPENAI_GUEST_MAX_MODEL_CALLS = 4
 _OPENAI_GUEST_MAX_OUTPUT_TOKENS_PER_CALL = 1_024
 _OPENAI_GUEST_MAX_TOTAL_TOKENS = 12_000
-_OPENAI_GUEST_INPUT_BILLING_COPIES = 2
+_OPENAI_GUEST_MAX_COUNT_RISK_TOKENS_PER_RUN = 48_000
 
 _RESERVE_GUEST_BUDGET_SQL = text(
     """
@@ -93,19 +93,25 @@ def minimum_guest_run_reservation_micro_usd(
     max_model_calls: int,
     max_output_tokens: int,
     max_total_tokens: int,
+    max_count_risk_tokens: int,
 ) -> int:
     """Return the conservative gpt-5.6-luna accounting reserve for one run.
 
-    The public guest path sends the same token-bearing input once to the official
-    input-token count endpoint and once to generation.  Until OpenAI documents the
-    count endpoint's billing semantics, reserve both copies at Luna's most expensive
-    input bucket.  Output remains more expensive than both input copies combined, so
-    the maximum output reservation is the worst point under the shared token budget.
+    Generation uses the exact 12k token ledger. Count requests use a separate 48k
+    aggregate risk ledger because their conservative preflight reservation is based
+    on payload bytes, not the exact count returned after provider I/O. Until OpenAI
+    documents count billing, price the full risk ledger at Luna's most expensive
+    input bucket in addition to the worst generation allocation.
     """
-    values = (max_model_calls, max_output_tokens, max_total_tokens)
+    values = (
+        max_model_calls,
+        max_output_tokens,
+        max_total_tokens,
+        max_count_risk_tokens,
+    )
     if any(not isinstance(value, int) or isinstance(value, bool) for value in values):
         raise TypeError("guest run limits must be integers")
-    if max_model_calls < 1 or max_output_tokens < 1 or max_total_tokens < 1:
+    if any(value < 1 for value in values):
         raise ValueError("guest run limits must be positive")
     output_tokens = max_model_calls * max_output_tokens
     if output_tokens > max_total_tokens:
@@ -121,9 +127,8 @@ def minimum_guest_run_reservation_micro_usd(
         _OPENAI_GUEST_CACHE_WRITE_USD_MICROS_PER_MILLION_TOKENS,
     )
     numerator = (
-        input_tokens * input_rate * _OPENAI_GUEST_INPUT_BILLING_COPIES
-        + output_tokens * _OPENAI_GUEST_OUTPUT_USD_MICROS_PER_MILLION_TOKENS
-    )
+        input_tokens + max_count_risk_tokens
+    ) * input_rate + output_tokens * _OPENAI_GUEST_OUTPUT_USD_MICROS_PER_MILLION_TOKENS
     return (numerator + _MICRO_USD_PER_USD - 1) // _MICRO_USD_PER_USD
 
 
@@ -131,6 +136,7 @@ GUEST_MIN_RUN_RESERVATION_MICRO_USD = minimum_guest_run_reservation_micro_usd(
     max_model_calls=_OPENAI_GUEST_MAX_MODEL_CALLS,
     max_output_tokens=_OPENAI_GUEST_MAX_OUTPUT_TOKENS_PER_CALL,
     max_total_tokens=_OPENAI_GUEST_MAX_TOTAL_TOKENS,
+    max_count_risk_tokens=_OPENAI_GUEST_MAX_COUNT_RISK_TOKENS_PER_RUN,
 )
 
 

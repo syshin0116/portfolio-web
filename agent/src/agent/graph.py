@@ -94,7 +94,7 @@ NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
 logger = logging.getLogger(__name__)
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="anonymous-public-v1",
+    policy_id="anonymous-public-v2",
     max_model_calls=4,
     max_tool_calls=8,
     max_quickjs_calls=1,
@@ -106,6 +106,8 @@ GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     max_depth=1,
     max_output_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
     max_total_tokens=12_000,
+    max_count_risk_tokens_per_attempt=48_000,
+    max_count_risk_tokens_per_run=48_000,
     max_elapsed_seconds=GUEST_RUN_MAX_ELAPSED_SECONDS,
 )
 _GUEST_ROOT_TOOL_ORDER = (
@@ -575,7 +577,7 @@ async def graph(
         logger.debug(
             (
                 "run budget observed policy=%s model=%d tool=%d quickjs=%d "
-                "task=%d tokens=%d"
+                "task=%d tokens=%d count_risk=%d"
             ),
             snapshot.policy_id,
             snapshot.model_calls,
@@ -583,6 +585,7 @@ async def graph(
             snapshot.quickjs_calls,
             snapshot.task_calls,
             snapshot.charged_tokens,
+            snapshot.count_risk_tokens,
         )
 
 

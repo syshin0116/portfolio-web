@@ -75,6 +75,8 @@ OPENAI_CAPABILITY_POLICY = RunBudgetPolicy(
     max_depth=1,
     max_output_tokens=1_024,
     max_total_tokens=48_000,
+    max_count_risk_tokens_per_attempt=48_000,
+    max_count_risk_tokens_per_run=48_000,
     max_elapsed_seconds=90,
 )
 _EXPECTED_DISTRIBUTIONS = {

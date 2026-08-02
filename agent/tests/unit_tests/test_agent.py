@@ -246,6 +246,9 @@ def test_guest_accounting_floor_tracks_the_runtime_policy():
             max_model_calls=GUEST_RUN_BUDGET_POLICY.max_model_calls,
             max_output_tokens=GUEST_RUN_BUDGET_POLICY.max_output_tokens,
             max_total_tokens=GUEST_RUN_BUDGET_POLICY.max_total_tokens,
+            max_count_risk_tokens=(
+                GUEST_RUN_BUDGET_POLICY.max_count_risk_tokens_per_run
+            ),
         )
         == GUEST_MIN_RUN_RESERVATION_MICRO_USD
     )
@@ -1096,7 +1099,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     assert result["messages"][-1].content == "guest answer"
     assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
     snapshot = budget.snapshot()
-    assert snapshot.policy_id == "anonymous-public-v1"
+    assert snapshot.policy_id == "anonymous-public-v2"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
 
@@ -1744,7 +1747,7 @@ Stop after the first supported DocId.
     snapshot = asdict(budget.snapshot())
     snapshot.pop("elapsed_ms")
     assert snapshot == {
-        "policy_id": "owner-capability-lab-v2",
+        "policy_id": "owner-capability-lab-v3",
         "model_calls": 3,
         "model_reservations_in_flight": 0,
         "tool_calls": 1,
@@ -1754,6 +1757,8 @@ Stop after the first supported DocId.
         "task_calls": 1,
         "tasks_in_flight": 0,
         "charged_tokens": 30,
+        "count_risk_tokens": 0,
+        "count_risk_tokens_in_flight": 0,
         "provider_input_tokens": None,
         "provider_output_tokens": None,
         "provider_cache_read_input_tokens": None,

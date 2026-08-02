@@ -70,6 +70,8 @@ class RunBudgetPolicy:
     max_depth: int
     max_output_tokens: int
     max_total_tokens: int
+    max_count_risk_tokens_per_attempt: int
+    max_count_risk_tokens_per_run: int
     max_elapsed_seconds: int
 
     def __post_init__(self) -> None:
@@ -85,6 +87,8 @@ class RunBudgetPolicy:
             self.max_depth,
             self.max_output_tokens,
             self.max_total_tokens,
+            self.max_count_risk_tokens_per_attempt,
+            self.max_count_risk_tokens_per_run,
             self.max_elapsed_seconds,
         )
         if (
@@ -95,13 +99,15 @@ class RunBudgetPolicy:
                 for value in integer_limits
             )
             or self.max_output_tokens > self.max_total_tokens
+            or self.max_count_risk_tokens_per_attempt
+            > self.max_count_risk_tokens_per_run
             or self.max_quickjs_output_bytes > self.max_quickjs_total_output_bytes
         ):
             raise ValueError("run budget policy limits must be positive and coherent")
 
 
 DEFAULT_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="owner-capability-lab-v2",
+    policy_id="owner-capability-lab-v3",
     max_model_calls=12,
     max_tool_calls=24,
     max_quickjs_calls=4,
@@ -113,6 +119,8 @@ DEFAULT_RUN_BUDGET_POLICY = RunBudgetPolicy(
     max_depth=1,
     max_output_tokens=2_048,
     max_total_tokens=48_000,
+    max_count_risk_tokens_per_attempt=48_000,
+    max_count_risk_tokens_per_run=48_000,
     max_elapsed_seconds=90,
 )
 
@@ -178,8 +186,10 @@ class BudgetSnapshot:
 
     Provider buckets are populated only when every settled model call carried
     complete provider metadata; otherwise all four are ``None`` and
-    ``provider_usage_complete`` is false. Only :meth:`RunBudget.finalize`
-    produces ``finalized=True``.
+    ``provider_usage_complete`` is false. ``count_risk_tokens`` records exact
+    successful counts plus conservative reservations retained by failed count
+    attempts; ``count_risk_tokens_in_flight`` is the still-open subset. Only
+    :meth:`RunBudget.finalize` produces ``finalized=True``.
     """
 
     policy_id: str
@@ -192,6 +202,8 @@ class BudgetSnapshot:
     task_calls: int
     tasks_in_flight: int
     charged_tokens: int
+    count_risk_tokens: int
+    count_risk_tokens_in_flight: int
     provider_input_tokens: int | None
     provider_output_tokens: int | None
     provider_cache_read_input_tokens: int | None
@@ -211,13 +223,14 @@ class RunBudget:
 
     __slots__ = (
         "_charged_tokens",
+        "_charged_count_risk_tokens",
         "_clock",
         "_exhausted",
         "_finalized_snapshot",
         "_ledger_id",
         "_lock",
         "_model_calls",
-        "_model_input_upper_bounds",
+        "_model_count_risk_reservations",
         "_model_reservations_needing_input",
         "_next_reservation_id",
         "_next_quickjs_reservation_id",
@@ -262,10 +275,11 @@ class RunBudget:
         self._task_calls = 0
         self._tasks_in_flight = 0
         self._charged_tokens = 0
+        self._charged_count_risk_tokens = 0
         self._next_reservation_id = 0
         self._open_model_reservations: dict[int, int] = {}
         self._model_reservations_needing_input: set[int] = set()
-        self._model_input_upper_bounds: dict[int, int] = {}
+        self._model_count_risk_reservations: dict[int, int] = {}
         self._next_quickjs_reservation_id = 0
         self._open_quickjs_reservations: dict[int, int] = {}
         self._next_task_reservation_id = 0
@@ -353,12 +367,12 @@ class RunBudget:
         input_upper_bound: int | None = None,
         task_reservation: TaskReservation | None = None,
     ) -> ModelReservation:
-        """Reserve output and an optional local input bound before remote count.
+        """Reserve actual output and optional count risk before remote count.
 
         ``None`` preserves the exact-count extension flow used by providers whose
-        count endpoint is not part of the billable request envelope. An integer
-        reserves output plus that input amount atomically; settlement may only
-        shrink the input tranche after the provider returns an exact count.
+        preparer is absent. An integer atomically reserves that amount in the
+        separate count-risk ledger while output stays in the actual token ledger;
+        settlement may only shrink risk after an exact count and parity check.
         """
         with self._lock:
             self._require_active_locked()
@@ -372,7 +386,14 @@ class RunBudget:
             if self._model_calls >= self._policy.max_model_calls:
                 self._exhausted = True
                 raise RunBudgetExceededError("model-call budget exhausted")
-            reserved = self._policy.max_output_tokens + (input_upper_bound or 0)
+            if input_upper_bound is not None and (
+                input_upper_bound > self._policy.max_count_risk_tokens_per_attempt
+                or self._charged_count_risk_tokens + input_upper_bound
+                > self._policy.max_count_risk_tokens_per_run
+            ):
+                self._exhausted = True
+                raise RunBudgetExceededError("input count-risk budget exhausted")
+            reserved = self._policy.max_output_tokens
             additional_charge = reserved - task_tranche
             if self._charged_tokens + additional_charge > self._policy.max_total_tokens:
                 self._exhausted = True
@@ -392,7 +413,8 @@ class RunBudget:
             self._open_model_reservations[reservation.reservation_id] = reserved
             self._model_reservations_needing_input.add(reservation.reservation_id)
             if input_upper_bound is not None:
-                self._model_input_upper_bounds[reservation.reservation_id] = (
+                self._charged_count_risk_tokens += input_upper_bound
+                self._model_count_risk_reservations[reservation.reservation_id] = (
                     input_upper_bound
                 )
             return reservation
@@ -430,7 +452,7 @@ class RunBudget:
                 or input_tokens < 0
             ):
                 raise ValueError("input_tokens must be a non-negative integer")
-            input_upper_bound = self._model_input_upper_bounds.get(
+            input_upper_bound = self._model_count_risk_reservations.get(
                 reservation.reservation_id
             )
             if input_upper_bound is None:
@@ -444,24 +466,28 @@ class RunBudget:
                 reserved = reservation.reserved_tokens + input_tokens
                 self._charged_tokens += input_tokens
             else:
-                if (
-                    reservation.reserved_tokens
-                    != self._policy.max_output_tokens + input_upper_bound
-                ):
+                if reservation.reserved_tokens != self._policy.max_output_tokens:
                     raise RuntimeError(
-                        "bounded model attempt has an invalid input tranche"
+                        "count-risk model attempt has an invalid output tranche"
                     )
                 if input_tokens > input_upper_bound:
                     self._exhausted = True
                     raise RunBudgetExceededError(
                         "provider input count exceeded the local reservation"
                     )
+                if self._charged_tokens + input_tokens > self._policy.max_total_tokens:
+                    self._exhausted = True
+                    raise RunBudgetExceededError("token budget exhausted")
                 refund = input_upper_bound - input_tokens
-                reserved = reservation.reserved_tokens - refund
-                self._charged_tokens -= refund
+                reserved = reservation.reserved_tokens + input_tokens
+                self._charged_tokens += input_tokens
+                self._charged_count_risk_tokens -= refund
             self._open_model_reservations[reservation.reservation_id] = reserved
             self._model_reservations_needing_input.remove(reservation.reservation_id)
-            self._model_input_upper_bounds.pop(reservation.reservation_id, None)
+            self._model_count_risk_reservations.pop(
+                reservation.reservation_id,
+                None,
+            )
             return ModelReservation(
                 reservation.reservation_id,
                 reserved,
@@ -580,7 +606,10 @@ class RunBudget:
                 raise RuntimeError("model reservation is unknown or already settled")
             del self._open_model_reservations[reservation.reservation_id]
             self._model_reservations_needing_input.discard(reservation.reservation_id)
-            self._model_input_upper_bounds.pop(reservation.reservation_id, None)
+            self._model_count_risk_reservations.pop(
+                reservation.reservation_id,
+                None,
+            )
             if needs_input and (
                 actual_tokens is not None or provider_usage is not None
             ):
@@ -834,6 +863,14 @@ class RunBudget:
                 self._charged_tokens,
                 self._policy.max_total_tokens,
             ),
+            count_risk_tokens=min(
+                self._charged_count_risk_tokens,
+                self._policy.max_count_risk_tokens_per_run,
+            ),
+            count_risk_tokens_in_flight=min(
+                sum(self._model_count_risk_reservations.values()),
+                self._policy.max_count_risk_tokens_per_run,
+            ),
             provider_input_tokens=provider_input_tokens,
             provider_output_tokens=provider_output_tokens,
             provider_cache_read_input_tokens=provider_cache_read_input_tokens,
@@ -870,6 +907,23 @@ class RunBudget:
             open_models = len(self._open_model_reservations)
             open_quickjs = len(self._open_quickjs_reservations)
             open_tasks = len(self._open_task_reservations)
+            count_risk_reservation_ids = set(self._model_count_risk_reservations)
+            if (
+                not count_risk_reservation_ids.issubset(
+                    self._model_reservations_needing_input
+                )
+                or not count_risk_reservation_ids.issubset(
+                    self._open_model_reservations
+                )
+                or self._charged_count_risk_tokens
+                < sum(self._model_count_risk_reservations.values())
+                or self._charged_count_risk_tokens
+                > self._policy.max_count_risk_tokens_per_run
+            ):
+                self._exhausted = True
+                raise RunBudgetUnsettledError(
+                    "run budget count-risk ledger is inconsistent"
+                )
             if open_models or open_quickjs or open_tasks:
                 raise RunBudgetUnsettledError(
                     "run budget has "

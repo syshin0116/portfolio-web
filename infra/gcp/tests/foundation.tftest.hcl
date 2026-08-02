@@ -456,7 +456,7 @@ run "foundation_security_contract" {
         AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"
         GUEST_DAILY_BUDGET_MICRO_USD    = "500000"
         GUEST_MODEL                     = "openai:gpt-5.6-luna"
-        GUEST_RUN_RESERVATION_MICRO_USD = "6892"
+        GUEST_RUN_RESERVATION_MICRO_USD = "18892"
       }
     }
     error_message = "Production must atomically enable the reviewed Luna guest budget while Preview remains fail closed and unpriced."
@@ -488,7 +488,7 @@ run "foundation_security_contract" {
           AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"
           GUEST_DAILY_BUDGET_MICRO_USD    = "500000"
           GUEST_MODEL                     = "openai:gpt-5.6-luna"
-          GUEST_RUN_RESERVATION_MICRO_USD = "6892"
+          GUEST_RUN_RESERVATION_MICRO_USD = "18892"
         }
       }
     )

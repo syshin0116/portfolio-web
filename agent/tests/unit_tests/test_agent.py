@@ -67,6 +67,7 @@ from agent.capabilities.token_counting import (
     InputTokenCountError,
     _require_exact_openai_guest_model,
     openai_guest_safety_identifier,
+    prepare_openai_input_token_count,
 )
 from agent.graph import (
     DEFAULT_MODEL,
@@ -90,7 +91,7 @@ from agent.graph import (
 )
 from agent.guest_budget import (
     GUEST_MIN_RUN_RESERVATION_MICRO_USD,
-    minimum_guest_generation_cost_micro_usd,
+    minimum_guest_run_reservation_micro_usd,
 )
 from agent.inspection import InspectionEventTransformer
 from agent.run_liveness import GuestExecutionFenceUnavailableError
@@ -239,12 +240,15 @@ async def _exact_openai_test_input_tokens(_request) -> int:
     return 1
 
 
-def test_guest_generation_cost_floor_tracks_the_runtime_policy():
+def test_guest_accounting_floor_tracks_the_runtime_policy():
     assert (
-        minimum_guest_generation_cost_micro_usd(
+        minimum_guest_run_reservation_micro_usd(
             max_model_calls=GUEST_RUN_BUDGET_POLICY.max_model_calls,
             max_output_tokens=GUEST_RUN_BUDGET_POLICY.max_output_tokens,
             max_total_tokens=GUEST_RUN_BUDGET_POLICY.max_total_tokens,
+            max_count_risk_tokens=(
+                GUEST_RUN_BUDGET_POLICY.max_count_risk_tokens_per_run
+            ),
         )
         == GUEST_MIN_RUN_RESERVATION_MICRO_USD
     )
@@ -893,6 +897,8 @@ def test_guest_and_owner_graphs_route_distinct_server_owned_counters(monkeypatch
     assert owner_middleware._model_provider == "anthropic"
     assert owner_middleware._expected_response_models == frozenset()
     assert owner_middleware._root_tool_allowlist is None
+    assert guest_middleware._input_token_count_preparer is None
+    assert owner_middleware._input_token_count_preparer is None
     assert captured[0]["skills"] == []
     assert captured[1]["skills"] == ["/skills/"]
     guest_prompt = captured[0]["system_prompt"]
@@ -900,6 +906,41 @@ def test_guest_and_owner_graphs_route_distinct_server_owned_counters(monkeypatch
     assert "keyword_search" in guest_prompt
     assert "no mounted skill" in guest_prompt
     assert "Use the mounted blog-retrieval skill" not in guest_prompt
+
+
+def test_real_openai_guest_graph_wires_atomic_count_preparation(monkeypatch):
+    captured = []
+    compiled = SimpleNamespace(stream_transformers=())
+    compiled.copy = lambda *, update: SimpleNamespace(**update)
+
+    def capture_deep_agent(**kwargs):
+        captured.append(kwargs)
+        return compiled
+
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-guest-construction-key")
+    monkeypatch.setattr("agent.graph.create_deep_agent", capture_deep_agent)
+    monkeypatch.setattr("agent.graph.build_subagents", lambda **_kwargs: [])
+    safety_identifier = openai_guest_safety_identifier(
+        "anon:00000000-0000-4000-8000-000000000001"
+    )
+    _bounded_guest_model.cache_clear()
+    try:
+        model = _bounded_guest_model(OPENAI_GUEST_MODEL_SPEC, safety_identifier)
+        create_graph(
+            runtime=_guest_runtime(),
+            config={"configurable": {"thread_id": "guest-atomic-count"}},
+            model=model,
+            budget=RunBudget(GUEST_RUN_BUDGET_POLICY),
+        )
+    finally:
+        _bounded_guest_model.cache_clear()
+
+    middleware = captured[0]["middleware"][-1]
+    assert isinstance(middleware, RunBudgetMiddleware)
+    assert middleware._input_token_count_preparer is prepare_openai_input_token_count
 
 
 def test_guest_root_tool_contract_is_literal_ordered_unique_and_exact():
@@ -1058,7 +1099,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     assert result["messages"][-1].content == "guest answer"
     assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
     snapshot = budget.snapshot()
-    assert snapshot.policy_id == "anonymous-public-v1"
+    assert snapshot.policy_id == "anonymous-public-v2"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
 
@@ -1706,7 +1747,7 @@ Stop after the first supported DocId.
     snapshot = asdict(budget.snapshot())
     snapshot.pop("elapsed_ms")
     assert snapshot == {
-        "policy_id": "owner-capability-lab-v2",
+        "policy_id": "owner-capability-lab-v3",
         "model_calls": 3,
         "model_reservations_in_flight": 0,
         "tool_calls": 1,
@@ -1716,6 +1757,8 @@ Stop after the first supported DocId.
         "task_calls": 1,
         "tasks_in_flight": 0,
         "charged_tokens": 30,
+        "count_risk_tokens": 0,
+        "count_risk_tokens_in_flight": 0,
         "provider_input_tokens": None,
         "provider_output_tokens": None,
         "provider_cache_read_input_tokens": None,

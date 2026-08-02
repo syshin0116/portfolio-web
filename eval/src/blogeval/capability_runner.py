@@ -118,6 +118,8 @@ _CAPABILITY_POLICY_MAXIMA = {
     "max_depth": 1,
     "max_output_tokens": 2_048,
     "max_total_tokens": 48_000,
+    "max_count_risk_tokens_per_attempt": 48_000,
+    "max_count_risk_tokens_per_run": 48_000,
     "max_elapsed_seconds": 90,
 }
 _FAILURE_CODES = frozenset(
@@ -2283,6 +2285,14 @@ def _parse_budget(
             raw["charged_tokens"],
             location=f"{location}.charged_tokens",
         ),
+        count_risk_tokens=_integer(
+            raw["count_risk_tokens"],
+            location=f"{location}.count_risk_tokens",
+        ),
+        count_risk_tokens_in_flight=_integer(
+            raw["count_risk_tokens_in_flight"],
+            location=f"{location}.count_risk_tokens_in_flight",
+        ),
         provider_input_tokens=_optional_integer(
             raw["provider_input_tokens"],
             location=f"{location}.provider_input_tokens",
@@ -2317,6 +2327,8 @@ def _parse_budget(
         "task_calls": policy.max_task_calls,
         "tasks_in_flight": policy.max_tasks_in_flight,
         "charged_tokens": policy.max_total_tokens,
+        "count_risk_tokens": policy.max_count_risk_tokens_per_run,
+        "count_risk_tokens_in_flight": policy.max_count_risk_tokens_per_run,
     }
     if (
         snapshot.policy_id != policy.policy_id

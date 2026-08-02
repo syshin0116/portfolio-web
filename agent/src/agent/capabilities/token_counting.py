@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -46,6 +46,12 @@ OPENAI_ROUTING_ENVIRONMENT_VARIABLES = frozenset(
 )
 _OPENAI_CAPTURE_API_KEY = "capture-only-no-provider-request"
 _OPENAI_CAPTURE_MAX_BODY_BYTES = 1024 * 1024
+# This is a deliberately conservative local admission heuristic, not a provider
+# tokenization guarantee. OpenAI does not publish a hard maximum for hidden
+# Responses framing, so public launch still requires provider billing evidence
+# and an account-level hard spend stop.
+_OPENAI_INPUT_TOKEN_FRAMING_TOKENS_PER_JSON_NODE = 8
+_OPENAI_INPUT_TOKEN_FIXED_FRAMING_TOKENS = 256
 _OPENAI_GUEST_MODEL_FIELDS_SET = frozenset(
     {
         "async_client",
@@ -103,6 +109,101 @@ class InputTokenCountError(RuntimeError):
 
 
 type InputTokenCounter = Callable[[ModelRequest[Any]], Awaitable[int]]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedInputTokenCount:
+    """One locally prepared provider count with a conservative reservation.
+
+    Preparation must perform no provider I/O. The run ledger atomically reserves
+    ``reserved_input_tokens`` before ``count`` may make a billable request.
+    """
+
+    reserved_input_tokens: int
+    _count: Callable[[], Awaitable[int]] = field(repr=False)
+    _verify_generation_request: Callable[[ModelRequest[Any]], Awaitable[None]] = field(
+        repr=False
+    )
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.reserved_input_tokens, int)
+            or isinstance(self.reserved_input_tokens, bool)
+            or self.reserved_input_tokens < 0
+            or not callable(self._count)
+            or not callable(self._verify_generation_request)
+        ):
+            raise ValueError("prepared input count must have a valid reservation")
+
+    async def count(self) -> int:
+        """Execute the already-prepared provider count request exactly once."""
+        return await self._count()
+
+    async def verify_generation_request(self, request: ModelRequest[Any]) -> None:
+        """Fail if the final token-bearing generation request drifted."""
+        await self._verify_generation_request(request)
+
+
+type InputTokenCountPreparer = Callable[
+    [ModelRequest[Any]], Awaitable[PreparedInputTokenCount]
+]
+
+
+def _json_node_count(value: Any) -> int:
+    if isinstance(value, dict):
+        return 1 + len(value) + sum(_json_node_count(item) for item in value.values())
+    if isinstance(value, list):
+        return 1 + sum(_json_node_count(item) for item in value)
+    return 1
+
+
+def _canonical_openai_input_payload(payload: dict[str, Any]) -> bytes:
+    """Return one deterministic byte representation of token-bearing fields."""
+    try:
+        return json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise InputTokenCountError(
+            "OpenAI input-count payload cannot be bounded as canonical JSON"
+        ) from exc
+
+
+def _openai_input_token_reservation(payload: dict[str, Any]) -> int:
+    """Return the reviewed local admission reservation for one count payload.
+
+    The value is intentionally larger than visible canonical bytes, but it is a
+    defense-in-depth heuristic rather than a documented provider upper bound.
+    """
+    canonical = _canonical_openai_input_payload(payload)
+    nodes = _json_node_count(payload)
+    return (
+        len(canonical)
+        + nodes * _OPENAI_INPUT_TOKEN_FRAMING_TOKENS_PER_JSON_NODE
+        + _OPENAI_INPUT_TOKEN_FIXED_FRAMING_TOKENS
+    )
+
+
+def _validated_openai_input_token_count(
+    token_count: object,
+    *,
+    reserved_input_tokens: int,
+) -> int:
+    if (
+        not isinstance(token_count, int)
+        or isinstance(token_count, bool)
+        or token_count < 0
+    ):
+        raise InputTokenCountError("OpenAI returned a malformed input token count")
+    if token_count > reserved_input_tokens:
+        raise InputTokenCountError(
+            "OpenAI input token count exceeded the conservative local reservation"
+        )
+    return token_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,6 +672,78 @@ async def _count_openai_responses_input_tokens(
     return response.input_tokens
 
 
+async def _prepare_openai_input_token_count(
+    request: ModelRequest[Any],
+    *,
+    contract: OpenAIResponsesInputTokenContract | None = None,
+) -> PreparedInputTokenCount:
+    """Capture one immutable count payload without provider I/O."""
+    generation_payload = await _capture_openai_generation_payload(
+        request,
+        contract=contract,
+    )
+    count_payload = _openai_input_count_payload(
+        generation_payload,
+        contract=contract,
+    )
+    canonical_count_payload = _canonical_openai_input_payload(count_payload)
+    reserved_input_tokens = _openai_input_token_reservation(count_payload)
+    prepared_request = request
+    count_started = False
+
+    async def count() -> int:
+        nonlocal count_started
+        if count_started:
+            raise InputTokenCountError(
+                "prepared OpenAI input-count request was already attempted"
+            )
+        count_started = True
+        replayed_payload = json.loads(canonical_count_payload)
+        if not isinstance(replayed_payload, dict):
+            raise InputTokenCountError(
+                "prepared OpenAI input-count payload is not an object"
+            )
+        token_count = await _count_openai_responses_input_tokens(replayed_payload)
+        return _validated_openai_input_token_count(
+            token_count,
+            reserved_input_tokens=reserved_input_tokens,
+        )
+
+    async def verify_generation_request(candidate: ModelRequest[Any]) -> None:
+        if candidate is not prepared_request:
+            raise InputTokenCountError(
+                "OpenAI generation request object changed after input counting"
+            )
+        replayed_generation_payload = await _capture_openai_generation_payload(
+            candidate,
+            contract=contract,
+        )
+        replayed_count_payload = _openai_input_count_payload(
+            replayed_generation_payload,
+            contract=contract,
+        )
+        if (
+            _canonical_openai_input_payload(replayed_count_payload)
+            != canonical_count_payload
+        ):
+            raise InputTokenCountError(
+                "OpenAI token-bearing generation payload changed after input counting"
+            )
+
+    return PreparedInputTokenCount(
+        reserved_input_tokens=reserved_input_tokens,
+        _count=count,
+        _verify_generation_request=verify_generation_request,
+    )
+
+
+async def prepare_openai_input_token_count(
+    request: ModelRequest[Any],
+) -> PreparedInputTokenCount:
+    """Prepare the exact guest Responses count before any provider request."""
+    return await _prepare_openai_input_token_count(request)
+
+
 async def count_openai_input_tokens(request: ModelRequest[Any]) -> int:
     """Count the exact Responses payload, including final function schemas.
 
@@ -579,17 +752,13 @@ async def count_openai_input_tokens(request: ModelRequest[Any]) -> int:
     ChatOpenAI bind/invoke path is replayed through a no-network transport,
     then only the official input-count endpoint receives the captured
     token-bearing fields. Any new wire field fails closed until reviewed.
+
+    The run-budget middleware uses :func:`prepare_openai_input_token_count` so
+    its local reservation is atomic before this provider call. This direct
+    helper remains available for exact-count tests and non-budgeted callers.
     """
-    generation_payload = await _capture_openai_generation_payload(request)
-    count_payload = _openai_input_count_payload(generation_payload)
-    token_count = await _count_openai_responses_input_tokens(count_payload)
-    if (
-        not isinstance(token_count, int)
-        or isinstance(token_count, bool)
-        or token_count < 0
-    ):
-        raise InputTokenCountError("OpenAI returned a malformed input token count")
-    return token_count
+    prepared = await prepare_openai_input_token_count(request)
+    return await prepared.count()
 
 
 def openai_responses_input_token_counter(
@@ -600,22 +769,11 @@ def openai_responses_input_token_counter(
         raise TypeError("contract must be an OpenAIResponsesInputTokenContract")
 
     async def count(request: ModelRequest[Any]) -> int:
-        generation_payload = await _capture_openai_generation_payload(
+        prepared = await _prepare_openai_input_token_count(
             request,
             contract=contract,
         )
-        count_payload = _openai_input_count_payload(
-            generation_payload,
-            contract=contract,
-        )
-        token_count = await _count_openai_responses_input_tokens(count_payload)
-        if (
-            not isinstance(token_count, int)
-            or isinstance(token_count, bool)
-            or token_count < 0
-        ):
-            raise InputTokenCountError("OpenAI returned a malformed input token count")
-        return token_count
+        return await prepared.count()
 
     return count
 
@@ -667,6 +825,7 @@ async def count_anthropic_input_tokens(request: ModelRequest[Any]) -> int:
 __all__ = [
     "InputTokenCountError",
     "InputTokenCounter",
+    "InputTokenCountPreparer",
     "OpenAIResponsesInputTokenContract",
     "OPENAI_API_BASE_URL",
     "OPENAI_GUEST_MAX_OUTPUT_TOKENS",
@@ -677,10 +836,12 @@ __all__ = [
     "OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX",
     "OPENAI_GUEST_TIMEOUT_SECONDS",
     "OPENAI_ROUTING_ENVIRONMENT_VARIABLES",
+    "PreparedInputTokenCount",
     "count_anthropic_input_tokens",
     "count_openai_input_tokens",
     "openai_guest_safety_identifier",
     "openai_responses_input_token_counter",
+    "prepare_openai_input_token_count",
     "require_exact_openai_guest_model",
     "require_exact_openai_responses_model",
     "require_official_openai_routing",

@@ -163,8 +163,13 @@ environment is rejected.
 ## Secret Manager payloads
 
 The foundation owns four runtime secrets for Preview and five for Production. The
-owner/evaluation model remains Anthropic; only Production adds the numeric-version-pinned
-`openai-api-key` required by the reviewed Luna guest tuple. Preview owns no OpenAI
+owner/evaluation model remains Anthropic; only Production uses the exact
+`openai:gpt-5.6-luna / 500000 / 18892` guest tuple and adds the numeric-version-pinned
+`openai-api-key`. The run reservation combines the 6,892 µUSD worst generation
+allocation with the separate 48,000-token aggregate count-risk ledger priced at Luna's
+highest input bucket (12,000 µUSD). This is not a documented count-endpoint price,
+hidden-token bound, or provider hard cap, so the public billing and account-stop gates
+remain closed. Preview owns no OpenAI
 credential. Add one separate migration URL secret per environment:
 
 ```text
@@ -552,6 +557,12 @@ secret references. A revision from the wrong repository or service, an alias suc
 `latest`, a different service account, or a non-ready revision fails before traffic
 changes. The workflow then runs health/auth and the two-turn APv2 smoke, and restores the
 previous revision automatically if that smoke fails.
+
+Production rollback also verifies the exact `openai:gpt-5.6-luna / 500000 / 18892`
+guest tuple. A revision carrying either the generation-only 6,892 µUSD reservation or
+the superseded 8,868 µUSD duplicate-input reservation is not an eligible rollback
+target; close guest issuance and deploy a reviewed replacement instead of weakening the
+provider-cost boundary during recovery.
 
 Database migrations must remain compatible with one previous application revision.
 Rollback changes traffic only; it does not reverse a Neon migration or secret version.

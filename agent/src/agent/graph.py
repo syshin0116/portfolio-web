@@ -65,6 +65,7 @@ from agent.capabilities.token_counting import (
     count_anthropic_input_tokens,
     count_openai_input_tokens,
     openai_guest_safety_identifier,
+    prepare_openai_input_token_count,
     require_exact_openai_guest_model,
     require_official_openai_routing,
     require_openai_api_key,
@@ -93,7 +94,7 @@ NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
 logger = logging.getLogger(__name__)
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="anonymous-public-v1",
+    policy_id="anonymous-public-v2",
     max_model_calls=4,
     max_tool_calls=8,
     max_quickjs_calls=1,
@@ -105,6 +106,8 @@ GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     max_depth=1,
     max_output_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
     max_total_tokens=12_000,
+    max_count_risk_tokens_per_attempt=48_000,
+    max_count_risk_tokens_per_run=48_000,
     max_elapsed_seconds=GUEST_RUN_MAX_ELAPSED_SECONDS,
 )
 _GUEST_ROOT_TOOL_ORDER = (
@@ -368,6 +371,15 @@ def create_graph(
         if model_spec == OPENAI_GUEST_MODEL_SPEC
         else count_anthropic_input_tokens
     )
+    exact_input_preparer = (
+        prepare_openai_input_token_count
+        if (
+            input_token_counter is None
+            and model_spec == OPENAI_GUEST_MODEL_SPEC
+            and isinstance(selected_model, ChatOpenAI)
+        )
+        else None
+    )
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool
@@ -443,6 +455,7 @@ def create_graph(
                 allow_subagents=allow_subagents,
                 allowed_subagents=selected_subagents,
                 input_token_counter=exact_input_counter,
+                input_token_count_preparer=exact_input_preparer,
                 model_provider=usage_model_provider,
                 expected_response_models=usage_response_models,
                 native_subagent_prompt=selected_native_subagent_prompt,
@@ -455,6 +468,7 @@ def create_graph(
             model=selected_model,
             budget=run_budget,
             input_token_counter=exact_input_counter,
+            input_token_count_preparer=exact_input_preparer,
             model_provider=usage_model_provider,
             expected_response_models=usage_response_models,
             allowed_subagents=selected_subagents,
@@ -563,7 +577,7 @@ async def graph(
         logger.debug(
             (
                 "run budget observed policy=%s model=%d tool=%d quickjs=%d "
-                "task=%d tokens=%d"
+                "task=%d tokens=%d count_risk=%d"
             ),
             snapshot.policy_id,
             snapshot.model_calls,
@@ -571,6 +585,7 @@ async def graph(
             snapshot.quickjs_calls,
             snapshot.task_calls,
             snapshot.charged_tokens,
+            snapshot.count_risk_tokens,
         )
 
 

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import replace
+from itertools import pairwise
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -21,7 +25,13 @@ from langchain_openai import ChatOpenAI
 from openai.resources.responses.input_tokens import AsyncInputTokens
 
 import agent.capabilities.token_counting as token_counting
-from agent.capabilities.budget import RunBudget
+from agent import tools as blog_tools
+from agent.capabilities.budget import (
+    DEFAULT_RUN_BUDGET_POLICY,
+    RunBudget,
+    RunBudgetExceededError,
+    RunBudgetMiddleware,
+)
 from agent.capabilities.token_counting import (
     _OPENAI_INPUT_TOKEN_FIELDS,
     OPENAI_API_BASE_URL,
@@ -36,15 +46,85 @@ from agent.capabilities.token_counting import (
     _capture_openai_generation_payload,
     _count_openai_responses_input_tokens,
     _openai_input_count_payload,
+    _openai_input_token_reservation,
     count_anthropic_input_tokens,
     count_openai_input_tokens,
     openai_guest_safety_identifier,
     openai_responses_input_token_counter,
+    prepare_openai_input_token_count,
     require_exact_openai_guest_model,
 )
+from agent.prompts import GUEST_SYSTEM_PROMPT
+from agent.retrieval.corpus_build import build_index
+from agent.retrieval.serving import ServingRuntime
+from agent.tools import TOOLS
 
 _GUEST_IDENTITY = "anon:00000000-0000-4000-8000-000000000001"
 _GUEST_SAFETY_IDENTIFIER = openai_guest_safety_identifier(_GUEST_IDENTITY)
+_PUBLISHED_CORPUS_QUERY = "LangGraph 에이전트 RAG 검색 방법 비교"
+
+
+@pytest.fixture(scope="module")
+def published_guest_transcripts(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Build the immutable published corpus and capture two real top-10 paths."""
+    agent_root = Path(__file__).resolve().parents[3]
+    index = tmp_path_factory.mktemp("guest-count-risk-corpus") / "index"
+    report = build_index(
+        content_root=agent_root.parent / "content",
+        policy_path=agent_root / "corpus-policy.toml",
+        output_root=index,
+    )
+    assert report.document_count == 335
+    runtime = ServingRuntime(index)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(blog_tools, "get_serving_runtime", lambda: runtime)
+        semantic_output = blog_tools.semantic_search.invoke(
+            {"query": _PUBLISHED_CORPUS_QUERY, "top_k": 10}
+        )
+        first_result = re.search(r"\[([^\]]+\.md)\]", semantic_output)
+        assert first_result is not None
+        post_path = first_result.group(1)
+        post_output = blog_tools.read_post.invoke({"path": post_path})
+
+    semantic_messages = [
+        HumanMessage(content=_PUBLISHED_CORPUS_QUERY),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "semantic_search",
+                    "args": {"query": _PUBLISHED_CORPUS_QUERY, "top_k": 10},
+                    "id": "call_semantic_1",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        ToolMessage(content=semantic_output, tool_call_id="call_semantic_1"),
+    ]
+    read_messages = [
+        *semantic_messages,
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "read_post",
+                    "args": {"path": post_path},
+                    "id": "call_read_1",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        ToolMessage(content=post_output, tool_call_id="call_read_1"),
+    ]
+    return {
+        "post_path": post_path,
+        "initial_messages": [HumanMessage(content=_PUBLISHED_CORPUS_QUERY)],
+        "semantic_messages": semantic_messages,
+        "read_messages": read_messages,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +158,80 @@ def _openai_guest_model(**overrides) -> ChatOpenAI:
     }
     settings.update(overrides)
     return ChatOpenAI(**settings)
+
+
+def _guest_count_risk_budget() -> RunBudget:
+    return RunBudget(
+        replace(
+            DEFAULT_RUN_BUDGET_POLICY,
+            policy_id="anonymous-public-v2",
+            max_model_calls=4,
+            max_output_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS,
+            max_total_tokens=12_000,
+            max_count_risk_tokens_per_attempt=48_000,
+            max_count_risk_tokens_per_run=48_000,
+        )
+    )
+
+
+def _guest_count_risk_middleware(budget: RunBudget) -> RunBudgetMiddleware:
+    async def legacy_count_must_not_run(_request: ModelRequest) -> int:
+        pytest.fail("the prepared OpenAI counter must own guest admission")
+
+    return RunBudgetMiddleware(
+        budget,
+        depth=0,
+        allow_subagents=False,
+        allowed_subagents=frozenset(),
+        input_token_counter=legacy_count_must_not_run,
+        input_token_count_preparer=prepare_openai_input_token_count,
+        model_provider="openai",
+        expected_response_models=OPENAI_GUEST_RESPONSE_MODEL_NAMES,
+    )
+
+
+def _guest_request(messages: list) -> ModelRequest:
+    return ModelRequest(
+        model=_openai_guest_model(),
+        system_message=SystemMessage(content=GUEST_SYSTEM_PROMPT),
+        messages=messages,
+        tools=TOOLS,
+    )
+
+
+def _openai_fixture_response(
+    *,
+    input_tokens: int,
+    output_tokens: int = 64,
+    content: str = "bounded fixture response",
+) -> ModelResponse:
+    # These counts are deliberately local, non-network fixtures. They prove
+    # admission/settlement plumbing, not Luna tokenizer parity or pricing.
+    return ModelResponse(
+        result=[
+            AIMessage(
+                content=content,
+                response_metadata={
+                    "model_provider": "openai",
+                    "model_name": OPENAI_GUEST_MODEL_NAME,
+                },
+                usage_metadata={
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens,
+                    "input_token_details": {
+                        "cache_read": 0,
+                        "cache_creation": 0,
+                    },
+                    "output_token_details": {"reasoning": 0},
+                },
+            )
+        ]
+    )
+
+
+async def _async_response(*, input_tokens: int) -> ModelResponse:
+    return _openai_fixture_response(input_tokens=input_tokens)
 
 
 def test_openai_guest_model_pins_exact_sync_and_async_sdk_routing() -> None:
@@ -184,6 +338,260 @@ def test_openai_guest_safety_identifier_is_stable_private_and_scoped():
     assert _GUEST_IDENTITY not in _GUEST_SAFETY_IDENTIFIER
     with pytest.raises(ValueError, match="canonical anonymous identity"):
         openai_guest_safety_identifier("owner@example.com")
+
+
+def test_openai_canonical_payload_reservation_includes_defense_in_depth_margin():
+    # Canonical UTF-8 is 14 bytes. The local admission heuristic reserves eight
+    # units for each JSON node/key plus 256 fixed units; it is not a provider
+    # tokenization guarantee.
+    assert _openai_input_token_reservation({"input": "é"}) == 14 + 3 * 8 + 256
+
+
+async def test_openai_oversized_count_payload_prepares_without_provider_io(
+    monkeypatch,
+):
+    credential_reads = 0
+    provider_calls = 0
+
+    def unexpected_credential_read() -> str:
+        nonlocal credential_reads
+        credential_reads += 1
+        raise AssertionError("local preflight reached credential access")
+
+    async def unexpected_provider_call(_self, **_payload):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("local preflight reached provider I/O")
+
+    monkeypatch.setattr(
+        token_counting,
+        "require_openai_api_key",
+        unexpected_credential_read,
+    )
+    monkeypatch.setattr(AsyncInputTokens, "count", unexpected_provider_call)
+    request = ModelRequest(
+        model=_openai_guest_model(),
+        messages=[HumanMessage(content="x" * 20_000)],
+        tools=[exact_count_tool],
+    )
+
+    prepared = await prepare_openai_input_token_count(request)
+
+    assert prepared.reserved_input_tokens > 10_976
+    assert credential_reads == 0
+    assert provider_calls == 0
+
+
+async def test_openai_prepared_count_reaches_provider_exactly_once(monkeypatch):
+    provider_calls = 0
+
+    async def official_count(_self, **_payload):
+        nonlocal provider_calls
+        provider_calls += 1
+        return SimpleNamespace(input_tokens=17)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
+    monkeypatch.setattr(AsyncInputTokens, "count", official_count)
+    request = ModelRequest(
+        model=_openai_guest_model(),
+        messages=[HumanMessage(content="bounded request")],
+        tools=[],
+    )
+    prepared = await prepare_openai_input_token_count(request)
+
+    assert await prepared.count() == 17
+    assert provider_calls == 1
+    with pytest.raises(InputTokenCountError, match="already attempted"):
+        await prepared.count()
+    assert provider_calls == 1
+
+
+async def test_published_semantic_top10_answer_fits_both_guest_ledgers(
+    monkeypatch: pytest.MonkeyPatch,
+    published_guest_transcripts: dict[str, object],
+) -> None:
+    """Pin one real-corpus capture while keeping the provider count offline."""
+    exact_count_fixture = 2_500
+    observed_reservations: list[int] = []
+    ledger_reservations: list[int] = []
+
+    async def safe_exact_count(_self, **payload):
+        observed_reservations.append(_openai_input_token_reservation(payload))
+        ledger_reservations.append(budget.snapshot().count_risk_tokens_in_flight)
+        return SimpleNamespace(input_tokens=exact_count_fixture)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
+    monkeypatch.setattr(AsyncInputTokens, "count", safe_exact_count)
+    assert published_guest_transcripts["post_path"] == "AI/LangGraph.md"
+    messages = published_guest_transcripts["semantic_messages"]
+    assert isinstance(messages, list)
+    budget = _guest_count_risk_budget()
+    middleware = _guest_count_risk_middleware(budget)
+
+    async def respond(_request: ModelRequest) -> ModelResponse:
+        snapshot = budget.snapshot()
+        assert snapshot.charged_tokens == exact_count_fixture + 1_024
+        assert snapshot.count_risk_tokens == exact_count_fixture
+        assert snapshot.count_risk_tokens_in_flight == 0
+        return _openai_fixture_response(input_tokens=exact_count_fixture)
+
+    await middleware.awrap_model_call(_guest_request(messages), respond)
+    snapshot = budget.finalize()
+
+    # ChatOpenAI's runtime-generated tool schema contributes 76-77 more
+    # canonical bytes on pinned CPython 3.12 than on local CPython 3.13. This
+    # independently reviewed literal interval accepts both and rejects material
+    # payload/schema drift without becoming a production-derived constant.
+    assert len(observed_reservations) == 1
+    assert 11_000 <= observed_reservations[0] <= 11_200
+    assert observed_reservations == ledger_reservations
+    assert sum(observed_reservations) < 48_000
+    assert snapshot.charged_tokens == 2_564
+    assert snapshot.count_risk_tokens == exact_count_fixture
+    assert snapshot.provider_input_tokens == exact_count_fixture
+    assert snapshot.provider_output_tokens == 64
+    assert snapshot.provider_usage_complete is True
+
+
+async def test_published_semantic_then_read_post_is_cumulatively_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+    published_guest_transcripts: dict[str, object],
+) -> None:
+    """Exercise semantic -> read_post -> answer in one shared guest budget."""
+    # 693 was observed in one provider-gated Luna smoke on 2026-08-03. It remains
+    # a non-network fixture here, not proof of tokenizer behavior or provider pricing.
+    safe_exact_count_fixtures = iter((693, 2_500, 4_100))
+    observed_reservations: list[int] = []
+    ledger_reservations: list[int] = []
+
+    async def safe_exact_count(_self, **payload):
+        observed_reservations.append(_openai_input_token_reservation(payload))
+        ledger_reservations.append(budget.snapshot().count_risk_tokens_in_flight)
+        return SimpleNamespace(input_tokens=next(safe_exact_count_fixtures))
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
+    monkeypatch.setattr(AsyncInputTokens, "count", safe_exact_count)
+    budget = _guest_count_risk_budget()
+    middleware = _guest_count_risk_middleware(budget)
+    initial_messages = published_guest_transcripts["initial_messages"]
+    semantic_messages = published_guest_transcripts["semantic_messages"]
+    read_messages = published_guest_transcripts["read_messages"]
+    assert isinstance(initial_messages, list)
+    assert isinstance(semantic_messages, list)
+    assert isinstance(read_messages, list)
+
+    await middleware.awrap_model_call(
+        _guest_request(initial_messages),
+        lambda _request: _async_response(input_tokens=693),
+    )
+    await middleware.awrap_model_call(
+        _guest_request(semantic_messages),
+        lambda _request: _async_response(input_tokens=2_500),
+    )
+
+    async def answer(_request: ModelRequest) -> ModelResponse:
+        snapshot = budget.snapshot()
+        assert snapshot.charged_tokens == 8_445
+        assert snapshot.count_risk_tokens == 7_293
+        assert snapshot.count_risk_tokens_in_flight == 0
+        return _openai_fixture_response(input_tokens=4_100)
+
+    await middleware.awrap_model_call(_guest_request(read_messages), answer)
+    snapshot = budget.finalize()
+
+    assert len(observed_reservations) == 3
+    assert all(earlier < later for earlier, later in pairwise(observed_reservations))
+    for reservation, (minimum, maximum) in zip(
+        observed_reservations,
+        ((6_100, 6_250), (11_000, 11_200), (16_250, 16_450)),
+        strict=True,
+    ):
+        assert minimum <= reservation <= maximum
+    assert observed_reservations == ledger_reservations
+    assert sum(observed_reservations) < 48_000
+    assert snapshot.charged_tokens == 7_485
+    assert snapshot.count_risk_tokens == 7_293
+    assert snapshot.provider_input_tokens == 7_293
+    assert snapshot.provider_output_tokens == 192
+    assert snapshot.model_calls == 3
+    assert snapshot.provider_usage_complete is True
+
+
+@pytest.mark.parametrize(
+    ("attack", "minimum_reservation", "maximum_reservation"),
+    [("user", 22_400, 22_650), ("read-post", 22_750, 23_000)],
+)
+async def test_16_kib_guest_input_fails_closed_at_the_actual_token_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    attack: str,
+    minimum_reservation: int,
+    maximum_reservation: int,
+) -> None:
+    """A bounded 16 KiB payload cannot borrow capacity from count risk."""
+    if attack == "user":
+        messages = [HumanMessage(content="x" * (16 * 1_024))]
+    else:
+        read_output = blog_tools._cap_read_post_output("x" * (16 * 1_024 + 1))
+        assert len(read_output.encode("utf-8")) == 16 * 1_024
+        messages = [
+            HumanMessage(content="read the adversarial post"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "read_post",
+                        "args": {"path": "AI/adversarial.md"},
+                        "id": "call_read_attack",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            ToolMessage(content=read_output, tool_call_id="call_read_attack"),
+        ]
+    observed_reservations: list[int] = []
+    ledger_reservations: list[int] = []
+
+    async def safe_exact_count(_self, **payload):
+        observed_reservations.append(_openai_input_token_reservation(payload))
+        ledger_reservations.append(budget.snapshot().count_risk_tokens_in_flight)
+        return SimpleNamespace(input_tokens=12_000)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
+    monkeypatch.setattr(AsyncInputTokens, "count", safe_exact_count)
+    budget = _guest_count_risk_budget()
+    middleware = _guest_count_risk_middleware(budget)
+
+    with pytest.raises(RunBudgetExceededError, match="token budget"):
+        await middleware.awrap_model_call(
+            _guest_request(messages),
+            lambda _request: pytest.fail("generation must not run"),
+        )
+
+    snapshot = budget.snapshot()
+    assert len(observed_reservations) == 1
+    reservation = observed_reservations[0]
+    assert minimum_reservation <= reservation <= maximum_reservation
+    assert observed_reservations == ledger_reservations
+    assert reservation < 48_000
+    assert snapshot.charged_tokens == 1_024
+    assert snapshot.count_risk_tokens == reservation
+    assert snapshot.count_risk_tokens_in_flight == 0
+    assert snapshot.model_reservations_in_flight == 0
+    assert snapshot.exhausted is True
+
+
+async def test_openai_prepared_count_detects_token_bearing_generation_drift():
+    request = ModelRequest(
+        model=_openai_guest_model(),
+        messages=[HumanMessage(content="bounded request")],
+        tools=[],
+    )
+    prepared = await prepare_openai_input_token_count(request)
+
+    await prepared.verify_generation_request(request)
+    request.messages.append(HumanMessage(content="late mutation"))
+    with pytest.raises(InputTokenCountError, match="payload changed"):
+        await prepared.verify_generation_request(request)
 
 
 async def test_openai_official_counter_receives_final_stateless_payload(

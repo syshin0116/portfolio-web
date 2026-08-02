@@ -20,7 +20,7 @@ from langgraph_sdk.runtime import ServerRuntime
 
 from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
 from agent.capabilities.quickjs import QUICKJS_TOOL_NAME
-from agent.capabilities.token_counting import InputTokenCounter
+from agent.capabilities.token_counting import InputTokenCounter, InputTokenCountPreparer
 from agent.tools import (
     graph_traverse,
     keyword_search,
@@ -314,6 +314,7 @@ def _compiled_subagent(
     model: BaseChatModel,
     budget: RunBudget,
     input_token_counter: InputTokenCounter,
+    input_token_count_preparer: InputTokenCountPreparer | None,
     model_provider: str,
     expected_response_models: frozenset[str],
 ) -> CompiledSubAgent:
@@ -334,6 +335,7 @@ def _compiled_subagent(
                 allow_subagents=False,
                 allowed_subagents=frozenset(),
                 input_token_counter=input_token_counter,
+                input_token_count_preparer=input_token_count_preparer,
                 model_provider=model_provider,
                 expected_response_models=expected_response_models,
                 quickjs_tool_name=QUICKJS_TOOL_NAME,
@@ -359,6 +361,7 @@ def build_subagents(
     model: BaseChatModel,
     budget: RunBudget,
     input_token_counter: InputTokenCounter,
+    input_token_count_preparer: InputTokenCountPreparer | None = None,
     model_provider: str = "anthropic",
     expected_response_models: frozenset[str] = frozenset(),
     allowed_subagents: frozenset[str] = SUBAGENT_NAMES,
@@ -373,6 +376,7 @@ def build_subagents(
             model=model,
             budget=budget,
             input_token_counter=input_token_counter,
+            input_token_count_preparer=input_token_count_preparer,
             model_provider=model_provider,
             expected_response_models=expected_response_models,
         )

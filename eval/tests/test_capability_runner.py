@@ -109,6 +109,8 @@ FIXED_POLICY = RunBudgetPolicy(
     max_depth=1,
     max_output_tokens=128,
     max_total_tokens=2_048,
+    max_count_risk_tokens_per_attempt=2_048,
+    max_count_risk_tokens_per_run=2_048,
     max_elapsed_seconds=10,
 )
 

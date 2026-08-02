@@ -24,6 +24,8 @@ from agent.capabilities.subagents import (
 from agent.capabilities.token_counting import (
     InputTokenCounter,
     InputTokenCountError,
+    InputTokenCountPreparer,
+    PreparedInputTokenCount,
     count_anthropic_input_tokens,
 )
 
@@ -33,7 +35,9 @@ __all__ = [
     "BoundedQuickJSMiddleware",
     "BudgetSnapshot",
     "InputTokenCountError",
+    "InputTokenCountPreparer",
     "InputTokenCounter",
+    "PreparedInputTokenCount",
     "QUICKJS_SYSTEM_PROMPT",
     "QUICKJS_TOOL_NAME",
     "QuickJSReservation",

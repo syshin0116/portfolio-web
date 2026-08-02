@@ -109,6 +109,7 @@ def _service(service: str) -> dict[str, object]:
                 "metadata": {
                     "annotations": {
                         "autoscaling.knative.dev/maxScale": "1",
+                        "autoscaling.knative.dev/minScale": "0",
                         "run.googleapis.com/execution-environment": "gen2",
                     }
                 },
@@ -152,6 +153,8 @@ def _job(job: str) -> dict[str, object]:
         "spec": {
             "template": {
                 "spec": {
+                    "parallelism": 1,
+                    "taskCount": 1,
                     "template": {
                         "spec": {
                             "serviceAccountName": spec["service_account"],
@@ -176,7 +179,7 @@ def _job(job: str) -> dict[str, object]:
                                 }
                             ],
                         }
-                    }
+                    },
                 }
             }
         },
@@ -212,6 +215,8 @@ class FakeRead:
             "name": (
                 f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{repository}"
             ),
+            "format": "DOCKER",
+            "mode": "STANDARD_REPOSITORY",
             "dockerConfig": {"immutableTags": False},
             "cleanupPolicyDryRun": False,
             "cleanupPolicies": {
@@ -343,6 +348,7 @@ class FakeRead:
                 {
                     "email": account,
                     "name": f"projects/{PROJECT_ID}/serviceAccounts/{account}",
+                    "disabled": False,
                 }
                 for account in sorted(WORKLOAD_SERVICE_ACCOUNTS | {EXTRA_AUDIT_SA})
             ],
@@ -946,6 +952,55 @@ class ExactProjectReadinessTests(unittest.TestCase):
             fixture.calls,
         )
 
+    def test_state_bucket_foreign_kms_fails_before_state_object_read(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "storage",
+            "buckets",
+            "describe",
+            f"gs://{STATE_BUCKET}",
+            "--format=json",
+        )
+        document = json.loads(fixture.responses[command])
+        document["encryption"] = {
+            "defaultKmsKeyName": (
+                "projects/jinjoo/locations/us-east4/keyRings/foreign/cryptoKeys/state"
+            )
+        }
+        fixture.responses[command] = json.dumps(document)
+
+        with self.assertRaisesRegex(ReadinessError, "Google-managed encryption"):
+            self._verify(fixture)
+
+        self.assertNotIn(
+            (
+                "storage",
+                "objects",
+                "describe",
+                f"gs://{STATE_BUCKET}/{STATE_OBJECT}",
+                "--format=json",
+            ),
+            fixture.calls,
+        )
+
+    def test_state_object_foreign_kms_key_fails(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "storage",
+            "objects",
+            "describe",
+            f"gs://{STATE_BUCKET}/{STATE_OBJECT}",
+            "--format=json",
+        )
+        document = json.loads(fixture.responses[command])
+        document["kmsKeyName"] = (
+            "projects/jinjoo/locations/us-east4/keyRings/foreign/cryptoKeys/state"
+        )
+        fixture.responses[command] = json.dumps(document)
+
+        with self.assertRaisesRegex(ReadinessError, "Google-managed encryption"):
+            self._verify(fixture)
+
     def test_bucket_ownership_is_discovered_before_global_name_reads(self) -> None:
         fixture = FakeRead()
         discovery = (
@@ -1008,6 +1063,24 @@ class ExactProjectReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ReadinessError, "direct project-level role"):
             self._verify(fixture)
 
+    def test_scheduler_service_agent_binding_must_be_unconditional(self) -> None:
+        fixture = FakeRead()
+        command = ("projects", "get-iam-policy", PROJECT_ID, "--format=json")
+        policy = json.loads(fixture.responses[command])
+        binding = next(
+            item
+            for item in policy["bindings"]
+            if item["role"] == "roles/cloudscheduler.serviceAgent"
+        )
+        binding["condition"] = {
+            "title": "never",
+            "expression": "false",
+        }
+        fixture.responses[command] = json.dumps(policy)
+
+        with self.assertRaisesRegex(ReadinessError, "must be unconditional"):
+            self._verify(fixture)
+
     def test_user_managed_service_account_key_fails(self) -> None:
         fixture = FakeRead()
         fixture.user_key_output = "projects/x/serviceAccounts/y/keys/123\n"
@@ -1044,6 +1117,28 @@ class ExactProjectReadinessTests(unittest.TestCase):
         fixture.responses[command] = json.dumps(accounts)
 
         with self.assertRaisesRegex(ReadinessError, "escaped"):
+            self._verify(fixture)
+
+        self.assertFalse(
+            any(
+                call[:4] == ("iam", "service-accounts", "keys", "list")
+                for call in fixture.calls
+            )
+        )
+
+    def test_disabled_workload_service_account_fails_before_key_reads(self) -> None:
+        fixture = FakeRead()
+        command = ("iam", "service-accounts", "list", "--format=json")
+        accounts = json.loads(fixture.responses[command])
+        target = next(
+            account for account in accounts if account["email"] == PRODUCTION_RUNTIME_SA
+        )
+        target["disabled"] = True
+        fixture.responses[command] = json.dumps(accounts)
+
+        with self.assertRaisesRegex(
+            ReadinessError, "workload service account is disabled"
+        ):
             self._verify(fixture)
 
         self.assertFalse(
@@ -1135,6 +1230,69 @@ class ExactProjectReadinessTests(unittest.TestCase):
                 with self.assertRaisesRegex(ReadinessError, "cleanup selector"):
                     self._verify(fixture)
 
+    def test_artifact_repository_format_or_mode_drift_fails(self) -> None:
+        for field, value in {
+            "format": "MAVEN",
+            "mode": "REMOTE_REPOSITORY",
+        }.items():
+            with self.subTest(field=field):
+                fixture = FakeRead()
+                command = (
+                    "artifacts",
+                    "repositories",
+                    "describe",
+                    "agent",
+                    "--location",
+                    REGION,
+                    "--format=json",
+                )
+                document = json.loads(fixture.responses[command])
+                document[field] = value
+                fixture.responses[command] = json.dumps(document)
+
+                with self.assertRaisesRegex(
+                    ReadinessError, "identity, format, or mode"
+                ):
+                    self._verify(fixture)
+
+    def test_artifact_repository_foreign_kms_key_fails(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "artifacts",
+            "repositories",
+            "describe",
+            "agent",
+            "--location",
+            REGION,
+            "--format=json",
+        )
+        document = json.loads(fixture.responses[command])
+        document["kmsKeyName"] = (
+            "projects/jinjoo/locations/us-east4/keyRings/foreign/cryptoKeys/agent"
+        )
+        fixture.responses[command] = json.dumps(document)
+
+        with self.assertRaisesRegex(ReadinessError, "Google-managed encryption"):
+            self._verify(fixture)
+
+    def test_artifact_cleanup_missing_tag_state_fails(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "artifacts",
+            "repositories",
+            "describe",
+            "agent",
+            "--location",
+            REGION,
+            "--format=json",
+        )
+        document = json.loads(fixture.responses[command])
+        del document["cleanupPolicies"]["delete-after-90-days"]["condition"]["tagState"]
+        fixture.responses[command] = json.dumps(document)
+
+        with self.assertRaisesRegex(ReadinessError, "metadata or retention"):
+            self._verify(fixture)
+
     def test_artifact_cleanup_policy_ids_must_match_map_keys(self) -> None:
         cases = {
             "delete_mismatch": ("delete-after-90-days", "keep-last-30"),
@@ -1165,6 +1323,74 @@ class ExactProjectReadinessTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     ReadinessError, "cleanup policy fields or IDs"
                 ):
+                    self._verify(fixture)
+
+    def test_secret_foreign_cmek_or_expiration_fails(self) -> None:
+        command = ("secrets", "describe", "openai-api-key", "--format=json")
+        for name in ("foreign_cmek", "expiration"):
+            with self.subTest(name=name):
+                fixture = FakeRead()
+                document = json.loads(fixture.responses[command])
+                if name == "foreign_cmek":
+                    document["replication"]["automatic"][
+                        "customerManagedEncryption"
+                    ] = {
+                        "kmsKeyName": (
+                            "projects/jinjoo/locations/us-east4/keyRings/foreign/"
+                            "cryptoKeys/secrets"
+                        )
+                    }
+                else:
+                    document["expireTime"] = "2026-08-04T00:00:00Z"
+                fixture.responses[command] = json.dumps(document)
+
+                with self.assertRaisesRegex(ReadinessError, "encryption or expiration"):
+                    self._verify(fixture)
+
+    def test_cloud_run_service_nonzero_min_scale_fails(self) -> None:
+        command = (
+            "run",
+            "services",
+            "describe",
+            "agent",
+            "--region",
+            REGION,
+            "--format=json",
+        )
+        for name in ("revision", "service"):
+            with self.subTest(name=name):
+                fixture = FakeRead()
+                service = json.loads(fixture.responses[command])
+                if name == "revision":
+                    annotations = service["spec"]["template"]["metadata"]["annotations"]
+                    annotations["autoscaling.knative.dev/minScale"] = "1"
+                else:
+                    service["metadata"]["annotations"][
+                        "run.googleapis.com/minScale"
+                    ] = "1"
+                fixture.responses[command] = json.dumps(service)
+
+                with self.assertRaisesRegex(ReadinessError, "scaling boundary"):
+                    self._verify(fixture)
+
+    def test_cloud_run_job_task_fanout_fails(self) -> None:
+        command = (
+            "run",
+            "jobs",
+            "describe",
+            "agent-maintenance",
+            "--region",
+            REGION,
+            "--format=json",
+        )
+        for field in ("taskCount", "parallelism"):
+            with self.subTest(field=field):
+                fixture = FakeRead()
+                job = json.loads(fixture.responses[command])
+                job["spec"]["template"]["spec"][field] = 100
+                fixture.responses[command] = json.dumps(job)
+
+                with self.assertRaisesRegex(ReadinessError, "task fan-out"):
                     self._verify(fixture)
 
     def test_production_luna_spend_control_drift_fails(self) -> None:

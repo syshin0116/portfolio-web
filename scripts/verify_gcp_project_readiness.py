@@ -824,6 +824,7 @@ def _validate_project(document: Any) -> None:
 
 def _validate_project_policy(document: Any) -> None:
     policy = _object(document, "project IAM policy")
+    bindings = _array(policy.get("bindings", []), "project IAM bindings")
     pairs = _policy_pairs(policy, require_unconditional=False)
     public = {"allUsers", "allAuthenticatedUsers"}
     if any(member in public for _, member in pairs):
@@ -853,6 +854,14 @@ def _validate_project_policy(document: Any) -> None:
     scheduler_members = {
         member for role, member in pairs if role == "roles/cloudscheduler.serviceAgent"
     }
+    scheduler_bindings = [
+        _object(binding, "Cloud Scheduler service-agent binding")
+        for binding in bindings
+        if _object(binding, "project IAM binding").get("role")
+        == "roles/cloudscheduler.serviceAgent"
+    ]
+    if len(scheduler_bindings) != 1 or "condition" in scheduler_bindings[0]:
+        _fail("Cloud Scheduler service-agent binding must be unconditional")
     if scheduler_members != {f"serviceAccount:{CLOUD_SCHEDULER_SERVICE_AGENT}"}:
         _fail("Cloud Scheduler service-agent binding is not exact")
 
@@ -895,6 +904,15 @@ def _validate_artifact_repository(document: Any, repository: str) -> None:
         "agent-preview": ("delete-after-14-days", "1209600s", "keep-last-20", 20),
     }[repository]
     delete_id, delete_after, keep_id, keep_count = expected
+    if (
+        repo.get("name")
+        != f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{repository}"
+        or repo.get("format") != "DOCKER"
+        or repo.get("mode") != "STANDARD_REPOSITORY"
+    ):
+        _fail(f"Artifact Registry {repository} identity, format, or mode drifted")
+    if repo.get("kmsKeyName") not in (None, ""):
+        _fail(f"Artifact Registry {repository} must use Google-managed encryption")
     policies = repo.get("cleanupPolicies")
     if not isinstance(policies, dict) or set(policies) != {delete_id, keep_id}:
         _fail(f"Artifact Registry {repository} cleanup inventory drifted")
@@ -942,15 +960,13 @@ def _validate_artifact_repository(document: Any, repository: str) -> None:
     ):
         _fail(f"Artifact Registry {repository} cleanup selector narrowed")
     if (
-        repo.get("name")
-        != f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{repository}"
-        or _object(repo.get("dockerConfig", {}), "docker config").get(
+        _object(repo.get("dockerConfig", {}), "docker config").get(
             "immutableTags", False
         )
         is not False
         or repo.get("cleanupPolicyDryRun", False) is not False
         or delete.get("action") != "DELETE"
-        or condition.get("tagState", "ANY") != "ANY"
+        or condition.get("tagState") != "ANY"
         or condition.get("olderThan") != delete_after
         or "newerThan" in condition
         or keep.get("action") != "KEEP"
@@ -983,6 +999,9 @@ def _validate_bucket(document: Any) -> None:
     retention = soft_delete.get(
         "retentionDurationSeconds", soft_delete.get("retention_duration_seconds", 0)
     )
+    encryption = _object(bucket.get("encryption", {}), "bucket encryption")
+    if encryption.get("defaultKmsKeyName") not in (None, ""):
+        _fail("Terraform state bucket must use Google-managed encryption")
     if (
         bucket.get("name") != STATE_BUCKET
         or str(owner) != PROJECT_NUMBER
@@ -1012,6 +1031,8 @@ def _validate_bucket_discovery(document: Any) -> None:
 def _validate_state_object(document: Any) -> None:
     state = _object(document, "Terraform state object")
     bucket = state.get("bucket")
+    if state.get("kmsKeyName") not in (None, ""):
+        _fail("Terraform state object must use Google-managed encryption")
     if (
         state.get("name") != STATE_OBJECT
         or (bucket is not None and bucket != STATE_BUCKET)
@@ -1052,6 +1073,11 @@ def _validate_service_account_inventory(document: Any) -> frozenset[str]:
             or email in emails
         ):
             _fail("service-account inventory escaped the exact project boundary")
+        if (
+            email in WORKLOAD_SERVICE_ACCOUNTS
+            and account.get("disabled", False) is not False
+        ):
+            _fail("a managed workload service account is disabled")
         emails.add(email)
     if not emails or not WORKLOAD_SERVICE_ACCOUNTS <= emails:
         _fail("managed workload service-account inventory is incomplete")
@@ -1065,10 +1091,23 @@ def _validate_secret_metadata(document: Any, secret: str) -> None:
         f"projects/{PROJECT_NUMBER}/secrets/{secret}",
     }
     replication = _object(metadata.get("replication", {}), "secret replication")
-    if metadata.get("name") not in valid_names or not any(
-        key in replication for key in ("automatic", "auto")
+    automatic_keys = set(replication) & {"automatic", "auto"}
+    if (
+        metadata.get("name") not in valid_names
+        or len(automatic_keys) != 1
+        or set(replication) != automatic_keys
     ):
         _fail(f"Secret Manager {secret} identity or replication drifted")
+    automatic = _object(
+        replication[next(iter(automatic_keys))], "automatic secret replication"
+    )
+    if (
+        automatic
+        or metadata.get("expireTime") not in (None, "")
+        or metadata.get("expire_time") not in (None, "")
+        or metadata.get("ttl") not in (None, "")
+    ):
+        _fail(f"Secret Manager {secret} encryption or expiration drifted")
 
 
 def _normalize_secret_ref(entry: Mapping[str, Any]) -> tuple[str, str] | None:
@@ -1137,7 +1176,13 @@ def _validate_service(document: Any, service: str) -> None:
     annotations = _object(template_metadata.get("annotations", {}), "annotations")
     top_annotations = _object(metadata.get("annotations", {}), "service annotations")
     max_scale = annotations.get("autoscaling.knative.dev/maxScale")
+    revision_min_scale = annotations.get("autoscaling.knative.dev/minScale", "0")
+    service_min_scale = top_annotations.get("run.googleapis.com/minScale", "0")
     ingress = top_annotations.get("run.googleapis.com/ingress")
+    if not _integer_equals(revision_min_scale, 0) or not _integer_equals(
+        service_min_scale, 0
+    ):
+        _fail(f"Cloud Run service {service} scaling boundary drifted")
     if (
         metadata.get("name") != service
         or ingress != "all"
@@ -1181,6 +1226,10 @@ def _validate_job(document: Any, job: str) -> None:
     if len(containers) != 1:
         _fail(f"Cloud Run job {job} must have exactly one container")
     container = _object(containers[0], "job container")
+    if not _integer_equals(task_spec.get("taskCount", 1), 1) or not _integer_equals(
+        task_spec.get("parallelism", 1), 1
+    ):
+        _fail(f"Cloud Run job {job} task fan-out drifted")
     if (
         metadata.get("name") != job
         or template_spec.get("serviceAccountName") != spec["service_account"]

@@ -216,10 +216,12 @@ class FakeRead:
             "cleanupPolicyDryRun": False,
             "cleanupPolicies": {
                 delete_id: {
+                    "id": delete_id,
                     "action": "DELETE",
                     "condition": {"tagState": "ANY", "olderThan": age},
                 },
                 keep_id: {
+                    "id": keep_id,
                     "action": "KEEP",
                     "mostRecentVersions": {"keepCount": count},
                 },
@@ -1131,6 +1133,38 @@ class ExactProjectReadinessTests(unittest.TestCase):
                 fixture.responses[command] = json.dumps(document)
 
                 with self.assertRaisesRegex(ReadinessError, "cleanup selector"):
+                    self._verify(fixture)
+
+    def test_artifact_cleanup_policy_ids_must_match_map_keys(self) -> None:
+        cases = {
+            "delete_mismatch": ("delete-after-90-days", "keep-last-30"),
+            "keep_mismatch": ("keep-last-30", "delete-after-90-days"),
+            "delete_missing": ("delete-after-90-days", None),
+            "keep_missing": ("keep-last-30", None),
+        }
+        for name, (policy_key, policy_id) in cases.items():
+            with self.subTest(name=name):
+                fixture = FakeRead()
+                command = (
+                    "artifacts",
+                    "repositories",
+                    "describe",
+                    "agent",
+                    "--location",
+                    REGION,
+                    "--format=json",
+                )
+                document = json.loads(fixture.responses[command])
+                policy = document["cleanupPolicies"][policy_key]
+                if policy_id is None:
+                    policy.pop("id")
+                else:
+                    policy["id"] = policy_id
+                fixture.responses[command] = json.dumps(document)
+
+                with self.assertRaisesRegex(
+                    ReadinessError, "cleanup policy fields or IDs"
+                ):
                     self._verify(fixture)
 
     def test_production_luna_spend_control_drift_fails(self) -> None:

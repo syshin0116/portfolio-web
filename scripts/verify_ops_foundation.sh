@@ -182,13 +182,30 @@ prepare_live_toolchain() {
   fi
 }
 
-prepare_live_python() {
-  LIVE_PYTHON_BIN="$(
-    /usr/bin/env -i \
-      PATH="$LIVE_CHILD_PATH" \
-      "$LIVE_BOOTSTRAP_PYTHON_BIN" -I -s "$LIVE_TOOLCHAIN_VERIFIER" \
-      validate "${REPO_ROOT}/.venv/bin/python3"
-  )" || fail "cannot resolve the trusted frozen-workspace Python"
+sync_live_python_environment() {
+  /usr/bin/env -i \
+    HOME="$LIVE_TRUSTED_HOME" \
+    PATH="$LIVE_CHILD_PATH" \
+    "$LIVE_UV_BIN" sync \
+    --project "$REPO_ROOT" \
+    --python "$LIVE_PYTHON_BIN" \
+    --no-config \
+    --no-python-downloads \
+    --frozen \
+    --package syshin0116-dev-agent \
+    --all-extras \
+    --dev
+}
+
+validate_live_python() {
+  [[ -e "${REPO_ROOT}/.venv/bin/python3" ]] ||
+    fail "trusted frozen-workspace Python must exist before live sync"
+  /usr/bin/env -i \
+    PATH="$LIVE_CHILD_PATH" \
+    "$LIVE_BOOTSTRAP_PYTHON_BIN" -I -s "$LIVE_TOOLCHAIN_VERIFIER" \
+    validate "${REPO_ROOT}/.venv/bin/python3" >/dev/null ||
+    fail "cannot resolve the trusted frozen-workspace Python"
+  LIVE_PYTHON_BIN="${REPO_ROOT}/.venv/bin/python3"
   /usr/bin/env -i \
     HOME="$LIVE_TRUSTED_HOME" \
     PATH="$LIVE_CHILD_PATH" \
@@ -197,16 +214,21 @@ prepare_live_python() {
     fail "live Python must be within the reviewed 3.12-3.14 range"
 }
 
-run_live_uv() {
+prepare_live_python() {
+  validate_live_python
+  sync_live_python_environment
+  validate_live_python
+}
+
+run_live_python() {
   /usr/bin/env -i \
     HOME="$LIVE_TRUSTED_HOME" \
     PATH="$LIVE_CHILD_PATH" \
-    "$LIVE_UV_BIN" run --frozen --package syshin0116-dev-agent "$@"
+    "$LIVE_PYTHON_BIN" -I -s "$@"
 }
 
 verify_static_contract_live() {
-  run_live_uv \
-    python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
+  run_live_python "$CONTRACT_SCRIPT" static --repo-root "$REPO_ROOT"
   printf 'OK: credential-free Terraform security contract verified.\n'
 }
 
@@ -268,8 +290,7 @@ verify_canonical_repository_governance() {
   if [[ -f "$GOVERNANCE_MANIFEST" && -f "$GOVERNANCE_VERIFIER" ]]; then
     (
       cd "$REPO_ROOT"
-      run_live_uv \
-        python "$GOVERNANCE_VERIFIER" --live --gh-bin "$LIVE_GH_BIN"
+      run_live_python "$GOVERNANCE_VERIFIER" --live --gh-bin "$LIVE_GH_BIN"
     )
   elif [[ -e "$GOVERNANCE_MANIFEST" || -e "$GOVERNANCE_VERIFIER" ]]; then
     fail "canonical repository-governance manifest and verifier must land together"
@@ -283,8 +304,8 @@ verify_canonical_repository_governance() {
 
 verify_live_contract() {
   prepare_live_toolchain
-  verify_static_contract_live
   prepare_live_python
+  verify_static_contract_live
   /usr/bin/env -i \
     HOME="$LIVE_TRUSTED_HOME" \
     OPS_FOUNDATION_GCLOUD_ACCOUNT="${OPS_FOUNDATION_GCLOUD_ACCOUNT:-}" \
@@ -336,6 +357,7 @@ case "$mode" in
     ;;
   --governance-live)
     prepare_live_toolchain false
+    prepare_live_python
     verify_canonical_repository_governance
     ;;
   -h | --help)

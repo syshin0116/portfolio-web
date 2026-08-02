@@ -118,9 +118,13 @@ toolchain, and only through its executable path, for example
 test or environment override. Live preflight accepts only current-user/root-owned regular
 `uv`, `gh`, `gcloud`, and Python executables whose selected and resolved ancestry is not
 group/other writable; it derives `HOME` from passwd and gives children a fixed, sanitized
-environment. The GCP reader is a separate Python process launched with `-E -s`, and every
-request must match the SHA-pinned literal command oracle. This boundary does not resist a
-malicious same-user workstation or loader injection before the initial shell starts.
+environment. Live mode requires an existing `.venv/bin/python3`, validates its selected
+and resolved path before `uv` can query it, pins the exact absolute path into a
+configuration-free frozen sync with Python downloads disabled, then validates it again.
+Only that absolute selected path may run the static, GCP, or GitHub governance verifier.
+The GCP reader is a separate Python process launched with `-E -s`, and every request must
+match the SHA-pinned literal command oracle. This boundary does not resist a malicious
+same-user workstation or loader injection before the initial shell starts.
 
 A missing API, permission denial, inaccessible endpoint, or unreadable response is a
 hard **STOP**, not remediation authority. This verifier never authorizes an IAM grant,

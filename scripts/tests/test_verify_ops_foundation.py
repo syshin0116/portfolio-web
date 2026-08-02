@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Callable
@@ -832,21 +833,33 @@ output "unreviewed_sensitive_value" {
         self.assertNotEqual(0, result.returncode)
         self.assertIn("on-disk Terraform loadable inventory mismatch", result.stderr)
 
-    def test_governance_delegation_uses_exact_pinned_uv_command(self) -> None:
+    def test_governance_delegation_syncs_then_uses_validated_python(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
             root = self._fixture(directory)
             manifest = root / ".github/repository-governance.json"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("{}\n", encoding="utf-8")
             governance = root / "scripts/verify_repository_governance.py"
-            governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+            governance_args = root / "governance-args.txt"
+            governance.write_text(
+                "import pathlib, sys\n"
+                f"pathlib.Path({str(governance_args)!r}).write_text("
+                "'\\n'.join(sys.argv[1:]) + '\\n', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            workspace_bin = root / ".venv/bin"
+            workspace_bin.mkdir(parents=True)
+            workspace_python = workspace_bin / "python3"
+            workspace_python.symlink_to(sys.executable)
 
             fake_bin = root / "fake-bin"
             fake_bin.mkdir()
             args_file = root / "uv-args.txt"
             fake_uv = fake_bin / "uv"
             fake_uv.write_text(
-                f"#!/bin/bash\nprintf '%s\\n' \"$@\" > {shlex.quote(str(args_file))}\n",
+                "#!/bin/bash\n"
+                "set -eu\n"
+                f"/usr/bin/printf '%s\\n' \"$@\" > {shlex.quote(str(args_file))}\n",
                 encoding="utf-8",
             )
             fake_uv.chmod(0o755)
@@ -868,18 +881,174 @@ output "unreviewed_sensitive_value" {
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(
                 [
-                    "run",
+                    "sync",
+                    "--project",
+                    str(root.resolve()),
+                    "--python",
+                    str(workspace_python),
+                    "--no-config",
+                    "--no-python-downloads",
                     "--frozen",
                     "--package",
                     "syshin0116-dev-agent",
-                    "python",
-                    str(governance.resolve()),
+                    "--all-extras",
+                    "--dev",
+                ],
+                args_file.read_text(encoding="utf-8").splitlines(),
+            )
+            self.assertEqual(
+                [
                     "--live",
                     "--gh-bin",
                     str(fake_gh.resolve()),
                 ],
-                args_file.read_text(encoding="utf-8").splitlines(),
+                governance_args.read_text(encoding="utf-8").splitlines(),
             )
+
+    def test_live_modes_reject_workspace_python_before_execution(self) -> None:
+        for mode in ("--live", "--governance-live"):
+            with (
+                self.subTest(mode=mode),
+                tempfile.TemporaryDirectory(dir=Path.home()) as directory,
+            ):
+                root = self._fixture(directory)
+                manifest = root / ".github/repository-governance.json"
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text("{}\n", encoding="utf-8")
+                governance = root / "scripts/verify_repository_governance.py"
+                governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+                marker = root / "untrusted-python-ran"
+                workspace_bin = root / ".venv/bin"
+                workspace_bin.mkdir(parents=True)
+                workspace_python = workspace_bin / "python3"
+                workspace_python.write_text(
+                    "#!/bin/sh\n"
+                    f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(marker))}\n",
+                    encoding="utf-8",
+                )
+                workspace_python.chmod(0o770)
+
+                fake_bin = root / "fake-bin"
+                fake_bin.mkdir()
+                uv_marker = root / "uv-ran"
+                fake_uv = fake_bin / "uv"
+                fake_uv.write_text(
+                    "#!/bin/sh\n"
+                    f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(uv_marker))}\n"
+                    f"exec {shlex.quote(str(workspace_python))}\n",
+                    encoding="utf-8",
+                )
+                fake_uv.chmod(0o755)
+                for tool in ("gh", "gcloud"):
+                    executable = fake_bin / tool
+                    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    executable.chmod(0o755)
+
+                environment = os.environ.copy()
+                environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+                result = subprocess.run(
+                    ["scripts/verify_ops_foundation.sh", mode],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("group/other writable", result.stderr)
+                self.assertFalse(uv_marker.exists())
+                self.assertFalse(marker.exists())
+
+    def test_live_revalidates_workspace_python_after_sync(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            root = self._fixture(directory)
+            manifest = root / ".github/repository-governance.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("{}\n", encoding="utf-8")
+            governance = root / "scripts/verify_repository_governance.py"
+            governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+            marker = root / "replacement-python-ran"
+            workspace_bin = root / ".venv/bin"
+            workspace_bin.mkdir(parents=True)
+            workspace_python = workspace_bin / "python3"
+            workspace_python.symlink_to(sys.executable)
+            replacement = root / "replacement-python"
+            replacement.write_text(
+                "#!/bin/sh\n"
+                f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(marker))}\n",
+                encoding="utf-8",
+            )
+            replacement.chmod(0o770)
+
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text(
+                "#!/bin/sh\n"
+                f"exec /bin/mv {shlex.quote(str(replacement))} "
+                f"{shlex.quote(str(workspace_python))}\n",
+                encoding="utf-8",
+            )
+            fake_uv.chmod(0o755)
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            result = subprocess.run(
+                ["scripts/verify_ops_foundation.sh", "--governance-live"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("group/other writable", result.stderr)
+            self.assertFalse(marker.exists())
+
+    def test_governance_live_missing_workspace_python_stops_before_sync(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+            root = self._fixture(directory)
+            manifest = root / ".github/repository-governance.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("{}\n", encoding="utf-8")
+            governance = root / "scripts/verify_repository_governance.py"
+            governance.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            uv_marker = root / "uv-ran"
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text(
+                "#!/bin/sh\n"
+                f"/usr/bin/printf '%s\\n' CALLED > {shlex.quote(str(uv_marker))}\n",
+                encoding="utf-8",
+            )
+            fake_uv.chmod(0o755)
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_gh.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            result = subprocess.run(
+                ["scripts/verify_ops_foundation.sh", "--governance-live"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("must exist before live sync", result.stderr)
+            self.assertFalse(uv_marker.exists())
 
     def test_preview_condition_mutations_fail_closed(self) -> None:
         mutations: dict[str, Callable[[str], str]] = {
@@ -1625,10 +1794,46 @@ exit "$source_status"
         self.assertEqual(
             1,
             verifier.count(
+                "prepare_live_python() {\n"
+                "  validate_live_python\n"
+                "  sync_live_python_environment\n"
+                "  validate_live_python\n"
+                "}\n"
+            ),
+        )
+        self.assertEqual(
+            1,
+            verifier.count(
+                "run_live_python() {\n"
+                "  /usr/bin/env -i \\\n"
+                '    HOME="$LIVE_TRUSTED_HOME" \\\n'
+                '    PATH="$LIVE_CHILD_PATH" \\\n'
+                '    "$LIVE_PYTHON_BIN" -I -s "$@"\n'
+                "}\n"
+            ),
+        )
+        self.assertEqual(
+            1,
+            verifier.count(
+                "verify_static_contract_live() {\n"
+                '  run_live_python "$CONTRACT_SCRIPT" static --repo-root '
+                '"$REPO_ROOT"\n'
+            ),
+        )
+        self.assertEqual(
+            1,
+            verifier.count(
+                '      run_live_python "$GOVERNANCE_VERIFIER" --live --gh-bin '
+                '"$LIVE_GH_BIN"\n'
+            ),
+        )
+        self.assertEqual(
+            1,
+            verifier.count(
                 "verify_live_contract() {\n"
                 "  prepare_live_toolchain\n"
-                "  verify_static_contract_live\n"
                 "  prepare_live_python\n"
+                "  verify_static_contract_live\n"
                 "  /usr/bin/env -i \\\n"
                 '    HOME="$LIVE_TRUSTED_HOME" \\\n'
                 '    OPS_FOUNDATION_GCLOUD_ACCOUNT="${OPS_FOUNDATION_GCLOUD_ACCOUNT:-}" '

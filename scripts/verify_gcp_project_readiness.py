@@ -902,11 +902,18 @@ def _validate_artifact_repository(document: Any, repository: str) -> None:
     keep = _object(policies[keep_id], f"{repository} keep policy")
     condition = _object(delete.get("condition"), f"{repository} delete condition")
     recent = _object(keep.get("mostRecentVersions"), f"{repository} keep count")
-    if set(delete) != {"action", "condition"} or set(keep) != {
-        "action",
-        "mostRecentVersions",
-    }:
-        _fail(f"Artifact Registry {repository} cleanup policy fields drifted")
+    if (
+        set(delete) != {"id", "action", "condition"}
+        or set(keep)
+        != {
+            "id",
+            "action",
+            "mostRecentVersions",
+        }
+        or delete.get("id") != delete_id
+        or keep.get("id") != keep_id
+    ):
+        _fail(f"Artifact Registry {repository} cleanup policy fields or IDs drifted")
     condition_fields = {
         "newerThan",
         "olderThan",

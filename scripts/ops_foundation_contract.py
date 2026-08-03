@@ -32,7 +32,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "050532388dab304678ec06fdecddeb8ae42e293bfb5a4b95361bbfe7adde024d"
+        "880bceca77c7e7ecae1eead4def5f0298c9d750ecbb4fd132d6948d939eb35ae"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -40,12 +40,12 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "159107d4e80d4901219fea3308fea31edc4a4a9b3e64414e9dcb9181cc718069"
+        "659c4ac6961661218a657d3b0c74acb720c0dd6338dcd42b34f68e02bd2b20f6"
     )
 }
 EXPECTED_PINNED_READINESS_FILES = {
     "scripts/gcp_project_readiness_contract.json": (
-        "e4ad8de73b80e70f290626dbadcb9ae02189060510f4167c58391ce71cdbb520"
+        "c1d54db7fb4c51efef2f6e68b6e59d6fd5d9f8e3da8e6bd5e7ef07fe570d7bb8"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
@@ -53,9 +53,14 @@ EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
         ("google_cloud_run_v2_job", "grant_probe"),
         ("google_cloud_run_v2_job", "maintenance"),
         ("google_cloud_run_v2_job", "migration"),
+        ("google_cloud_run_v2_job", "scheduled_maintenance"),
         ("google_cloud_run_v2_job_iam_member", "deployer_grant_probe_job"),
         ("google_cloud_run_v2_job_iam_member", "deployer_maintenance_job"),
         ("google_cloud_run_v2_job_iam_member", "deployer_migration_job"),
+        (
+            "google_cloud_run_v2_job_iam_member",
+            "deployer_scheduled_maintenance_job",
+        ),
         ("google_cloud_run_v2_job_iam_member", "scheduler_maintenance_job"),
         ("google_cloud_run_v2_service", "agent"),
         ("google_cloud_run_v2_service_iam_member", "deployer_service_update"),
@@ -68,11 +73,12 @@ EXPECTED_TERRAFORM_TEST_ABSTRACT = {
         "foundation_security_contract",
         "foundation_bootstrap_contract",
         "jobs_bootstrap_contract",
+        "services_bootstrap_contract",
     ]
 }
 EXPECTED_TERRAFORM_TEST_SUMMARY = {
     "status": "pass",
-    "passed": 3,
+    "passed": 4,
     "failed": 0,
     "errored": 0,
     "skipped": 0,
@@ -363,19 +369,20 @@ EXPECTED_VARIABLES = {
     "agent_delivery_stage": {
         "description": (
             "Explicit bootstrap stage: foundation creates prerequisites, jobs "
-            "creates migration/probe jobs, and services creates the serving surface."
+            "creates one-shot jobs, services creates the smokeable serving surface, "
+            "and launch adds the active reviewed schedule."
         ),
         "type": "string",
         "default": "foundation",
         "validation": [
             {
                 "condition": (
-                    "${contains([foundation, jobs, services], "
+                    "${contains([foundation, jobs, services, launch], "
                     "var.agent_delivery_stage)}"
                 ),
                 "error_message": (
                     "agent_delivery_stage must be exactly foundation, jobs, "
-                    "or services."
+                    "services, or launch."
                 ),
             },
             {
@@ -389,17 +396,17 @@ EXPECTED_VARIABLES = {
                     "var.agent_secret_versions != null)}"
                 ),
                 "error_message": (
-                    "foundation requires null image/version inputs; jobs and "
-                    "services require one immutable production image, no preview "
-                    "image, and the complete reviewed production numeric version map."
+                    "foundation requires null image/version inputs; every later stage "
+                    "requires one immutable production image, no preview image, and "
+                    "the complete reviewed production numeric version map."
                 ),
             },
         ],
     },
     "agent_bootstrap_image": {
         "description": (
-            "Reviewed immutable agent image for the jobs and services stages; null "
-            "during foundation bootstrap, after which CD owns digest changes."
+            "Reviewed immutable agent image for the jobs, services, and launch stages; "
+            "null during foundation bootstrap, after which CD owns digest changes."
         ),
         "type": "string",
         "default": None,
@@ -647,6 +654,22 @@ EXPECTED_RESOURCE_CONFIGS = {
             "run.revisions.get",
             "run.services.get",
             "run.services.update",
+        ],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_project_iam_custom_role", "scheduled_maintenance_delivery"): {
+        "project": "${var.project_id}",
+        "role_id": "cloudRunScheduledMaintenanceDelivery",
+        "title": "Cloud Run scheduled maintenance delivery",
+        "description": (
+            "Update and verify only the existing scheduled maintenance job; "
+            "execution remains exclusive to Cloud Scheduler."
+        ),
+        "stage": "GA",
+        "permissions": [
+            "run.jobs.get",
+            "run.jobs.update",
+            "run.operations.get",
         ],
         "lifecycle": [{"prevent_destroy": True}],
     },
@@ -1053,8 +1076,8 @@ EXPECTED_CHECK_BLOCKS = [
                         "var.agent_secret_versions != null)}"
                     ),
                     "error_message": (
-                        "foundation requires null image/version inputs; jobs and "
-                        "services require one immutable production image, no preview "
+                        "foundation requires null image/version inputs; every later "
+                        "stage requires one immutable production image, no preview "
                         "image, and the complete reviewed production numeric version map."
                     ),
                 }
@@ -1072,7 +1095,7 @@ EXPECTED_CHECK_BLOCKS = [
                         "local.required_production_delivery_secret_names)}"
                     ),
                     "error_message": (
-                        "jobs and services require exactly the four production "
+                        "every non-foundation stage requires exactly the four production "
                         "delivery secret IDs, with no missing or extra version keys."
                     ),
                 }
@@ -1822,6 +1845,12 @@ def validate_terraform_test_result(
             "progress": "complete",
             "status": "pass",
         },
+        {
+            "path": "tests/foundation.tftest.hcl",
+            "run": "services_bootstrap_contract",
+            "progress": "complete",
+            "status": "pass",
+        },
     ]
     if completed_runs != expected_runs:
         _fail(
@@ -1836,7 +1865,7 @@ def validate_terraform_test_result(
     ]
     if summaries != [EXPECTED_TERRAFORM_TEST_SUMMARY]:
         _fail(
-            "Terraform test summary must report exactly 3 passed, 0 failed, "
+            "Terraform test summary must report exactly 4 passed, 0 failed, "
             f"0 errored, 0 skipped; got={summaries}"
         )
 

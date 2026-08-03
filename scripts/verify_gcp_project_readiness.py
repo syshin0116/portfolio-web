@@ -49,7 +49,7 @@ READINESS_CONTRACT_PATH = Path(__file__).with_name(
     "gcp_project_readiness_contract.json"
 )
 READINESS_CONTRACT_SHA256 = (
-    "e4ad8de73b80e70f290626dbadcb9ae02189060510f4167c58391ce71cdbb520"
+    "c1d54db7fb4c51efef2f6e68b6e59d6fd5d9f8e3da8e6bd5e7ef07fe570d7bb8"
 )
 
 PRODUCTION_RUNTIME_SA = f"agent-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
@@ -70,6 +70,9 @@ CLOUD_SCHEDULER_SERVICE_AGENT = (
     f"service-{PROJECT_NUMBER}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
 )
 CLOUD_RUN_DELIVERY_ROLE = f"projects/{PROJECT_ID}/roles/cloudRunAgentDelivery"
+SCHEDULED_MAINTENANCE_DELIVERY_ROLE = (
+    f"projects/{PROJECT_ID}/roles/cloudRunScheduledMaintenanceDelivery"
+)
 
 WORKLOAD_SERVICE_ACCOUNTS = frozenset(
     {
@@ -173,6 +176,7 @@ JOB_SPECS = {
         "secret": "agent-migration-database-url",
         "timeout": 900,
         "scheduler": None,
+        "delivery_role": CLOUD_RUN_DELIVERY_ROLE,
     },
     "agent-grants": {
         "service_account": PRODUCTION_RUNTIME_SA,
@@ -183,6 +187,7 @@ JOB_SPECS = {
         "secret": "agent-database-url",
         "timeout": 600,
         "scheduler": None,
+        "delivery_role": CLOUD_RUN_DELIVERY_ROLE,
     },
     "agent-maintenance": {
         "service_account": PRODUCTION_RUNTIME_SA,
@@ -192,7 +197,19 @@ JOB_SPECS = {
         "module": "agent.maintenance",
         "secret": "agent-database-url",
         "timeout": 600,
+        "scheduler": None,
+        "delivery_role": CLOUD_RUN_DELIVERY_ROLE,
+    },
+    "agent-scheduled-maintenance": {
+        "service_account": PRODUCTION_RUNTIME_SA,
+        "deployer": PRODUCTION_DEPLOYER_SA,
+        "repository": "agent",
+        "container": "maintenance",
+        "module": "agent.maintenance",
+        "secret": "agent-database-url",
+        "timeout": 600,
         "scheduler": MAINTENANCE_SCHEDULER_SA,
+        "delivery_role": SCHEDULED_MAINTENANCE_DELIVERY_ROLE,
     },
 }
 
@@ -249,6 +266,13 @@ def _fixed_commands() -> frozenset[tuple[str, ...]]:
             "roles",
             "describe",
             "cloudRunAgentDelivery",
+            "--format=json",
+        ),
+        (
+            "iam",
+            "roles",
+            "describe",
+            "cloudRunScheduledMaintenanceDelivery",
             "--format=json",
         ),
         ("iam", "service-accounts", "list", "--format=json"),
@@ -822,8 +846,11 @@ def _validate_project_policy(document: Any) -> None:
     workload_members = {
         f"serviceAccount:{email}" for email in WORKLOAD_SERVICE_ACCOUNTS
     }
-    if any(member in workload_members for _, member in pairs):
-        _fail("a managed workload identity has a direct project-level role")
+    workload_project_roles = {
+        (role, member) for role, member in pairs if member in workload_members
+    }
+    if workload_project_roles:
+        _fail("managed workload identities must not have project-wide roles")
     forbidden_roles = {
         "roles/iam.serviceAccountUser",
         "roles/iam.serviceAccountTokenCreator",
@@ -869,6 +896,29 @@ def _validate_delivery_role(document: Any) -> None:
         or len(permissions) != len(expected_permissions)
     ):
         _fail("Cloud Run delivery role is not the exact seven-permission role")
+
+
+def _validate_scheduled_maintenance_delivery_role(document: Any) -> None:
+    role = _object(document, "Cloud Run scheduled maintenance delivery role")
+    expected_permissions = {
+        "run.jobs.get",
+        "run.jobs.update",
+        "run.operations.get",
+    }
+    permissions = role.get("includedPermissions")
+    if (
+        role.get("name") != SCHEDULED_MAINTENANCE_DELIVERY_ROLE
+        or role.get("deleted", False) is not False
+        or role.get("stage") != "GA"
+        or not isinstance(permissions, list)
+        or not all(isinstance(permission, str) for permission in permissions)
+        or set(permissions) != expected_permissions
+        or len(permissions) != len(expected_permissions)
+    ):
+        _fail(
+            "Cloud Run scheduled maintenance delivery role is not the exact "
+            "three-permission non-executing role"
+        )
 
 
 def _validate_enabled_apis(raw: str) -> None:
@@ -1247,7 +1297,7 @@ def _validate_scheduler(document: Any) -> None:
     allowed_headers = {"Content-Type", "User-Agent"}
     expected_uri = (
         f"https://run.googleapis.com/v2/projects/{PROJECT_ID}/locations/{REGION}/"
-        "jobs/agent-maintenance:run"
+        "jobs/agent-scheduled-maintenance:run"
     )
     if (
         scheduler.get("name")
@@ -1300,6 +1350,19 @@ def verify_exact_project_readiness(
                 "--format=json",
             ),
             "Cloud Run delivery role",
+        )
+    )
+    _validate_scheduled_maintenance_delivery_role(
+        _read_json(
+            read,
+            (
+                "iam",
+                "roles",
+                "describe",
+                "cloudRunScheduledMaintenanceDelivery",
+                "--format=json",
+            ),
+            "Cloud Run scheduled maintenance delivery role",
         )
     )
     _validate_enabled_apis(
@@ -1627,7 +1690,7 @@ def verify_exact_project_readiness(
         suffix = (job, "--region", REGION, "--format=json")
         _validate_job(_read_json(read, ("run", "jobs", "describe", *suffix), job), job)
         expected_policy = {
-            (CLOUD_RUN_DELIVERY_ROLE, f"serviceAccount:{spec['deployer']}")
+            (str(spec["delivery_role"]), f"serviceAccount:{spec['deployer']}")
         }
         scheduler = spec["scheduler"]
         if scheduler is not None:

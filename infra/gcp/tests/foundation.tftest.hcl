@@ -25,6 +25,14 @@ override_resource {
 }
 
 override_resource {
+  target          = google_project_iam_custom_role.scheduled_maintenance_delivery
+  override_during = plan
+  values = {
+    name = "projects/festive-ally-503605-v7/roles/cloudRunScheduledMaintenanceDelivery"
+  }
+}
+
+override_resource {
   target          = google_service_account.runtime
   override_during = plan
   values = {
@@ -149,7 +157,7 @@ run "foundation_security_contract" {
   command = plan
 
   variables {
-    agent_delivery_stage          = "services"
+    agent_delivery_stage          = "launch"
     agent_bootstrap_image         = "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
     agent_preview_bootstrap_image = null
     agent_secret_versions = {
@@ -520,6 +528,7 @@ run "foundation_security_contract" {
       length(google_cloud_run_v2_job.migration) == 1
       && length(google_cloud_run_v2_job.grant_probe) == 1
       && length(google_cloud_run_v2_job.maintenance) == 1
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 1
       && alltrue([
         for environment, job in google_cloud_run_v2_job.migration :
         environment == "production"
@@ -584,8 +593,24 @@ run "foundation_security_contract" {
         ])
         && job.deletion_protection
       ])
+      && alltrue([
+        for environment, job in google_cloud_run_v2_job.scheduled_maintenance :
+        environment == "production"
+        && job.name == "agent-scheduled-maintenance"
+        && job.template[0].template[0].service_account == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].service_account
+        && job.template[0].template[0].timeout == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].timeout
+        && job.template[0].template[0].max_retries == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].max_retries
+        && job.template[0].template[0].execution_environment == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].execution_environment
+        && job.template[0].template[0].containers[0].name == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].name
+        && job.template[0].template[0].containers[0].image == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].image
+        && job.template[0].template[0].containers[0].command == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].command
+        && job.template[0].template[0].containers[0].args == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].args
+        && job.template[0].template[0].containers[0].resources[0].limits == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].resources[0].limits
+        && job.template[0].template[0].containers[0].env == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].env
+        && job.deletion_protection == google_cloud_run_v2_job.maintenance[environment].deletion_protection
+      ])
     )
-    error_message = "Production alone must run the same-image one-shot jobs using exact numeric secret pins."
+    error_message = "Production alone must run exact one-shot jobs, with distinct validation and scheduled maintenance jobs sharing one template."
   }
 
   assert {
@@ -594,6 +619,7 @@ run "foundation_security_contract" {
       && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 1
       && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 1
       && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job) == 1
       && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 1
       && toset(google_project_iam_custom_role.cloud_run_delivery.permissions) == toset([
         "run.jobs.get",
@@ -603,6 +629,11 @@ run "foundation_security_contract" {
         "run.revisions.get",
         "run.services.get",
         "run.services.update",
+      ])
+      && toset(google_project_iam_custom_role.scheduled_maintenance_delivery.permissions) == toset([
+        "run.jobs.get",
+        "run.jobs.update",
+        "run.operations.get",
       ])
       && alltrue([
         for environment, binding in google_cloud_run_v2_service_iam_member.deployer_service_update :
@@ -624,10 +655,17 @@ run "foundation_security_contract" {
         binding.role == google_project_iam_custom_role.cloud_run_delivery.name
         && binding.member == "serviceAccount:${local.cloud_run_environments[environment].deployer_service_account}"
       ])
+      && alltrue([
+        for environment, binding in google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job :
+        binding.role == google_project_iam_custom_role.scheduled_maintenance_delivery.name
+        && binding.member == "serviceAccount:${local.cloud_run_environments[environment].deployer_service_account}"
+        && binding.name == "agent-scheduled-maintenance"
+      ])
       && google_cloud_run_v2_job_iam_member.scheduler_maintenance_job["production"].role == "roles/run.invoker"
       && google_cloud_run_v2_job_iam_member.scheduler_maintenance_job["production"].member == "serviceAccount:agent-maintenance-scheduler@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_cloud_run_v2_job_iam_member.scheduler_maintenance_job["production"].name == "agent-scheduled-maintenance"
     )
-    error_message = "Deployers must keep the exact seven-permission role on matching resources, while the scheduler may invoke only production maintenance."
+    error_message = "Deployers must keep resource-scoped Cloud Run roles, scheduled maintenance delivery must omit execution permission, and Scheduler may invoke only the distinct scheduled job."
   }
 
   assert {
@@ -641,7 +679,7 @@ run "foundation_security_contract" {
       && google_cloud_scheduler_job.guest_maintenance["production"].paused == false
       && google_cloud_scheduler_job.guest_maintenance["production"].retry_config[0].retry_count == 0
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].http_method == "POST"
-      && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].uri == "https://run.googleapis.com/v2/projects/festive-ally-503605-v7/locations/asia-southeast1/jobs/agent-maintenance:run"
+      && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].uri == "https://run.googleapis.com/v2/projects/festive-ally-503605-v7/locations/asia-southeast1/jobs/agent-scheduled-maintenance:run"
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].body == base64encode("{}")
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].headers == tomap({
         "Content-Type" = "application/json"
@@ -679,11 +717,13 @@ run "foundation_bootstrap_contract" {
       && length(google_cloud_run_v2_job.migration) == 0
       && length(google_cloud_run_v2_job.grant_probe) == 0
       && length(google_cloud_run_v2_job.maintenance) == 0
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 0
       && length(google_cloud_run_v2_service_iam_member.public_invoker) == 0
       && length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 0
       && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 0
       && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 0
       && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 0
+      && length(google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job) == 0
       && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 0
       && length(google_cloud_scheduler_job.guest_maintenance) == 0
     )
@@ -740,9 +780,11 @@ run "jobs_bootstrap_contract" {
       && length(google_cloud_run_v2_job.migration) == 1
       && length(google_cloud_run_v2_job.grant_probe) == 1
       && length(google_cloud_run_v2_job.maintenance) == 1
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 1
       && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 1
       && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 1
       && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job) == 1
       && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 0
       && length(google_cloud_scheduler_job.guest_maintenance) == 0
     )
@@ -781,6 +823,18 @@ run "jobs_bootstrap_contract" {
           if try(env.value_source[0].secret_key_ref[0].version, null) != null
         ])
       ])
+      && alltrue([
+        for environment, job in google_cloud_run_v2_job.scheduled_maintenance :
+        environment == "production"
+        && job.name == "agent-scheduled-maintenance"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
+        && job.template[0].template[0].containers[0].env == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].env
+        && alltrue([
+          for env in job.template[0].template[0].containers[0].env :
+          can(regex("^[1-9][0-9]*$", env.value_source[0].secret_key_ref[0].version))
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ])
+      ])
     )
     error_message = "The jobs stage must use the reviewed digest and positive numeric secret versions."
   }
@@ -797,6 +851,39 @@ run "jobs_bootstrap_contract" {
       && output.production_maintenance_job == "agent-maintenance"
       && output.production_guest_maintenance_schedule == null
     )
-    error_message = "The jobs stage must expose only the three Production job names and no schedule."
+    error_message = "The jobs stage must expose only the reviewed Production job outputs and no schedule."
+  }
+}
+
+run "services_bootstrap_contract" {
+  command = plan
+
+  variables {
+    agent_delivery_stage          = "services"
+    agent_bootstrap_image         = "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    agent_preview_bootstrap_image = null
+    agent_secret_versions = {
+      agent-auth-secret            = "11"
+      agent-database-url           = "12"
+      agent-migration-database-url = "13"
+      openai-api-key               = "16"
+    }
+  }
+
+  assert {
+    condition = (
+      length(google_cloud_run_v2_service.agent) == 1
+      && length(google_cloud_run_v2_service_iam_member.public_invoker) == 1
+      && length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 1
+      && length(google_cloud_run_v2_job.migration) == 1
+      && length(google_cloud_run_v2_job.grant_probe) == 1
+      && length(google_cloud_run_v2_job.maintenance) == 1
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 1
+      && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 0
+      && length(google_cloud_scheduler_job.guest_maintenance) == 0
+      && output.production_cloud_run_service == "agent"
+      && output.production_guest_maintenance_schedule == null
+    )
+    error_message = "The services stage must create the smokeable serving surface without any autonomous maintenance schedule before launch approval."
   }
 }

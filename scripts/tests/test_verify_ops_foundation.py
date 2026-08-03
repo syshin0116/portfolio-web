@@ -159,7 +159,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(
-            4,
+            5,
             cloud_run_source.count(
                 "google_artifact_registry_repository_iam_member."
                 "active_cloud_run_reader,"
@@ -189,7 +189,7 @@ class StaticVerifierMutationTests(unittest.TestCase):
         self.assertEqual(1, production_definition.count("DATABASE_URL"))
         self.assertEqual(1, production_definition.count("OPENAI_API_KEY"))
         self.assertEqual(
-            4,
+            5,
             cloud_run_source.count("local.production_cloud_run_environments"),
         )
         self.assertIn('MODEL                     = "openai:gpt-5.6-luna"', production)

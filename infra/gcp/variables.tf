@@ -65,13 +65,13 @@ variable "github_production_environment" {
 }
 
 variable "agent_delivery_stage" {
-  description = "Explicit bootstrap stage: foundation creates prerequisites, jobs creates migration/probe jobs, and services creates the serving surface."
+  description = "Explicit bootstrap stage: foundation creates prerequisites, jobs creates one-shot jobs, services creates the smokeable serving surface, and launch adds the active reviewed schedule."
   type        = string
   default     = "foundation"
 
   validation {
-    condition     = contains(["foundation", "jobs", "services"], var.agent_delivery_stage)
-    error_message = "agent_delivery_stage must be exactly foundation, jobs, or services."
+    condition     = contains(["foundation", "jobs", "services", "launch"], var.agent_delivery_stage)
+    error_message = "agent_delivery_stage must be exactly foundation, jobs, services, or launch."
   }
 
   validation {
@@ -84,12 +84,12 @@ variable "agent_delivery_stage" {
       && var.agent_preview_bootstrap_image == null
       && var.agent_secret_versions != null
     )
-    error_message = "foundation requires null image/version inputs; jobs and services require one immutable production image, no preview image, and the complete reviewed production numeric version map."
+    error_message = "foundation requires null image/version inputs; every later stage requires one immutable production image, no preview image, and the complete reviewed production numeric version map."
   }
 }
 
 variable "agent_bootstrap_image" {
-  description = "Reviewed immutable agent image for the jobs and services stages; null during foundation bootstrap, after which CD owns digest changes."
+  description = "Reviewed immutable agent image for the jobs, services, and launch stages; null during foundation bootstrap, after which CD owns digest changes."
   type        = string
   default     = null
 

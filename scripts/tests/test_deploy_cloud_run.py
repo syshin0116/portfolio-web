@@ -40,6 +40,13 @@ class CloudRunDeliveryTests(unittest.TestCase):
         image_prefix = image_digest.rsplit(":", 1)[0] + ":"
         previous_image_digest = image_prefix + "4" * 64
         rollback_image_digest = image_prefix + "5" * 64
+        job_images = {
+            f"{service}-migrate": previous_image_digest,
+            f"{service}-grants": previous_image_digest,
+            f"{service}-maintenance": previous_image_digest,
+        }
+        if not preview:
+            job_images["agent-scheduled-maintenance"] = previous_image_digest
         binary = root / "bin"
         binary.mkdir()
         state = root / "state.json"
@@ -55,12 +62,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         f"{service}-old": previous_image_digest,
                         f"{service}-target": rollback_image_digest,
                     },
-                    "job_images": {
-                        f"{service}-migrate": previous_image_digest,
-                        f"{service}-grants": previous_image_digest,
-                        f"{service}-maintenance": previous_image_digest,
-                    },
+                    "job_images": job_images,
                     "job_etags": {},
+                    "job_update_failures": [],
                     "run_requests": [],
                     "traffic_updates": 0,
                 }
@@ -94,6 +98,27 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     job = args[3]
                     state["job_images"][job] = args[args.index("--image") + 1]
                     state["job_etags"][job] = "etag-" + job + "-9"
+                    if (
+                        os.environ.get("FAIL_JOB_UPDATE_ONCE") == job
+                        and job not in state["job_update_failures"]
+                    ):
+                        state["job_update_failures"].append(job)
+                        state_path.write_text(json.dumps(state), encoding="utf-8")
+                        raise SystemExit("injected ambiguous job update failure")
+                    if (
+                        os.environ.get("BLOCK_JOB_UPDATE_ONCE") == job
+                        and job not in state["job_update_failures"]
+                    ):
+                        import signal
+                        import time
+
+                        state["job_update_failures"].append(job)
+                        state_path.write_text(json.dumps(state), encoding="utf-8")
+                        Path(os.environ["BLOCK_JOB_UPDATE_MARKER"]).touch()
+                        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+                        signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
+                        while True:
+                            time.sleep(0.1)
                 elif args[:3] == ["run", "services", "update"]:
                     state["service_image"] = args[args.index("--image") + 1]
                     state["latest_created"] = (
@@ -453,6 +478,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 def job_document(job):
                     migration = job.endswith("-migrate")
                     maintenance = job.endswith("-maintenance")
+                    mutation_target = os.environ.get("FAKE_JOB_MUTATION_TARGET")
+                    job_environment = (
+                        os.environ if mutation_target in (None, job) else {}
+                    )
                     expected_secret = (
                         (
                             "agent-preview-migration-database-url"
@@ -504,7 +533,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         ),
                         "reconciling": False,
                         "terminalCondition": {
-                            "state": os.environ.get(
+                            "state": job_environment.get(
                                 "FAKE_JOB_STATE", "CONDITION_SUCCEEDED"
                             )
                         },
@@ -515,31 +544,35 @@ class CloudRunDeliveryTests(unittest.TestCase):
                             "taskCount": 1,
                             "parallelism": 1,
                             "template": {
-                                "serviceAccount": os.environ.get(
+                                "serviceAccount": job_environment.get(
                                     "FAKE_JOB_SERVICE_ACCOUNT", expected_sa
                                 ),
-                                "timeout": os.environ.get(
+                                "timeout": job_environment.get(
                                     "FAKE_JOB_TIMEOUT", timeout
                                 ),
                                 "executionEnvironment": (
                                     "EXECUTION_ENVIRONMENT_GEN2"
                                 ),
                                 "maxRetries": int(
-                                    os.environ.get("FAKE_JOB_MAX_RETRIES", "0")
+                                    job_environment.get(
+                                        "FAKE_JOB_MAX_RETRIES", "0"
+                                    )
                                 ),
                                 "containers": [{
                                     "name": container_name,
-                                    "image": os.environ.get(
+                                    "image": job_environment.get(
                                         "FAKE_JOB_IMAGE",
                                         state["job_images"].get(job, ""),
                                     ),
                                     "command": [
-                                        os.environ.get("FAKE_JOB_COMMAND", "python")
+                                        job_environment.get(
+                                            "FAKE_JOB_COMMAND", "python"
+                                        )
                                     ],
                                     "args": ["-m", module],
                                     "resources": {
                                         "limits": {
-                                            "cpu": os.environ.get(
+                                            "cpu": job_environment.get(
                                                 "FAKE_JOB_CPU", "1"
                                             ),
                                             "memory": "1Gi",
@@ -558,11 +591,11 @@ class CloudRunDeliveryTests(unittest.TestCase):
                                             "name": "DATABASE_URL",
                                             "valueSource": {
                                                 "secretKeyRef": {
-                                                    "secret": os.environ.get(
+                                                    "secret": job_environment.get(
                                                         "FAKE_JOB_SECRET",
                                                         expected_secret,
                                                     ),
-                                                    "version": os.environ.get(
+                                                    "version": job_environment.get(
                                                         "FAKE_JOB_SECRET_VERSION",
                                                         "31",
                                                     ),
@@ -575,26 +608,30 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         },
                     }
                     task_template = document["template"]["template"]
-                    if os.environ.get("FAKE_JOB_VOLUMES") == "true":
+                    if job_environment.get("FAKE_JOB_VOLUMES") == "true":
                         task_template["volumes"] = [{
                             "name": "drift",
                             "emptyDir": {"medium": "MEMORY"},
                         }]
-                    if os.environ.get("FAKE_JOB_VPC") == "true":
+                    if job_environment.get("FAKE_JOB_VPC") == "true":
                         task_template["vpcAccess"] = {
                             "networkInterfaces": [{"network": "default"}]
                         }
                     container = task_template["containers"][0]
-                    if os.environ.get("FAKE_JOB_VOLUME_MOUNT") == "true":
+                    if job_environment.get("FAKE_JOB_VOLUME_MOUNT") == "true":
                         container["volumeMounts"] = [{
                             "name": "drift",
                             "mountPath": "/drift",
                         }]
-                    if "FAKE_JOB_WORKING_DIR" in os.environ:
-                        container["workingDir"] = os.environ["FAKE_JOB_WORKING_DIR"]
-                    if "FAKE_JOB_BASE_IMAGE" in os.environ:
-                        container["baseImageUri"] = os.environ["FAKE_JOB_BASE_IMAGE"]
-                    if os.environ.get("FAKE_JOB_SANDBOX") == "true":
+                    if "FAKE_JOB_WORKING_DIR" in job_environment:
+                        container["workingDir"] = job_environment[
+                            "FAKE_JOB_WORKING_DIR"
+                        ]
+                    if "FAKE_JOB_BASE_IMAGE" in job_environment:
+                        container["baseImageUri"] = job_environment[
+                            "FAKE_JOB_BASE_IMAGE"
+                        ]
+                    if job_environment.get("FAKE_JOB_SANDBOX") == "true":
                         container["sandboxLauncher"] = True
                     return document
 
@@ -810,6 +847,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "/revisions/agent-g",
             "gcloud run services update-traffic agent",
             "uv run --frozen --package syshin0116-dev-agent",
+            "gcloud run jobs update agent-scheduled-maintenance",
         ]
         cursor = -1
         for marker in ordered:
@@ -850,6 +888,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
             ],
             state["run_requests"],
         )
+        scheduled_promotion = operations.rindex(
+            "gcloud run jobs update agent-scheduled-maintenance"
+        )
+        self.assertLess(promotion, scheduled_promotion)
         self.assertNotIn(ACCESS_TOKEN, operations)
 
     def test_official_v2_service_without_terraform_only_field_passes(self) -> None:
@@ -912,6 +954,104 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertNotIn("restoring traffic", result.stderr)
         self.assertEqual("agent-old", state["serving"])
         self.assertFalse(state["smoke"])
+        self.assertEqual(
+            {state["revision_images"]["agent-old"]},
+            set(state["job_images"].values()),
+        )
+
+    def test_rejected_candidate_never_reaches_scheduled_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory, fail_protocol=True)
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+            state = json.loads(
+                (Path(directory) / "state.json").read_text(encoding="utf-8")
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn(
+            "gcloud run jobs update agent-scheduled-maintenance", operations
+        )
+        self.assertEqual(
+            state["revision_images"]["agent-old"],
+            state["job_images"]["agent-scheduled-maintenance"],
+        )
+
+    def test_ambiguous_scheduled_job_update_restores_previous_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAIL_JOB_UPDATE_ONCE"] = "agent-scheduled-maintenance"
+            result = self._run(directory, environment, "deploy")
+            state = json.loads(
+                (Path(directory) / "state.json").read_text(encoding="utf-8")
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("agent-old", state["serving"])
+        self.assertEqual(
+            {state["revision_images"]["agent-old"]},
+            set(state["job_images"].values()),
+        )
+
+    def test_ambiguous_rollback_scheduled_update_restores_previous_release(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment["FAIL_JOB_UPDATE_ONCE"] = "agent-scheduled-maintenance"
+            result = self._run(directory, environment, "rollback", "agent-target")
+            state = json.loads(
+                (Path(directory) / "state.json").read_text(encoding="utf-8")
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("agent-old", state["serving"])
+        self.assertEqual(
+            {state["revision_images"]["agent-old"]},
+            set(state["job_images"].values()),
+        )
+
+    def test_termination_during_scheduled_update_restores_previous_release(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            marker = Path(directory) / "scheduled-update-ready"
+            environment["BLOCK_JOB_UPDATE_ONCE"] = "agent-scheduled-maintenance"
+            environment["BLOCK_JOB_UPDATE_MARKER"] = str(marker)
+            process = subprocess.Popen(
+                [str(DEPLOY_SCRIPT), "deploy"],
+                cwd=REPO_ROOT,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            deadline = time.monotonic() + 15
+            while not marker.exists() and time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.05)
+            if not marker.exists():
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                stdout, stderr = process.communicate(timeout=5)
+                self.fail(
+                    "scheduled update did not reach the cancellation boundary: "
+                    f"stdout={stdout!r} stderr={stderr!r}"
+                )
+            os.killpg(process.pid, signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=15)
+            state = json.loads(
+                (Path(directory) / "state.json").read_text(encoding="utf-8")
+            )
+
+        self.assertNotEqual(0, process.returncode)
+        self.assertIn("restoring traffic to agent-old", stderr)
+        self.assertEqual("agent-old", state["serving"])
         self.assertEqual(
             {state["revision_images"]["agent-old"]},
             set(state["job_images"].values()),
@@ -1039,6 +1179,27 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertNotIn("--to-revisions", operations)
 
+    def test_manual_rollback_ignores_poisoned_optional_job_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment.update(
+                {
+                    "MIGRATION_JOB": "agent-maintenance",
+                    "GRANT_PROBE_JOB": "agent-migrate",
+                    "MAINTENANCE_JOB": "agent-grants",
+                }
+            )
+            result = self._run(directory, environment, "rollback", "agent-target")
+            state = json.loads(
+                (Path(directory) / "state.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            {state["revision_images"]["agent-target"]},
+            set(state["job_images"].values()),
+        )
+
     def test_each_job_drift_stops_after_update_and_before_run(self) -> None:
         mutations = {
             "command": {"FAKE_JOB_COMMAND": "bash"},
@@ -1074,6 +1235,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             ):
                 environment = self._fixture(directory)
                 environment.update(mutation)
+                environment["FAKE_JOB_MUTATION_TARGET"] = "agent-migrate"
                 result = self._run(directory, environment, "deploy")
                 operations = (Path(directory) / "operations.log").read_text(
                     encoding="utf-8"
@@ -1084,6 +1246,25 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 self.assertIn("/jobs/agent-migrate", operations)
                 self.assertNotIn("/jobs/agent-migrate:run", operations)
                 self.assertNotIn("gcloud run services update agent", operations)
+
+    def test_scheduled_job_contract_drift_fails_before_any_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment.update(
+                {
+                    "FAKE_JOB_COMMAND": "bash",
+                    "FAKE_JOB_MUTATION_TARGET": "agent-scheduled-maintenance",
+                }
+            )
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("drifted from the exact executable contract", result.stderr)
+        self.assertNotIn("gcloud run jobs update", operations)
+        self.assertNotIn("gcloud run services update", operations)
 
     def test_job_etag_drift_fails_closed_before_execution_or_service_update(
         self,

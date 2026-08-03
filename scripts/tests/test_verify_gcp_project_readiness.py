@@ -39,6 +39,7 @@ from scripts.verify_gcp_project_readiness import (
     PROJECT_NUMBER,
     REGION,
     REQUIRED_APIS,
+    SCHEDULED_MAINTENANCE_DELIVERY_ROLE,
     SERVICE_SPECS,
     STATE_BUCKET,
     STATE_BUCKET_COMMANDS,
@@ -278,7 +279,7 @@ class FakeRead:
                 (
                     "roles/cloudscheduler.serviceAgent",
                     f"serviceAccount:{CLOUD_SCHEDULER_SERVICE_AGENT}",
-                )
+                ),
             ),
             (
                 "iam",
@@ -297,6 +298,21 @@ class FakeRead:
                     "run.revisions.get",
                     "run.services.get",
                     "run.services.update",
+                ],
+            },
+            (
+                "iam",
+                "roles",
+                "describe",
+                "cloudRunScheduledMaintenanceDelivery",
+                "--format=json",
+            ): {
+                "name": SCHEDULED_MAINTENANCE_DELIVERY_ROLE,
+                "stage": "GA",
+                "includedPermissions": [
+                    "run.jobs.get",
+                    "run.jobs.update",
+                    "run.operations.get",
                 ],
             },
             ("services", "list", "--enabled", "--format=value(config.name)"): (
@@ -403,7 +419,7 @@ class FakeRead:
                     "uri": (
                         "https://run.googleapis.com/v2/projects/"
                         f"{PROJECT_ID}/locations/{REGION}/"
-                        "jobs/agent-maintenance:run"
+                        "jobs/agent-scheduled-maintenance:run"
                     ),
                     "body": "e30=",
                     "headers": {"Content-Type": "application/json"},
@@ -531,7 +547,7 @@ class FakeRead:
             responses[("run", "jobs", "describe", *suffix)] = _job(job)
             pairs = [
                 (
-                    CLOUD_RUN_DELIVERY_ROLE,
+                    spec["delivery_role"],
                     f"serviceAccount:{spec['deployer']}",
                 )
             ]
@@ -600,7 +616,7 @@ class ExactProjectCommandBoundaryTests(unittest.TestCase):
                 {
                     key: value
                     for key, value in JOB_SPECS.items()
-                    if key != "agent-maintenance"
+                    if key != "agent-scheduled-maintenance"
                 },
                 "inventory",
             ),
@@ -921,6 +937,49 @@ class ExactProjectReadinessTests(unittest.TestCase):
                     )
                 )
 
+    def test_scheduled_maintenance_delivery_role_rejects_execution_permission(
+        self,
+    ) -> None:
+        fixture = FakeRead()
+        command = (
+            "iam",
+            "roles",
+            "describe",
+            "cloudRunScheduledMaintenanceDelivery",
+            "--format=json",
+        )
+        document = json.loads(fixture.responses[command])
+        document["includedPermissions"].append("run.jobs.run")
+        fixture.responses[command] = json.dumps(document)
+
+        with self.assertRaisesRegex(ReadinessError, "non-executing role"):
+            self._verify(fixture)
+
+    def test_scheduled_maintenance_rejects_the_general_delivery_role(self) -> None:
+        fixture = FakeRead()
+        suffix = (
+            "agent-scheduled-maintenance",
+            "--region",
+            REGION,
+            "--format=json",
+        )
+        command = ("run", "jobs", "get-iam-policy", *suffix)
+        fixture.responses[command] = json.dumps(
+            _policy(
+                (
+                    CLOUD_RUN_DELIVERY_ROLE,
+                    f"serviceAccount:{PRODUCTION_DEPLOYER_SA}",
+                ),
+                (
+                    "roles/run.invoker",
+                    f"serviceAccount:{MAINTENANCE_SCHEDULER_SA}",
+                ),
+            )
+        )
+
+        with self.assertRaisesRegex(ReadinessError, "IAM does not match"):
+            self._verify(fixture)
+
     def test_project_describe_parent_field_is_ignored_without_scope_reads(self) -> None:
         fixture = FakeRead()
         command = ("projects", "describe", PROJECT_ID, "--format=json")
@@ -1085,7 +1144,7 @@ class ExactProjectReadinessTests(unittest.TestCase):
             )
         )
 
-        with self.assertRaisesRegex(ReadinessError, "direct project-level role"):
+        with self.assertRaisesRegex(ReadinessError, "project-wide roles"):
             self._verify(fixture)
 
     def test_scheduler_service_agent_binding_must_be_unconditional(self) -> None:
@@ -1551,7 +1610,12 @@ class ExactProjectReadinessTests(unittest.TestCase):
     def test_preview_foundation_is_dormant_without_runtime_reads(self) -> None:
         self.assertEqual({"agent"}, set(SERVICE_SPECS))
         self.assertEqual(
-            {"agent-migrate", "agent-grants", "agent-maintenance"},
+            {
+                "agent-migrate",
+                "agent-grants",
+                "agent-maintenance",
+                "agent-scheduled-maintenance",
+            },
             set(JOB_SPECS),
         )
         self.assertFalse(
@@ -1577,6 +1641,27 @@ class ExactProjectReadinessTests(unittest.TestCase):
         )
         scheduler = json.loads(fixture.responses[command])
         scheduler["state"] = "PAUSED"
+        fixture.responses[command] = json.dumps(scheduler)
+
+        with self.assertRaisesRegex(ReadinessError, "Scheduler"):
+            self._verify(fixture)
+
+    def test_scheduler_rejects_the_release_validation_maintenance_job(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "scheduler",
+            "jobs",
+            "describe",
+            "agent-guest-maintenance",
+            "--location",
+            REGION,
+            "--format=json",
+        )
+        scheduler = json.loads(fixture.responses[command])
+        scheduler["httpTarget"]["uri"] = (
+            f"https://run.googleapis.com/v2/projects/{PROJECT_ID}/locations/"
+            f"{REGION}/jobs/agent-maintenance:run"
+        )
         fixture.responses[command] = json.dumps(scheduler)
 
         with self.assertRaisesRegex(ReadinessError, "Scheduler"):

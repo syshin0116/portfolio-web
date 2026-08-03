@@ -99,7 +99,7 @@ locals {
 }
 
 resource "google_cloud_run_v2_service" "agent" {
-  for_each = var.agent_delivery_stage == "services" ? local.production_cloud_run_environments : {}
+  for_each = contains(["services", "launch"], var.agent_delivery_stage) ? local.production_cloud_run_environments : {}
 
   project             = var.project_id
   name                = each.value.service_name
@@ -404,6 +404,70 @@ resource "google_cloud_run_v2_job" "maintenance" {
   }
 }
 
+resource "google_cloud_run_v2_job" "scheduled_maintenance" {
+  for_each = var.agent_delivery_stage == "foundation" ? {} : local.production_cloud_run_environments
+
+  project             = var.project_id
+  name                = "agent-scheduled-maintenance"
+  location            = var.region
+  deletion_protection = true
+
+  template {
+    template {
+      service_account       = each.value.runtime_service_account
+      max_retries           = 0
+      timeout               = "600s"
+      execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
+
+      containers {
+        name    = "maintenance"
+        image   = each.value.bootstrap_image
+        command = ["python"]
+        args    = ["-m", "agent.maintenance"]
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "1Gi"
+          }
+        }
+
+        env {
+          name  = "ENV_MODE"
+          value = "PRODUCTION"
+        }
+
+        env {
+          name  = "RUN_MIGRATIONS_ON_STARTUP"
+          value = "false"
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = each.value.runtime_secrets.DATABASE_URL.secret
+              version = each.value.runtime_secrets.DATABASE_URL.version
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_artifact_registry_repository_iam_member.active_cloud_run_reader,
+    google_secret_manager_secret_iam_member.runtime_accessor,
+  ]
+
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+    ]
+  }
+}
+
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   for_each = google_cloud_run_v2_service.agent
 
@@ -454,9 +518,19 @@ resource "google_cloud_run_v2_job_iam_member" "deployer_maintenance_job" {
   member   = "serviceAccount:${local.cloud_run_environments[each.key].deployer_service_account}"
 }
 
+resource "google_cloud_run_v2_job_iam_member" "deployer_scheduled_maintenance_job" {
+  for_each = google_cloud_run_v2_job.scheduled_maintenance
+
+  project  = var.project_id
+  location = each.value.location
+  name     = each.value.name
+  role     = google_project_iam_custom_role.scheduled_maintenance_delivery.name
+  member   = "serviceAccount:${local.cloud_run_environments[each.key].deployer_service_account}"
+}
+
 resource "google_cloud_run_v2_job_iam_member" "scheduler_maintenance_job" {
-  for_each = var.agent_delivery_stage == "services" ? {
-    production = google_cloud_run_v2_job.maintenance["production"]
+  for_each = var.agent_delivery_stage == "launch" ? {
+    production = google_cloud_run_v2_job.scheduled_maintenance["production"]
   } : {}
 
   project  = var.project_id
@@ -467,7 +541,7 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_maintenance_job" {
 }
 
 resource "google_cloud_scheduler_job" "guest_maintenance" {
-  for_each = var.agent_delivery_stage == "services" ? {
+  for_each = var.agent_delivery_stage == "launch" ? {
     production = local.cloud_run_environments.production
   } : {}
 
@@ -478,9 +552,8 @@ resource "google_cloud_scheduler_job" "guest_maintenance" {
   schedule         = "*/15 * * * *"
   time_zone        = "Etc/UTC"
   attempt_deadline = "60s"
-  # Public launch requires retention maintenance to be active before the web
-  # surface can mint anonymous credentials. Keep this repository-owned so an
-  # exact Terraform plan exposes any out-of-band pause before apply.
+  # The schedule does not exist in the services stage. The separately reviewed
+  # launch stage creates it active only after the serving release passes smoke.
   paused = false
 
   retry_config {
@@ -489,7 +562,7 @@ resource "google_cloud_scheduler_job" "guest_maintenance" {
 
   http_target {
     http_method = "POST"
-    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${each.value.maintenance_job_name}:run"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.scheduled_maintenance[each.key].name}:run"
     body        = base64encode("{}")
     headers = {
       "Content-Type" = "application/json"

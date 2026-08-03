@@ -41,9 +41,9 @@ cloud_run_api_request() (
   local token
 
   if [[ "$method" == "GET" ]]; then
-    [[ "$resource_path" =~ ^(services/agent(-preview)?|services/agent(-preview)?/revisions/agent(-preview)?-[a-z0-9-]+|jobs/agent(-preview)?-(migrate|grants|maintenance)|operations/[A-Za-z0-9._~-]+)$ ]]
+    [[ "$resource_path" =~ ^(services/agent(-preview)?|services/agent(-preview)?/revisions/agent(-preview)?-[a-z0-9-]+|jobs/(agent-(migrate|grants|maintenance|scheduled-maintenance)|agent-preview-(migrate|grants|maintenance))|operations/[A-Za-z0-9._~-]+)$ ]]
   elif [[ "$method" == "POST" ]]; then
-    [[ "$resource_path" =~ ^jobs/agent(-preview)?-(migrate|grants|maintenance):run$ ]]
+    [[ "$resource_path" =~ ^jobs/(agent-(migrate|grants|maintenance)|agent-preview-(migrate|grants|maintenance)):run$ ]]
   else
     false
   fi || {
@@ -227,6 +227,7 @@ runtime_expectations() {
       readonly EXPECTED_MIGRATION_JOB="agent-preview-migrate"
       readonly EXPECTED_GRANT_JOB="agent-preview-grants"
       readonly EXPECTED_MAINTENANCE_JOB="agent-preview-maintenance"
+      readonly EXPECTED_SCHEDULED_MAINTENANCE_JOB=""
       readonly EXPECTED_ANONYMOUS_ACCESS_ENABLED="false"
       readonly EXPECTED_GUEST_DAILY_BUDGET_MICRO_USD=""
       readonly EXPECTED_GUEST_MODEL=""
@@ -245,6 +246,7 @@ runtime_expectations() {
       readonly EXPECTED_MIGRATION_JOB="agent-migrate"
       readonly EXPECTED_GRANT_JOB="agent-grants"
       readonly EXPECTED_MAINTENANCE_JOB="agent-maintenance"
+      readonly EXPECTED_SCHEDULED_MAINTENANCE_JOB="agent-scheduled-maintenance"
       readonly EXPECTED_ANONYMOUS_ACCESS_ENABLED="true"
       readonly EXPECTED_GUEST_DAILY_BUDGET_MICRO_USD="500000"
       readonly EXPECTED_GUEST_MODEL="openai:gpt-5.6-luna"
@@ -545,7 +547,7 @@ verify_job_contract() {
       expected_service_account="$EXPECTED_RUNTIME_SERVICE_ACCOUNT"
       expected_timeout="600s"
       ;;
-    "$EXPECTED_MAINTENANCE_JOB")
+    "$EXPECTED_MAINTENANCE_JOB" | "$EXPECTED_SCHEDULED_MAINTENANCE_JOB")
       expected_args='["-m","agent.maintenance"]'
       expected_container_name="maintenance"
       expected_secret="$(
@@ -910,30 +912,44 @@ update_job_image() {
 }
 
 sync_jobs_to_digest() {
-  local grant_job="${GRANT_PROBE_JOB:-$EXPECTED_GRANT_JOB}"
   local image_digest="$1"
-  local maintenance_job="${MAINTENANCE_JOB:-$EXPECTED_MAINTENANCE_JOB}"
-  local migration_job="${MIGRATION_JOB:-$EXPECTED_MIGRATION_JOB}"
 
-  update_job_image "$migration_job" "$image_digest"
-  update_job_image "$grant_job" "$image_digest"
-  update_job_image "$maintenance_job" "$image_digest"
+  update_job_image "$EXPECTED_MIGRATION_JOB" "$image_digest"
+  update_job_image "$EXPECTED_GRANT_JOB" "$image_digest"
+  update_job_image "$EXPECTED_MAINTENANCE_JOB" "$image_digest"
 }
 
 restore_jobs_to_digest() {
   local failed="false"
-  local grant_job="${GRANT_PROBE_JOB:-$EXPECTED_GRANT_JOB}"
   local image_digest="$1"
   local job
-  local maintenance_job="${MAINTENANCE_JOB:-$EXPECTED_MAINTENANCE_JOB}"
-  local migration_job="${MIGRATION_JOB:-$EXPECTED_MIGRATION_JOB}"
 
-  for job in "$migration_job" "$grant_job" "$maintenance_job"; do
+  for job in \
+    "$EXPECTED_MIGRATION_JOB" \
+    "$EXPECTED_GRANT_JOB" \
+    "$EXPECTED_MAINTENANCE_JOB"; do
     if ! update_job_image "$job" "$image_digest"; then
       failed="true"
     fi
   done
   [[ "$failed" == "false" ]]
+}
+
+verify_scheduled_maintenance_digest() {
+  local image_digest="$1"
+
+  [[ -n "$EXPECTED_SCHEDULED_MAINTENANCE_JOB" ]] || return 0
+  verify_job_contract \
+    "$EXPECTED_SCHEDULED_MAINTENANCE_JOB" \
+    "" \
+    "$image_digest" >/dev/null
+}
+
+update_scheduled_maintenance_digest() {
+  local image_digest="$1"
+
+  [[ -n "$EXPECTED_SCHEDULED_MAINTENANCE_JOB" ]] || return 0
+  update_job_image "$EXPECTED_SCHEDULED_MAINTENANCE_JOB" "$image_digest"
 }
 
 set_revision_traffic() {
@@ -1113,6 +1129,9 @@ deploy() {
   local previous_image_digest
   local new_revision=""
   local smoke_url
+  local jobs_mutation_attempted="false"
+  local scheduled_job_mutation_attempted="false"
+  local scheduled_job_restore_failed="false"
   local traffic_shift_attempted="false"
 
   validate_deploy_inputs
@@ -1125,6 +1144,7 @@ deploy() {
   }
   verify_revision_contract "$previous_revision"
   previous_image_digest="$(revision_image_digest "$previous_revision")"
+  verify_scheduled_maintenance_digest "$previous_image_digest"
 
   rollback_on_error() {
     local status="$1"
@@ -1142,8 +1162,13 @@ deploy() {
         restore_failed="true"
       fi
     fi
-    if ! restore_jobs_to_digest "$previous_image_digest"; then
+    if [[ "$jobs_mutation_attempted" == "true" ]] &&
+      ! restore_jobs_to_digest "$previous_image_digest"; then
       jobs_restore_failed="true"
+    fi
+    if [[ "$scheduled_job_mutation_attempted" == "true" ]] &&
+      ! update_scheduled_maintenance_digest "$previous_image_digest"; then
+      scheduled_job_restore_failed="true"
     fi
     if [[ "$cleanup_failed" == "true" ]]; then
       printf 'Deployment failed and the public smoke tag could not be removed.\n' >&2
@@ -1154,12 +1179,16 @@ deploy() {
     if [[ "$jobs_restore_failed" == "true" ]]; then
       printf 'Deployment failed and previous revision job-image restoration also failed.\n' >&2
     fi
+    if [[ "$scheduled_job_restore_failed" == "true" ]]; then
+      printf 'Deployment failed and scheduled maintenance image restoration also failed.\n' >&2
+    fi
     exit "$status"
   }
   trap 'rollback_on_error $?' ERR
   trap 'rollback_on_error 130' INT
   trap 'rollback_on_error 143' TERM
 
+  jobs_mutation_attempted="true"
   run_job_with_digest "$MIGRATION_JOB"
   run_job_with_digest "$GRANT_PROBE_JOB"
   run_job_with_digest "$MAINTENANCE_JOB"
@@ -1204,6 +1233,8 @@ deploy() {
   health_smoke "$(service_url)"
   require_serving_revision "$new_revision"
   remove_smoke_tag
+  scheduled_job_mutation_attempted="true"
+  update_scheduled_maintenance_digest "$IMAGE_DIGEST"
 
   trap - ERR INT TERM
   printf 'Cloud Run deployment passed: service=%s revision=%s\n' \
@@ -1215,6 +1246,10 @@ rollback() {
   local previous_revision
   local previous_image_digest
   local rollback_image_digest
+  local jobs_mutation_attempted="false"
+  local scheduled_job_mutation_attempted="false"
+  local scheduled_job_restore_failed="false"
+  local traffic_shift_attempted="false"
 
   [[ -n "$REQUESTED_ROLLBACK_REVISION" ]] || {
     printf 'rollback mode requires an exact revision name.\n' >&2
@@ -1234,6 +1269,7 @@ rollback() {
   rollback_image_digest="$(revision_image_digest "$REQUESTED_ROLLBACK_REVISION")"
   verify_revision_contract "$previous_revision"
   previous_image_digest="$(revision_image_digest "$previous_revision")"
+  verify_scheduled_maintenance_digest "$previous_image_digest"
 
   rollback_on_error() {
     local status="$1"
@@ -1243,14 +1279,21 @@ rollback() {
     if ! remove_smoke_tag; then
       cleanup_failed="true"
     fi
-    printf 'Rollback smoke failed; restoring traffic to %s.\n' \
-      "$previous_revision" >&2
-    if ! set_revision_traffic "$previous_revision" ||
-      ! require_serving_revision "$previous_revision"; then
-      restore_failed="true"
+    if [[ "$traffic_shift_attempted" == "true" ]]; then
+      printf 'Rollback smoke failed; restoring traffic to %s.\n' \
+        "$previous_revision" >&2
+      if ! set_revision_traffic "$previous_revision" ||
+        ! require_serving_revision "$previous_revision"; then
+        restore_failed="true"
+      fi
     fi
-    if ! restore_jobs_to_digest "$previous_image_digest"; then
+    if [[ "$jobs_mutation_attempted" == "true" ]] &&
+      ! restore_jobs_to_digest "$previous_image_digest"; then
       jobs_restore_failed="true"
+    fi
+    if [[ "$scheduled_job_mutation_attempted" == "true" ]] &&
+      ! update_scheduled_maintenance_digest "$previous_image_digest"; then
+      scheduled_job_restore_failed="true"
     fi
     if [[ "$cleanup_failed" == "true" ]]; then
       printf 'Rollback failed and the public smoke tag could not be removed.\n' >&2
@@ -1261,19 +1304,26 @@ rollback() {
     if [[ "$jobs_restore_failed" == "true" ]]; then
       printf 'Rollback failed and previous revision job-image restoration also failed.\n' >&2
     fi
+    if [[ "$scheduled_job_restore_failed" == "true" ]]; then
+      printf 'Rollback failed and scheduled maintenance image restoration also failed.\n' >&2
+    fi
     exit "$status"
   }
   trap 'rollback_on_error $?' ERR
   trap 'rollback_on_error 130' INT
   trap 'rollback_on_error 143' TERM
 
+  traffic_shift_attempted="true"
   set_revision_traffic "$REQUESTED_ROLLBACK_REVISION"
   require_serving_revision "$REQUESTED_ROLLBACK_REVISION"
   health_smoke "$(service_url)"
   protocol_smoke "$(service_url)"
+  jobs_mutation_attempted="true"
   sync_jobs_to_digest "$rollback_image_digest"
   remove_smoke_tag
   require_serving_revision "$REQUESTED_ROLLBACK_REVISION"
+  scheduled_job_mutation_attempted="true"
+  update_scheduled_maintenance_digest "$rollback_image_digest"
   trap - ERR INT TERM
   printf 'Cloud Run rollback passed: service=%s revision=%s\n' \
     "$CLOUD_RUN_SERVICE" "$REQUESTED_ROLLBACK_REVISION"

@@ -153,6 +153,7 @@ def _terraform_test_records() -> list[dict[str, object]]:
                     "foundation_security_contract",
                     "foundation_bootstrap_contract",
                     "jobs_bootstrap_contract",
+                    "services_bootstrap_contract",
                 ]
             },
         },
@@ -184,10 +185,19 @@ def _terraform_test_records() -> list[dict[str, object]]:
             },
         },
         {
+            "type": "test_run",
+            "test_run": {
+                "path": "tests/foundation.tftest.hcl",
+                "run": "services_bootstrap_contract",
+                "progress": "complete",
+                "status": "pass",
+            },
+        },
+        {
             "type": "test_summary",
             "test_summary": {
                 "status": "pass",
-                "passed": 3,
+                "passed": 4,
                 "failed": 0,
                 "errored": 0,
                 "skipped": 0,
@@ -203,7 +213,7 @@ class TerraformTestResultContractTests(unittest.TestCase):
     def test_zero_discovered_tests_fails_closed(self) -> None:
         records = _terraform_test_records()
         records[1]["test_abstract"] = {}
-        del records[2:5]
+        del records[2:6]
         records[2]["test_summary"] = {
             "status": "pass",
             "passed": 0,

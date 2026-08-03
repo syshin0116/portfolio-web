@@ -46,6 +46,23 @@ resource "google_project_iam_custom_role" "cloud_run_delivery" {
   }
 }
 
+resource "google_project_iam_custom_role" "scheduled_maintenance_delivery" {
+  project     = var.project_id
+  role_id     = "cloudRunScheduledMaintenanceDelivery"
+  title       = "Cloud Run scheduled maintenance delivery"
+  description = "Update and verify only the existing scheduled maintenance job; execution remains exclusive to Cloud Scheduler."
+  stage       = "GA"
+  permissions = [
+    "run.jobs.get",
+    "run.jobs.update",
+    "run.operations.get",
+  ]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "google_service_account_iam_member" "deployer_uses_runtime" {
   for_each = local.deployer_service_accounts
 

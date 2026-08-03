@@ -42,7 +42,8 @@
   "jobs": [
     "agent-grants",
     "agent-maintenance",
-    "agent-migrate"
+    "agent-migrate",
+    "agent-scheduled-maintenance"
   ],
   "secrets": [
     "agent-auth-secret",
@@ -115,6 +116,13 @@
       "roles",
       "describe",
       "cloudRunAgentDelivery",
+      "--format=json"
+    ],
+    [
+      "iam",
+      "roles",
+      "describe",
+      "cloudRunScheduledMaintenanceDelivery",
       "--format=json"
     ],
     [

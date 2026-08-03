@@ -429,7 +429,7 @@ check "agent_delivery_stage_inputs" {
       && var.agent_preview_bootstrap_image == null
       && var.agent_secret_versions != null
     )
-    error_message = "foundation requires null image/version inputs; jobs and services require one immutable production image, no preview image, and the complete reviewed production numeric version map."
+    error_message = "foundation requires null image/version inputs; every later stage requires one immutable production image, no preview image, and the complete reviewed production numeric version map."
   }
 }
 
@@ -439,7 +439,7 @@ check "agent_secret_version_inventory" {
       var.agent_secret_versions != null
       && toset(keys(var.agent_secret_versions)) == local.required_production_delivery_secret_names
     )
-    error_message = "jobs and services require exactly the four production delivery secret IDs, with no missing or extra version keys."
+    error_message = "every non-foundation stage requires exactly the four production delivery secret IDs, with no missing or extra version keys."
   }
 }
 

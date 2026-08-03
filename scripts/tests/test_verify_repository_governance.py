@@ -677,6 +677,28 @@ class LocalGovernanceTests(unittest.TestCase):
                 errors,
             )
 
+    def test_agent_image_build_uses_attestation_capable_builder(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/agent-image-build.yml").read_text(
+            encoding="utf-8"
+        )
+        setup = (
+            "      - uses: docker/setup-buildx-action@"
+            "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0\n"
+            "        with:\n"
+            "          driver: docker-container\n"
+        )
+        auth = (
+            "      - uses: google-github-actions/auth@"
+            "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0\n"
+        )
+        build = "      - name: Build fresh and resolve the registry digest\n"
+
+        self.assertEqual(workflow.count(setup), 1)
+        self.assertEqual(workflow.count(auth), 1)
+        self.assertEqual(workflow.count(build), 1)
+        self.assertLess(workflow.index(setup), workflow.index(auth))
+        self.assertLess(workflow.index(setup), workflow.index(build))
+
     def test_reusable_delivery_callers_cannot_request_fewer_permissions(self) -> None:
         mutations = (
             (
@@ -741,6 +763,12 @@ class LocalGovernanceTests(unittest.TestCase):
                 ".github/workflows/agent-image-build.yml",
                 "docker buildx build \\\n",
                 'docker buildx imagetools inspect "$image_tag" \\\n',
+            ),
+            (
+                "attestation-driver",
+                ".github/workflows/agent-image-build.yml",
+                "driver: docker-container",
+                "driver: docker",
             ),
             (
                 "environment-gate",

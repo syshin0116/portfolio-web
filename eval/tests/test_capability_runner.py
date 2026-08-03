@@ -21,6 +21,7 @@ from agent.capabilities.budget import (
 from agent.capabilities.quickjs import QUICKJS_TOOL_NAME, BoundedQuickJSMiddleware
 from agent.capabilities.token_counting import InputTokenCountError
 from agent.retrieval.protocol import DocId
+from deepagents.profiles.harness.harness_profiles import _harness_profile_for_model
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
@@ -363,6 +364,8 @@ class DeterministicCapabilityExecutor:
                     "store": store,
                 }
             )
+            resolved_profile = _harness_profile_for_model(model, None)
+            task_tool = compiled.nodes["tools"].bound._tools_by_name["task"]
             result = await compiled.ainvoke(
                 {
                     "messages": [
@@ -394,6 +397,11 @@ class DeterministicCapabilityExecutor:
                 "content_tree_sha": context.content_tree_sha,
                 "graph_run_id": str(context.graph_run_id),
                 "persistence_empty": persistence_empty,
+                "resolved_excluded_middleware": (resolved_profile.excluded_middleware),
+                "resolved_general_purpose_enabled": (
+                    resolved_profile.general_purpose_subagent.enabled
+                ),
+                "task_description": task_tool.description,
                 "task_id": context.task.task_id,
                 "thread_id": context.thread_id,
             }
@@ -874,6 +882,16 @@ def test_provider_free_graph_exercises_real_four_arm_topology_with_isolation() -
         assert len({record[identity_key] for record in records}) == len(records)
     assert all(record["persistence_empty"] is True for record in records)
     assert all(record["content_tree_sha"] == CONTENT_TREE_SHA for record in records)
+    assert all(
+        record["resolved_general_purpose_enabled"] is False for record in records
+    )
+    assert all(
+        "SummarizationMiddleware" in record["resolved_excluded_middleware"]
+        for record in records
+    )
+    assert all(
+        "- general-purpose:" not in record["task_description"] for record in records
+    )
 
     quickjs_only = [
         record

@@ -10,6 +10,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from uuid import UUID
 
+import deepagents.profiles.harness.harness_profiles as harness_profiles
 import pytest
 from aegra_api.core import database as aegra_database
 from aegra_api.services import graph_factory
@@ -123,6 +124,20 @@ class ToolCapableFakeModel(FakeMessagesListChatModel):
             )
         )
         return self
+
+
+class AnthropicToolCapableFakeModel(ToolCapableFakeModel):
+    """Deterministic injected model with an Anthropic provider identity."""
+
+    model_name: str = "claude-sonnet-4-6"
+
+    def _get_ls_params(self, stop=None, **kwargs):
+        del stop, kwargs
+        return {
+            "ls_model_type": "chat",
+            "ls_model_name": self.model_name,
+            "ls_provider": "anthropic",
+        }
 
 
 class PayloadRecordingFakeModel(ToolCapableFakeModel):
@@ -787,7 +802,9 @@ def test_prebuilt_production_model_resolves_fail_closed_harness_profile(monkeypa
     assert profile.tool_description_overrides == {"task": BOUNDED_TASK_TOOL_DESCRIPTION}
 
 
-def test_repeated_graph_creation_registers_profile_once_per_model(monkeypatch):
+def test_repeated_injected_anthropic_graph_creation_registers_provider_profile_once(
+    monkeypatch,
+):
     calls = []
     monkeypatch.delenv("MODEL", raising=False)
     monkeypatch.setattr(
@@ -800,12 +817,69 @@ def test_repeated_graph_creation_registers_profile_once_per_model(monkeypatch):
             create_graph(
                 runtime=_server_runtime([]),
                 config={"configurable": {"thread_id": thread_id}},
-                model=ToolCapableFakeModel(responses=[_final_message("done")]),
+                model=AnthropicToolCapableFakeModel(responses=[_final_message("done")]),
             )
     finally:
         _disable_general_purpose_subagent.cache_clear()
 
-    assert calls == [(DEFAULT_MODEL, NO_GENERAL_PURPOSE_SUBAGENT)]
+    assert calls == [
+        (DEFAULT_MODEL, NO_GENERAL_PURPOSE_SUBAGENT),
+        ("anthropic", NO_GENERAL_PURPOSE_SUBAGENT),
+    ]
+
+
+def test_fresh_injected_openai_identity_resolves_exact_fail_closed_profile(
+    monkeypatch,
+):
+    monkeypatch.setattr(harness_profiles, "_HARNESS_PROFILES", {})
+    model = ToolCapableFakeModel(responses=[_final_message("unused")])
+    _disable_general_purpose_subagent.cache_clear()
+    try:
+        compiled = create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "fresh-openai-profile-resolution"}},
+            model=model,
+            input_token_counter=_exact_anthropic_test_input_tokens,
+            dynamic_subagents_enabled=True,
+            quickjs_enabled=False,
+            root_tool_allowlist=frozenset({"task"}),
+            experiment_subagent_allowlist=frozenset({"evidence-checker"}),
+        )
+        profile = _harness_profile_for_model(model, None)
+    finally:
+        _disable_general_purpose_subagent.cache_clear()
+
+    task_tool = compiled.nodes["tools"].bound._tools_by_name["task"]
+    assert profile.general_purpose_subagent.enabled is False
+    assert "SummarizationMiddleware" in profile.excluded_middleware
+    assert "- evidence-checker:" in task_tool.description
+    assert "- general-purpose:" not in task_tool.description
+
+
+def test_injected_anthropic_eval_resolves_fail_closed_profile_without_general_purpose():
+    model = AnthropicToolCapableFakeModel(responses=[_final_message("unused")])
+    _disable_general_purpose_subagent.cache_clear()
+    try:
+        compiled = create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "anthropic-profile-resolution"}},
+            model=model,
+            input_token_counter=_exact_anthropic_test_input_tokens,
+            dynamic_subagents_enabled=True,
+            quickjs_enabled=False,
+            root_tool_allowlist=frozenset({"task"}),
+            experiment_subagent_allowlist=frozenset({"evidence-checker"}),
+        )
+        profile = _harness_profile_for_model(model, None)
+    finally:
+        _disable_general_purpose_subagent.cache_clear()
+
+    task_tool = compiled.nodes["tools"].bound._tools_by_name["task"]
+    assert profile.general_purpose_subagent.enabled is False
+    assert "SummarizationMiddleware" in profile.excluded_middleware
+    assert profile.excluded_tools == frozenset({"delete"})
+    assert "- evidence-checker:" in task_tool.description
+    assert "- general-purpose:" not in task_tool.description
 
 
 def test_compiled_graph_keeps_capability_topology_stable_while_opted_out():
@@ -1091,6 +1165,45 @@ def test_real_openai_guest_graph_wires_atomic_count_preparation(monkeypatch):
     middleware = captured[0]["middleware"][-1]
     assert isinstance(middleware, RunBudgetMiddleware)
     assert middleware._input_token_count_preparer is prepare_openai_input_token_count
+
+
+def test_real_openai_owner_graph_wires_contract_bound_atomic_count_preparation(
+    monkeypatch,
+):
+    captured = []
+    subagent_kwargs = {}
+    compiled = SimpleNamespace(stream_transformers=())
+    compiled.copy = lambda *, update: SimpleNamespace(**update)
+
+    def capture_deep_agent(**kwargs):
+        captured.append(kwargs)
+        return compiled
+
+    def capture_subagents(**kwargs):
+        subagent_kwargs.update(kwargs)
+        return []
+
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-owner-construction-key")
+    monkeypatch.setattr("agent.graph.create_deep_agent", capture_deep_agent)
+    monkeypatch.setattr("agent.graph.build_subagents", capture_subagents)
+    _bounded_model.cache_clear()
+    try:
+        create_graph(
+            runtime=_server_runtime(["admin"]),
+            config={"configurable": {"thread_id": "owner-atomic-count"}},
+            budget=RunBudget(),
+        )
+    finally:
+        _bounded_model.cache_clear()
+
+    middleware = captured[0]["middleware"][-1]
+    preparer = graph_module._OWNER_OPENAI_INPUT_TOKEN_PREPARER
+    assert isinstance(middleware, RunBudgetMiddleware)
+    assert middleware._input_token_count_preparer is preparer
+    assert subagent_kwargs["input_token_count_preparer"] is preparer
 
 
 def test_guest_root_tool_contract_is_literal_ordered_unique_and_exact():

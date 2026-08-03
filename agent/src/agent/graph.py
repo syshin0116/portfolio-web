@@ -75,6 +75,7 @@ from agent.capabilities.token_counting import (
     count_openai_input_tokens,
     openai_guest_safety_identifier,
     openai_responses_input_token_counter,
+    openai_responses_input_token_preparer,
     prepare_openai_input_token_count,
     require_exact_openai_guest_model,
     require_exact_openai_responses_model,
@@ -103,6 +104,9 @@ _OWNER_OPENAI_MODEL_CONTRACT = OpenAIResponsesInputTokenContract(
     safety_identifier=OWNER_OPENAI_SAFETY_IDENTIFIER,
 )
 _OWNER_OPENAI_INPUT_TOKEN_COUNTER = openai_responses_input_token_counter(
+    _OWNER_OPENAI_MODEL_CONTRACT
+)
+_OWNER_OPENAI_INPUT_TOKEN_PREPARER = openai_responses_input_token_preparer(
     _OWNER_OPENAI_MODEL_CONTRACT
 )
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -574,6 +578,8 @@ def create_graph(
         _normalized_guest_model_spec() if is_guest else _normalized_model_spec()
     )
     _disable_general_purpose_subagent(model_spec)
+    if model is not None and usage_model_provider == "anthropic":
+        _disable_general_purpose_subagent(usage_model_provider)
     selected_model = model or (
         _bounded_guest_model(
             model_spec,
@@ -600,15 +606,12 @@ def create_graph(
             )
         )
     )
-    exact_input_preparer = (
-        prepare_openai_input_token_count
-        if (
-            input_token_counter is None
-            and is_guest
-            and isinstance(selected_model, ChatOpenAI)
-        )
-        else None
-    )
+    exact_input_preparer = None
+    if input_token_counter is None and isinstance(selected_model, ChatOpenAI):
+        if is_guest:
+            exact_input_preparer = prepare_openai_input_token_count
+        elif owner_uses_server_model:
+            exact_input_preparer = _OWNER_OPENAI_INPUT_TOKEN_PREPARER
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool

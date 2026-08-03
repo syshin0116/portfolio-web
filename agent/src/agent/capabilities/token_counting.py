@@ -778,6 +778,22 @@ def openai_responses_input_token_counter(
     return count
 
 
+def openai_responses_input_token_preparer(
+    contract: OpenAIResponsesInputTokenContract,
+) -> InputTokenCountPreparer:
+    """Bind atomic provider counting and generation parity to one contract."""
+    if not isinstance(contract, OpenAIResponsesInputTokenContract):
+        raise TypeError("contract must be an OpenAIResponsesInputTokenContract")
+
+    async def prepare(request: ModelRequest[Any]) -> PreparedInputTokenCount:
+        return await _prepare_openai_input_token_count(
+            request,
+            contract=contract,
+        )
+
+    return prepare
+
+
 async def count_anthropic_input_tokens(request: ModelRequest[Any]) -> int:
     """Count the exact Anthropic request input, including the final tool schemas.
 
@@ -841,6 +857,7 @@ __all__ = [
     "count_openai_input_tokens",
     "openai_guest_safety_identifier",
     "openai_responses_input_token_counter",
+    "openai_responses_input_token_preparer",
     "prepare_openai_input_token_count",
     "require_exact_openai_guest_model",
     "require_exact_openai_responses_model",

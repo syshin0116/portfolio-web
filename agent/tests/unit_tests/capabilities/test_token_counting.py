@@ -51,6 +51,7 @@ from agent.capabilities.token_counting import (
     count_openai_input_tokens,
     openai_guest_safety_identifier,
     openai_responses_input_token_counter,
+    openai_responses_input_token_preparer,
     prepare_openai_input_token_count,
     require_exact_openai_guest_model,
 )
@@ -707,6 +708,57 @@ async def test_openai_counter_can_bind_one_exact_local_luna_contract(monkeypatch
     )
     with pytest.raises(InputTokenCountError, match="exact request contract"):
         await counter(mismatched_request)
+
+
+async def test_openai_preparer_binds_atomic_count_and_parity_to_local_contract(
+    monkeypatch,
+):
+    owner_safety_identifier = "owner_" + "1" * 58
+    contract = OpenAIResponsesInputTokenContract(
+        model_name=OPENAI_GUEST_MODEL_NAME,
+        max_output_tokens=256,
+        timeout_seconds=OPENAI_GUEST_TIMEOUT_SECONDS,
+        safety_identifier=owner_safety_identifier,
+    )
+    preparer = openai_responses_input_token_preparer(contract)
+    observed = {}
+    provider_calls = 0
+
+    async def official_count(_self, **payload):
+        nonlocal provider_calls
+        provider_calls += 1
+        observed["payload"] = payload
+        return SimpleNamespace(input_tokens=17)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-token-count-key")
+    monkeypatch.setattr(AsyncInputTokens, "count", official_count)
+    request = ModelRequest(
+        model=_openai_guest_model(
+            max_tokens=256,
+            extra_body={"safety_identifier": owner_safety_identifier},
+        ),
+        messages=[HumanMessage(content="bounded local evaluation")],
+        tools=[],
+    )
+
+    prepared = await preparer(request)
+
+    assert provider_calls == 0
+    assert await prepared.count() == 17
+    assert provider_calls == 1
+    assert prepared.reserved_input_tokens == _openai_input_token_reservation(
+        observed["payload"]
+    )
+    await prepared.verify_generation_request(request)
+    request.messages.append(HumanMessage(content="late mutation"))
+    with pytest.raises(InputTokenCountError, match="payload changed"):
+        await prepared.verify_generation_request(request)
+
+    mismatched_request = request.override(
+        model=_openai_guest_model(max_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS)
+    )
+    with pytest.raises(InputTokenCountError, match="exact request contract"):
+        await preparer(mismatched_request)
 
 
 async def test_openai_counter_preserves_the_complete_stateless_tool_transcript(

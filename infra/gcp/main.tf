@@ -157,6 +157,10 @@ resource "google_artifact_registry_repository" "preview_agent" {
   depends_on = [google_project_service.required]
 
   lifecycle {
+    # The imported legacy preview repository records the provider-default false
+    # as an omitted dockerConfig block. Keep Terraform read-only for that legacy
+    # surface; the live readiness verifier still rejects immutableTags=true.
+    ignore_changes  = [docker_config]
     prevent_destroy = true
   }
 }

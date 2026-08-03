@@ -1260,6 +1260,29 @@ class ExactProjectReadinessTests(unittest.TestCase):
                 ):
                     self._verify(fixture)
 
+    def test_active_and_legacy_artifact_immutable_tags_true_fails(self) -> None:
+        for region in (REGION, LEGACY_REGION):
+            with self.subTest(region=region):
+                fixture = FakeRead()
+                command = (
+                    "artifacts",
+                    "repositories",
+                    "describe",
+                    "agent-preview",
+                    "--location",
+                    region,
+                    "--format=json",
+                )
+                repository = json.loads(fixture.responses[command])
+                repository["dockerConfig"]["immutableTags"] = True
+                fixture.responses[command] = json.dumps(repository)
+
+                with self.assertRaisesRegex(
+                    ReadinessError,
+                    "metadata or retention drifted",
+                ):
+                    self._verify(fixture)
+
     def test_artifact_cleanup_prefix_or_unknown_selector_fails(self) -> None:
         cases: dict[str, tuple[str, object]] = {
             "newerThan": ("condition", "3600s"),

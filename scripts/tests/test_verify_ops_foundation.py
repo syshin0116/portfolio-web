@@ -95,6 +95,23 @@ def _write_secure_python_wrapper(path: Path) -> None:
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
+    def test_legacy_preview_docker_config_ignore_is_narrowly_scoped(self) -> None:
+        main_source = (REPO_ROOT / "infra/gcp/main.tf").read_text(encoding="utf-8")
+
+        def repository_block(name: str) -> str:
+            marker = f'resource "google_artifact_registry_repository" "{name}" {{'
+            return main_source.split(marker, 1)[1].split('\nresource "', 1)[0]
+
+        ignored_attribute = "ignore_changes  = [docker_config]"
+        self.assertEqual(1, main_source.count(ignored_attribute))
+        self.assertIn(ignored_attribute, repository_block("preview_agent"))
+        for managed_repository in ("agent", "active_agent", "active_preview_agent"):
+            with self.subTest(repository=managed_repository):
+                self.assertNotIn(
+                    ignored_attribute,
+                    repository_block(managed_repository),
+                )
+
     def test_artifact_iam_preserves_legacy_addresses_and_adds_active_mirrors(
         self,
     ) -> None:

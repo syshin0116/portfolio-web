@@ -529,7 +529,12 @@ EXPECTED_RESOURCE_CONFIGS = {
             },
         ],
         "depends_on": ["${google_project_service.required}"],
-        "lifecycle": [{"prevent_destroy": True}],
+        "lifecycle": [
+            {
+                "ignore_changes": ["${docker_config}"],
+                "prevent_destroy": True,
+            }
+        ],
     },
     ("google_artifact_registry_repository", "active_agent"): {
         "project": "${var.project_id}",

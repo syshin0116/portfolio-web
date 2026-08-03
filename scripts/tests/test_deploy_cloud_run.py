@@ -228,7 +228,6 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "LANGGRAPH_MAX_POOL_SIZE": "4",
                     "LANGGRAPH_MIN_POOL_SIZE": "1",
                     "MODEL": "openai:gpt-5.6-luna",
-                    "PORT": "8080",
                     "REDIS_BROKER_ENABLED": os.environ.get(
                         "FAKE_REDIS_BROKER_ENABLED", "false"
                     ),
@@ -236,6 +235,8 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "SQLALCHEMY_MAX_OVERFLOW": "0",
                     "SQLALCHEMY_POOL_SIZE": "2",
                 }
+                if os.environ.get("FAKE_RESERVED_PORT_ENV") == "true":
+                    plain_env["PORT"] = "8080"
                 if preview:
                     secrets = [
                         (
@@ -1146,6 +1147,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "startup_probe": {"FAKE_STARTUP_FAILURE_THRESHOLD": "23"},
             "cpu": {"FAKE_RUNTIME_CPU": "2"},
             "port": {"FAKE_RUNTIME_PORT": "9090"},
+            "reserved_port_environment": {"FAKE_RESERVED_PORT_ENV": "true"},
             "timeout": {"FAKE_RUNTIME_TIMEOUT": "301s"},
             "plain_environment": {"FAKE_ENV_MODE": "PREVIEW"},
             "anonymous_access": {"FAKE_AGENT_ANONYMOUS_ACCESS_ENABLED": "false"},

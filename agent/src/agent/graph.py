@@ -30,7 +30,6 @@ from deepagents.backends import (
 from deepagents.backends.protocol import WriteResult
 from deepagents.backends.utils import create_file_data
 from langchain.agents.middleware import TodoListMiddleware
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
@@ -71,11 +70,15 @@ from agent.capabilities.token_counting import (
     OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH,
     OPENAI_GUEST_TIMEOUT_SECONDS,
     InputTokenCounter,
+    OpenAIResponsesInputTokenContract,
     count_anthropic_input_tokens,
     count_openai_input_tokens,
     openai_guest_safety_identifier,
+    openai_responses_input_token_counter,
+    openai_responses_input_token_preparer,
     prepare_openai_input_token_count,
     require_exact_openai_guest_model,
+    require_exact_openai_responses_model,
     require_official_openai_routing,
     require_openai_api_key,
 )
@@ -88,11 +91,24 @@ from agent.run_liveness import (
 )
 from agent.tools import TOOLS
 
-DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
+DEFAULT_MODEL = OPENAI_GUEST_MODEL_SPEC
 MODEL_MAX_OUTPUT_TOKENS = 2_048
 GUEST_MODEL_MAX_OUTPUT_TOKENS = OPENAI_GUEST_MAX_OUTPUT_TOKENS
 MODEL_TIMEOUT_SECONDS = OPENAI_GUEST_TIMEOUT_SECONDS
-SUPPORTED_OWNER_MODEL_PROVIDERS = frozenset({"anthropic"})
+OWNER_OPENAI_SAFETY_IDENTIFIER = "owner_runtime"
+SUPPORTED_OWNER_MODEL_PROVIDERS = frozenset({"openai"})
+_OWNER_OPENAI_MODEL_CONTRACT = OpenAIResponsesInputTokenContract(
+    model_name=OPENAI_GUEST_MODEL_NAME,
+    max_output_tokens=MODEL_MAX_OUTPUT_TOKENS,
+    timeout_seconds=MODEL_TIMEOUT_SECONDS,
+    safety_identifier=OWNER_OPENAI_SAFETY_IDENTIFIER,
+)
+_OWNER_OPENAI_INPUT_TOKEN_COUNTER = openai_responses_input_token_counter(
+    _OWNER_OPENAI_MODEL_CONTRACT
+)
+_OWNER_OPENAI_INPUT_TOKEN_PREPARER = openai_responses_input_token_preparer(
+    _OWNER_OPENAI_MODEL_CONTRACT
+)
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
     tool_description_overrides={"task": BOUNDED_TASK_TOOL_DESCRIPTION},
@@ -394,11 +410,14 @@ def _normalize_model_spec(
 
 def _normalized_model_spec() -> str:
     """Return the supported owner/evaluation model in canonical form."""
-    return _normalize_model_spec(
+    normalized = _normalize_model_spec(
         os.environ.get("MODEL") or DEFAULT_MODEL,
         variable="MODEL",
         supported_providers=SUPPORTED_OWNER_MODEL_PROVIDERS,
     )
+    if normalized != DEFAULT_MODEL:
+        raise RuntimeError(f"MODEL must be exactly {DEFAULT_MODEL!r}")
+    return normalized
 
 
 def _normalized_guest_model_spec() -> str:
@@ -437,16 +456,32 @@ def _disable_general_purpose_subagent(model: str) -> None:
 
 @lru_cache(maxsize=len(SUPPORTED_OWNER_MODEL_PROVIDERS) * 4)
 def _bounded_model(model_spec: str) -> BaseChatModel:
-    """Create a non-configurable provider client with hard request bounds."""
-    model = init_chat_model(
-        model_spec,
+    """Create the exact owner Luna Responses client with hard request bounds."""
+    if model_spec != DEFAULT_MODEL:
+        raise RuntimeError(f"MODEL must be exactly {DEFAULT_MODEL!r}")
+    require_official_openai_routing()
+    model = ChatOpenAI(
+        model=OPENAI_GUEST_MODEL_NAME,
+        api_key=require_openai_api_key(),
+        base_url=OPENAI_API_BASE_URL,
+        stream_usage=True,
         max_tokens=MODEL_MAX_OUTPUT_TOKENS,
         max_retries=0,
         timeout=MODEL_TIMEOUT_SECONDS,
+        use_responses_api=True,
+        output_version="responses/v1",
+        reasoning={"context": "current_turn", "effort": "none"},
+        store=False,
+        truncation="disabled",
+        cache=False,
+        extra_body={"safety_identifier": OWNER_OPENAI_SAFETY_IDENTIFIER},
     )
     if not isinstance(model, BaseChatModel):
         raise RuntimeError("MODEL resolved to a runtime-configurable wrapper")
-    return model
+    return require_exact_openai_responses_model(
+        model,
+        contract=_OWNER_OPENAI_MODEL_CONTRACT,
+    )
 
 
 @lru_cache(maxsize=256)
@@ -517,11 +552,18 @@ def create_graph(
         model_provider is not None or expected_response_models is not None
     ):
         raise ValueError("guest provider contract cannot be overridden")
-    usage_model_provider = model_provider or ("openai" if is_guest else "anthropic")
+    owner_uses_server_model = not is_guest and model is None
+    usage_model_provider = model_provider or (
+        "openai" if is_guest or owner_uses_server_model else "anthropic"
+    )
     usage_response_models = (
         expected_response_models
         if expected_response_models is not None
-        else (OPENAI_GUEST_RESPONSE_MODEL_NAMES if is_guest else frozenset())
+        else (
+            OPENAI_GUEST_RESPONSE_MODEL_NAMES
+            if usage_model_provider == "openai"
+            else frozenset()
+        )
     )
     if usage_model_provider not in {"anthropic", "openai"}:
         raise ValueError("model_provider must be anthropic or openai")
@@ -533,15 +575,11 @@ def create_graph(
     ):
         raise ValueError("OpenAI provider contract requires exact response models")
     model_spec = (
-        _normalized_guest_model_spec()
-        if is_guest
-        else (
-            OPENAI_GUEST_MODEL_SPEC
-            if model is not None and usage_model_provider == "openai"
-            else _normalized_model_spec()
-        )
+        _normalized_guest_model_spec() if is_guest else _normalized_model_spec()
     )
     _disable_general_purpose_subagent(model_spec)
+    if model is not None and usage_model_provider == "anthropic":
+        _disable_general_purpose_subagent(usage_model_provider)
     selected_model = model or (
         _bounded_guest_model(
             model_spec,
@@ -557,18 +595,23 @@ def create_graph(
     )
     exact_input_counter = input_token_counter or (
         count_openai_input_tokens
-        if model_spec == OPENAI_GUEST_MODEL_SPEC
-        else count_anthropic_input_tokens
-    )
-    exact_input_preparer = (
-        prepare_openai_input_token_count
-        if (
-            input_token_counter is None
-            and model_spec == OPENAI_GUEST_MODEL_SPEC
-            and isinstance(selected_model, ChatOpenAI)
+        if is_guest
+        else (
+            _OWNER_OPENAI_INPUT_TOKEN_COUNTER
+            if owner_uses_server_model
+            else (
+                count_openai_input_tokens
+                if usage_model_provider == "openai"
+                else count_anthropic_input_tokens
+            )
         )
-        else None
     )
+    exact_input_preparer = None
+    if input_token_counter is None and isinstance(selected_model, ChatOpenAI):
+        if is_guest:
+            exact_input_preparer = prepare_openai_input_token_count
+        elif owner_uses_server_model:
+            exact_input_preparer = _OWNER_OPENAI_INPUT_TOKEN_PREPARER
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool

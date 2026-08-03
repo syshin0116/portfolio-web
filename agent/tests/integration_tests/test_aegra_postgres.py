@@ -186,6 +186,32 @@ class ToolCapableFakeModel(FakeMessagesListChatModel):
         return self
 
 
+def _openai_response(
+    content: str,
+    *,
+    tool_calls: list[dict[str, object]] | None = None,
+) -> AIMessage:
+    """Return provider-complete fake Luna usage for owner factory tests."""
+    return AIMessage(
+        content=content,
+        tool_calls=tool_calls or [],
+        response_metadata={
+            "model_provider": "openai",
+            "model_name": "gpt-5.6-luna",
+        },
+        usage_metadata={
+            "input_tokens": 1,
+            "output_tokens": 9,
+            "total_tokens": 10,
+            "input_token_details": {
+                "cache_creation": 0,
+                "cache_read": 0,
+            },
+            "output_token_details": {"reasoning": 0},
+        },
+    )
+
+
 def _service(
     base_graph,
     *,
@@ -1075,16 +1101,7 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
         await db_manager.initialize()
 
         budget_model = ToolCapableFakeModel(
-            responses=[
-                AIMessage(
-                    content="budget checkpoint persisted",
-                    usage_metadata={
-                        "input_tokens": 9,
-                        "output_tokens": 1,
-                        "total_tokens": 10,
-                    },
-                )
-            ]
+            responses=[_openai_response("budget checkpoint persisted")]
         )
         monkeypatch.setattr(
             "agent.graph._bounded_model",
@@ -1095,7 +1112,7 @@ async def test_postgres_migration_factory_static_and_pool_restart_persistence(
             return 1
 
         monkeypatch.setattr(
-            "agent.graph.count_anthropic_input_tokens",
+            "agent.graph._OWNER_OPENAI_INPUT_TOKEN_COUNTER",
             fixed_input_count,
         )
         budget_owner = User(identity="budget-owner", permissions=[])
@@ -1254,8 +1271,8 @@ Stop after one verdict.
         ]
         isolation_model = ToolCapableFakeModel(
             responses=[
-                AIMessage(
-                    content="",
+                _openai_response(
+                    "",
                     tool_calls=[
                         {
                             "name": "task",
@@ -1268,36 +1285,10 @@ Stop after one verdict.
                         }
                         for index, description in enumerate(descriptions)
                     ],
-                    usage_metadata={
-                        "input_tokens": 9,
-                        "output_tokens": 1,
-                        "total_tokens": 10,
-                    },
                 ),
-                AIMessage(
-                    content="isolated child result",
-                    usage_metadata={
-                        "input_tokens": 9,
-                        "output_tokens": 1,
-                        "total_tokens": 10,
-                    },
-                ),
-                AIMessage(
-                    content="isolated child result",
-                    usage_metadata={
-                        "input_tokens": 9,
-                        "output_tokens": 1,
-                        "total_tokens": 10,
-                    },
-                ),
-                AIMessage(
-                    content="isolated root result",
-                    usage_metadata={
-                        "input_tokens": 9,
-                        "output_tokens": 1,
-                        "total_tokens": 10,
-                    },
-                ),
+                _openai_response("isolated child result"),
+                _openai_response("isolated child result"),
+                _openai_response("isolated root result"),
             ]
         )
         observed_child_requests = []
@@ -1316,7 +1307,7 @@ Stop after one verdict.
             lambda _spec: isolation_model,
         )
         monkeypatch.setattr(
-            "agent.graph.count_anthropic_input_tokens",
+            "agent.graph._OWNER_OPENAI_INPUT_TOKEN_COUNTER",
             capture_isolation_count,
         )
         isolation_service = _factory_service(

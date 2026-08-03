@@ -10,6 +10,7 @@ from threading import Event, Lock
 from types import SimpleNamespace
 from uuid import UUID
 
+import deepagents.profiles.harness.harness_profiles as harness_profiles
 import pytest
 from aegra_api.core import database as aegra_database
 from aegra_api.services import graph_factory
@@ -30,7 +31,6 @@ from deepagents.profiles.harness.harness_profiles import (
     _harness_profile_for_model,
 )
 from langchain.agents.middleware.todo import WRITE_TODOS_SYSTEM_PROMPT
-from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
 )
@@ -79,6 +79,7 @@ from agent.graph import (
     MODEL_MAX_OUTPUT_TOKENS,
     MODEL_TIMEOUT_SECONDS,
     NO_GENERAL_PURPOSE_SUBAGENT,
+    OWNER_OPENAI_SAFETY_IDENTIFIER,
     _bounded_guest_model,
     _bounded_model,
     _build_backend,
@@ -103,7 +104,7 @@ from agent.tools import TOOLS
 class ToolCapableFakeModel(FakeMessagesListChatModel):
     """Deterministic model that records each bound tool surface."""
 
-    model_name: str = "claude-sonnet-4-6"
+    model_name: str = "gpt-5.6-luna"
     bound_tool_names: list[frozenset[str]] = Field(default_factory=list)
 
     def _get_ls_params(self, stop=None, **kwargs):
@@ -111,7 +112,7 @@ class ToolCapableFakeModel(FakeMessagesListChatModel):
         return {
             "ls_model_type": "chat",
             "ls_model_name": self.model_name,
-            "ls_provider": "anthropic",
+            "ls_provider": "openai",
         }
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
@@ -123,6 +124,20 @@ class ToolCapableFakeModel(FakeMessagesListChatModel):
             )
         )
         return self
+
+
+class AnthropicToolCapableFakeModel(ToolCapableFakeModel):
+    """Deterministic injected model with an Anthropic provider identity."""
+
+    model_name: str = "claude-sonnet-4-6"
+
+    def _get_ls_params(self, stop=None, **kwargs):
+        del stop, kwargs
+        return {
+            "ls_model_type": "chat",
+            "ls_model_name": self.model_name,
+            "ls_provider": "anthropic",
+        }
 
 
 class PayloadRecordingFakeModel(ToolCapableFakeModel):
@@ -351,6 +366,10 @@ def _replace_provider_token_count(monkeypatch):
         "agent.graph.count_openai_input_tokens",
         _exact_openai_test_input_tokens,
     )
+    monkeypatch.setattr(
+        "agent.graph._OWNER_OPENAI_INPUT_TOKEN_COUNTER",
+        _exact_openai_test_input_tokens,
+    )
 
 
 def test_graph_entrypoint_is_aegra_runtime_config_factory():
@@ -409,8 +428,8 @@ async def test_graph_factory_creates_a_fresh_budget_for_every_run(monkeypatch):
     created_budgets = []
     model = ToolCapableFakeModel(
         responses=[
-            _final_message("first run"),
-            _final_message("second run"),
+            _openai_final_message("first run"),
+            _openai_final_message("second run"),
         ]
     )
 
@@ -606,8 +625,8 @@ async def test_aegra_factory_creates_a_fresh_quickjs_tool_session_per_access(
 ):
     model = ToolCapableFakeModel(
         responses=[
-            _final_message("first access"),
-            _final_message("second access"),
+            _openai_final_message("first access"),
+            _openai_final_message("second access"),
         ]
     )
     monkeypatch.setenv("QUICKJS_ENABLED", "true")
@@ -762,7 +781,9 @@ def test_graph_module_never_constructs_its_own_persistence():
 
 
 def test_prebuilt_production_model_resolves_fail_closed_harness_profile(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy-profile-resolution-key")
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy-profile-resolution-key")
     _bounded_model.cache_clear()
     _disable_general_purpose_subagent.cache_clear()
     try:
@@ -773,14 +794,17 @@ def test_prebuilt_production_model_resolves_fail_closed_harness_profile(monkeypa
         _bounded_model.cache_clear()
         _disable_general_purpose_subagent.cache_clear()
 
-    assert isinstance(model, ChatAnthropic)
+    assert isinstance(model, ChatOpenAI)
+    assert model.model_name == "gpt-5.6-luna"
     assert profile.general_purpose_subagent.enabled is False
     assert "SummarizationMiddleware" in profile.excluded_middleware
     assert profile.excluded_tools == frozenset({"delete"})
     assert profile.tool_description_overrides == {"task": BOUNDED_TASK_TOOL_DESCRIPTION}
 
 
-def test_repeated_graph_creation_registers_profile_once_per_model(monkeypatch):
+def test_repeated_injected_anthropic_graph_creation_registers_provider_profile_once(
+    monkeypatch,
+):
     calls = []
     monkeypatch.delenv("MODEL", raising=False)
     monkeypatch.setattr(
@@ -793,12 +817,69 @@ def test_repeated_graph_creation_registers_profile_once_per_model(monkeypatch):
             create_graph(
                 runtime=_server_runtime([]),
                 config={"configurable": {"thread_id": thread_id}},
-                model=ToolCapableFakeModel(responses=[_final_message("done")]),
+                model=AnthropicToolCapableFakeModel(responses=[_final_message("done")]),
             )
     finally:
         _disable_general_purpose_subagent.cache_clear()
 
-    assert calls == [(DEFAULT_MODEL, NO_GENERAL_PURPOSE_SUBAGENT)]
+    assert calls == [
+        (DEFAULT_MODEL, NO_GENERAL_PURPOSE_SUBAGENT),
+        ("anthropic", NO_GENERAL_PURPOSE_SUBAGENT),
+    ]
+
+
+def test_fresh_injected_openai_identity_resolves_exact_fail_closed_profile(
+    monkeypatch,
+):
+    monkeypatch.setattr(harness_profiles, "_HARNESS_PROFILES", {})
+    model = ToolCapableFakeModel(responses=[_final_message("unused")])
+    _disable_general_purpose_subagent.cache_clear()
+    try:
+        compiled = create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "fresh-openai-profile-resolution"}},
+            model=model,
+            input_token_counter=_exact_anthropic_test_input_tokens,
+            dynamic_subagents_enabled=True,
+            quickjs_enabled=False,
+            root_tool_allowlist=frozenset({"task"}),
+            experiment_subagent_allowlist=frozenset({"evidence-checker"}),
+        )
+        profile = _harness_profile_for_model(model, None)
+    finally:
+        _disable_general_purpose_subagent.cache_clear()
+
+    task_tool = compiled.nodes["tools"].bound._tools_by_name["task"]
+    assert profile.general_purpose_subagent.enabled is False
+    assert "SummarizationMiddleware" in profile.excluded_middleware
+    assert "- evidence-checker:" in task_tool.description
+    assert "- general-purpose:" not in task_tool.description
+
+
+def test_injected_anthropic_eval_resolves_fail_closed_profile_without_general_purpose():
+    model = AnthropicToolCapableFakeModel(responses=[_final_message("unused")])
+    _disable_general_purpose_subagent.cache_clear()
+    try:
+        compiled = create_graph(
+            runtime=_server_runtime(["eval"]),
+            config={"configurable": {"thread_id": "anthropic-profile-resolution"}},
+            model=model,
+            input_token_counter=_exact_anthropic_test_input_tokens,
+            dynamic_subagents_enabled=True,
+            quickjs_enabled=False,
+            root_tool_allowlist=frozenset({"task"}),
+            experiment_subagent_allowlist=frozenset({"evidence-checker"}),
+        )
+        profile = _harness_profile_for_model(model, None)
+    finally:
+        _disable_general_purpose_subagent.cache_clear()
+
+    task_tool = compiled.nodes["tools"].bound._tools_by_name["task"]
+    assert profile.general_purpose_subagent.enabled is False
+    assert "SummarizationMiddleware" in profile.excluded_middleware
+    assert profile.excluded_tools == frozenset({"delete"})
+    assert "- evidence-checker:" in task_tool.description
+    assert "- general-purpose:" not in task_tool.description
 
 
 def test_compiled_graph_keeps_capability_topology_stable_while_opted_out():
@@ -814,11 +895,57 @@ def test_compiled_graph_keeps_capability_topology_stable_while_opted_out():
     assert QUICKJS_TOOL_NAME in registered_tools
 
 
+def test_owner_runtime_without_model_override_defaults_to_exact_luna(monkeypatch):
+    monkeypatch.delenv("MODEL", raising=False)
+
+    assert _normalized_model_spec() == "openai:gpt-5.6-luna"
+
+
+async def test_owner_default_luna_preserves_dynamic_subagents_and_quickjs_topology(
+    monkeypatch,
+):
+    monkeypatch.delenv("MODEL", raising=False)
+    model = ToolCapableFakeModel(
+        responses=[_openai_final_message("owner topology preserved")]
+    )
+    monkeypatch.setattr("agent.graph._bounded_model", lambda _spec: model)
+    budget = RunBudget()
+    quickjs_middleware = BoundedQuickJSMiddleware(enabled=True)
+    compiled = create_graph(
+        runtime=_server_runtime(["admin"]),
+        config={"configurable": {"thread_id": "owner-luna-topology"}},
+        budget=budget,
+        input_token_counter=_exact_openai_test_input_tokens,
+        dynamic_subagents_enabled=True,
+        quickjs_enabled=True,
+        quickjs_middleware=quickjs_middleware,
+    )
+
+    try:
+        result = await compiled.ainvoke(
+            {"messages": [{"role": "user", "content": "inspect topology"}]},
+            {"configurable": {"thread_id": "owner-luna-topology"}},
+        )
+    finally:
+        await quickjs_middleware.aclose()
+
+    assert result["messages"][-1].content == "owner topology preserved"
+    bound_tools = model.bound_tool_names[0]
+    assert {"task", "write_todos", QUICKJS_TOOL_NAME} <= bound_tools
+    task_tool = compiled.nodes["tools"].bound._tools_by_name["task"]
+    assert "shared run budget" in task_tool.description
+    assert all(f"- {name}:" in task_tool.description for name in SUBAGENT_NAMES)
+    snapshot = budget.finalize()
+    assert snapshot.provider_usage_complete is True
+    assert snapshot.provider_input_tokens == 1
+    assert snapshot.provider_output_tokens == 9
+
+
 @pytest.mark.parametrize(
     ("configured_model", "expected_model"),
     [
         (None, DEFAULT_MODEL),
-        ("anthropic/claude-haiku-4-5", "anthropic:claude-haiku-4-5"),
+        ("openai/gpt-5.6-luna", DEFAULT_MODEL),
     ],
     ids=["default-model", "normalized-model-override"],
 )
@@ -846,34 +973,34 @@ def test_create_graph_for_selected_model_keeps_declared_task_dispatch(
     assert compiled_graph.stream_transformers[-1] is InspectionEventTransformer
 
 
-def test_bounded_provider_model_disables_retries_and_runtime_configuration(monkeypatch):
-    calls = []
-    fake_model = ToolCapableFakeModel(responses=[_final_message("done")])
-
-    def fake_init(model_spec, **kwargs):
-        calls.append((model_spec, kwargs))
-        return fake_model
-
-    monkeypatch.setattr("agent.graph.init_chat_model", fake_init)
+def test_bounded_owner_model_uses_exact_luna_responses_contract(monkeypatch):
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    api_key = "test-openai-owner-construction-key"
+    monkeypatch.setenv("OPENAI_API_KEY", api_key)
     _bounded_model.cache_clear()
     try:
-        resolved = _bounded_model("anthropic:test-bounded-model")
-        cached = _bounded_model("anthropic:test-bounded-model")
+        resolved = _bounded_model(DEFAULT_MODEL)
+        cached = _bounded_model(DEFAULT_MODEL)
     finally:
         _bounded_model.cache_clear()
 
-    assert resolved is fake_model
-    assert cached is fake_model
-    assert calls == [
-        (
-            "anthropic:test-bounded-model",
-            {
-                "max_tokens": MODEL_MAX_OUTPUT_TOKENS,
-                "max_retries": 0,
-                "timeout": MODEL_TIMEOUT_SECONDS,
-            },
-        )
-    ]
+    assert isinstance(resolved, ChatOpenAI)
+    assert cached is resolved
+    assert resolved.model_name == "gpt-5.6-luna"
+    assert resolved.openai_api_key.get_secret_value() == api_key
+    assert resolved.max_tokens == MODEL_MAX_OUTPUT_TOKENS
+    assert resolved.max_retries == 0
+    assert resolved.request_timeout == MODEL_TIMEOUT_SECONDS
+    assert resolved.use_responses_api is True
+    assert resolved.output_version == "responses/v1"
+    assert resolved.reasoning == {"context": "current_turn", "effort": "none"}
+    assert resolved.store is False
+    assert resolved.truncation == "disabled"
+    assert resolved.streaming is False
+    assert resolved.cache is False
+    assert resolved.extra_body == {"safety_identifier": OWNER_OPENAI_SAFETY_IDENTIFIER}
+    assert resolved.openai_api_base == OPENAI_API_BASE_URL
 
 
 def test_bounded_guest_model_uses_the_lower_nonconfigurable_output_limit(monkeypatch):
@@ -1038,6 +1165,45 @@ def test_real_openai_guest_graph_wires_atomic_count_preparation(monkeypatch):
     middleware = captured[0]["middleware"][-1]
     assert isinstance(middleware, RunBudgetMiddleware)
     assert middleware._input_token_count_preparer is prepare_openai_input_token_count
+
+
+def test_real_openai_owner_graph_wires_contract_bound_atomic_count_preparation(
+    monkeypatch,
+):
+    captured = []
+    subagent_kwargs = {}
+    compiled = SimpleNamespace(stream_transformers=())
+    compiled.copy = lambda *, update: SimpleNamespace(**update)
+
+    def capture_deep_agent(**kwargs):
+        captured.append(kwargs)
+        return compiled
+
+    def capture_subagents(**kwargs):
+        subagent_kwargs.update(kwargs)
+        return []
+
+    for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-owner-construction-key")
+    monkeypatch.setattr("agent.graph.create_deep_agent", capture_deep_agent)
+    monkeypatch.setattr("agent.graph.build_subagents", capture_subagents)
+    _bounded_model.cache_clear()
+    try:
+        create_graph(
+            runtime=_server_runtime(["admin"]),
+            config={"configurable": {"thread_id": "owner-atomic-count"}},
+            budget=RunBudget(),
+        )
+    finally:
+        _bounded_model.cache_clear()
+
+    middleware = captured[0]["middleware"][-1]
+    preparer = graph_module._OWNER_OPENAI_INPUT_TOKEN_PREPARER
+    assert isinstance(middleware, RunBudgetMiddleware)
+    assert middleware._input_token_count_preparer is preparer
+    assert subagent_kwargs["input_token_count_preparer"] is preparer
 
 
 def test_guest_root_tool_contract_is_literal_ordered_unique_and_exact():

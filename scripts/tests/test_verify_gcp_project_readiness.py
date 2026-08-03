@@ -462,7 +462,7 @@ class FakeRead:
             )
             responses[
                 ("artifacts", "repositories", "get-iam-policy", *legacy_suffix)
-            ] = _policy()
+            ] = expected
         for account in WORKLOAD_SERVICE_ACCOUNTS:
             responses[
                 (
@@ -1214,6 +1214,51 @@ class ExactProjectReadinessTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReadinessError, "exact repository-owned"):
             self._verify(fixture)
+
+    def test_active_and_legacy_artifact_iam_require_mirrored_bindings(self) -> None:
+        for region in (REGION, LEGACY_REGION):
+            with self.subTest(region=region):
+                fixture = FakeRead()
+                if region == REGION:
+                    command = (
+                        "artifacts",
+                        "repositories",
+                        "get-iam-policy",
+                        "agent",
+                        "--location",
+                        region,
+                        "--format=json",
+                    )
+                    fixture.responses[command] = json.dumps(
+                        _policy(
+                            (
+                                "roles/artifactregistry.reader",
+                                f"serviceAccount:{CLOUD_RUN_SERVICE_AGENT}",
+                            ),
+                            (
+                                "roles/artifactregistry.reader",
+                                f"serviceAccount:{PRODUCTION_DEPLOYER_SA}",
+                            ),
+                        )
+                    )
+                else:
+                    for repository in ("agent", "agent-preview"):
+                        command = (
+                            "artifacts",
+                            "repositories",
+                            "get-iam-policy",
+                            repository,
+                            "--location",
+                            region,
+                            "--format=json",
+                        )
+                        fixture.responses[command] = json.dumps(_policy())
+
+                with self.assertRaisesRegex(
+                    ReadinessError,
+                    "exact repository-owned bindings",
+                ):
+                    self._verify(fixture)
 
     def test_artifact_cleanup_prefix_or_unknown_selector_fails(self) -> None:
         cases: dict[str, tuple[str, object]] = {

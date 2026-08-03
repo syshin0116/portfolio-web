@@ -32,7 +32,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "349f8fc2b313ac5809bb335936ad168f82cbe7b74c575aec98c82727008b5ad2"
+        "4711b19079ab3c5f6bc24412d1d4a58743fd247c9129e0791fdaf7f005002f66"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -40,7 +40,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "74394e4115f25fd5bc418ed6b3965da5c75de12dfebc01387ca60d47e620095c"
+        "159107d4e80d4901219fea3308fea31edc4a4a9b3e64414e9dcb9181cc718069"
     )
 }
 EXPECTED_PINNED_READINESS_FILES = {
@@ -759,6 +759,59 @@ EXPECTED_RESOURCE_CONFIGS = {
     },
     ("google_artifact_registry_repository_iam_member", "builder_writer"): {
         "project": "${var.project_id}",
+        "location": "${local.legacy_artifact_registry_region}",
+        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "role": "roles/artifactregistry.writer",
+        "member": "serviceAccount:${google_service_account.builder.email}",
+    },
+    ("google_artifact_registry_repository_iam_member", "preview_builder_writer"): {
+        "project": "${var.project_id}",
+        "location": "${local.legacy_artifact_registry_region}",
+        "repository": (
+            "${google_artifact_registry_repository.preview_agent.repository_id}"
+        ),
+        "role": "roles/artifactregistry.writer",
+        "member": "serviceAccount:${google_service_account.preview_builder.email}",
+    },
+    ("google_artifact_registry_repository_iam_member", "deployer_reader"): {
+        "for_each": {
+            "production": "${local.deployer_service_accounts.production}",
+        },
+        "project": "${var.project_id}",
+        "location": "${local.legacy_artifact_registry_region}",
+        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "role": "roles/artifactregistry.reader",
+        "member": "serviceAccount:${each.value}",
+    },
+    ("google_artifact_registry_repository_iam_member", "preview_deployer_reader"): {
+        "project": "${var.project_id}",
+        "location": "${local.legacy_artifact_registry_region}",
+        "repository": (
+            "${google_artifact_registry_repository.preview_agent.repository_id}"
+        ),
+        "role": "roles/artifactregistry.reader",
+        "member": "serviceAccount:${local.deployer_service_accounts.preview}",
+    },
+    ("google_artifact_registry_repository_iam_member", "cloud_run_reader"): {
+        "project": "${var.project_id}",
+        "location": "${local.legacy_artifact_registry_region}",
+        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "role": "roles/artifactregistry.reader",
+        "member": "${local.cloud_run_image_pull_principal}",
+        "depends_on": ["${google_project_service.required}"],
+    },
+    ("google_artifact_registry_repository_iam_member", "preview_cloud_run_reader"): {
+        "project": "${var.project_id}",
+        "location": "${local.legacy_artifact_registry_region}",
+        "repository": (
+            "${google_artifact_registry_repository.preview_agent.repository_id}"
+        ),
+        "role": "roles/artifactregistry.reader",
+        "member": "${local.cloud_run_image_pull_principal}",
+        "depends_on": ["${google_project_service.required}"],
+    },
+    ("google_artifact_registry_repository_iam_member", "active_builder_writer"): {
+        "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (
             "${google_artifact_registry_repository.active_agent.repository_id}"
@@ -766,7 +819,10 @@ EXPECTED_RESOURCE_CONFIGS = {
         "role": "roles/artifactregistry.writer",
         "member": "serviceAccount:${google_service_account.builder.email}",
     },
-    ("google_artifact_registry_repository_iam_member", "preview_builder_writer"): {
+    (
+        "google_artifact_registry_repository_iam_member",
+        "active_preview_builder_writer",
+    ): {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (
@@ -775,7 +831,7 @@ EXPECTED_RESOURCE_CONFIGS = {
         "role": "roles/artifactregistry.writer",
         "member": "serviceAccount:${google_service_account.preview_builder.email}",
     },
-    ("google_artifact_registry_repository_iam_member", "deployer_reader"): {
+    ("google_artifact_registry_repository_iam_member", "active_deployer_reader"): {
         "for_each": {
             "production": "${local.deployer_service_accounts.production}",
         },
@@ -787,7 +843,10 @@ EXPECTED_RESOURCE_CONFIGS = {
         "role": "roles/artifactregistry.reader",
         "member": "serviceAccount:${each.value}",
     },
-    ("google_artifact_registry_repository_iam_member", "preview_deployer_reader"): {
+    (
+        "google_artifact_registry_repository_iam_member",
+        "active_preview_deployer_reader",
+    ): {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (
@@ -796,7 +855,7 @@ EXPECTED_RESOURCE_CONFIGS = {
         "role": "roles/artifactregistry.reader",
         "member": "serviceAccount:${local.deployer_service_accounts.preview}",
     },
-    ("google_artifact_registry_repository_iam_member", "cloud_run_reader"): {
+    ("google_artifact_registry_repository_iam_member", "active_cloud_run_reader"): {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (
@@ -806,7 +865,10 @@ EXPECTED_RESOURCE_CONFIGS = {
         "member": "${local.cloud_run_image_pull_principal}",
         "depends_on": ["${google_project_service.required}"],
     },
-    ("google_artifact_registry_repository_iam_member", "preview_cloud_run_reader"): {
+    (
+        "google_artifact_registry_repository_iam_member",
+        "active_preview_cloud_run_reader",
+    ): {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (

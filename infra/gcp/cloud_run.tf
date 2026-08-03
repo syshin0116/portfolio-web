@@ -199,7 +199,7 @@ resource "google_cloud_run_v2_service" "agent" {
   }
 
   depends_on = [
-    google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.active_cloud_run_reader,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
 
@@ -264,7 +264,7 @@ resource "google_cloud_run_v2_job" "migration" {
   }
 
   depends_on = [
-    google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.active_cloud_run_reader,
     google_secret_manager_secret_iam_member.migrator_accessor,
   ]
 
@@ -328,7 +328,7 @@ resource "google_cloud_run_v2_job" "grant_probe" {
   }
 
   depends_on = [
-    google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.active_cloud_run_reader,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
 
@@ -392,7 +392,7 @@ resource "google_cloud_run_v2_job" "maintenance" {
   }
 
   depends_on = [
-    google_artifact_registry_repository_iam_member.cloud_run_reader,
+    google_artifact_registry_repository_iam_member.active_cloud_run_reader,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
 

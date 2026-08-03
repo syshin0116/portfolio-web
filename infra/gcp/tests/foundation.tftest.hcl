@@ -379,19 +379,41 @@ run "foundation_security_contract" {
     condition = (
       google_artifact_registry_repository_iam_member.builder_writer.role == "roles/artifactregistry.writer"
       && google_artifact_registry_repository_iam_member.builder_writer.member == "serviceAccount:agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.builder_writer.location == "us-east4"
       && google_artifact_registry_repository_iam_member.builder_writer.repository == "agent"
       && google_artifact_registry_repository_iam_member.preview_builder_writer.member == "serviceAccount:agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_builder_writer.location == "us-east4"
       && google_artifact_registry_repository_iam_member.preview_builder_writer.repository == "agent-preview"
       && length(google_artifact_registry_repository_iam_member.deployer_reader) == 1
       && google_artifact_registry_repository_iam_member.deployer_reader["production"].member == "serviceAccount:agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.deployer_reader["production"].location == "us-east4"
       && google_artifact_registry_repository_iam_member.preview_deployer_reader.member == "serviceAccount:agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_deployer_reader.location == "us-east4"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.role == "roles/artifactregistry.reader"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.cloud_run_reader.location == "us-east4"
       && google_artifact_registry_repository_iam_member.preview_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_cloud_run_reader.location == "us-east4"
+      && google_artifact_registry_repository_iam_member.active_builder_writer.member == "serviceAccount:agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_builder_writer.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_builder_writer.repository == "agent"
+      && google_artifact_registry_repository_iam_member.active_preview_builder_writer.member == "serviceAccount:agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_preview_builder_writer.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_preview_builder_writer.repository == "agent-preview"
+      && length(google_artifact_registry_repository_iam_member.active_deployer_reader) == 1
+      && google_artifact_registry_repository_iam_member.active_deployer_reader["production"].member == "serviceAccount:agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_deployer_reader["production"].location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_preview_deployer_reader.member == "serviceAccount:agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_preview_deployer_reader.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_cloud_run_reader.role == "roles/artifactregistry.reader"
+      && google_artifact_registry_repository_iam_member.active_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_cloud_run_reader.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_preview_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_preview_cloud_run_reader.location == "asia-southeast1"
       && google_service_account_iam_member.github_builder.member == local.github_delivery_role_principals.production_builder
       && google_service_account_iam_member.github_preview_builder.member == local.github_delivery_role_principals.preview_builder
     )
-    error_message = "Preview and production builders, repositories, readers, and WIF principals must remain disjoint."
+    error_message = "Legacy IAM addresses must stay in us-east4 while mirrored active delivery IAM targets Singapore."
   }
 
   assert {

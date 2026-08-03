@@ -95,6 +95,64 @@ def _write_secure_python_wrapper(path: Path) -> None:
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
+    def test_artifact_iam_preserves_legacy_addresses_and_adds_active_mirrors(
+        self,
+    ) -> None:
+        iam_source = (REPO_ROOT / "infra/gcp/iam.tf").read_text(encoding="utf-8")
+
+        def resource_block(name: str) -> str:
+            marker = (
+                f'resource "google_artifact_registry_repository_iam_member" "{name}" {{'
+            )
+            return iam_source.split(marker, 1)[1].split("\n}", 1)[0]
+
+        resource_pairs = {
+            "builder_writer": "active_builder_writer",
+            "preview_builder_writer": "active_preview_builder_writer",
+            "deployer_reader": "active_deployer_reader",
+            "preview_deployer_reader": "active_preview_deployer_reader",
+            "cloud_run_reader": "active_cloud_run_reader",
+            "preview_cloud_run_reader": "active_preview_cloud_run_reader",
+        }
+        for legacy_name, active_name in resource_pairs.items():
+            with self.subTest(legacy=legacy_name, active=active_name):
+                repository_name = (
+                    "preview_agent" if "preview" in legacy_name else "agent"
+                )
+                self.assertIn(
+                    "location   = local.legacy_artifact_registry_region",
+                    resource_block(legacy_name),
+                )
+                self.assertIn(
+                    "google_artifact_registry_repository."
+                    f"{repository_name}.repository_id",
+                    resource_block(legacy_name),
+                )
+                self.assertIn(
+                    "location   = var.region",
+                    resource_block(active_name),
+                )
+                self.assertIn(
+                    "google_artifact_registry_repository."
+                    f"active_{repository_name}.repository_id",
+                    resource_block(active_name),
+                )
+
+        cloud_run_source = (REPO_ROOT / "infra/gcp/cloud_run.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            4,
+            cloud_run_source.count(
+                "google_artifact_registry_repository_iam_member."
+                "active_cloud_run_reader,"
+            ),
+        )
+        self.assertNotIn(
+            "    google_artifact_registry_repository_iam_member.cloud_run_reader,",
+            cloud_run_source,
+        )
+
     def test_cloud_runtime_contract_has_production_only_openai_credential(self) -> None:
         cloud_run_source = (REPO_ROOT / "infra/gcp/cloud_run.tf").read_text(
             encoding="utf-8"

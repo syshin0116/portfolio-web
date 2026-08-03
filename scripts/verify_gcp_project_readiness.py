@@ -1370,7 +1370,7 @@ def verify_exact_project_readiness(
             ),
             f"legacy {repository} IAM",
         )
-        _require_exact_policy(legacy_policy, set(), f"legacy {repository}")
+        _require_exact_policy(legacy_policy, expected_policy, f"legacy {repository}")
 
     _validate_bucket_discovery(
         _read_json(

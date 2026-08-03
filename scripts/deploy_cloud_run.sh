@@ -164,6 +164,23 @@ revision_json() {
   cloud_run_api_get "services/${CLOUD_RUN_SERVICE}/revisions/${revision}"
 }
 
+revision_image_digest() {
+  local revision="$1"
+
+  revision_json "$revision" |
+    jq -er \
+      --arg expected_image_prefix "$EXPECTED_IMAGE_PREFIX" \
+      '
+        .containers
+        | select(type == "array" and length == 1)
+        | .[0].image
+        | select(type == "string" and startswith($expected_image_prefix))
+        | select(
+            (ltrimstr($expected_image_prefix) | test("^[0-9a-f]{64}$"))
+          )
+      '
+}
+
 job_json() {
   local job="$1"
   cloud_run_api_get "jobs/${job}"
@@ -504,6 +521,7 @@ verify_job_contract() {
   local document="${2:-}"
   local expected_args
   local expected_container_name
+  local expected_image="${3:-${IMAGE_DIGEST:-}}"
   local expected_job="$1"
   local expected_secret
   local expected_service_account
@@ -546,9 +564,15 @@ verify_job_contract() {
   if [[ -z "$document" ]]; then
     document="$(job_json "$expected_job")"
   fi
+  if [[ "$expected_image" != "${EXPECTED_IMAGE_PREFIX}"* ]] ||
+    [[ ! "${expected_image#"$EXPECTED_IMAGE_PREFIX"}" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'Cloud Run job verification requires an exact selected image digest.\n' \
+      >&2
+    return 1
+  fi
   jq -e \
     --arg expected_container_name "$expected_container_name" \
-    --arg expected_image "$IMAGE_DIGEST" \
+    --arg expected_image "$expected_image" \
     --arg expected_name "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/jobs/${expected_job}" \
     --arg expected_secret "$expected_secret" \
     --arg expected_service_account "$expected_service_account" \
@@ -862,14 +886,54 @@ run_job_with_digest() {
   local job_etag
   local operation
 
+  update_job_image "$job" "$IMAGE_DIGEST"
+  job_etag="$(verify_job_contract "$job" "" "$IMAGE_DIGEST")"
+  operation="$(cloud_run_api_run_job "$job" "$job_etag")"
+  wait_for_job_operation "$operation" "$job"
+}
+
+update_job_image() {
+  local image_digest="$2"
+  local job="$1"
+
+  if [[ "$image_digest" != "${EXPECTED_IMAGE_PREFIX}"* ]] ||
+    [[ ! "${image_digest#"$EXPECTED_IMAGE_PREFIX"}" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'refusing to update a job to an unselected image digest.\n' >&2
+    return 1
+  fi
   gcloud run jobs update "$job" \
     --project "$GCP_PROJECT_ID" \
     --region "$GCP_REGION" \
-    --image "$IMAGE_DIGEST" \
+    --image "$image_digest" \
     --quiet
-  job_etag="$(verify_job_contract "$job")"
-  operation="$(cloud_run_api_run_job "$job" "$job_etag")"
-  wait_for_job_operation "$operation" "$job"
+  verify_job_contract "$job" "" "$image_digest" >/dev/null
+}
+
+sync_jobs_to_digest() {
+  local grant_job="${GRANT_PROBE_JOB:-$EXPECTED_GRANT_JOB}"
+  local image_digest="$1"
+  local maintenance_job="${MAINTENANCE_JOB:-$EXPECTED_MAINTENANCE_JOB}"
+  local migration_job="${MIGRATION_JOB:-$EXPECTED_MIGRATION_JOB}"
+
+  update_job_image "$migration_job" "$image_digest"
+  update_job_image "$grant_job" "$image_digest"
+  update_job_image "$maintenance_job" "$image_digest"
+}
+
+restore_jobs_to_digest() {
+  local failed="false"
+  local grant_job="${GRANT_PROBE_JOB:-$EXPECTED_GRANT_JOB}"
+  local image_digest="$1"
+  local job
+  local maintenance_job="${MAINTENANCE_JOB:-$EXPECTED_MAINTENANCE_JOB}"
+  local migration_job="${MIGRATION_JOB:-$EXPECTED_MIGRATION_JOB}"
+
+  for job in "$migration_job" "$grant_job" "$maintenance_job"; do
+    if ! update_job_image "$job" "$image_digest"; then
+      failed="true"
+    fi
+  done
+  [[ "$failed" == "false" ]]
 }
 
 set_revision_traffic() {
@@ -1044,7 +1108,9 @@ validate_deploy_inputs() {
 }
 
 deploy() {
+  local jobs_restore_failed="false"
   local previous_revision
+  local previous_image_digest
   local new_revision=""
   local smoke_url
   local traffic_shift_attempted="false"
@@ -1057,6 +1123,8 @@ deploy() {
     printf 'current ready revision is outside the selected service.\n' >&2
     return 1
   }
+  verify_revision_contract "$previous_revision"
+  previous_image_digest="$(revision_image_digest "$previous_revision")"
 
   rollback_on_error() {
     local status="$1"
@@ -1074,11 +1142,17 @@ deploy() {
         restore_failed="true"
       fi
     fi
+    if ! restore_jobs_to_digest "$previous_image_digest"; then
+      jobs_restore_failed="true"
+    fi
     if [[ "$cleanup_failed" == "true" ]]; then
       printf 'Deployment failed and the public smoke tag could not be removed.\n' >&2
     fi
     if [[ "$restore_failed" == "true" ]]; then
       printf 'Deployment failed and previous revision traffic restoration also failed.\n' >&2
+    fi
+    if [[ "$jobs_restore_failed" == "true" ]]; then
+      printf 'Deployment failed and previous revision job-image restoration also failed.\n' >&2
     fi
     exit "$status"
   }
@@ -1137,7 +1211,10 @@ deploy() {
 }
 
 rollback() {
+  local jobs_restore_failed="false"
   local previous_revision
+  local previous_image_digest
+  local rollback_image_digest
 
   [[ -n "$REQUESTED_ROLLBACK_REVISION" ]] || {
     printf 'rollback mode requires an exact revision name.\n' >&2
@@ -1154,6 +1231,9 @@ rollback() {
     exit 1
   }
   verify_revision_contract "$REQUESTED_ROLLBACK_REVISION"
+  rollback_image_digest="$(revision_image_digest "$REQUESTED_ROLLBACK_REVISION")"
+  verify_revision_contract "$previous_revision"
+  previous_image_digest="$(revision_image_digest "$previous_revision")"
 
   rollback_on_error() {
     local status="$1"
@@ -1169,11 +1249,17 @@ rollback() {
       ! require_serving_revision "$previous_revision"; then
       restore_failed="true"
     fi
+    if ! restore_jobs_to_digest "$previous_image_digest"; then
+      jobs_restore_failed="true"
+    fi
     if [[ "$cleanup_failed" == "true" ]]; then
       printf 'Rollback failed and the public smoke tag could not be removed.\n' >&2
     fi
     if [[ "$restore_failed" == "true" ]]; then
       printf 'Rollback failed and previous revision traffic restoration also failed.\n' >&2
+    fi
+    if [[ "$jobs_restore_failed" == "true" ]]; then
+      printf 'Rollback failed and previous revision job-image restoration also failed.\n' >&2
     fi
     exit "$status"
   }
@@ -1185,6 +1271,7 @@ rollback() {
   require_serving_revision "$REQUESTED_ROLLBACK_REVISION"
   health_smoke "$(service_url)"
   protocol_smoke "$(service_url)"
+  sync_jobs_to_digest "$rollback_image_digest"
   remove_smoke_tag
   require_serving_revision "$REQUESTED_ROLLBACK_REVISION"
   trap - ERR INT TERM

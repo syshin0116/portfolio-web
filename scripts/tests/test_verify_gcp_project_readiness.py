@@ -476,8 +476,8 @@ class FakeRead:
         secret_accounts = {
             "agent-auth-secret": PRODUCTION_RUNTIME_SA,
             "agent-database-url": PRODUCTION_RUNTIME_SA,
-            "anthropic-api-key": PRODUCTION_RUNTIME_SA,
-            "langsmith-api-key": PRODUCTION_RUNTIME_SA,
+            "anthropic-api-key": None,
+            "langsmith-api-key": None,
             "openai-api-key": PRODUCTION_RUNTIME_SA,
             "agent-migration-database-url": PRODUCTION_MIGRATOR_SA,
             "agent-preview-anthropic-api-key": PREVIEW_RUNTIME_SA,
@@ -491,10 +491,14 @@ class FakeRead:
                 "name": f"projects/{PROJECT_NUMBER}/secrets/{secret}",
                 "replication": {"automatic": {}},
             }
-            responses[("secrets", "get-iam-policy", secret, "--format=json")] = _policy(
-                (
-                    "roles/secretmanager.secretAccessor",
-                    f"serviceAccount:{account}",
+            responses[("secrets", "get-iam-policy", secret, "--format=json")] = (
+                _policy()
+                if account is None
+                else _policy(
+                    (
+                        "roles/secretmanager.secretAccessor",
+                        f"serviceAccount:{account}",
+                    )
                 )
             )
         for provider in ("github-preview", "github-production"):
@@ -1209,6 +1213,26 @@ class ExactProjectReadinessTests(unittest.TestCase):
                     "roles/secretmanager.secretAccessor",
                     f"serviceAccount:{PREVIEW_RUNTIME_SA}",
                 ),
+            )
+        )
+
+        with self.assertRaisesRegex(ReadinessError, "exact repository-owned"):
+            self._verify(fixture)
+
+    def test_dormant_production_secret_accessor_fails(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "secrets",
+            "get-iam-policy",
+            "anthropic-api-key",
+            "--format=json",
+        )
+        fixture.responses[command] = json.dumps(
+            _policy(
+                (
+                    "roles/secretmanager.secretAccessor",
+                    f"serviceAccount:{PRODUCTION_RUNTIME_SA}",
+                )
             )
         )
 

@@ -63,10 +63,10 @@ resource "google_service_account_iam_member" "deployer_uses_migrator" {
 }
 
 resource "google_secret_manager_secret_iam_member" "runtime_accessor" {
-  for_each = google_secret_manager_secret.runtime
+  for_each = local.production_runtime_secret_names
 
   project   = var.project_id
-  secret_id = each.value.secret_id
+  secret_id = google_secret_manager_secret.runtime[each.key].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.runtime_service_accounts.production}"
 }

@@ -339,8 +339,8 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = length(google_secret_manager_secret_iam_member.runtime_accessor) == 5 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
-    error_message = "Production must bind only its five launch runtime secrets and Preview only its four fail-closed runtime secrets."
+    condition     = toset(keys(google_secret_manager_secret_iam_member.runtime_accessor)) == local.production_runtime_secret_names && length(google_secret_manager_secret_iam_member.runtime_accessor) == 3 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
+    error_message = "Production runtime access must be limited to auth, database, and OpenAI while Preview remains limited to its four fail-closed runtime secrets."
   }
 
   assert {

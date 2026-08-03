@@ -32,7 +32,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "4711b19079ab3c5f6bc24412d1d4a58743fd247c9129e0791fdaf7f005002f66"
+        "050532388dab304678ec06fdecddeb8ae42e293bfb5a4b95361bbfe7adde024d"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -722,9 +722,9 @@ EXPECTED_RESOURCE_CONFIGS = {
         "member": "serviceAccount:${each.value}",
     },
     ("google_secret_manager_secret_iam_member", "runtime_accessor"): {
-        "for_each": "${google_secret_manager_secret.runtime}",
+        "for_each": "${local.production_runtime_secret_names}",
         "project": "${var.project_id}",
-        "secret_id": "${each.value.secret_id}",
+        "secret_id": "${google_secret_manager_secret.runtime[each.key].secret_id}",
         "role": "roles/secretmanager.secretAccessor",
         "member": "serviceAccount:${local.runtime_service_accounts.production}",
     },
@@ -915,6 +915,9 @@ EXPECTED_LOCALS_BY_FILE = {
             "production_secret_names": (
                 "${toset([agent-auth-secret, agent-database-url, anthropic-api-key, "
                 "langsmith-api-key, openai-api-key])}"
+            ),
+            "production_runtime_secret_names": (
+                "${toset([agent-auth-secret, agent-database-url, openai-api-key])}"
             ),
             "preview_secret_names": (
                 "${toset([agent-preview-anthropic-api-key, "

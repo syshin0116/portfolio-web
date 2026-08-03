@@ -37,6 +37,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
         root = Path(directory)
         service = "agent-preview" if preview else "agent"
         image_digest = PREVIEW_IMAGE_DIGEST if preview else IMAGE_DIGEST
+        image_prefix = image_digest.rsplit(":", 1)[0] + ":"
+        previous_image_digest = image_prefix + "4" * 64
+        rollback_image_digest = image_prefix + "5" * 64
         binary = root / "bin"
         binary.mkdir()
         state = root / "state.json"
@@ -47,8 +50,16 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "latest_ready": f"{service}-old",
                     "serving": f"{service}-old",
                     "smoke": False,
-                    "service_image": image_digest,
-                    "job_images": {},
+                    "service_image": previous_image_digest,
+                    "revision_images": {
+                        f"{service}-old": previous_image_digest,
+                        f"{service}-target": rollback_image_digest,
+                    },
+                    "job_images": {
+                        f"{service}-migrate": previous_image_digest,
+                        f"{service}-grants": previous_image_digest,
+                        f"{service}-maintenance": previous_image_digest,
+                    },
                     "job_etags": {},
                     "run_requests": [],
                     "traffic_updates": 0,
@@ -95,6 +106,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         + os.environ["DELIVERY_RUN_ATTEMPT"]
                     )
                     state["latest_ready"] = state["latest_created"]
+                    state["revision_images"][state["latest_created"]] = state[
+                        "service_image"
+                    ]
                 elif args[:3] == ["run", "services", "update-traffic"]:
                     if "--set-tags" in args:
                         state["smoke"] = True
@@ -415,7 +429,12 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     return document
 
                 def revision_document(revision):
-                    result = runtime_template(state["service_image"])
+                    result = runtime_template(
+                        state["revision_images"].get(
+                            revision,
+                            state["service_image"],
+                        )
+                    )
                     result.update({
                         "name": f"{service_path}/revisions/{revision}",
                         "service": os.environ.get(
@@ -811,6 +830,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
         )
         self.assertFalse(state["smoke"])
         self.assertEqual(
+            {IMAGE_DIGEST},
+            set(state["job_images"].values()),
+        )
+        self.assertEqual(
             [
                 {
                     "job": "agent-migrate",
@@ -889,6 +912,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertNotIn("restoring traffic", result.stderr)
         self.assertEqual("agent-old", state["serving"])
         self.assertFalse(state["smoke"])
+        self.assertEqual(
+            {state["revision_images"]["agent-old"]},
+            set(state["job_images"].values()),
+        )
 
     def test_termination_during_pretraffic_protocol_cleans_without_promotion(
         self,
@@ -949,6 +976,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("restoring traffic to agent-old", result.stderr)
         self.assertEqual("agent-old", state["serving"])
+        self.assertEqual(
+            {state["revision_images"]["agent-old"]},
+            set(state["job_images"].values()),
+        )
 
     def test_manual_rollback_rejects_every_material_revision_drift(self) -> None:
         mutations = {
@@ -1448,6 +1479,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertLess(cleanup, shift)
         self.assertEqual("agent-target", state["serving"])
         self.assertFalse(state["smoke"])
+        self.assertEqual(
+            {state["revision_images"]["agent-target"]},
+            set(state["job_images"].values()),
+        )
 
 
 if __name__ == "__main__":

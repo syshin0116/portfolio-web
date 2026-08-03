@@ -24,6 +24,12 @@ locals {
     "openai-api-key",
   ])
 
+  production_runtime_secret_names = toset([
+    "agent-auth-secret",
+    "agent-database-url",
+    "openai-api-key",
+  ])
+
   preview_secret_names = toset([
     "agent-preview-anthropic-api-key",
     "agent-preview-auth-secret",

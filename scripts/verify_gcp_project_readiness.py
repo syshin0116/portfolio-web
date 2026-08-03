@@ -101,8 +101,8 @@ REQUIRED_APIS = frozenset(
 PRODUCTION_SECRET_POLICIES = {
     "agent-auth-secret": PRODUCTION_RUNTIME_SA,
     "agent-database-url": PRODUCTION_RUNTIME_SA,
-    "anthropic-api-key": PRODUCTION_RUNTIME_SA,
-    "langsmith-api-key": PRODUCTION_RUNTIME_SA,
+    "anthropic-api-key": None,
+    "langsmith-api-key": None,
     "openai-api-key": PRODUCTION_RUNTIME_SA,
     "agent-migration-database-url": PRODUCTION_MIGRATOR_SA,
 }
@@ -1519,16 +1519,17 @@ def verify_exact_project_readiness(
             ),
             f"Secret Manager {secret} IAM",
         )
-        _require_exact_policy(
-            policy,
-            {
+        expected_policy = (
+            set()
+            if expected_account is None
+            else {
                 (
                     "roles/secretmanager.secretAccessor",
                     f"serviceAccount:{expected_account}",
                 )
-            },
-            f"Secret Manager {secret}",
+            }
         )
+        _require_exact_policy(policy, expected_policy, f"Secret Manager {secret}")
 
     pool = _read_json(
         read,

@@ -127,7 +127,6 @@ COMMON_RUNTIME_ENV = {
     "LANGGRAPH_MAX_POOL_SIZE": "4",
     "LANGGRAPH_MIN_POOL_SIZE": "1",
     "MODEL": "openai:gpt-5.6-luna",
-    "PORT": "8080",
     "REDIS_BROKER_ENABLED": "false",
     "RUN_MIGRATIONS_ON_STARTUP": "false",
     "SQLALCHEMY_MAX_OVERFLOW": "0",

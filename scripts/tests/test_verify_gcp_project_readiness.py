@@ -917,6 +917,12 @@ class ExactProjectReadinessTests(unittest.TestCase):
             trust_state_bucket=fixture.trust_bucket,
         )
 
+    def test_cloud_run_service_omits_reserved_port_environment(self) -> None:
+        self.assertNotIn("PORT", PRODUCTION_RUNTIME_ENV)
+        for service, spec in SERVICE_SPECS.items():
+            with self.subTest(service=service):
+                self.assertNotIn("PORT", spec["plain_env"])
+
     def test_complete_exact_project_contract_passes(self) -> None:
         fixture = FakeRead()
 

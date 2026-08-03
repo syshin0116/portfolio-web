@@ -63,6 +63,23 @@ def _environment(target: str, role: str) -> dict[str, str]:
 
 
 class AgentDeliveryIdentityTests(unittest.TestCase):
+    def test_builder_initializes_attestation_driver_before_gcp_auth(self) -> None:
+        builder = (REPO_ROOT / ".github/workflows/agent-image-build.yml").read_text(
+            encoding="utf-8"
+        )
+
+        setup = builder.index(
+            "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
+        )
+        auth = builder.index("google-github-actions/auth@")
+        build = builder.index("docker buildx build")
+
+        self.assertIn("driver: docker-container", builder)
+        self.assertIn("--provenance=mode=max", builder)
+        self.assertIn("--sbom=true", builder)
+        self.assertLess(setup, auth)
+        self.assertLess(auth, build)
+
     def test_preview_has_an_independent_fail_closed_gate(self) -> None:
         preview = (REPO_ROOT / ".github/workflows/preview-agent.yml").read_text(
             encoding="utf-8"

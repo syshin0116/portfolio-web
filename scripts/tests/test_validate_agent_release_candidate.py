@@ -25,7 +25,8 @@ from scripts.validate_agent_release_candidate import (
 REPOSITORY = "syshin0116/syshin0116.dev"
 SOURCE_SHA = "a" * 40
 IMAGE_DIGEST = (
-    "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:" + "b" * 64
+    "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
+    + "b" * 64
 )
 REQUIRED_CHECKS = ("ci/check", "protocol/compat", "wiki/verify")
 REFLECTED_TOKEN = "reflected-github-api-secret-that-must-not-be-logged"

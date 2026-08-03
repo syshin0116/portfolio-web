@@ -117,7 +117,7 @@ jobs:
           DELIVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
           DELIVERY_RUN_ID: ${{ github.run_id }}
           GCP_PROJECT_ID: festive-ally-503605-v7
-          GCP_REGION: us-east4
+          GCP_REGION: asia-southeast1
           GRANT_PROBE_JOB: ${{ steps.delivery_identity.outputs.grant_probe_job }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           MAINTENANCE_JOB: ${{ steps.delivery_identity.outputs.maintenance_job }}
@@ -130,7 +130,7 @@ jobs:
         env:
           CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
           GCP_PROJECT_ID: festive-ally-503605-v7
-          GCP_REGION: us-east4
+          GCP_REGION: asia-southeast1
           ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
           SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
         run: scripts/deploy_cloud_run.sh rollback "$ROLLBACK_REVISION"

@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "projectId": "festive-ally-503605-v7",
   "projectNumber": "72919926064",
-  "region": "us-east4",
+  "region": "asia-southeast1",
+  "legacyRegion": "us-east4",
   "stateBucket": "festive-ally-503605-v7-tfstate",
   "stateObject": "syshin0116.dev/gcp/foundation/default.tfstate",
   "requiredApis": [
@@ -31,17 +32,18 @@
     "agent",
     "agent-preview"
   ],
-  "services": [
+  "legacyRepositories": [
     "agent",
     "agent-preview"
+  ],
+  "services": [
+    "agent"
   ],
   "jobs": [
     "agent-grants",
     "agent-maintenance",
     "agent-migrate",
-    "agent-preview-grants",
-    "agent-preview-maintenance",
-    "agent-preview-migrate"
+    "agent-scheduled-maintenance"
   ],
   "secrets": [
     "agent-auth-secret",
@@ -118,6 +120,13 @@
     ],
     [
       "iam",
+      "roles",
+      "describe",
+      "cloudRunScheduledMaintenanceDelivery",
+      "--format=json"
+    ],
+    [
+      "iam",
       "service-accounts",
       "list",
       "--format=json"
@@ -176,7 +185,7 @@
       "describe",
       "agent-guest-maintenance",
       "--location",
-      "us-east4",
+      "asia-southeast1",
       "--format=json"
     ]
   ],

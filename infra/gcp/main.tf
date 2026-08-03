@@ -1,4 +1,5 @@
 locals {
+  legacy_artifact_registry_region          = "us-east4"
   disabled_preview_wif_attribute_condition = "attribute.repository_id == '__legacy_provider_disabled__'"
   delivery_role_mapping                    = "assertion.event_name == 'pull_request' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/preview-agent.yml@' + assertion.ref ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@' + assertion.ref ? 'preview-builder' : assertion.environment == '${var.github_preview_environment}' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@' + assertion.ref ? 'preview-deployer' : 'invalid') : assertion.event_name in ['push', 'workflow_dispatch'] && assertion.ref == 'refs/heads/main' && assertion.workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/deploy-agent.yml@refs/heads/main' ? (assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-image-build.yml@refs/heads/main' ? 'production-builder' : assertion.environment == '${var.github_production_environment}' && assertion.job_workflow_ref == 'syshin0116/syshin0116.dev/.github/workflows/agent-release.yml@refs/heads/main' ? 'production-deployer' : 'invalid') : 'invalid'"
   delivery_wif_attribute_condition         = "attribute.repository_id == '${var.github_repository_id}' && attribute.repository_owner_id == '${var.github_owner_id}' && attribute.delivery_role in ['preview-builder', 'preview-deployer', 'production-builder', 'production-deployer']"
@@ -23,6 +24,12 @@ locals {
     "openai-api-key",
   ])
 
+  production_runtime_secret_names = toset([
+    "agent-auth-secret",
+    "agent-database-url",
+    "openai-api-key",
+  ])
+
   preview_secret_names = toset([
     "agent-preview-anthropic-api-key",
     "agent-preview-auth-secret",
@@ -40,6 +47,13 @@ locals {
     local.preview_secret_names,
     toset(values(local.migration_secret_names)),
   )
+
+  required_production_delivery_secret_names = toset([
+    "agent-auth-secret",
+    "agent-database-url",
+    "agent-migration-database-url",
+    "openai-api-key",
+  ])
 
   deployers = {
     preview = {
@@ -74,7 +88,7 @@ resource "google_project_service" "required" {
 
 resource "google_artifact_registry_repository" "agent" {
   project       = var.project_id
-  location      = var.region
+  location      = local.legacy_artifact_registry_region
   repository_id = "agent"
   description   = "Production agent images with bounded rollback retention"
   format        = "DOCKER"
@@ -116,9 +130,91 @@ resource "google_artifact_registry_repository" "agent" {
 
 resource "google_artifact_registry_repository" "preview_agent" {
   project       = var.project_id
-  location      = var.region
+  location      = local.legacy_artifact_registry_region
   repository_id = "agent-preview"
   description   = "Preview agent images with short-lived retention"
+  format        = "DOCKER"
+
+  docker_config {
+    immutable_tags = false
+  }
+
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-after-14-days"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "ANY"
+      older_than = "1209600s"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-last-20"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 20
+    }
+  }
+
+  depends_on = [google_project_service.required]
+
+  lifecycle {
+    # The imported legacy preview repository records the provider-default false
+    # as an omitted dockerConfig block. Keep Terraform read-only for that legacy
+    # surface; the live readiness verifier still rejects immutableTags=true.
+    ignore_changes  = [docker_config]
+    prevent_destroy = true
+  }
+}
+
+resource "google_artifact_registry_repository" "active_agent" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "agent"
+  description   = "Singapore production agent images with bounded rollback retention"
+  format        = "DOCKER"
+
+  docker_config {
+    immutable_tags = false
+  }
+
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-after-90-days"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "ANY"
+      older_than = "7776000s"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-last-30"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 30
+    }
+  }
+
+  depends_on = [google_project_service.required]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_artifact_registry_repository" "active_preview_agent" {
+  project       = var.project_id
+  location      = var.region
+  repository_id = "agent-preview"
+  description   = "Singapore preview image foundation retained dormant by delivery gates"
   format        = "DOCKER"
 
   docker_config {
@@ -330,10 +426,10 @@ check "agent_delivery_stage_inputs" {
       && var.agent_secret_versions == null
       ) : (
       var.agent_bootstrap_image != null
-      && var.agent_preview_bootstrap_image != null
+      && var.agent_preview_bootstrap_image == null
       && var.agent_secret_versions != null
     )
-    error_message = "foundation requires null image/version inputs; jobs and services require immutable production/preview images plus the complete reviewed numeric version map."
+    error_message = "foundation requires null image/version inputs; every later stage requires one immutable production image, no preview image, and the complete reviewed production numeric version map."
   }
 }
 
@@ -341,9 +437,9 @@ check "agent_secret_version_inventory" {
   assert {
     condition = var.agent_delivery_stage == "foundation" ? true : (
       var.agent_secret_versions != null
-      && toset(keys(var.agent_secret_versions)) == local.required_agent_secret_names
+      && toset(keys(var.agent_secret_versions)) == local.required_production_delivery_secret_names
     )
-    error_message = "jobs and services require exactly the eleven managed secret IDs, with no missing or extra version keys."
+    error_message = "every non-foundation stage requires exactly the four production delivery secret IDs, with no missing or extra version keys."
   }
 }
 

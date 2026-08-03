@@ -24,10 +24,10 @@ EXPECTED_ENVIRONMENTS = {
 }
 EXPECTED_IMAGE_PREFIXES = {
     "preview": (
-        "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
+        "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
     ),
     "production": (
-        "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
+        "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
     ),
 }
 GITHUB_ACTIONS_APP_ID = 15368

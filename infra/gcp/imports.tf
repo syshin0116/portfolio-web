@@ -1,6 +1,6 @@
 import {
   to = google_artifact_registry_repository.agent
-  id = "projects/${var.project_id}/locations/${var.region}/repositories/agent"
+  id = "projects/${var.project_id}/locations/${local.legacy_artifact_registry_region}/repositories/agent"
 }
 
 import {

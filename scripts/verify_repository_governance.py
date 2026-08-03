@@ -220,7 +220,7 @@ CI_CHANGES_JOB = "changes"
 CI_CHANGES_TIMEOUT_MINUTES = 10
 AGENT_CI_JOB = "agent"
 AGENT_CI_JOB_AST_SHA256 = (
-    "9033845cf4855fdb77b98afa979ea099e40e05f30666fc70e4e800ce4284983d"
+    "11ce62f5e2301b85dcc62ac1ecf43a55024bea5c1e6dd27250eb087fc2d2bf79"
 )
 AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
@@ -236,13 +236,13 @@ EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
 )
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (
-        "379244ec5d1185963d4cd2c5d4f20b7833b155f44b400c3ab5ae70058f4e6e55"
+        "cb00937738a941fdccae54a11547d07da645c33ac5575a012c12a07debd6caf0"
     ),
     ".github/workflows/agent-release.yml": (
-        "afe9383f95105da107da1559531b0877149f2e17da4ab4b3a89934dcc337c8e3"
+        "cfc036db1c58da5eb60b669c0bf6b2daeb0514de367119509ea53750a9e23b03"
     ),
     ".github/workflows/preview-agent.yml": (
-        "492d30bd53ba48a81882350e013ac26c27d65cbd34be23bbd9ae526d31fc7796"
+        "651a730dd549e958837df3cab7792821919ee9093f2ad35a91c7fdc3cefed1d9"
     ),
     ".github/workflows/deploy-agent.yml": (
         "ccd93f95170586f6ab1cf8b2e20bdb3968f61cf31f655ac08a1b9752fd175307"
@@ -250,11 +250,11 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
 }
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
 AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
-    "4b243cf809882216a179343dd1f11b5805eb34f48275f0bec4c4256a95f461eb"
+    "05517f3f6e0a2119f1e88706e71eac4393bf4dab986d347b43cff568c3aa4688"
 )
 AGENT_RELEASE_CANDIDATE_SCRIPT = "scripts/validate_agent_release_candidate.py"
 AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
-    "a8c0dc770b0314d9b08843c16abae6bac24b405e51ac75e3dd14c6775e2006d3"
+    "7fd935a23fd5cfccbb713f17eceefcf6ff288e50b20af1e927b232da42321118"
 )
 VERCEL_CONFIG = "web/vercel.json"
 EXPECTED_VERCEL_AUTODEPLOY_CONFIG = {

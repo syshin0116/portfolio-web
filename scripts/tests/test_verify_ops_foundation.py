@@ -95,16 +95,104 @@ def _write_secure_python_wrapper(path: Path) -> None:
 
 
 class StaticVerifierMutationTests(unittest.TestCase):
+    def test_legacy_preview_docker_config_ignore_is_narrowly_scoped(self) -> None:
+        main_source = (REPO_ROOT / "infra/gcp/main.tf").read_text(encoding="utf-8")
+
+        def repository_block(name: str) -> str:
+            marker = f'resource "google_artifact_registry_repository" "{name}" {{'
+            return main_source.split(marker, 1)[1].split('\nresource "', 1)[0]
+
+        ignored_attribute = "ignore_changes  = [docker_config]"
+        self.assertEqual(1, main_source.count(ignored_attribute))
+        self.assertIn(ignored_attribute, repository_block("preview_agent"))
+        for managed_repository in ("agent", "active_agent", "active_preview_agent"):
+            with self.subTest(repository=managed_repository):
+                self.assertNotIn(
+                    ignored_attribute,
+                    repository_block(managed_repository),
+                )
+
+    def test_artifact_iam_preserves_legacy_addresses_and_adds_active_mirrors(
+        self,
+    ) -> None:
+        iam_source = (REPO_ROOT / "infra/gcp/iam.tf").read_text(encoding="utf-8")
+
+        def resource_block(name: str) -> str:
+            marker = (
+                f'resource "google_artifact_registry_repository_iam_member" "{name}" {{'
+            )
+            return iam_source.split(marker, 1)[1].split("\n}", 1)[0]
+
+        resource_pairs = {
+            "builder_writer": "active_builder_writer",
+            "preview_builder_writer": "active_preview_builder_writer",
+            "deployer_reader": "active_deployer_reader",
+            "preview_deployer_reader": "active_preview_deployer_reader",
+            "cloud_run_reader": "active_cloud_run_reader",
+            "preview_cloud_run_reader": "active_preview_cloud_run_reader",
+        }
+        for legacy_name, active_name in resource_pairs.items():
+            with self.subTest(legacy=legacy_name, active=active_name):
+                repository_name = (
+                    "preview_agent" if "preview" in legacy_name else "agent"
+                )
+                self.assertIn(
+                    "location   = local.legacy_artifact_registry_region",
+                    resource_block(legacy_name),
+                )
+                self.assertIn(
+                    "google_artifact_registry_repository."
+                    f"{repository_name}.repository_id",
+                    resource_block(legacy_name),
+                )
+                self.assertIn(
+                    "location   = var.region",
+                    resource_block(active_name),
+                )
+                self.assertIn(
+                    "google_artifact_registry_repository."
+                    f"active_{repository_name}.repository_id",
+                    resource_block(active_name),
+                )
+
+        cloud_run_source = (REPO_ROOT / "infra/gcp/cloud_run.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            5,
+            cloud_run_source.count(
+                "google_artifact_registry_repository_iam_member."
+                "active_cloud_run_reader,"
+            ),
+        )
+        self.assertNotIn(
+            "    google_artifact_registry_repository_iam_member.cloud_run_reader,",
+            cloud_run_source,
+        )
+
     def test_cloud_runtime_contract_has_production_only_openai_credential(self) -> None:
         cloud_run_source = (REPO_ROOT / "infra/gcp/cloud_run.tf").read_text(
             encoding="utf-8"
         )
         preview, production = cloud_run_source.split("    production = {", 1)
+        production_definition = production.split(
+            "\n  production_cloud_run_environments = {", 1
+        )[0]
 
         self.assertNotIn("OPENAI_API_KEY", preview)
         self.assertNotIn("agent-preview-openai-api-key", preview)
         self.assertEqual(1, production.count("OPENAI_API_KEY"))
         self.assertEqual(2, production.count('"openai-api-key"'))
+        self.assertNotIn("ANTHROPIC_API_KEY", production_definition)
+        self.assertNotIn("LANGCHAIN_API_KEY", production_definition)
+        self.assertEqual(1, production_definition.count("AGENT_AUTH_SECRET"))
+        self.assertEqual(1, production_definition.count("DATABASE_URL"))
+        self.assertEqual(1, production_definition.count("OPENAI_API_KEY"))
+        self.assertEqual(
+            5,
+            cloud_run_source.count("local.production_cloud_run_environments"),
+        )
+        self.assertIn('MODEL                     = "openai:gpt-5.6-luna"', production)
 
         deploy_source = (REPO_ROOT / "scripts/deploy_cloud_run.sh").read_text(
             encoding="utf-8"
@@ -117,6 +205,45 @@ class StaticVerifierMutationTests(unittest.TestCase):
             '{"name":"OPENAI_API_KEY","secret":"openai-api-key"}',
             production_expectation,
         )
+        self.assertNotIn("ANTHROPIC_API_KEY", production_expectation)
+        self.assertNotIn("LANGCHAIN_API_KEY", production_expectation)
+
+    def test_delivery_versions_are_four_production_numeric_pins(self) -> None:
+        variables = (REPO_ROOT / "infra/gcp/variables.tf").read_text(encoding="utf-8")
+        version_contract = variables.split('variable "agent_secret_versions" {', 1)[1]
+        for secret in (
+            "agent-auth-secret",
+            "agent-database-url",
+            "agent-migration-database-url",
+            "openai-api-key",
+        ):
+            self.assertEqual(1, version_contract.count(f'"{secret}"'))
+        for dormant_secret in (
+            "agent-preview-auth-secret",
+            "anthropic-api-key",
+            "langsmith-api-key",
+        ):
+            self.assertNotIn(dormant_secret, version_contract)
+        self.assertIn('can(regex("^[1-9][0-9]*$", version))', version_contract)
+
+    def test_ci_container_uses_the_production_luna_secret_contract(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        model_position = workflow.index("--env MODEL=openai:gpt-5.6-luna")
+        docker_start = workflow.rindex(
+            "          docker run",
+            0,
+            model_position,
+        )
+        docker_end = workflow.index('            "$image_tag"', model_position)
+        docker_runtime = workflow[docker_start:docker_end]
+
+        self.assertIn("--env MODEL=openai:gpt-5.6-luna", docker_runtime)
+        self.assertIn(
+            "--env OPENAI_API_KEY=ci-only-not-a-real-openai-key",
+            docker_runtime,
+        )
+        self.assertNotIn("ANTHROPIC_API_KEY", docker_runtime)
+        self.assertNotIn("LANGCHAIN_API_KEY", docker_runtime)
 
     def test_broad_cloud_run_developer_role_is_absent(self) -> None:
         reviewed_paths = (
@@ -174,7 +301,9 @@ class StaticVerifierMutationTests(unittest.TestCase):
             oracle = root / "scripts/gcp_project_readiness_contract.json"
             oracle.write_text(
                 oracle.read_text(encoding="utf-8").replace(
-                    '"region": "us-east4"', '"region": "us-central1"', 1
+                    '"region": "asia-southeast1"',
+                    '"region": "us-central1"',
+                    1,
                 ),
                 encoding="utf-8",
             )

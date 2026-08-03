@@ -25,6 +25,7 @@ from scripts.verify_gcp_project_readiness import (
     GCLOUD_ACCOUNT_ENV,
     GCloudReader,
     JOB_SPECS,
+    LEGACY_REGION,
     MAINTENANCE_SCHEDULER_SA,
     PREVIEW_BUILDER_SA,
     PREVIEW_DEPLOYER_SA,
@@ -38,6 +39,7 @@ from scripts.verify_gcp_project_readiness import (
     PROJECT_NUMBER,
     REGION,
     REQUIRED_APIS,
+    SCHEDULED_MAINTENANCE_DELIVERY_ROLE,
     SERVICE_SPECS,
     STATE_BUCKET,
     STATE_BUCKET_COMMANDS,
@@ -196,7 +198,7 @@ class FakeRead:
         self.user_key_outputs: dict[str, str] = {}
 
     @staticmethod
-    def _artifact(repository: str) -> dict[str, object]:
+    def _artifact(repository: str, *, region: str = REGION) -> dict[str, object]:
         if repository == "agent":
             delete_id, age, keep_id, count = (
                 "delete-after-90-days",
@@ -213,7 +215,7 @@ class FakeRead:
             )
         return {
             "name": (
-                f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{repository}"
+                f"projects/{PROJECT_ID}/locations/{region}/repositories/{repository}"
             ),
             "format": "DOCKER",
             "mode": "STANDARD_REPOSITORY",
@@ -277,7 +279,7 @@ class FakeRead:
                 (
                     "roles/cloudscheduler.serviceAgent",
                     f"serviceAccount:{CLOUD_SCHEDULER_SERVICE_AGENT}",
-                )
+                ),
             ),
             (
                 "iam",
@@ -296,6 +298,21 @@ class FakeRead:
                     "run.revisions.get",
                     "run.services.get",
                     "run.services.update",
+                ],
+            },
+            (
+                "iam",
+                "roles",
+                "describe",
+                "cloudRunScheduledMaintenanceDelivery",
+                "--format=json",
+            ): {
+                "name": SCHEDULED_MAINTENANCE_DELIVERY_ROLE,
+                "stage": "GA",
+                "includedPermissions": [
+                    "run.jobs.get",
+                    "run.jobs.update",
+                    "run.operations.get",
                 ],
             },
             ("services", "list", "--enabled", "--format=value(config.name)"): (
@@ -317,7 +334,7 @@ class FakeRead:
             ): {
                 "name": STATE_BUCKET,
                 "projectNumber": PROJECT_NUMBER,
-                "location": REGION.upper(),
+                "location": LEGACY_REGION.upper(),
                 "iamConfiguration": {
                     "publicAccessPrevention": "enforced",
                     "uniformBucketLevelAccess": {"enabled": True},
@@ -402,7 +419,7 @@ class FakeRead:
                     "uri": (
                         "https://run.googleapis.com/v2/projects/"
                         f"{PROJECT_ID}/locations/{REGION}/"
-                        "jobs/agent-maintenance:run"
+                        "jobs/agent-scheduled-maintenance:run"
                     ),
                     "body": "e30=",
                     "headers": {"Content-Type": "application/json"},
@@ -450,6 +467,18 @@ class FakeRead:
             responses[("artifacts", "repositories", "get-iam-policy", *suffix)] = (
                 expected
             )
+            legacy_suffix = (
+                repository,
+                "--location",
+                LEGACY_REGION,
+                "--format=json",
+            )
+            responses[("artifacts", "repositories", "describe", *legacy_suffix)] = (
+                self._artifact(repository, region=LEGACY_REGION)
+            )
+            responses[
+                ("artifacts", "repositories", "get-iam-policy", *legacy_suffix)
+            ] = expected
         for account in WORKLOAD_SERVICE_ACCOUNTS:
             responses[
                 (
@@ -463,8 +492,8 @@ class FakeRead:
         secret_accounts = {
             "agent-auth-secret": PRODUCTION_RUNTIME_SA,
             "agent-database-url": PRODUCTION_RUNTIME_SA,
-            "anthropic-api-key": PRODUCTION_RUNTIME_SA,
-            "langsmith-api-key": PRODUCTION_RUNTIME_SA,
+            "anthropic-api-key": None,
+            "langsmith-api-key": None,
             "openai-api-key": PRODUCTION_RUNTIME_SA,
             "agent-migration-database-url": PRODUCTION_MIGRATOR_SA,
             "agent-preview-anthropic-api-key": PREVIEW_RUNTIME_SA,
@@ -478,10 +507,14 @@ class FakeRead:
                 "name": f"projects/{PROJECT_NUMBER}/secrets/{secret}",
                 "replication": {"automatic": {}},
             }
-            responses[("secrets", "get-iam-policy", secret, "--format=json")] = _policy(
-                (
-                    "roles/secretmanager.secretAccessor",
-                    f"serviceAccount:{account}",
+            responses[("secrets", "get-iam-policy", secret, "--format=json")] = (
+                _policy()
+                if account is None
+                else _policy(
+                    (
+                        "roles/secretmanager.secretAccessor",
+                        f"serviceAccount:{account}",
+                    )
                 )
             )
         for provider in ("github-preview", "github-production"):
@@ -514,7 +547,7 @@ class FakeRead:
             responses[("run", "jobs", "describe", *suffix)] = _job(job)
             pairs = [
                 (
-                    CLOUD_RUN_DELIVERY_ROLE,
+                    spec["delivery_role"],
                     f"serviceAccount:{spec['deployer']}",
                 )
             ]
@@ -583,7 +616,7 @@ class ExactProjectCommandBoundaryTests(unittest.TestCase):
                 {
                     key: value
                     for key, value in JOB_SPECS.items()
-                    if key != "agent-maintenance"
+                    if key != "agent-scheduled-maintenance"
                 },
                 "inventory",
             ),
@@ -904,6 +937,49 @@ class ExactProjectReadinessTests(unittest.TestCase):
                     )
                 )
 
+    def test_scheduled_maintenance_delivery_role_rejects_execution_permission(
+        self,
+    ) -> None:
+        fixture = FakeRead()
+        command = (
+            "iam",
+            "roles",
+            "describe",
+            "cloudRunScheduledMaintenanceDelivery",
+            "--format=json",
+        )
+        document = json.loads(fixture.responses[command])
+        document["includedPermissions"].append("run.jobs.run")
+        fixture.responses[command] = json.dumps(document)
+
+        with self.assertRaisesRegex(ReadinessError, "non-executing role"):
+            self._verify(fixture)
+
+    def test_scheduled_maintenance_rejects_the_general_delivery_role(self) -> None:
+        fixture = FakeRead()
+        suffix = (
+            "agent-scheduled-maintenance",
+            "--region",
+            REGION,
+            "--format=json",
+        )
+        command = ("run", "jobs", "get-iam-policy", *suffix)
+        fixture.responses[command] = json.dumps(
+            _policy(
+                (
+                    CLOUD_RUN_DELIVERY_ROLE,
+                    f"serviceAccount:{PRODUCTION_DEPLOYER_SA}",
+                ),
+                (
+                    "roles/run.invoker",
+                    f"serviceAccount:{MAINTENANCE_SCHEDULER_SA}",
+                ),
+            )
+        )
+
+        with self.assertRaisesRegex(ReadinessError, "IAM does not match"):
+            self._verify(fixture)
+
     def test_project_describe_parent_field_is_ignored_without_scope_reads(self) -> None:
         fixture = FakeRead()
         command = ("projects", "describe", PROJECT_ID, "--format=json")
@@ -1068,7 +1144,7 @@ class ExactProjectReadinessTests(unittest.TestCase):
             )
         )
 
-        with self.assertRaisesRegex(ReadinessError, "direct project-level role"):
+        with self.assertRaisesRegex(ReadinessError, "project-wide roles"):
             self._verify(fixture)
 
     def test_scheduler_service_agent_binding_must_be_unconditional(self) -> None:
@@ -1201,6 +1277,94 @@ class ExactProjectReadinessTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReadinessError, "exact repository-owned"):
             self._verify(fixture)
+
+    def test_dormant_production_secret_accessor_fails(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "secrets",
+            "get-iam-policy",
+            "anthropic-api-key",
+            "--format=json",
+        )
+        fixture.responses[command] = json.dumps(
+            _policy(
+                (
+                    "roles/secretmanager.secretAccessor",
+                    f"serviceAccount:{PRODUCTION_RUNTIME_SA}",
+                )
+            )
+        )
+
+        with self.assertRaisesRegex(ReadinessError, "exact repository-owned"):
+            self._verify(fixture)
+
+    def test_active_and_legacy_artifact_iam_require_mirrored_bindings(self) -> None:
+        for region in (REGION, LEGACY_REGION):
+            with self.subTest(region=region):
+                fixture = FakeRead()
+                if region == REGION:
+                    command = (
+                        "artifacts",
+                        "repositories",
+                        "get-iam-policy",
+                        "agent",
+                        "--location",
+                        region,
+                        "--format=json",
+                    )
+                    fixture.responses[command] = json.dumps(
+                        _policy(
+                            (
+                                "roles/artifactregistry.reader",
+                                f"serviceAccount:{CLOUD_RUN_SERVICE_AGENT}",
+                            ),
+                            (
+                                "roles/artifactregistry.reader",
+                                f"serviceAccount:{PRODUCTION_DEPLOYER_SA}",
+                            ),
+                        )
+                    )
+                else:
+                    for repository in ("agent", "agent-preview"):
+                        command = (
+                            "artifacts",
+                            "repositories",
+                            "get-iam-policy",
+                            repository,
+                            "--location",
+                            region,
+                            "--format=json",
+                        )
+                        fixture.responses[command] = json.dumps(_policy())
+
+                with self.assertRaisesRegex(
+                    ReadinessError,
+                    "exact repository-owned bindings",
+                ):
+                    self._verify(fixture)
+
+    def test_active_and_legacy_artifact_immutable_tags_true_fails(self) -> None:
+        for region in (REGION, LEGACY_REGION):
+            with self.subTest(region=region):
+                fixture = FakeRead()
+                command = (
+                    "artifacts",
+                    "repositories",
+                    "describe",
+                    "agent-preview",
+                    "--location",
+                    region,
+                    "--format=json",
+                )
+                repository = json.loads(fixture.responses[command])
+                repository["dockerConfig"]["immutableTags"] = True
+                fixture.responses[command] = json.dumps(repository)
+
+                with self.assertRaisesRegex(
+                    ReadinessError,
+                    "metadata or retention drifted",
+                ):
+                    self._verify(fixture)
 
     def test_artifact_cleanup_prefix_or_unknown_selector_fails(self) -> None:
         cases: dict[str, tuple[str, object]] = {
@@ -1443,28 +1607,26 @@ class ExactProjectReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ReadinessError, "secret environment inventory"):
             self._verify(fixture)
 
-    def test_preview_cannot_enable_anonymous_access(self) -> None:
-        fixture = FakeRead()
-        command = (
-            "run",
-            "services",
-            "describe",
-            "agent-preview",
-            "--region",
-            REGION,
-            "--format=json",
+    def test_preview_foundation_is_dormant_without_runtime_reads(self) -> None:
+        self.assertEqual({"agent"}, set(SERVICE_SPECS))
+        self.assertEqual(
+            {
+                "agent-migrate",
+                "agent-grants",
+                "agent-maintenance",
+                "agent-scheduled-maintenance",
+            },
+            set(JOB_SPECS),
         )
-        service = json.loads(fixture.responses[command])
-        entries = service["spec"]["template"]["spec"]["containers"][0]["env"]
-        next(
-            entry
-            for entry in entries
-            if entry["name"] == "AGENT_ANONYMOUS_ACCESS_ENABLED"
-        )["value"] = "true"
-        fixture.responses[command] = json.dumps(service)
-
-        with self.assertRaisesRegex(ReadinessError, "guest boundary"):
-            self._verify(fixture)
+        self.assertFalse(
+            any(
+                "agent-preview" in token
+                for command in FIXED_GCLOUD_COMMANDS
+                for token in command
+                if command[:2] == ("run", "services")
+            )
+        )
+        self.assertIn(PREVIEW_RUNTIME_SA, WORKLOAD_SERVICE_ACCOUNTS)
 
     def test_scheduler_must_be_enabled_after_launch_approval(self) -> None:
         fixture = FakeRead()
@@ -1479,6 +1641,27 @@ class ExactProjectReadinessTests(unittest.TestCase):
         )
         scheduler = json.loads(fixture.responses[command])
         scheduler["state"] = "PAUSED"
+        fixture.responses[command] = json.dumps(scheduler)
+
+        with self.assertRaisesRegex(ReadinessError, "Scheduler"):
+            self._verify(fixture)
+
+    def test_scheduler_rejects_the_release_validation_maintenance_job(self) -> None:
+        fixture = FakeRead()
+        command = (
+            "scheduler",
+            "jobs",
+            "describe",
+            "agent-guest-maintenance",
+            "--location",
+            REGION,
+            "--format=json",
+        )
+        scheduler = json.loads(fixture.responses[command])
+        scheduler["httpTarget"]["uri"] = (
+            f"https://run.googleapis.com/v2/projects/{PROJECT_ID}/locations/"
+            f"{REGION}/jobs/agent-maintenance:run"
+        )
         fixture.responses[command] = json.dumps(scheduler)
 
         with self.assertRaisesRegex(ReadinessError, "Scheduler"):

@@ -46,6 +46,23 @@ resource "google_project_iam_custom_role" "cloud_run_delivery" {
   }
 }
 
+resource "google_project_iam_custom_role" "scheduled_maintenance_delivery" {
+  project     = var.project_id
+  role_id     = "cloudRunScheduledMaintenanceDelivery"
+  title       = "Cloud Run scheduled maintenance delivery"
+  description = "Update and verify only the existing scheduled maintenance job; execution remains exclusive to Cloud Scheduler."
+  stage       = "GA"
+  permissions = [
+    "run.jobs.get",
+    "run.jobs.update",
+    "run.operations.get",
+  ]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "google_service_account_iam_member" "deployer_uses_runtime" {
   for_each = local.deployer_service_accounts
 
@@ -63,10 +80,10 @@ resource "google_service_account_iam_member" "deployer_uses_migrator" {
 }
 
 resource "google_secret_manager_secret_iam_member" "runtime_accessor" {
-  for_each = google_secret_manager_secret.runtime
+  for_each = local.production_runtime_secret_names
 
   project   = var.project_id
-  secret_id = each.value.secret_id
+  secret_id = google_secret_manager_secret.runtime[each.key].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.runtime_service_accounts.production}"
 }
@@ -115,7 +132,7 @@ resource "google_service_account_iam_member" "github_preview_builder" {
 
 resource "google_artifact_registry_repository_iam_member" "builder_writer" {
   project    = var.project_id
-  location   = var.region
+  location   = local.legacy_artifact_registry_region
   repository = google_artifact_registry_repository.agent.repository_id
   role       = "roles/artifactregistry.writer"
   member     = "serviceAccount:${google_service_account.builder.email}"
@@ -123,7 +140,7 @@ resource "google_artifact_registry_repository_iam_member" "builder_writer" {
 
 resource "google_artifact_registry_repository_iam_member" "preview_builder_writer" {
   project    = var.project_id
-  location   = var.region
+  location   = local.legacy_artifact_registry_region
   repository = google_artifact_registry_repository.preview_agent.repository_id
   role       = "roles/artifactregistry.writer"
   member     = "serviceAccount:${google_service_account.preview_builder.email}"
@@ -135,7 +152,7 @@ resource "google_artifact_registry_repository_iam_member" "deployer_reader" {
   }
 
   project    = var.project_id
-  location   = var.region
+  location   = local.legacy_artifact_registry_region
   repository = google_artifact_registry_repository.agent.repository_id
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:${each.value}"
@@ -143,7 +160,7 @@ resource "google_artifact_registry_repository_iam_member" "deployer_reader" {
 
 resource "google_artifact_registry_repository_iam_member" "preview_deployer_reader" {
   project    = var.project_id
-  location   = var.region
+  location   = local.legacy_artifact_registry_region
   repository = google_artifact_registry_repository.preview_agent.repository_id
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:${local.deployer_service_accounts.preview}"
@@ -151,7 +168,7 @@ resource "google_artifact_registry_repository_iam_member" "preview_deployer_read
 
 resource "google_artifact_registry_repository_iam_member" "cloud_run_reader" {
   project    = var.project_id
-  location   = var.region
+  location   = local.legacy_artifact_registry_region
   repository = google_artifact_registry_repository.agent.repository_id
   role       = "roles/artifactregistry.reader"
   member     = local.cloud_run_image_pull_principal
@@ -161,8 +178,64 @@ resource "google_artifact_registry_repository_iam_member" "cloud_run_reader" {
 
 resource "google_artifact_registry_repository_iam_member" "preview_cloud_run_reader" {
   project    = var.project_id
-  location   = var.region
+  location   = local.legacy_artifact_registry_region
   repository = google_artifact_registry_repository.preview_agent.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = local.cloud_run_image_pull_principal
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_artifact_registry_repository_iam_member" "active_builder_writer" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.active_agent.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.builder.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "active_preview_builder_writer" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.active_preview_agent.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.preview_builder.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "active_deployer_reader" {
+  for_each = {
+    production = local.deployer_service_accounts.production
+  }
+
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.active_agent.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${each.value}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "active_preview_deployer_reader" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.active_preview_agent.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${local.deployer_service_accounts.preview}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "active_cloud_run_reader" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.active_agent.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = local.cloud_run_image_pull_principal
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_artifact_registry_repository_iam_member" "active_preview_cloud_run_reader" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.active_preview_agent.repository_id
   role       = "roles/artifactregistry.reader"
   member     = local.cloud_run_image_pull_principal
 

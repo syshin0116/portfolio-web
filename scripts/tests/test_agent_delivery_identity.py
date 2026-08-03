@@ -18,7 +18,7 @@ TARGETS = {
             "agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
         ),
         "repository": (
-            "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent"
+            "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent"
         ),
         "service": "agent-preview",
         "migration": "agent-preview-migrate",
@@ -33,7 +33,9 @@ TARGETS = {
         "deployer": (
             "agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
         ),
-        "repository": ("us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent"),
+        "repository": (
+            "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent"
+        ),
         "service": "agent",
         "migration": "agent-migrate",
         "grant": "agent-grants",
@@ -61,6 +63,25 @@ def _environment(target: str, role: str) -> dict[str, str]:
 
 
 class AgentDeliveryIdentityTests(unittest.TestCase):
+    def test_preview_has_an_independent_fail_closed_gate(self) -> None:
+        preview = (REPO_ROOT / ".github/workflows/preview-agent.yml").read_text(
+            encoding="utf-8"
+        )
+        production = (REPO_ROOT / ".github/workflows/deploy-agent.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            1,
+            preview.count("vars.AGENT_CLOUD_RUN_PREVIEW_ENABLED == 'true'"),
+        )
+        self.assertIn("vars.AGENT_CLOUD_RUN_ENABLED == 'true'", preview)
+        self.assertNotIn("AGENT_CLOUD_RUN_PREVIEW_ENABLED", production)
+        self.assertEqual(
+            2,
+            production.count("vars.AGENT_CLOUD_RUN_ENABLED == 'true'"),
+        )
+
     def test_preview_build_and_release_pin_pr_head_not_synthetic_merge_sha(
         self,
     ) -> None:

@@ -1,7 +1,7 @@
 resource "google_storage_bucket" "terraform_state" {
   name     = "${var.project_id}-tfstate"
   project  = var.project_id
-  location = var.region
+  location = local.legacy_artifact_registry_region
 
   force_destroy               = false
   public_access_prevention    = "enforced"

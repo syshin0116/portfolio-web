@@ -25,6 +25,14 @@ override_resource {
 }
 
 override_resource {
+  target          = google_project_iam_custom_role.scheduled_maintenance_delivery
+  override_during = plan
+  values = {
+    name = "projects/festive-ally-503605-v7/roles/cloudRunScheduledMaintenanceDelivery"
+  }
+}
+
+override_resource {
   target          = google_service_account.runtime
   override_during = plan
   values = {
@@ -149,32 +157,40 @@ run "foundation_security_contract" {
   command = plan
 
   variables {
-    agent_delivery_stage          = "services"
-    agent_bootstrap_image         = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    agent_preview_bootstrap_image = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    agent_delivery_stage          = "launch"
+    agent_bootstrap_image         = "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    agent_preview_bootstrap_image = null
     agent_secret_versions = {
-      agent-auth-secret                    = "11"
-      agent-database-url                   = "12"
-      agent-migration-database-url         = "13"
-      agent-preview-anthropic-api-key      = "21"
-      agent-preview-auth-secret            = "22"
-      agent-preview-database-url           = "23"
-      agent-preview-langsmith-api-key      = "24"
-      agent-preview-migration-database-url = "25"
-      anthropic-api-key                    = "14"
-      langsmith-api-key                    = "15"
-      openai-api-key                       = "16"
+      agent-auth-secret            = "11"
+      agent-database-url           = "12"
+      agent-migration-database-url = "13"
+      openai-api-key               = "16"
     }
   }
 
   assert {
     condition = (
-      !google_artifact_registry_repository.agent.docker_config[0].immutable_tags
-      && !google_artifact_registry_repository.preview_agent.docker_config[0].immutable_tags
-      && !google_artifact_registry_repository.agent.cleanup_policy_dry_run
-      && !google_artifact_registry_repository.preview_agent.cleanup_policy_dry_run
+      google_artifact_registry_repository.agent.docker_config[0].immutable_tags == false
+      && google_artifact_registry_repository.preview_agent.docker_config[0].immutable_tags == false
+      && google_artifact_registry_repository.active_agent.docker_config[0].immutable_tags == false
+      && google_artifact_registry_repository.active_preview_agent.docker_config[0].immutable_tags == false
+      && google_artifact_registry_repository.agent.cleanup_policy_dry_run == false
+      && google_artifact_registry_repository.preview_agent.cleanup_policy_dry_run == false
+      && google_artifact_registry_repository.active_agent.cleanup_policy_dry_run == false
+      && google_artifact_registry_repository.active_preview_agent.cleanup_policy_dry_run == false
     )
     error_message = "Both registries must allow expired tagged versions to be deleted by active cleanup policies."
+  }
+
+  assert {
+    condition = (
+      google_artifact_registry_repository.agent.location == "us-east4"
+      && google_artifact_registry_repository.preview_agent.location == "us-east4"
+      && google_artifact_registry_repository.active_agent.location == "asia-southeast1"
+      && google_artifact_registry_repository.active_preview_agent.location == "asia-southeast1"
+      && google_storage_bucket.terraform_state.location == "us-east4"
+    )
+    error_message = "Singapore delivery resources must coexist with replacement-proof legacy registries and state storage."
   }
 
   assert {
@@ -331,8 +347,8 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = length(google_secret_manager_secret_iam_member.runtime_accessor) == 5 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
-    error_message = "Production must bind only its five launch runtime secrets and Preview only its four fail-closed runtime secrets."
+    condition     = toset(keys(google_secret_manager_secret_iam_member.runtime_accessor)) == local.production_runtime_secret_names && length(google_secret_manager_secret_iam_member.runtime_accessor) == 3 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
+    error_message = "Production runtime access must be limited to auth, database, and OpenAI while Preview remains limited to its four fail-closed runtime secrets."
   }
 
   assert {
@@ -371,31 +387,51 @@ run "foundation_security_contract" {
     condition = (
       google_artifact_registry_repository_iam_member.builder_writer.role == "roles/artifactregistry.writer"
       && google_artifact_registry_repository_iam_member.builder_writer.member == "serviceAccount:agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.builder_writer.location == "us-east4"
       && google_artifact_registry_repository_iam_member.builder_writer.repository == "agent"
       && google_artifact_registry_repository_iam_member.preview_builder_writer.member == "serviceAccount:agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_builder_writer.location == "us-east4"
       && google_artifact_registry_repository_iam_member.preview_builder_writer.repository == "agent-preview"
       && length(google_artifact_registry_repository_iam_member.deployer_reader) == 1
       && google_artifact_registry_repository_iam_member.deployer_reader["production"].member == "serviceAccount:agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.deployer_reader["production"].location == "us-east4"
       && google_artifact_registry_repository_iam_member.preview_deployer_reader.member == "serviceAccount:agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_deployer_reader.location == "us-east4"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.role == "roles/artifactregistry.reader"
       && google_artifact_registry_repository_iam_member.cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.cloud_run_reader.location == "us-east4"
       && google_artifact_registry_repository_iam_member.preview_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.preview_cloud_run_reader.location == "us-east4"
+      && google_artifact_registry_repository_iam_member.active_builder_writer.member == "serviceAccount:agent-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_builder_writer.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_builder_writer.repository == "agent"
+      && google_artifact_registry_repository_iam_member.active_preview_builder_writer.member == "serviceAccount:agent-preview-image-builder@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_preview_builder_writer.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_preview_builder_writer.repository == "agent-preview"
+      && length(google_artifact_registry_repository_iam_member.active_deployer_reader) == 1
+      && google_artifact_registry_repository_iam_member.active_deployer_reader["production"].member == "serviceAccount:agent-prod-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_deployer_reader["production"].location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_preview_deployer_reader.member == "serviceAccount:agent-preview-deployer@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_preview_deployer_reader.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_cloud_run_reader.role == "roles/artifactregistry.reader"
+      && google_artifact_registry_repository_iam_member.active_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_cloud_run_reader.location == "asia-southeast1"
+      && google_artifact_registry_repository_iam_member.active_preview_cloud_run_reader.member == "serviceAccount:service-72919926064@serverless-robot-prod.iam.gserviceaccount.com"
+      && google_artifact_registry_repository_iam_member.active_preview_cloud_run_reader.location == "asia-southeast1"
       && google_service_account_iam_member.github_builder.member == local.github_delivery_role_principals.production_builder
       && google_service_account_iam_member.github_preview_builder.member == local.github_delivery_role_principals.preview_builder
     )
-    error_message = "Preview and production builders, repositories, readers, and WIF principals must remain disjoint."
+    error_message = "Legacy IAM addresses must stay in us-east4 while mirrored active delivery IAM targets Singapore."
   }
 
   assert {
-    condition = alltrue([
+    condition = length(google_cloud_run_v2_service.agent) == 1 && alltrue([
       for environment, service in google_cloud_run_v2_service.agent :
-      service.template[0].scaling[0].max_instance_count == 1
+      environment == "production"
+      && service.template[0].scaling[0].max_instance_count == 1
+      && service.template[0].scaling[0].min_instance_count == 0
       && service.template[0].max_instance_request_concurrency == 8
-      && service.template[0].containers[0].image == (
-        environment == "preview"
-        ? var.agent_preview_bootstrap_image
-        : var.agent_bootstrap_image
-      )
+      && service.template[0].containers[0].image == var.agent_bootstrap_image
       && service.template[0].containers[0].command == tolist(["uvicorn"])
       && service.template[0].containers[0].args == tolist([
         "aegra_api.main:app",
@@ -407,9 +443,7 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
-      && length(service.template[0].containers[0].env) == (
-        environment == "production" ? 22 : 21
-      )
+      && length(service.template[0].containers[0].env) == 20
       && {
         for env in service.template[0].containers[0].env :
         env.name => env.value
@@ -418,7 +452,7 @@ run "foundation_security_contract" {
       && length([
         for env in service.template[0].containers[0].env : env
         if try(env.value_source[0].secret_key_ref[0].version, null) != null
-      ]) == (environment == "production" ? 5 : 4)
+      ]) == 3
       && alltrue([
         for env in service.template[0].containers[0].env :
         try(
@@ -428,7 +462,7 @@ run "foundation_security_contract" {
         )
       ])
     ])
-    error_message = "Both services must keep the immutable image, one-instance/one-worker runtime, deletion protection, and exact numeric secret pins."
+    error_message = "The production-only service must keep the immutable image, zero-to-one scaling, one worker, and exactly three numeric secret pins."
   }
 
   assert {
@@ -446,12 +480,6 @@ run "foundation_security_contract" {
         ], env.name)
       }
       } == {
-      preview = {
-        AGENT_ANONYMOUS_ACCESS_ENABLED  = "false"
-        GUEST_DAILY_BUDGET_MICRO_USD    = ""
-        GUEST_MODEL                     = ""
-        GUEST_RUN_RESERVATION_MICRO_USD = ""
-      }
       production = {
         AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"
         GUEST_DAILY_BUDGET_MICRO_USD    = "500000"
@@ -459,7 +487,7 @@ run "foundation_security_contract" {
         GUEST_RUN_RESERVATION_MICRO_USD = "18892"
       }
     }
-    error_message = "Production must atomically enable the reviewed Luna guest budget while Preview remains fail closed and unpriced."
+    error_message = "Only Production may launch, with the reviewed Luna guest budget atomically enabled."
   }
 
   assert {
@@ -497,16 +525,14 @@ run "foundation_security_contract" {
 
   assert {
     condition = (
-      length(google_cloud_run_v2_job.migration) == 2
-      && length(google_cloud_run_v2_job.grant_probe) == 2
-      && length(google_cloud_run_v2_job.maintenance) == 2
+      length(google_cloud_run_v2_job.migration) == 1
+      && length(google_cloud_run_v2_job.grant_probe) == 1
+      && length(google_cloud_run_v2_job.maintenance) == 1
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 1
       && alltrue([
         for environment, job in google_cloud_run_v2_job.migration :
-        job.template[0].template[0].containers[0].image == (
-          environment == "preview"
-          ? var.agent_preview_bootstrap_image
-          : var.agent_bootstrap_image
-        )
+        environment == "production"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
         && job.template[0].template[0].containers[0].args == tolist(["-m", "agent.migrate"])
         && job.template[0].template[0].max_retries == 0
         && job.template[0].template[0].execution_environment == "EXECUTION_ENVIRONMENT_GEN2"
@@ -524,11 +550,8 @@ run "foundation_security_contract" {
       ])
       && alltrue([
         for environment, job in google_cloud_run_v2_job.grant_probe :
-        job.template[0].template[0].containers[0].image == (
-          environment == "preview"
-          ? var.agent_preview_bootstrap_image
-          : var.agent_bootstrap_image
-        )
+        environment == "production"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
         && job.template[0].template[0].containers[0].args == tolist(["-m", "agent.neon_grant_probe"])
         && job.template[0].template[0].max_retries == 0
         && job.template[0].template[0].execution_environment == "EXECUTION_ENVIRONMENT_GEN2"
@@ -546,11 +569,8 @@ run "foundation_security_contract" {
       ])
       && alltrue([
         for environment, job in google_cloud_run_v2_job.maintenance :
-        job.template[0].template[0].containers[0].image == (
-          environment == "preview"
-          ? var.agent_preview_bootstrap_image
-          : var.agent_bootstrap_image
-        )
+        environment == "production"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
         && job.template[0].template[0].service_account == local.cloud_run_environments[environment].runtime_service_account
         && job.template[0].template[0].timeout == "600s"
         && job.template[0].template[0].containers[0].command == tolist(["python"])
@@ -573,16 +593,33 @@ run "foundation_security_contract" {
         ])
         && job.deletion_protection
       ])
+      && alltrue([
+        for environment, job in google_cloud_run_v2_job.scheduled_maintenance :
+        environment == "production"
+        && job.name == "agent-scheduled-maintenance"
+        && job.template[0].template[0].service_account == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].service_account
+        && job.template[0].template[0].timeout == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].timeout
+        && job.template[0].template[0].max_retries == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].max_retries
+        && job.template[0].template[0].execution_environment == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].execution_environment
+        && job.template[0].template[0].containers[0].name == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].name
+        && job.template[0].template[0].containers[0].image == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].image
+        && job.template[0].template[0].containers[0].command == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].command
+        && job.template[0].template[0].containers[0].args == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].args
+        && job.template[0].template[0].containers[0].resources[0].limits == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].resources[0].limits
+        && job.template[0].template[0].containers[0].env == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].env
+        && job.deletion_protection == google_cloud_run_v2_job.maintenance[environment].deletion_protection
+      ])
     )
-    error_message = "Every environment must run same-image one-shot jobs using exact numeric secret pins."
+    error_message = "Production alone must run exact one-shot jobs, with distinct validation and scheduled maintenance jobs sharing one template."
   }
 
   assert {
     condition = (
-      length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 2
-      && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 2
-      && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 2
-      && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 2
+      length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job) == 1
       && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 1
       && toset(google_project_iam_custom_role.cloud_run_delivery.permissions) == toset([
         "run.jobs.get",
@@ -592,6 +629,11 @@ run "foundation_security_contract" {
         "run.revisions.get",
         "run.services.get",
         "run.services.update",
+      ])
+      && toset(google_project_iam_custom_role.scheduled_maintenance_delivery.permissions) == toset([
+        "run.jobs.get",
+        "run.jobs.update",
+        "run.operations.get",
       ])
       && alltrue([
         for environment, binding in google_cloud_run_v2_service_iam_member.deployer_service_update :
@@ -613,24 +655,31 @@ run "foundation_security_contract" {
         binding.role == google_project_iam_custom_role.cloud_run_delivery.name
         && binding.member == "serviceAccount:${local.cloud_run_environments[environment].deployer_service_account}"
       ])
+      && alltrue([
+        for environment, binding in google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job :
+        binding.role == google_project_iam_custom_role.scheduled_maintenance_delivery.name
+        && binding.member == "serviceAccount:${local.cloud_run_environments[environment].deployer_service_account}"
+        && binding.name == "agent-scheduled-maintenance"
+      ])
       && google_cloud_run_v2_job_iam_member.scheduler_maintenance_job["production"].role == "roles/run.invoker"
       && google_cloud_run_v2_job_iam_member.scheduler_maintenance_job["production"].member == "serviceAccount:agent-maintenance-scheduler@festive-ally-503605-v7.iam.gserviceaccount.com"
+      && google_cloud_run_v2_job_iam_member.scheduler_maintenance_job["production"].name == "agent-scheduled-maintenance"
     )
-    error_message = "Deployers must keep the exact seven-permission role on matching resources, while the scheduler may invoke only production maintenance."
+    error_message = "Deployers must keep resource-scoped Cloud Run roles, scheduled maintenance delivery must omit execution permission, and Scheduler may invoke only the distinct scheduled job."
   }
 
   assert {
     condition = (
       length(google_cloud_scheduler_job.guest_maintenance) == 1
       && google_cloud_scheduler_job.guest_maintenance["production"].name == "agent-guest-maintenance"
-      && google_cloud_scheduler_job.guest_maintenance["production"].region == "us-east4"
+      && google_cloud_scheduler_job.guest_maintenance["production"].region == "asia-southeast1"
       && google_cloud_scheduler_job.guest_maintenance["production"].schedule == "*/15 * * * *"
       && google_cloud_scheduler_job.guest_maintenance["production"].time_zone == "Etc/UTC"
       && google_cloud_scheduler_job.guest_maintenance["production"].attempt_deadline == "60s"
       && google_cloud_scheduler_job.guest_maintenance["production"].paused == false
       && google_cloud_scheduler_job.guest_maintenance["production"].retry_config[0].retry_count == 0
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].http_method == "POST"
-      && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].uri == "https://run.googleapis.com/v2/projects/festive-ally-503605-v7/locations/us-east4/jobs/agent-maintenance:run"
+      && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].uri == "https://run.googleapis.com/v2/projects/festive-ally-503605-v7/locations/asia-southeast1/jobs/agent-scheduled-maintenance:run"
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].body == base64encode("{}")
       && google_cloud_scheduler_job.guest_maintenance["production"].http_target[0].headers == tomap({
         "Content-Type" = "application/json"
@@ -668,11 +717,13 @@ run "foundation_bootstrap_contract" {
       && length(google_cloud_run_v2_job.migration) == 0
       && length(google_cloud_run_v2_job.grant_probe) == 0
       && length(google_cloud_run_v2_job.maintenance) == 0
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 0
       && length(google_cloud_run_v2_service_iam_member.public_invoker) == 0
       && length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 0
       && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 0
       && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 0
       && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 0
+      && length(google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job) == 0
       && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 0
       && length(google_cloud_scheduler_job.guest_maintenance) == 0
     )
@@ -711,20 +762,13 @@ run "jobs_bootstrap_contract" {
 
   variables {
     agent_delivery_stage          = "jobs"
-    agent_bootstrap_image         = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    agent_preview_bootstrap_image = "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    agent_bootstrap_image         = "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    agent_preview_bootstrap_image = null
     agent_secret_versions = {
-      agent-auth-secret                    = "11"
-      agent-database-url                   = "12"
-      agent-migration-database-url         = "13"
-      agent-preview-anthropic-api-key      = "21"
-      agent-preview-auth-secret            = "22"
-      agent-preview-database-url           = "23"
-      agent-preview-langsmith-api-key      = "24"
-      agent-preview-migration-database-url = "25"
-      anthropic-api-key                    = "14"
-      langsmith-api-key                    = "15"
-      openai-api-key                       = "16"
+      agent-auth-secret            = "11"
+      agent-database-url           = "12"
+      agent-migration-database-url = "13"
+      openai-api-key               = "16"
     }
   }
 
@@ -733,27 +777,26 @@ run "jobs_bootstrap_contract" {
       length(google_cloud_run_v2_service.agent) == 0
       && length(google_cloud_run_v2_service_iam_member.public_invoker) == 0
       && length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 0
-      && length(google_cloud_run_v2_job.migration) == 2
-      && length(google_cloud_run_v2_job.grant_probe) == 2
-      && length(google_cloud_run_v2_job.maintenance) == 2
-      && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 2
-      && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 2
-      && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 2
+      && length(google_cloud_run_v2_job.migration) == 1
+      && length(google_cloud_run_v2_job.grant_probe) == 1
+      && length(google_cloud_run_v2_job.maintenance) == 1
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_migration_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_grant_probe_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_maintenance_job) == 1
+      && length(google_cloud_run_v2_job_iam_member.deployer_scheduled_maintenance_job) == 1
       && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 0
       && length(google_cloud_scheduler_job.guest_maintenance) == 0
     )
-    error_message = "The jobs stage must create both environments' jobs and bindings without creating a serving surface."
+    error_message = "The jobs stage must create only Production jobs and bindings without creating a serving surface."
   }
 
   assert {
     condition = (
       alltrue([
         for environment, job in google_cloud_run_v2_job.migration :
-        job.template[0].template[0].containers[0].image == (
-          environment == "preview"
-          ? var.agent_preview_bootstrap_image
-          : var.agent_bootstrap_image
-        )
+        environment == "production"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
         && alltrue([
           for env in job.template[0].template[0].containers[0].env :
           can(regex("^[1-9][0-9]*$", env.value_source[0].secret_key_ref[0].version))
@@ -762,11 +805,8 @@ run "jobs_bootstrap_contract" {
       ])
       && alltrue([
         for environment, job in google_cloud_run_v2_job.grant_probe :
-        job.template[0].template[0].containers[0].image == (
-          environment == "preview"
-          ? var.agent_preview_bootstrap_image
-          : var.agent_bootstrap_image
-        )
+        environment == "production"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
         && alltrue([
           for env in job.template[0].template[0].containers[0].env :
           can(regex("^[1-9][0-9]*$", env.value_source[0].secret_key_ref[0].version))
@@ -775,11 +815,20 @@ run "jobs_bootstrap_contract" {
       ])
       && alltrue([
         for environment, job in google_cloud_run_v2_job.maintenance :
-        job.template[0].template[0].containers[0].image == (
-          environment == "preview"
-          ? var.agent_preview_bootstrap_image
-          : var.agent_bootstrap_image
-        )
+        environment == "production"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
+        && alltrue([
+          for env in job.template[0].template[0].containers[0].env :
+          can(regex("^[1-9][0-9]*$", env.value_source[0].secret_key_ref[0].version))
+          if try(env.value_source[0].secret_key_ref[0].version, null) != null
+        ])
+      ])
+      && alltrue([
+        for environment, job in google_cloud_run_v2_job.scheduled_maintenance :
+        environment == "production"
+        && job.name == "agent-scheduled-maintenance"
+        && job.template[0].template[0].containers[0].image == var.agent_bootstrap_image
+        && job.template[0].template[0].containers[0].env == google_cloud_run_v2_job.maintenance[environment].template[0].template[0].containers[0].env
         && alltrue([
           for env in job.template[0].template[0].containers[0].env :
           can(regex("^[1-9][0-9]*$", env.value_source[0].secret_key_ref[0].version))
@@ -794,14 +843,47 @@ run "jobs_bootstrap_contract" {
     condition = (
       output.preview_cloud_run_service == null
       && output.production_cloud_run_service == null
-      && output.preview_migration_job == "agent-preview-migrate"
+      && output.preview_migration_job == null
       && output.production_migration_job == "agent-migrate"
-      && output.preview_grant_probe_job == "agent-preview-grants"
+      && output.preview_grant_probe_job == null
       && output.production_grant_probe_job == "agent-grants"
-      && output.preview_maintenance_job == "agent-preview-maintenance"
+      && output.preview_maintenance_job == null
       && output.production_maintenance_job == "agent-maintenance"
       && output.production_guest_maintenance_schedule == null
     )
-    error_message = "The jobs stage must expose the six one-shot job names but no schedule."
+    error_message = "The jobs stage must expose only the reviewed Production job outputs and no schedule."
+  }
+}
+
+run "services_bootstrap_contract" {
+  command = plan
+
+  variables {
+    agent_delivery_stage          = "services"
+    agent_bootstrap_image         = "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    agent_preview_bootstrap_image = null
+    agent_secret_versions = {
+      agent-auth-secret            = "11"
+      agent-database-url           = "12"
+      agent-migration-database-url = "13"
+      openai-api-key               = "16"
+    }
+  }
+
+  assert {
+    condition = (
+      length(google_cloud_run_v2_service.agent) == 1
+      && length(google_cloud_run_v2_service_iam_member.public_invoker) == 1
+      && length(google_cloud_run_v2_service_iam_member.deployer_service_update) == 1
+      && length(google_cloud_run_v2_job.migration) == 1
+      && length(google_cloud_run_v2_job.grant_probe) == 1
+      && length(google_cloud_run_v2_job.maintenance) == 1
+      && length(google_cloud_run_v2_job.scheduled_maintenance) == 1
+      && length(google_cloud_run_v2_job_iam_member.scheduler_maintenance_job) == 0
+      && length(google_cloud_scheduler_job.guest_maintenance) == 0
+      && output.production_cloud_run_service == "agent"
+      && output.production_guest_maintenance_schedule == null
+    )
+    error_message = "The services stage must create the smokeable serving surface without any autonomous maintenance schedule before launch approval."
   }
 }

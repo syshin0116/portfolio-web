@@ -1,8 +1,16 @@
 output "artifact_registry_repository" {
-  value = google_artifact_registry_repository.agent.name
+  value = google_artifact_registry_repository.active_agent.name
 }
 
 output "preview_artifact_registry_repository" {
+  value = google_artifact_registry_repository.active_preview_agent.name
+}
+
+output "legacy_artifact_registry_repository" {
+  value = google_artifact_registry_repository.agent.name
+}
+
+output "legacy_preview_artifact_registry_repository" {
   value = google_artifact_registry_repository.preview_agent.name
 }
 

@@ -100,11 +100,24 @@ class StaticVerifierMutationTests(unittest.TestCase):
             encoding="utf-8"
         )
         preview, production = cloud_run_source.split("    production = {", 1)
+        production_definition = production.split(
+            "\n  production_cloud_run_environments = {", 1
+        )[0]
 
         self.assertNotIn("OPENAI_API_KEY", preview)
         self.assertNotIn("agent-preview-openai-api-key", preview)
         self.assertEqual(1, production.count("OPENAI_API_KEY"))
         self.assertEqual(2, production.count('"openai-api-key"'))
+        self.assertNotIn("ANTHROPIC_API_KEY", production_definition)
+        self.assertNotIn("LANGCHAIN_API_KEY", production_definition)
+        self.assertEqual(1, production_definition.count("AGENT_AUTH_SECRET"))
+        self.assertEqual(1, production_definition.count("DATABASE_URL"))
+        self.assertEqual(1, production_definition.count("OPENAI_API_KEY"))
+        self.assertEqual(
+            4,
+            cloud_run_source.count("local.production_cloud_run_environments"),
+        )
+        self.assertIn('MODEL                     = "openai:gpt-5.6-luna"', production)
 
         deploy_source = (REPO_ROOT / "scripts/deploy_cloud_run.sh").read_text(
             encoding="utf-8"
@@ -117,6 +130,45 @@ class StaticVerifierMutationTests(unittest.TestCase):
             '{"name":"OPENAI_API_KEY","secret":"openai-api-key"}',
             production_expectation,
         )
+        self.assertNotIn("ANTHROPIC_API_KEY", production_expectation)
+        self.assertNotIn("LANGCHAIN_API_KEY", production_expectation)
+
+    def test_delivery_versions_are_four_production_numeric_pins(self) -> None:
+        variables = (REPO_ROOT / "infra/gcp/variables.tf").read_text(encoding="utf-8")
+        version_contract = variables.split('variable "agent_secret_versions" {', 1)[1]
+        for secret in (
+            "agent-auth-secret",
+            "agent-database-url",
+            "agent-migration-database-url",
+            "openai-api-key",
+        ):
+            self.assertEqual(1, version_contract.count(f'"{secret}"'))
+        for dormant_secret in (
+            "agent-preview-auth-secret",
+            "anthropic-api-key",
+            "langsmith-api-key",
+        ):
+            self.assertNotIn(dormant_secret, version_contract)
+        self.assertIn('can(regex("^[1-9][0-9]*$", version))', version_contract)
+
+    def test_ci_container_uses_the_production_luna_secret_contract(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        model_position = workflow.index("--env MODEL=openai:gpt-5.6-luna")
+        docker_start = workflow.rindex(
+            "          docker run",
+            0,
+            model_position,
+        )
+        docker_end = workflow.index('            "$image_tag"', model_position)
+        docker_runtime = workflow[docker_start:docker_end]
+
+        self.assertIn("--env MODEL=openai:gpt-5.6-luna", docker_runtime)
+        self.assertIn(
+            "--env OPENAI_API_KEY=ci-only-not-a-real-openai-key",
+            docker_runtime,
+        )
+        self.assertNotIn("ANTHROPIC_API_KEY", docker_runtime)
+        self.assertNotIn("LANGCHAIN_API_KEY", docker_runtime)
 
     def test_broad_cloud_run_developer_role_is_absent(self) -> None:
         reviewed_paths = (
@@ -174,7 +226,9 @@ class StaticVerifierMutationTests(unittest.TestCase):
             oracle = root / "scripts/gcp_project_readiness_contract.json"
             oracle.write_text(
                 oracle.read_text(encoding="utf-8").replace(
-                    '"region": "us-east4"', '"region": "us-central1"', 1
+                    '"region": "asia-southeast1"',
+                    '"region": "us-central1"',
+                    1,
                 ),
                 encoding="utf-8",
             )

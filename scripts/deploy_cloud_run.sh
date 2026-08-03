@@ -4,7 +4,7 @@ set -eEuo pipefail
 readonly MODE="${1:-}"
 readonly REQUESTED_ROLLBACK_REVISION="${2:-}"
 readonly EXPECTED_PROJECT_ID="festive-ally-503605-v7"
-readonly EXPECTED_REGION="us-east4"
+readonly EXPECTED_REGION="asia-southeast1"
 readonly CLOUD_RUN_API_ORIGIN="https://run.googleapis.com"
 readonly CLOUD_RUN_API_MAX_BYTES="1048576"
 
@@ -197,7 +197,7 @@ service_url() {
 runtime_expectations() {
   case "$CLOUD_RUN_SERVICE" in
     agent-preview)
-      readonly EXPECTED_IMAGE_PREFIX="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
+      readonly EXPECTED_IMAGE_PREFIX="asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
       readonly EXPECTED_RUNTIME_SERVICE_ACCOUNT="agent-preview-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
       readonly EXPECTED_RUNTIME_SECRETS='[
         {"name":"AGENT_AUTH_SECRET","secret":"agent-preview-auth-secret"},
@@ -216,13 +216,11 @@ runtime_expectations() {
       readonly EXPECTED_GUEST_RUN_RESERVATION_MICRO_USD=""
       ;;
     agent)
-      readonly EXPECTED_IMAGE_PREFIX="us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
+      readonly EXPECTED_IMAGE_PREFIX="asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
       readonly EXPECTED_RUNTIME_SERVICE_ACCOUNT="agent-runtime@festive-ally-503605-v7.iam.gserviceaccount.com"
       readonly EXPECTED_RUNTIME_SECRETS='[
         {"name":"AGENT_AUTH_SECRET","secret":"agent-auth-secret"},
-        {"name":"ANTHROPIC_API_KEY","secret":"anthropic-api-key"},
         {"name":"DATABASE_URL","secret":"agent-database-url"},
-        {"name":"LANGCHAIN_API_KEY","secret":"langsmith-api-key"},
         {"name":"OPENAI_API_KEY","secret":"openai-api-key"}
       ]'
       readonly EXPECTED_MIGRATOR_SERVICE_ACCOUNT="agent-prod-migrator@festive-ally-503605-v7.iam.gserviceaccount.com"
@@ -254,7 +252,7 @@ runtime_expectations() {
         HOST:"0.0.0.0",
         LANGGRAPH_MAX_POOL_SIZE:"4",
         LANGGRAPH_MIN_POOL_SIZE:"1",
-        MODEL:"anthropic:claude-sonnet-4-6",
+        MODEL:"openai:gpt-5.6-luna",
         PORT:"8080",
         REDIS_BROKER_ENABLED:"false",
         RUN_MIGRATIONS_ON_STARTUP:"false",

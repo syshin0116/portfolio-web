@@ -50,17 +50,9 @@ locals {
           secret  = google_secret_manager_secret.runtime["agent-auth-secret"].secret_id
           version = try(var.agent_secret_versions["agent-auth-secret"], null)
         }
-        ANTHROPIC_API_KEY = {
-          secret  = google_secret_manager_secret.runtime["anthropic-api-key"].secret_id
-          version = try(var.agent_secret_versions["anthropic-api-key"], null)
-        }
         DATABASE_URL = {
           secret  = google_secret_manager_secret.runtime["agent-database-url"].secret_id
           version = try(var.agent_secret_versions["agent-database-url"], null)
-        }
-        LANGCHAIN_API_KEY = {
-          secret  = google_secret_manager_secret.runtime["langsmith-api-key"].secret_id
-          version = try(var.agent_secret_versions["langsmith-api-key"], null)
         }
         OPENAI_API_KEY = {
           secret  = google_secret_manager_secret.runtime["openai-api-key"].secret_id
@@ -68,6 +60,10 @@ locals {
         }
       }
     }
+  }
+
+  production_cloud_run_environments = {
+    production = local.cloud_run_environments.production
   }
 
   cloud_run_runtime_environment_common = {
@@ -78,7 +74,7 @@ locals {
     HOST                      = "0.0.0.0"
     LANGGRAPH_MAX_POOL_SIZE   = "4"
     LANGGRAPH_MIN_POOL_SIZE   = "1"
-    MODEL                     = "anthropic:claude-sonnet-4-6"
+    MODEL                     = "openai:gpt-5.6-luna"
     PORT                      = "8080"
     REDIS_BROKER_ENABLED      = "false"
     RUN_MIGRATIONS_ON_STARTUP = "false"
@@ -103,7 +99,7 @@ locals {
 }
 
 resource "google_cloud_run_v2_service" "agent" {
-  for_each = var.agent_delivery_stage == "services" ? local.cloud_run_environments : {}
+  for_each = var.agent_delivery_stage == "services" ? local.production_cloud_run_environments : {}
 
   project             = var.project_id
   name                = each.value.service_name
@@ -204,8 +200,6 @@ resource "google_cloud_run_v2_service" "agent" {
 
   depends_on = [
     google_artifact_registry_repository_iam_member.cloud_run_reader,
-    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
-    google_secret_manager_secret_iam_member.preview_runtime_accessor,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
 
@@ -219,7 +213,7 @@ resource "google_cloud_run_v2_service" "agent" {
 }
 
 resource "google_cloud_run_v2_job" "migration" {
-  for_each = var.agent_delivery_stage == "foundation" ? {} : local.cloud_run_environments
+  for_each = var.agent_delivery_stage == "foundation" ? {} : local.production_cloud_run_environments
 
   project             = var.project_id
   name                = each.value.migration_job_name
@@ -271,7 +265,6 @@ resource "google_cloud_run_v2_job" "migration" {
 
   depends_on = [
     google_artifact_registry_repository_iam_member.cloud_run_reader,
-    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
     google_secret_manager_secret_iam_member.migrator_accessor,
   ]
 
@@ -284,7 +277,7 @@ resource "google_cloud_run_v2_job" "migration" {
 }
 
 resource "google_cloud_run_v2_job" "grant_probe" {
-  for_each = var.agent_delivery_stage == "foundation" ? {} : local.cloud_run_environments
+  for_each = var.agent_delivery_stage == "foundation" ? {} : local.production_cloud_run_environments
 
   project             = var.project_id
   name                = each.value.grant_probe_job_name
@@ -336,8 +329,6 @@ resource "google_cloud_run_v2_job" "grant_probe" {
 
   depends_on = [
     google_artifact_registry_repository_iam_member.cloud_run_reader,
-    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
-    google_secret_manager_secret_iam_member.preview_runtime_accessor,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
 
@@ -350,7 +341,7 @@ resource "google_cloud_run_v2_job" "grant_probe" {
 }
 
 resource "google_cloud_run_v2_job" "maintenance" {
-  for_each = var.agent_delivery_stage == "foundation" ? {} : local.cloud_run_environments
+  for_each = var.agent_delivery_stage == "foundation" ? {} : local.production_cloud_run_environments
 
   project             = var.project_id
   name                = each.value.maintenance_job_name
@@ -402,8 +393,6 @@ resource "google_cloud_run_v2_job" "maintenance" {
 
   depends_on = [
     google_artifact_registry_repository_iam_member.cloud_run_reader,
-    google_artifact_registry_repository_iam_member.preview_cloud_run_reader,
-    google_secret_manager_secret_iam_member.preview_runtime_accessor,
     google_secret_manager_secret_iam_member.runtime_accessor,
   ]
 

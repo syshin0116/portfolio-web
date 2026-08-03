@@ -32,7 +32,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "f30484e3fd8e9e664c080f688227fdd57151fb1b30dcd0f71b378a319b8fbbb8"
+        "349f8fc2b313ac5809bb335936ad168f82cbe7b74c575aec98c82727008b5ad2"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -40,12 +40,12 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "2cd81306c789caa4fed43dc31bc687665a4b29ccb1fbcdecbcf159b989c545b9"
+        "74394e4115f25fd5bc418ed6b3965da5c75de12dfebc01387ca60d47e620095c"
     )
 }
 EXPECTED_PINNED_READINESS_FILES = {
     "scripts/gcp_project_readiness_contract.json": (
-        "e1bdcf7e7b412f3769fe65d1ad196c2d8986e1cbeb8116836e6af2d7310655a8"
+        "e4ad8de73b80e70f290626dbadcb9ae02189060510f4167c58391ce71cdbb520"
     )
 }
 EXPECTED_PINNED_RESOURCE_KEYS = frozenset(
@@ -197,7 +197,10 @@ EXPECTED_PROVIDER_BLOCKS = [
 EXPECTED_IMPORT_BLOCKS = [
     {
         "to": "${google_artifact_registry_repository.agent}",
-        "id": "projects/${var.project_id}/locations/${var.region}/repositories/agent",
+        "id": (
+            "projects/${var.project_id}/locations/"
+            "${local.legacy_artifact_registry_region}/repositories/agent"
+        ),
     },
     {
         "to": "${google_storage_bucket.terraform_state}",
@@ -281,15 +284,15 @@ EXPECTED_VARIABLES = {
         ],
     },
     "region": {
-        "description": "Cloud Run and Artifact Registry region.",
+        "description": "Active Cloud Run, Scheduler, and Artifact Registry region.",
         "type": "string",
-        "default": "us-east4",
+        "default": "asia-southeast1",
         "validation": [
             {
-                "condition": '${var.region == "us-east4"}',
+                "condition": '${var.region == "asia-southeast1"}',
                 "error_message": (
-                    "This foundation is fixed to us-east4; review state, imports, "
-                    "and data residency before changing regions."
+                    "Active agent delivery is fixed to asia-southeast1; legacy "
+                    "us-east4 registries and state storage remain separately pinned."
                 ),
             }
         ],
@@ -382,13 +385,13 @@ EXPECTED_VARIABLES = {
                     "var.agent_preview_bootstrap_image == null && "
                     "var.agent_secret_versions == null) : "
                     "(var.agent_bootstrap_image != null && "
-                    "var.agent_preview_bootstrap_image != null && "
+                    "var.agent_preview_bootstrap_image == null && "
                     "var.agent_secret_versions != null)}"
                 ),
                 "error_message": (
                     "foundation requires null image/version inputs; jobs and "
-                    "services require immutable production/preview images plus "
-                    "the complete reviewed numeric version map."
+                    "services require one immutable production image, no preview "
+                    "image, and the complete reviewed production numeric version map."
                 ),
             },
         ],
@@ -404,7 +407,7 @@ EXPECTED_VARIABLES = {
             {
                 "condition": (
                     "${var.agent_bootstrap_image == None || "
-                    'can(regex("^us-east4-docker\\\\.pkg\\\\.dev/'
+                    'can(regex("^asia-southeast1-docker\\\\.pkg\\\\.dev/'
                     'festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$", '
                     "var.agent_bootstrap_image))}"
                 ),
@@ -417,31 +420,26 @@ EXPECTED_VARIABLES = {
     },
     "agent_preview_bootstrap_image": {
         "description": (
-            "Reviewed immutable preview image in the isolated preview repository "
-            "for the jobs and services stages; null during foundation bootstrap."
+            "Dormant preview delivery input. It must remain null while "
+            "production-only Cloud Run delivery is active."
         ),
         "type": "string",
         "default": None,
         "validation": [
             {
-                "condition": (
-                    "${var.agent_preview_bootstrap_image == None || "
-                    'can(regex("^us-east4-docker\\\\.pkg\\\\.dev/'
-                    "festive-ally-503605-v7/agent-preview/agent@sha256:"
-                    '[0-9a-f]{64}$", var.agent_preview_bootstrap_image))}'
-                ),
+                "condition": "${var.agent_preview_bootstrap_image == null}",
                 "error_message": (
-                    "When set, agent_preview_bootstrap_image must be the exact "
-                    "preview repository path at a lowercase sha256 digest."
+                    "agent_preview_bootstrap_image must remain null until preview "
+                    "Cloud Run resources are reviewed and restored."
                 ),
             }
         ],
     },
     "agent_secret_versions": {
         "description": (
-            "Reviewed Secret Manager numeric versions keyed by all eleven managed "
-            "secret IDs; null only during foundation bootstrap. Secret payloads "
-            "never enter Terraform."
+            "Reviewed numeric versions for the four production delivery secrets; "
+            "null only during foundation bootstrap. Dormant secret containers stay "
+            "versionless here and payloads never enter Terraform."
         ),
         "type": "${map(string)}",
         "default": None,
@@ -462,17 +460,11 @@ EXPECTED_VARIABLES = {
                     "${var.agent_secret_versions == null ? True : "
                     "toset(keys(var.agent_secret_versions)) == toset(["
                     "agent-auth-secret, agent-database-url, "
-                    "agent-migration-database-url, "
-                    "agent-preview-anthropic-api-key, "
-                    "agent-preview-auth-secret, "
-                    "agent-preview-database-url, "
-                    "agent-preview-langsmith-api-key, "
-                    "agent-preview-migration-database-url, "
-                    "anthropic-api-key, langsmith-api-key, openai-api-key])}"
+                    "agent-migration-database-url, openai-api-key])}"
                 ),
                 "error_message": (
-                    "agent_secret_versions must contain exactly the eleven "
-                    "managed secret IDs, with no missing or extra keys."
+                    "agent_secret_versions must contain exactly auth, runtime DB, "
+                    "migration DB, and OpenAI production secret IDs."
                 ),
             },
         ],
@@ -495,7 +487,7 @@ EXPECTED_RESOURCE_CONFIGS = {
     },
     ("google_artifact_registry_repository", "agent"): {
         "project": "${var.project_id}",
-        "location": "${var.region}",
+        "location": "${local.legacy_artifact_registry_region}",
         "repository_id": "agent",
         "description": "Production agent images with bounded rollback retention",
         "format": "DOCKER",
@@ -518,9 +510,59 @@ EXPECTED_RESOURCE_CONFIGS = {
     },
     ("google_artifact_registry_repository", "preview_agent"): {
         "project": "${var.project_id}",
-        "location": "${var.region}",
+        "location": "${local.legacy_artifact_registry_region}",
         "repository_id": "agent-preview",
         "description": "Preview agent images with short-lived retention",
+        "format": "DOCKER",
+        "docker_config": [{"immutable_tags": False}],
+        "cleanup_policy_dry_run": False,
+        "cleanup_policies": [
+            {
+                "id": "delete-after-14-days",
+                "action": "DELETE",
+                "condition": [{"tag_state": "ANY", "older_than": "1209600s"}],
+            },
+            {
+                "id": "keep-last-20",
+                "action": "KEEP",
+                "most_recent_versions": [{"keep_count": 20}],
+            },
+        ],
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_artifact_registry_repository", "active_agent"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository_id": "agent",
+        "description": (
+            "Singapore production agent images with bounded rollback retention"
+        ),
+        "format": "DOCKER",
+        "docker_config": [{"immutable_tags": False}],
+        "cleanup_policy_dry_run": False,
+        "cleanup_policies": [
+            {
+                "id": "delete-after-90-days",
+                "action": "DELETE",
+                "condition": [{"tag_state": "ANY", "older_than": "7776000s"}],
+            },
+            {
+                "id": "keep-last-30",
+                "action": "KEEP",
+                "most_recent_versions": [{"keep_count": 30}],
+            },
+        ],
+        "depends_on": ["${google_project_service.required}"],
+        "lifecycle": [{"prevent_destroy": True}],
+    },
+    ("google_artifact_registry_repository", "active_preview_agent"): {
+        "project": "${var.project_id}",
+        "location": "${var.region}",
+        "repository_id": "agent-preview",
+        "description": (
+            "Singapore preview image foundation retained dormant by delivery gates"
+        ),
         "format": "DOCKER",
         "docker_config": [{"immutable_tags": False}],
         "cleanup_policy_dry_run": False,
@@ -718,7 +760,9 @@ EXPECTED_RESOURCE_CONFIGS = {
     ("google_artifact_registry_repository_iam_member", "builder_writer"): {
         "project": "${var.project_id}",
         "location": "${var.region}",
-        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "repository": (
+            "${google_artifact_registry_repository.active_agent.repository_id}"
+        ),
         "role": "roles/artifactregistry.writer",
         "member": "serviceAccount:${google_service_account.builder.email}",
     },
@@ -726,7 +770,7 @@ EXPECTED_RESOURCE_CONFIGS = {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (
-            "${google_artifact_registry_repository.preview_agent.repository_id}"
+            "${google_artifact_registry_repository.active_preview_agent.repository_id}"
         ),
         "role": "roles/artifactregistry.writer",
         "member": "serviceAccount:${google_service_account.preview_builder.email}",
@@ -737,7 +781,9 @@ EXPECTED_RESOURCE_CONFIGS = {
         },
         "project": "${var.project_id}",
         "location": "${var.region}",
-        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "repository": (
+            "${google_artifact_registry_repository.active_agent.repository_id}"
+        ),
         "role": "roles/artifactregistry.reader",
         "member": "serviceAccount:${each.value}",
     },
@@ -745,7 +791,7 @@ EXPECTED_RESOURCE_CONFIGS = {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (
-            "${google_artifact_registry_repository.preview_agent.repository_id}"
+            "${google_artifact_registry_repository.active_preview_agent.repository_id}"
         ),
         "role": "roles/artifactregistry.reader",
         "member": "serviceAccount:${local.deployer_service_accounts.preview}",
@@ -753,7 +799,9 @@ EXPECTED_RESOURCE_CONFIGS = {
     ("google_artifact_registry_repository_iam_member", "cloud_run_reader"): {
         "project": "${var.project_id}",
         "location": "${var.region}",
-        "repository": "${google_artifact_registry_repository.agent.repository_id}",
+        "repository": (
+            "${google_artifact_registry_repository.active_agent.repository_id}"
+        ),
         "role": "roles/artifactregistry.reader",
         "member": "${local.cloud_run_image_pull_principal}",
         "depends_on": ["${google_project_service.required}"],
@@ -762,7 +810,7 @@ EXPECTED_RESOURCE_CONFIGS = {
         "project": "${var.project_id}",
         "location": "${var.region}",
         "repository": (
-            "${google_artifact_registry_repository.preview_agent.repository_id}"
+            "${google_artifact_registry_repository.active_preview_agent.repository_id}"
         ),
         "role": "roles/artifactregistry.reader",
         "member": "${local.cloud_run_image_pull_principal}",
@@ -771,7 +819,7 @@ EXPECTED_RESOURCE_CONFIGS = {
     ("google_storage_bucket", "terraform_state"): {
         "name": "${var.project_id}-tfstate",
         "project": "${var.project_id}",
-        "location": "${var.region}",
+        "location": "${local.legacy_artifact_registry_region}",
         "force_destroy": False,
         "public_access_prevention": "enforced",
         "uniform_bucket_level_access": True,
@@ -783,6 +831,7 @@ EXPECTED_RESOURCE_CONFIGS = {
 EXPECTED_LOCALS_BY_FILE = {
     "infra/gcp/main.tf": [
         {
+            "legacy_artifact_registry_region": "us-east4",
             "disabled_preview_wif_attribute_condition": (
                 EXPECTED_SOURCE_CONDITIONS["disabled_preview"]
             ),
@@ -813,6 +862,10 @@ EXPECTED_LOCALS_BY_FILE = {
                 "${setunion(local.production_secret_names, "
                 "local.preview_secret_names, "
                 "toset(values(local.migration_secret_names)))}"
+            ),
+            "required_production_delivery_secret_names": (
+                "${toset([agent-auth-secret, agent-database-url, "
+                "agent-migration-database-url, openai-api-key])}"
             ),
             "deployers": {
                 "preview": {
@@ -926,13 +979,13 @@ EXPECTED_CHECK_BLOCKS = [
                         "var.agent_preview_bootstrap_image == null && "
                         "var.agent_secret_versions == null) : "
                         "(var.agent_bootstrap_image != null && "
-                        "var.agent_preview_bootstrap_image != null && "
+                        "var.agent_preview_bootstrap_image == null && "
                         "var.agent_secret_versions != null)}"
                     ),
                     "error_message": (
                         "foundation requires null image/version inputs; jobs and "
-                        "services require immutable production/preview images plus "
-                        "the complete reviewed numeric version map."
+                        "services require one immutable production image, no preview "
+                        "image, and the complete reviewed production numeric version map."
                     ),
                 }
             ]
@@ -946,11 +999,11 @@ EXPECTED_CHECK_BLOCKS = [
                         '${var.agent_delivery_stage == "foundation" ? True : '
                         "(var.agent_secret_versions != null && "
                         "toset(keys(var.agent_secret_versions)) == "
-                        "local.required_agent_secret_names)}"
+                        "local.required_production_delivery_secret_names)}"
                     ),
                     "error_message": (
-                        "jobs and services require exactly the eleven managed "
-                        "secret IDs, with no missing or extra version keys."
+                        "jobs and services require exactly the four production "
+                        "delivery secret IDs, with no missing or extra version keys."
                     ),
                 }
             ]
@@ -959,9 +1012,15 @@ EXPECTED_CHECK_BLOCKS = [
 ]
 EXPECTED_OUTPUTS = {
     "artifact_registry_repository": {
-        "value": "${google_artifact_registry_repository.agent.name}",
+        "value": "${google_artifact_registry_repository.active_agent.name}",
     },
     "preview_artifact_registry_repository": {
+        "value": "${google_artifact_registry_repository.active_preview_agent.name}",
+    },
+    "legacy_artifact_registry_repository": {
+        "value": "${google_artifact_registry_repository.agent.name}",
+    },
+    "legacy_preview_artifact_registry_repository": {
         "value": "${google_artifact_registry_repository.preview_agent.name}",
     },
     "runtime_service_account": {

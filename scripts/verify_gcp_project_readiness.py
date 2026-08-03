@@ -36,7 +36,8 @@ except ModuleNotFoundError:  # Direct `python scripts/...` execution.
 
 PROJECT_ID = "festive-ally-503605-v7"
 PROJECT_NUMBER = "72919926064"
-REGION = "us-east4"
+REGION = "asia-southeast1"
+LEGACY_REGION = "us-east4"
 STATE_BUCKET = f"{PROJECT_ID}-tfstate"
 STATE_OBJECT = "syshin0116.dev/gcp/foundation/default.tfstate"
 GCLOUD_ACCOUNT_ENV = "OPS_FOUNDATION_GCLOUD_ACCOUNT"
@@ -48,7 +49,7 @@ READINESS_CONTRACT_PATH = Path(__file__).with_name(
     "gcp_project_readiness_contract.json"
 )
 READINESS_CONTRACT_SHA256 = (
-    "e1bdcf7e7b412f3769fe65d1ad196c2d8986e1cbeb8116836e6af2d7310655a8"
+    "e4ad8de73b80e70f290626dbadcb9ae02189060510f4167c58391ce71cdbb520"
 )
 
 PRODUCTION_RUNTIME_SA = f"agent-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
@@ -122,7 +123,7 @@ COMMON_RUNTIME_ENV = {
     "HOST": "0.0.0.0",
     "LANGGRAPH_MAX_POOL_SIZE": "4",
     "LANGGRAPH_MIN_POOL_SIZE": "1",
-    "MODEL": "anthropic:claude-sonnet-4-6",
+    "MODEL": "openai:gpt-5.6-luna",
     "PORT": "8080",
     "REDIS_BROKER_ENABLED": "false",
     "RUN_MIGRATIONS_ON_STARTUP": "false",
@@ -149,20 +150,11 @@ PREVIEW_RUNTIME_SECRETS = {
 }
 PRODUCTION_RUNTIME_SECRETS = {
     "AGENT_AUTH_SECRET": "agent-auth-secret",
-    "ANTHROPIC_API_KEY": "anthropic-api-key",
     "DATABASE_URL": "agent-database-url",
-    "LANGCHAIN_API_KEY": "langsmith-api-key",
     "OPENAI_API_KEY": "openai-api-key",
 }
 
 SERVICE_SPECS = {
-    "agent-preview": {
-        "runtime": PREVIEW_RUNTIME_SA,
-        "deployer": PREVIEW_DEPLOYER_SA,
-        "repository": "agent-preview",
-        "plain_env": PREVIEW_RUNTIME_ENV,
-        "secrets": PREVIEW_RUNTIME_SECRETS,
-    },
     "agent": {
         "runtime": PRODUCTION_RUNTIME_SA,
         "deployer": PRODUCTION_DEPLOYER_SA,
@@ -172,36 +164,6 @@ SERVICE_SPECS = {
     },
 }
 JOB_SPECS = {
-    "agent-preview-migrate": {
-        "service_account": PREVIEW_MIGRATOR_SA,
-        "deployer": PREVIEW_DEPLOYER_SA,
-        "repository": "agent-preview",
-        "container": "migration",
-        "module": "agent.migrate",
-        "secret": "agent-preview-migration-database-url",
-        "timeout": 900,
-        "scheduler": None,
-    },
-    "agent-preview-grants": {
-        "service_account": PREVIEW_RUNTIME_SA,
-        "deployer": PREVIEW_DEPLOYER_SA,
-        "repository": "agent-preview",
-        "container": "grant-probe",
-        "module": "agent.neon_grant_probe",
-        "secret": "agent-preview-database-url",
-        "timeout": 600,
-        "scheduler": None,
-    },
-    "agent-preview-maintenance": {
-        "service_account": PREVIEW_RUNTIME_SA,
-        "deployer": PREVIEW_DEPLOYER_SA,
-        "repository": "agent-preview",
-        "container": "maintenance",
-        "module": "agent.maintenance",
-        "secret": "agent-preview-database-url",
-        "timeout": 600,
-        "scheduler": None,
-    },
     "agent-migrate": {
         "service_account": PRODUCTION_MIGRATOR_SA,
         "deployer": PRODUCTION_DEPLOYER_SA,
@@ -323,18 +285,19 @@ def _fixed_commands() -> frozenset[tuple[str, ...]]:
         ),
     }
     for repository in ("agent", "agent-preview"):
-        for operation in ("describe", "get-iam-policy"):
-            commands.add(
-                (
-                    "artifacts",
-                    "repositories",
-                    operation,
-                    repository,
-                    "--location",
-                    REGION,
-                    "--format=json",
+        for location in (REGION, LEGACY_REGION):
+            for operation in ("describe", "get-iam-policy"):
+                commands.add(
+                    (
+                        "artifacts",
+                        "repositories",
+                        operation,
+                        repository,
+                        "--location",
+                        location,
+                        "--format=json",
+                    )
                 )
-            )
     for service in SERVICE_SPECS:
         for operation in ("describe", "get-iam-policy"):
             commands.add(
@@ -491,6 +454,20 @@ def _approved_fixed_commands(contract: Mapping[str, Any]) -> frozenset[tuple[str
                     "--format=json",
                 )
             )
+    legacy_region = contract.get("legacyRegion")
+    for repository in _contract_string_list(contract, "legacyRepositories"):
+        for operation in _contract_string_list(contract, "repositoryOperations"):
+            commands.add(
+                (
+                    "artifacts",
+                    "repositories",
+                    operation,
+                    repository,
+                    "--location",
+                    str(legacy_region),
+                    "--format=json",
+                )
+            )
     for service in _contract_string_list(contract, "services"):
         for operation in _contract_string_list(contract, "serviceOperations"):
             commands.add(
@@ -574,11 +551,13 @@ def validate_readiness_source_contract() -> None:
         "projectId",
         "projectNumber",
         "region",
+        "legacyRegion",
         "stateBucket",
         "stateObject",
         "requiredApis",
         "workloadServiceAccounts",
         "repositories",
+        "legacyRepositories",
         "services",
         "jobs",
         "secrets",
@@ -597,6 +576,7 @@ def validate_readiness_source_contract() -> None:
         "projectId": PROJECT_ID,
         "projectNumber": PROJECT_NUMBER,
         "region": REGION,
+        "legacyRegion": LEGACY_REGION,
         "stateBucket": STATE_BUCKET,
         "stateObject": STATE_OBJECT,
     }
@@ -606,6 +586,7 @@ def validate_readiness_source_contract() -> None:
         "requiredApis": REQUIRED_APIS,
         "workloadServiceAccounts": WORKLOAD_SERVICE_ACCOUNTS,
         "repositories": frozenset({"agent", "agent-preview"}),
+        "legacyRepositories": frozenset({"agent", "agent-preview"}),
         "services": frozenset(SERVICE_SPECS),
         "jobs": frozenset(JOB_SPECS),
         "secrets": frozenset(SECRET_POLICIES),
@@ -897,7 +878,12 @@ def _validate_enabled_apis(raw: str) -> None:
         _fail(f"required Google APIs are not enabled: {missing}")
 
 
-def _validate_artifact_repository(document: Any, repository: str) -> None:
+def _validate_artifact_repository(
+    document: Any,
+    repository: str,
+    *,
+    region: str,
+) -> None:
     repo = _object(document, f"Artifact Registry {repository}")
     expected = {
         "agent": ("delete-after-90-days", "7776000s", "keep-last-30", 30),
@@ -906,7 +892,7 @@ def _validate_artifact_repository(document: Any, repository: str) -> None:
     delete_id, delete_after, keep_id, keep_count = expected
     if (
         repo.get("name")
-        != f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{repository}"
+        != f"projects/{PROJECT_ID}/locations/{region}/repositories/{repository}"
         or repo.get("format") != "DOCKER"
         or repo.get("mode") != "STANDARD_REPOSITORY"
     ):
@@ -1006,7 +992,7 @@ def _validate_bucket(document: Any) -> None:
         bucket.get("name") != STATE_BUCKET
         or str(owner) != PROJECT_NUMBER
         or not isinstance(location, str)
-        or location.upper() != REGION.upper()
+        or location.upper() != LEGACY_REGION.upper()
         or public_prevention != "enforced"
         or uniform is not True
         or versioning is not True
@@ -1351,13 +1337,40 @@ def verify_exact_project_readiness(
         prefix = ("artifacts", "repositories")
         suffix = (repository, "--location", REGION, "--format=json")
         _validate_artifact_repository(
-            _read_json(read, (*prefix, "describe", *suffix), repository), repository
+            _read_json(read, (*prefix, "describe", *suffix), repository),
+            repository,
+            region=REGION,
         )
         policy = _object(
             _read_json(read, (*prefix, "get-iam-policy", *suffix), f"{repository} IAM"),
             f"{repository} IAM",
         )
         _require_exact_policy(policy, expected_policy, repository)
+
+        legacy_suffix = (
+            repository,
+            "--location",
+            LEGACY_REGION,
+            "--format=json",
+        )
+        _validate_artifact_repository(
+            _read_json(
+                read,
+                (*prefix, "describe", *legacy_suffix),
+                f"legacy {repository}",
+            ),
+            repository,
+            region=LEGACY_REGION,
+        )
+        legacy_policy = _object(
+            _read_json(
+                read,
+                (*prefix, "get-iam-policy", *legacy_suffix),
+                f"legacy {repository} IAM",
+            ),
+            f"legacy {repository} IAM",
+        )
+        _require_exact_policy(legacy_policy, set(), f"legacy {repository}")
 
     _validate_bucket_discovery(
         _read_json(

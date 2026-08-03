@@ -25,6 +25,7 @@ from scripts.verify_gcp_project_readiness import (
     GCLOUD_ACCOUNT_ENV,
     GCloudReader,
     JOB_SPECS,
+    LEGACY_REGION,
     MAINTENANCE_SCHEDULER_SA,
     PREVIEW_BUILDER_SA,
     PREVIEW_DEPLOYER_SA,
@@ -196,7 +197,7 @@ class FakeRead:
         self.user_key_outputs: dict[str, str] = {}
 
     @staticmethod
-    def _artifact(repository: str) -> dict[str, object]:
+    def _artifact(repository: str, *, region: str = REGION) -> dict[str, object]:
         if repository == "agent":
             delete_id, age, keep_id, count = (
                 "delete-after-90-days",
@@ -213,7 +214,7 @@ class FakeRead:
             )
         return {
             "name": (
-                f"projects/{PROJECT_ID}/locations/{REGION}/repositories/{repository}"
+                f"projects/{PROJECT_ID}/locations/{region}/repositories/{repository}"
             ),
             "format": "DOCKER",
             "mode": "STANDARD_REPOSITORY",
@@ -317,7 +318,7 @@ class FakeRead:
             ): {
                 "name": STATE_BUCKET,
                 "projectNumber": PROJECT_NUMBER,
-                "location": REGION.upper(),
+                "location": LEGACY_REGION.upper(),
                 "iamConfiguration": {
                     "publicAccessPrevention": "enforced",
                     "uniformBucketLevelAccess": {"enabled": True},
@@ -450,6 +451,18 @@ class FakeRead:
             responses[("artifacts", "repositories", "get-iam-policy", *suffix)] = (
                 expected
             )
+            legacy_suffix = (
+                repository,
+                "--location",
+                LEGACY_REGION,
+                "--format=json",
+            )
+            responses[("artifacts", "repositories", "describe", *legacy_suffix)] = (
+                self._artifact(repository, region=LEGACY_REGION)
+            )
+            responses[
+                ("artifacts", "repositories", "get-iam-policy", *legacy_suffix)
+            ] = _policy()
         for account in WORKLOAD_SERVICE_ACCOUNTS:
             responses[
                 (
@@ -1443,28 +1456,21 @@ class ExactProjectReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ReadinessError, "secret environment inventory"):
             self._verify(fixture)
 
-    def test_preview_cannot_enable_anonymous_access(self) -> None:
-        fixture = FakeRead()
-        command = (
-            "run",
-            "services",
-            "describe",
-            "agent-preview",
-            "--region",
-            REGION,
-            "--format=json",
+    def test_preview_foundation_is_dormant_without_runtime_reads(self) -> None:
+        self.assertEqual({"agent"}, set(SERVICE_SPECS))
+        self.assertEqual(
+            {"agent-migrate", "agent-grants", "agent-maintenance"},
+            set(JOB_SPECS),
         )
-        service = json.loads(fixture.responses[command])
-        entries = service["spec"]["template"]["spec"]["containers"][0]["env"]
-        next(
-            entry
-            for entry in entries
-            if entry["name"] == "AGENT_ANONYMOUS_ACCESS_ENABLED"
-        )["value"] = "true"
-        fixture.responses[command] = json.dumps(service)
-
-        with self.assertRaisesRegex(ReadinessError, "guest boundary"):
-            self._verify(fixture)
+        self.assertFalse(
+            any(
+                "agent-preview" in token
+                for command in FIXED_GCLOUD_COMMANDS
+                for token in command
+                if command[:2] == ("run", "services")
+            )
+        )
+        self.assertIn(PREVIEW_RUNTIME_SA, WORKLOAD_SERVICE_ACCOUNTS)
 
     def test_scheduler_must_be_enabled_after_launch_approval(self) -> None:
         fixture = FakeRead()

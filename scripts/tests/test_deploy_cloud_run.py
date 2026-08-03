@@ -16,10 +16,11 @@ SOURCE_SHA = "1" * 40
 DELIVERY_RUN_ID = "9876543210"
 DELIVERY_RUN_ATTEMPT = "1"
 IMAGE_DIGEST = (
-    "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:" + "2" * 64
+    "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:"
+    + "2" * 64
 )
 PREVIEW_IMAGE_DIGEST = (
-    "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
+    "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:"
     + "3" * 64
 )
 ACCESS_TOKEN = "test-token-that-must-never-enter-the-operation-log"
@@ -154,7 +155,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 output_path = Path(args[args.index("--output") + 1])
                 state = json.loads(state_path.read_text(encoding="utf-8"))
                 project = "festive-ally-503605-v7"
-                region = "us-east4"
+                region = "asia-southeast1"
                 service_name = os.environ["CLOUD_RUN_SERVICE"]
                 preview = service_name == "agent-preview"
                 service_path = (
@@ -187,7 +188,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "HOST": "0.0.0.0",
                     "LANGGRAPH_MAX_POOL_SIZE": "4",
                     "LANGGRAPH_MIN_POOL_SIZE": "1",
-                    "MODEL": "anthropic:claude-sonnet-4-6",
+                    "MODEL": "openai:gpt-5.6-luna",
                     "PORT": "8080",
                     "REDIS_BROKER_ENABLED": os.environ.get(
                         "FAKE_REDIS_BROKER_ENABLED", "false"
@@ -196,44 +197,31 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "SQLALCHEMY_MAX_OVERFLOW": "0",
                     "SQLALCHEMY_POOL_SIZE": "2",
                 }
-                secrets = [
-                    (
-                        "AGENT_AUTH_SECRET",
-                        "agent-preview-auth-secret" if preview else "agent-auth-secret",
-                        os.environ.get("FAKE_RUNTIME_SECRET_VERSION", "11"),
-                    ),
-                    (
-                        "ANTHROPIC_API_KEY",
+                if preview:
+                    secrets = [
                         (
-                            "agent-preview-anthropic-api-key"
-                            if preview
-                            else "anthropic-api-key"
+                            "AGENT_AUTH_SECRET",
+                            "agent-preview-auth-secret",
+                            os.environ.get("FAKE_RUNTIME_SECRET_VERSION", "11"),
                         ),
-                        "12",
-                    ),
-                    (
-                        "DATABASE_URL",
-                        "agent-preview-database-url" if preview else "agent-database-url",
-                        "13",
-                    ),
-                    (
-                        "LANGCHAIN_API_KEY",
+                        ("ANTHROPIC_API_KEY", "agent-preview-anthropic-api-key", "12"),
+                        ("DATABASE_URL", "agent-preview-database-url", "13"),
+                        ("LANGCHAIN_API_KEY", "agent-preview-langsmith-api-key", "14"),
+                    ]
+                else:
+                    secrets = [
                         (
-                            "agent-preview-langsmith-api-key"
-                            if preview
-                            else "langsmith-api-key"
+                            "AGENT_AUTH_SECRET",
+                            "agent-auth-secret",
+                            os.environ.get("FAKE_RUNTIME_SECRET_VERSION", "11"),
                         ),
-                        "14",
-                    ),
-                ]
-                if not preview:
-                    secrets.append(
+                        ("DATABASE_URL", "agent-database-url", "13"),
                         (
                             "OPENAI_API_KEY",
                             "openai-api-key",
                             os.environ.get("FAKE_OPENAI_SECRET_VERSION", "15"),
-                        )
-                    )
+                        ),
+                    ]
 
                 def runtime_template(image):
                     env = [
@@ -749,7 +737,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 "FAKE_LOG": str(log),
                 "FAKE_STATE": str(state),
                 "GCP_PROJECT_ID": "festive-ally-503605-v7",
-                "GCP_REGION": "us-east4",
+                "GCP_REGION": "asia-southeast1",
                 "GRANT_PROBE_JOB": f"{service}-grants",
                 "IMAGE_DIGEST": image_digest,
                 "MAINTENANCE_JOB": f"{service}-maintenance",
@@ -966,7 +954,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
         mutations = {
             "wrong_repository": {
                 "FAKE_RUNTIME_IMAGE": (
-                    "us-east4-docker.pkg.dev/festive-ally-503605-v7/"
+                    "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/"
                     "agent-preview/agent@sha256:" + "3" * 64
                 )
             },
@@ -980,7 +968,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "not_ready": {"FAKE_REVISION_STATE": "CONDITION_FAILED"},
             "wrong_service": {
                 "FAKE_REVISION_SERVICE": (
-                    "projects/festive-ally-503605-v7/locations/us-east4/"
+                    "projects/festive-ally-503605-v7/locations/asia-southeast1/"
                     "services/agent-preview"
                 )
             },
@@ -1035,7 +1023,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "resources": {"FAKE_JOB_CPU": "2"},
             "image": {
                 "FAKE_JOB_IMAGE": (
-                    "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/"
+                    "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/"
                     "agent@sha256:" + "4" * 64
                 )
             },
@@ -1104,7 +1092,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             environment = self._fixture(directory)
             environment["FAKE_EXECUTION_IMAGE"] = (
-                "us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/"
+                "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/"
                 "agent@sha256:" + "5" * 64
             )
             result = self._run(directory, environment, "deploy")

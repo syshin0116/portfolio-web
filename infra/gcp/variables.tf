@@ -10,13 +10,13 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Cloud Run and Artifact Registry region."
+  description = "Active Cloud Run, Scheduler, and Artifact Registry region."
   type        = string
-  default     = "us-east4"
+  default     = "asia-southeast1"
 
   validation {
-    condition     = var.region == "us-east4"
-    error_message = "This foundation is fixed to us-east4; review state, imports, and data residency before changing regions."
+    condition     = var.region == "asia-southeast1"
+    error_message = "Active agent delivery is fixed to asia-southeast1; legacy us-east4 registries and state storage remain separately pinned."
   }
 }
 
@@ -81,10 +81,10 @@ variable "agent_delivery_stage" {
       && var.agent_secret_versions == null
       ) : (
       var.agent_bootstrap_image != null
-      && var.agent_preview_bootstrap_image != null
+      && var.agent_preview_bootstrap_image == null
       && var.agent_secret_versions != null
     )
-    error_message = "foundation requires null image/version inputs; jobs and services require immutable production/preview images plus the complete reviewed numeric version map."
+    error_message = "foundation requires null image/version inputs; jobs and services require one immutable production image, no preview image, and the complete reviewed production numeric version map."
   }
 }
 
@@ -94,24 +94,24 @@ variable "agent_bootstrap_image" {
   default     = null
 
   validation {
-    condition     = var.agent_bootstrap_image == null || can(regex("^us-east4-docker\\.pkg\\.dev/festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$", var.agent_bootstrap_image))
+    condition     = var.agent_bootstrap_image == null || can(regex("^asia-southeast1-docker\\.pkg\\.dev/festive-ally-503605-v7/agent/agent@sha256:[0-9a-f]{64}$", var.agent_bootstrap_image))
     error_message = "When set, agent_bootstrap_image must be the exact regional agent repository path at a lowercase sha256 digest."
   }
 }
 
 variable "agent_preview_bootstrap_image" {
-  description = "Reviewed immutable preview image in the isolated preview repository for the jobs and services stages; null during foundation bootstrap."
+  description = "Dormant preview delivery input. It must remain null while production-only Cloud Run delivery is active."
   type        = string
   default     = null
 
   validation {
-    condition     = var.agent_preview_bootstrap_image == null || can(regex("^us-east4-docker\\.pkg\\.dev/festive-ally-503605-v7/agent-preview/agent@sha256:[0-9a-f]{64}$", var.agent_preview_bootstrap_image))
-    error_message = "When set, agent_preview_bootstrap_image must be the exact preview repository path at a lowercase sha256 digest."
+    condition     = var.agent_preview_bootstrap_image == null
+    error_message = "agent_preview_bootstrap_image must remain null until preview Cloud Run resources are reviewed and restored."
   }
 }
 
 variable "agent_secret_versions" {
-  description = "Reviewed Secret Manager numeric versions keyed by all eleven managed secret IDs; null only during foundation bootstrap. Secret payloads never enter Terraform."
+  description = "Reviewed numeric versions for the four production delivery secrets; null only during foundation bootstrap. Dormant secret containers stay versionless here and payloads never enter Terraform."
   type        = map(string)
   default     = null
 
@@ -128,15 +128,8 @@ variable "agent_secret_versions" {
       "agent-auth-secret",
       "agent-database-url",
       "agent-migration-database-url",
-      "agent-preview-anthropic-api-key",
-      "agent-preview-auth-secret",
-      "agent-preview-database-url",
-      "agent-preview-langsmith-api-key",
-      "agent-preview-migration-database-url",
-      "anthropic-api-key",
-      "langsmith-api-key",
       "openai-api-key",
     ])
-    error_message = "agent_secret_versions must contain exactly the eleven managed secret IDs, with no missing or extra keys."
+    error_message = "agent_secret_versions must contain exactly auth, runtime DB, migration DB, and OpenAI production secret IDs."
   }
 }

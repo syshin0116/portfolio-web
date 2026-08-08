@@ -677,6 +677,46 @@ class LocalGovernanceTests(unittest.TestCase):
                 errors,
             )
 
+    def test_agent_release_declares_optional_environment_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertFalse(
+            any(
+                governance.AGENT_RELEASE_ENVIRONMENT_SECRET in error
+                and "sole optional workflow_call secret" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_agent_release_rejects_required_environment_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            workflow = root / ".github/workflows/agent-release.yml"
+            original = workflow.read_text(encoding="utf-8")
+            optional = (
+                "    secrets:\n"
+                "      AGENT_SMOKE_BEARER_TOKEN:\n"
+                "        required: false\n"
+            )
+            required = optional.replace("required: false", "required: true")
+            mutated = original.replace(optional, required, 1)
+            self.assertNotEqual(original, mutated)
+            workflow.write_text(mutated, encoding="utf-8")
+
+            errors = governance.validate_local(root, governance.load_policy())
+
+        self.assertTrue(
+            any(
+                governance.AGENT_RELEASE_ENVIRONMENT_SECRET in error
+                and "sole optional workflow_call secret" in error
+                for error in errors
+            ),
+            errors,
+        )
+
     def test_agent_image_build_uses_attestation_capable_builder(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/agent-image-build.yml").read_text(
             encoding="utf-8"

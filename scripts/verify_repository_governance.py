@@ -239,7 +239,7 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
         "a535afb42a1144153f76c577bff3a1826d4ab7dc0e655b6aa2f6a73b243e0585"
     ),
     ".github/workflows/agent-release.yml": (
-        "cfc036db1c58da5eb60b669c0bf6b2daeb0514de367119509ea53750a9e23b03"
+        "91c62be35dda4dde15b7e1c1d1c0e2522a0bc3eb705cca7ad30dd90d4abedc64"
     ),
     ".github/workflows/preview-agent.yml": (
         "651a730dd549e958837df3cab7792821919ee9093f2ad35a91c7fdc3cefed1d9"
@@ -248,6 +248,7 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
         "ccd93f95170586f6ab1cf8b2e20bdb3968f61cf31f655ac08a1b9752fd175307"
     ),
 }
+AGENT_RELEASE_ENVIRONMENT_SECRET = "AGENT_SMOKE_BEARER_TOKEN"
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
 AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
     "05517f3f6e0a2119f1e88706e71eac4393bf4dab986d347b43cff568c3aa4688"
@@ -1194,6 +1195,35 @@ def validate_agent_delivery_permission_chain(
                 f"{relative}: exact workflow AST differs; "
                 f"expected_sha256={expected_sha256}, "
                 f"actual_sha256={actual_sha256}"
+            )
+
+    release_relative = ".github/workflows/agent-release.yml"
+    release_document = documents.get((repository_root / release_relative).resolve())
+    if release_document is not None:
+        try:
+            workflow_call = workflow_trigger_config(release_document).get(
+                "workflow_call"
+            )
+            if not isinstance(workflow_call, dict):
+                raise GovernanceError("workflow_call must be a mapping")
+            secrets = workflow_call.get("secrets")
+            if not isinstance(secrets, dict):
+                raise GovernanceError("workflow_call.secrets must be a mapping")
+            secret_names = set(secrets)
+            definition = secrets.get(AGENT_RELEASE_ENVIRONMENT_SECRET)
+            if secret_names != {AGENT_RELEASE_ENVIRONMENT_SECRET} or not isinstance(
+                definition, dict
+            ):
+                raise GovernanceError(
+                    "workflow_call.secrets must contain only the smoke token"
+                )
+            if definition.get("required") != "false":
+                raise GovernanceError("the smoke token must be optional")
+        except GovernanceError as exc:
+            errors.append(
+                f"{release_relative}: {AGENT_RELEASE_ENVIRONMENT_SECRET} must be "
+                "declared as the sole optional workflow_call secret so the "
+                f"reviewer-gated environment can supply it: {exc}"
             )
 
     permission_chains = (

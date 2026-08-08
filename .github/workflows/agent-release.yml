@@ -34,6 +34,9 @@ on:
         required: false
         default: ""
         type: string
+    secrets:
+      AGENT_SMOKE_BEARER_TOKEN:
+        required: false
 
 permissions: {}
 

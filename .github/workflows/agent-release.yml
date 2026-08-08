@@ -36,7 +36,7 @@ on:
         type: string
     secrets:
       AGENT_SMOKE_BEARER_TOKEN:
-        required: false
+        required: true
 
 permissions: {}
 

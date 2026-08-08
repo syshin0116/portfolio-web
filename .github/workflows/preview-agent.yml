@@ -58,6 +58,8 @@ jobs:
       id-token: write
       pull-requests: read
     uses: ./.github/workflows/agent-release.yml
+    secrets:
+      AGENT_SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_PREVIEW_SMOKE_BEARER_TOKEN }}
     with:
       target: preview
       environment: Agent Preview

@@ -246,16 +246,16 @@ def desired_live_responses() -> dict[str, object]:
             "variables": [],
         },
         AGENT_PREVIEW_SECRETS_PAGE: {
-            "total_count": 1,
-            "secrets": [{"name": "AGENT_SMOKE_BEARER_TOKEN"}],
+            "total_count": 0,
+            "secrets": [],
         },
         AGENT_PREVIEW_VARIABLES_PAGE: {
             "total_count": 0,
             "variables": [],
         },
         AGENT_PRODUCTION_SECRETS_PAGE: {
-            "total_count": 1,
-            "secrets": [{"name": "AGENT_SMOKE_BEARER_TOKEN"}],
+            "total_count": 0,
+            "secrets": [],
         },
         AGENT_PRODUCTION_VARIABLES_PAGE: {
             "total_count": 0,
@@ -677,32 +677,32 @@ class LocalGovernanceTests(unittest.TestCase):
                 errors,
             )
 
-    def test_agent_release_declares_optional_environment_secret(self) -> None:
+    def test_agent_release_declares_required_caller_secret(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
             errors = governance.validate_local(root, governance.load_policy())
 
         self.assertFalse(
             any(
-                governance.AGENT_RELEASE_ENVIRONMENT_SECRET in error
-                and "sole optional workflow_call secret" in error
+                governance.AGENT_RELEASE_WORKFLOW_SECRET in error
+                and "sole required workflow_call secret" in error
                 for error in errors
             ),
             errors,
         )
 
-    def test_agent_release_rejects_required_environment_secret(self) -> None:
+    def test_agent_release_rejects_optional_caller_secret(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_local_governance_fixture(directory)
             workflow = root / ".github/workflows/agent-release.yml"
             original = workflow.read_text(encoding="utf-8")
-            optional = (
+            required = (
                 "    secrets:\n"
                 "      AGENT_SMOKE_BEARER_TOKEN:\n"
-                "        required: false\n"
+                "        required: true\n"
             )
-            required = optional.replace("required: false", "required: true")
-            mutated = original.replace(optional, required, 1)
+            optional = required.replace("required: true", "required: false")
+            mutated = original.replace(required, optional, 1)
             self.assertNotEqual(original, mutated)
             workflow.write_text(mutated, encoding="utf-8")
 
@@ -710,12 +710,134 @@ class LocalGovernanceTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                governance.AGENT_RELEASE_ENVIRONMENT_SECRET in error
-                and "sole optional workflow_call secret" in error
+                governance.AGENT_RELEASE_WORKFLOW_SECRET in error
+                and "sole required workflow_call secret" in error
                 for error in errors
             ),
             errors,
         )
+
+    def test_agent_release_callers_pass_only_the_named_target_secret(self) -> None:
+        expected = {
+            ".github/workflows/preview-agent.yml": ("AGENT_PREVIEW_SMOKE_BEARER_TOKEN"),
+            ".github/workflows/deploy-agent.yml": (
+                "AGENT_PRODUCTION_SMOKE_BEARER_TOKEN"
+            ),
+        }
+        for relative, source_secret in expected.items():
+            with (
+                self.subTest(workflow=relative),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = copy_local_governance_fixture(directory)
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertFalse(
+                any(
+                    relative in error
+                    and "must pass only AGENT_SMOKE_BEARER_TOKEN" in error
+                    and source_secret in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_agent_release_callers_reject_secret_inheritance(self) -> None:
+        mappings = (
+            (
+                ".github/workflows/preview-agent.yml",
+                "AGENT_PREVIEW_SMOKE_BEARER_TOKEN",
+            ),
+            (
+                ".github/workflows/deploy-agent.yml",
+                "AGENT_PRODUCTION_SMOKE_BEARER_TOKEN",
+            ),
+        )
+        for relative, source_secret in mappings:
+            with (
+                self.subTest(workflow=relative),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = copy_local_governance_fixture(directory)
+                workflow = root / relative
+                original = workflow.read_text(encoding="utf-8")
+                exact = (
+                    "    secrets:\n"
+                    "      AGENT_SMOKE_BEARER_TOKEN: "
+                    f"${{{{ secrets.{source_secret} }}}}\n"
+                )
+                mutated = original.replace(exact, "    secrets: inherit\n", 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(
+                    relative in error
+                    and "must pass only AGENT_SMOKE_BEARER_TOKEN" in error
+                    and source_secret in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_agent_release_callers_reject_missing_wrong_or_extra_mapping(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "missing",
+                ".github/workflows/preview-agent.yml",
+                "AGENT_PREVIEW_SMOKE_BEARER_TOKEN",
+                "",
+            ),
+            (
+                "wrong-source",
+                ".github/workflows/deploy-agent.yml",
+                "AGENT_PRODUCTION_SMOKE_BEARER_TOKEN",
+                "    secrets:\n"
+                "      AGENT_SMOKE_BEARER_TOKEN: "
+                "${{ secrets.AGENT_PREVIEW_SMOKE_BEARER_TOKEN }}\n",
+            ),
+            (
+                "extra",
+                ".github/workflows/preview-agent.yml",
+                "AGENT_PREVIEW_SMOKE_BEARER_TOKEN",
+                "    secrets:\n"
+                "      AGENT_SMOKE_BEARER_TOKEN: "
+                "${{ secrets.AGENT_PREVIEW_SMOKE_BEARER_TOKEN }}\n"
+                "      UNRELATED_SECRET: ${{ secrets.UNRELATED_SECRET }}\n",
+            ),
+        )
+        for label, relative, source_secret, replacement in cases:
+            with (
+                self.subTest(mutation=label),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = copy_local_governance_fixture(directory)
+                workflow = root / relative
+                original = workflow.read_text(encoding="utf-8")
+                exact = (
+                    "    secrets:\n"
+                    "      AGENT_SMOKE_BEARER_TOKEN: "
+                    f"${{{{ secrets.{source_secret} }}}}\n"
+                )
+                mutated = original.replace(exact, replacement, 1)
+                self.assertNotEqual(original, mutated)
+                workflow.write_text(mutated, encoding="utf-8")
+
+                errors = governance.validate_local(root, governance.load_policy())
+
+            self.assertTrue(
+                any(
+                    relative in error
+                    and "must pass only AGENT_SMOKE_BEARER_TOKEN" in error
+                    and source_secret in error
+                    for error in errors
+                ),
+                errors,
+            )
 
     def test_agent_image_build_uses_attestation_capable_builder(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/agent-image-build.yml").read_text(
@@ -4388,16 +4510,12 @@ class LiveGovernanceTests(unittest.TestCase):
         self,
     ) -> None:
         cases = (
-            (AGENT_PREVIEW_SECRETS_PAGE, "secrets", [], 0, 1),
             (
                 AGENT_PREVIEW_SECRETS_PAGE,
                 "secrets",
-                [
-                    {"name": "AGENT_SMOKE_BEARER_TOKEN"},
-                    {"name": "MUST_NOT_APPEAR_IN_OUTPUT"},
-                ],
-                2,
+                [{"name": "MUST_NOT_APPEAR_IN_OUTPUT"}],
                 1,
+                0,
             ),
             (
                 AGENT_PREVIEW_VARIABLES_PAGE,
@@ -4406,7 +4524,13 @@ class LiveGovernanceTests(unittest.TestCase):
                 1,
                 0,
             ),
-            (AGENT_PRODUCTION_SECRETS_PAGE, "secrets", [], 0, 1),
+            (
+                AGENT_PRODUCTION_SECRETS_PAGE,
+                "secrets",
+                [{"name": "MUST_NOT_APPEAR_IN_OUTPUT"}],
+                1,
+                0,
+            ),
             (
                 AGENT_PRODUCTION_VARIABLES_PAGE,
                 "variables",

@@ -188,8 +188,8 @@ EXPECTED_ENVIRONMENTS = {
 }
 EXPECTED_ENVIRONMENT_SECRETS = {
     "Evaluation Publication": frozenset(),
-    "Agent Preview": frozenset({"AGENT_SMOKE_BEARER_TOKEN"}),
-    "Agent Production": frozenset({"AGENT_SMOKE_BEARER_TOKEN"}),
+    "Agent Preview": frozenset(),
+    "Agent Production": frozenset(),
 }
 EXPECTED_ENVIRONMENT_VARIABLES = {
     "Evaluation Publication": frozenset(),
@@ -239,16 +239,20 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
         "a535afb42a1144153f76c577bff3a1826d4ab7dc0e655b6aa2f6a73b243e0585"
     ),
     ".github/workflows/agent-release.yml": (
-        "91c62be35dda4dde15b7e1c1d1c0e2522a0bc3eb705cca7ad30dd90d4abedc64"
+        "87b9f80f01e0fa25b150d7ea02cd9c91b8eaa699b5a2a66518467c7622974961"
     ),
     ".github/workflows/preview-agent.yml": (
-        "651a730dd549e958837df3cab7792821919ee9093f2ad35a91c7fdc3cefed1d9"
+        "bf5d483538eb5c838b8bbd95edd79a8584a1c9ed6add57930474380709f79a91"
     ),
     ".github/workflows/deploy-agent.yml": (
-        "ccd93f95170586f6ab1cf8b2e20bdb3968f61cf31f655ac08a1b9752fd175307"
+        "5d5da4eb7955a1e7f3d804054805b267360e45c7e9ee5f74a9d9b1cda7213ef7"
     ),
 }
-AGENT_RELEASE_ENVIRONMENT_SECRET = "AGENT_SMOKE_BEARER_TOKEN"
+AGENT_RELEASE_WORKFLOW_SECRET = "AGENT_SMOKE_BEARER_TOKEN"
+AGENT_RELEASE_CALLER_SECRET_SOURCES = {
+    ".github/workflows/preview-agent.yml": "AGENT_PREVIEW_SMOKE_BEARER_TOKEN",
+    ".github/workflows/deploy-agent.yml": "AGENT_PRODUCTION_SMOKE_BEARER_TOKEN",
+}
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
 AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
     "05517f3f6e0a2119f1e88706e71eac4393bf4dab986d347b43cff568c3aa4688"
@@ -1210,20 +1214,44 @@ def validate_agent_delivery_permission_chain(
             if not isinstance(secrets, dict):
                 raise GovernanceError("workflow_call.secrets must be a mapping")
             secret_names = set(secrets)
-            definition = secrets.get(AGENT_RELEASE_ENVIRONMENT_SECRET)
-            if secret_names != {AGENT_RELEASE_ENVIRONMENT_SECRET} or not isinstance(
+            definition = secrets.get(AGENT_RELEASE_WORKFLOW_SECRET)
+            if secret_names != {AGENT_RELEASE_WORKFLOW_SECRET} or not isinstance(
                 definition, dict
             ):
                 raise GovernanceError(
                     "workflow_call.secrets must contain only the smoke token"
                 )
-            if definition.get("required") != "false":
-                raise GovernanceError("the smoke token must be optional")
+            if definition.get("required") != "true":
+                raise GovernanceError("the smoke token must be required")
         except GovernanceError as exc:
             errors.append(
-                f"{release_relative}: {AGENT_RELEASE_ENVIRONMENT_SECRET} must be "
-                "declared as the sole optional workflow_call secret so the "
-                f"reviewer-gated environment can supply it: {exc}"
+                f"{release_relative}: {AGENT_RELEASE_WORKFLOW_SECRET} must be "
+                "declared as the sole required workflow_call secret: "
+                f"{exc}"
+            )
+
+    for caller_relative, source_secret in AGENT_RELEASE_CALLER_SECRET_SOURCES.items():
+        caller_document = documents.get((repository_root / caller_relative).resolve())
+        if caller_document is None:
+            continue
+        try:
+            release_job = _workflow_jobs(caller_document)["release"]
+            secret_node = _mapping_value(release_job, "secrets")
+            actual_secrets = (
+                _node_to_data(secret_node) if secret_node is not None else None
+            )
+            expected_secrets = {
+                AGENT_RELEASE_WORKFLOW_SECRET: (f"${{{{ secrets.{source_secret} }}}}")
+            }
+            if actual_secrets != expected_secrets:
+                raise GovernanceError(
+                    f"expected {expected_secrets!r}, found {actual_secrets!r}"
+                )
+        except (GovernanceError, KeyError) as exc:
+            errors.append(
+                f"{caller_relative}: release job must pass only "
+                f"{AGENT_RELEASE_WORKFLOW_SECRET} from {source_secret}; "
+                f"secret inheritance is forbidden: {exc}"
             )
 
     permission_chains = (

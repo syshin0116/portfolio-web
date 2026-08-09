@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from collections.abc import Awaitable, Callable
+from contextvars import Context
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -568,7 +569,10 @@ async def _capture_openai_generation_payload(
             if request.system_message is not None:
                 messages.append(request.system_message)
             messages.extend(request.messages)
-            await bound_model.ainvoke(messages)
+            await asyncio.create_task(
+                bound_model.ainvoke(messages),
+                context=Context(),
+            )
     except InputTokenCountError:
         raise
     except Exception as exc:

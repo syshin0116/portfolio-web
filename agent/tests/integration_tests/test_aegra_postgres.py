@@ -8,7 +8,9 @@ import json
 import multiprocessing
 import os
 import runpy
+import signal
 import socket
+import sys
 import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -105,6 +107,9 @@ INSPECTION_FIXTURE = (
 )
 _GUEST_INTERRUPT_ID = "0123456789abcdef0123456789abcdef"
 _GUEST_SUBMIT_NONCE = "123e4567-e89b-42d3-a456-426614174000"
+_JS_SDK_RUN_TIMEOUT_SECONDS = 30
+_JS_SDK_TERMINATE_TIMEOUT_SECONDS = 2
+_JS_SDK_KILL_TIMEOUT_SECONDS = 2
 
 
 def _postgres_memory_create_process(
@@ -335,12 +340,15 @@ async def _run_official_js_sdk_e2e(
         },
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-    except TimeoutError:
-        process.kill()
-        stdout, stderr = await process.communicate()
+    stdout, stderr, timed_out = await _communicate_process_group(
+        process,
+        run_timeout=_JS_SDK_RUN_TIMEOUT_SECONDS,
+        terminate_timeout=_JS_SDK_TERMINATE_TIMEOUT_SECONDS,
+        kill_timeout=_JS_SDK_KILL_TIMEOUT_SECONDS,
+    )
+    if timed_out:
         raise AssertionError(
             "official JavaScript SDK APv2 integration timed out\n"
             f"stdout:\n{stdout.decode('utf-8')}\n"
@@ -357,6 +365,188 @@ async def _run_official_js_sdk_e2e(
     summary = json.loads(lines[-1])
     assert isinstance(summary, dict)
     return summary
+
+
+async def _communicate_process_group(
+    process: asyncio.subprocess.Process,
+    *,
+    run_timeout: float,
+    terminate_timeout: float,
+    kill_timeout: float,
+) -> tuple[bytes, bytes, bool]:
+    """Drain a subprocess created with ``start_new_session=True``."""
+    communication = asyncio.create_task(process.communicate())
+    try:
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                asyncio.shield(communication), timeout=run_timeout
+            )
+        except TimeoutError:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    asyncio.shield(communication), timeout=terminate_timeout
+                )
+            except TimeoutError:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        asyncio.shield(communication), timeout=kill_timeout
+                    )
+                except TimeoutError as error:
+                    raise RuntimeError(
+                        "process group did not drain after SIGKILL"
+                    ) from error
+            return stdout, stderr, True
+    except asyncio.CancelledError:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        try:
+            await asyncio.wait_for(asyncio.shield(communication), timeout=kill_timeout)
+        except TimeoutError as error:
+            raise RuntimeError(
+                "cancelled process group did not drain after SIGKILL"
+            ) from error
+        raise
+    finally:
+        if not communication.done():
+            communication.cancel()
+            with suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(communication, timeout=kill_timeout)
+    return stdout, stderr, False
+
+
+async def test_process_group_communicate_when_process_exits_returns_exact_output():
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "print('complete', flush=True)",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    stdout, stderr, timed_out = await _communicate_process_group(
+        process,
+        run_timeout=5,
+        terminate_timeout=0.1,
+        kill_timeout=1,
+    )
+
+    assert (stdout, stderr, timed_out, process.returncode) == (
+        b"complete\n",
+        b"",
+        False,
+        0,
+    )
+
+
+async def _spawn_descendant_holding_process_pipes() -> asyncio.subprocess.Process:
+    descendant_source = "\n".join(
+        (
+            "import signal",
+            "import time",
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            "print('descendant-ready', flush=True)",
+            "time.sleep(60)",
+        )
+    )
+    parent_source = "\n".join(
+        (
+            "import subprocess",
+            "import sys",
+            "import time",
+            f"subprocess.Popen([sys.executable, '-c', {descendant_source!r}])",
+            "time.sleep(60)",
+        )
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        parent_source,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    try:
+        ready = await asyncio.wait_for(process.stdout.readline(), timeout=10)
+        assert ready == b"descendant-ready\n"
+    except BaseException:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        with suppress(TimeoutError):
+            await asyncio.wait_for(process.communicate(), timeout=5)
+        raise
+    return process
+
+
+async def _cleanup_test_process_group(process: asyncio.subprocess.Process) -> None:
+    stdout_open = process.stdout is not None and not process.stdout.at_eof()
+    stderr_open = process.stderr is not None and not process.stderr.at_eof()
+    if process.returncode is None or stdout_open or stderr_open:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        with suppress(TimeoutError):
+            await asyncio.wait_for(process.communicate(), timeout=5)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+async def test_process_group_timeout_kills_descendant_holding_pipes_within_bound():
+    process = await _spawn_descendant_holding_process_pipes()
+
+    try:
+        async with asyncio.timeout(10):
+            stdout, stderr, timed_out = await _communicate_process_group(
+                process,
+                run_timeout=0.05,
+                terminate_timeout=0.25,
+                kill_timeout=5,
+            )
+        assert (stdout, stderr, timed_out) == (b"", b"", True)
+        assert process.stdout is not None and process.stdout.at_eof()
+        assert process.stderr is not None and process.stderr.at_eof()
+    finally:
+        await _cleanup_test_process_group(process)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+async def test_process_group_cancellation_during_term_grace_kills_descendant_and_drains_pipes(
+    monkeypatch,
+):
+    process = await _spawn_descendant_holding_process_pipes()
+    entered_terminate_grace = asyncio.Event()
+    real_killpg = os.killpg
+
+    def observe_terminate(process_group_id: int, sent_signal: int) -> None:
+        real_killpg(process_group_id, sent_signal)
+        if sent_signal == signal.SIGTERM:
+            entered_terminate_grace.set()
+
+    monkeypatch.setattr(os, "killpg", observe_terminate)
+    communication = asyncio.create_task(
+        _communicate_process_group(
+            process,
+            run_timeout=0.05,
+            terminate_timeout=60,
+            kill_timeout=5,
+        )
+    )
+
+    try:
+        await asyncio.wait_for(entered_terminate_grace.wait(), timeout=5)
+        communication.cancel()
+        async with asyncio.timeout(10):
+            with pytest.raises(asyncio.CancelledError):
+                await communication
+        assert process.returncode is not None
+        assert process.stdout is not None and process.stdout.at_eof()
+        assert process.stderr is not None and process.stderr.at_eof()
+    finally:
+        await _cleanup_test_process_group(process)
 
 
 async def _database_tables(url: str) -> tuple[set[str], list[str]]:

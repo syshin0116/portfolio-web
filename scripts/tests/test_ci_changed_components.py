@@ -134,9 +134,11 @@ class PathClassificationTests(unittest.TestCase):
         for path in (
             "scripts/deploy_cloud_run.sh",
             "scripts/ops_foundation_contract.py",
+            "scripts/resolve_agent_runtime_image.py",
             "scripts/tests/test_agent_delivery_identity.py",
             "scripts/tests/test_deploy_cloud_run.py",
             "scripts/tests/test_ops_foundation_contract.py",
+            "scripts/tests/test_resolve_agent_runtime_image.py",
             "scripts/tests/test_validate_agent_release_candidate.py",
             "scripts/tests/test_verify_gcp_project_readiness.py",
             "scripts/verify_ops_foundation.sh",

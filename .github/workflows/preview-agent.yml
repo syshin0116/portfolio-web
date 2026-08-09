@@ -19,6 +19,7 @@ on:
       - "scripts/build_index.py"
       - "scripts/deploy_cloud_run.sh"
       - "scripts/smoke.py"
+      - "scripts/resolve_agent_runtime_image.py"
       - "scripts/validate_agent_release_candidate.py"
       - "scripts/validate_agent_delivery_identity.sh"
       - ".github/workflows/agent-image-build.yml"

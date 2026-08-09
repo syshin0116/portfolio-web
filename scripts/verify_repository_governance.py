@@ -236,16 +236,16 @@ EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
 )
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (
-        "a535afb42a1144153f76c577bff3a1826d4ab7dc0e655b6aa2f6a73b243e0585"
+        "d7e764e97de3f6d6fde5bec8c6265bf58c50769c15a8d2f8131eb854c410ef9b"
     ),
     ".github/workflows/agent-release.yml": (
         "87b9f80f01e0fa25b150d7ea02cd9c91b8eaa699b5a2a66518467c7622974961"
     ),
     ".github/workflows/preview-agent.yml": (
-        "bf5d483538eb5c838b8bbd95edd79a8584a1c9ed6add57930474380709f79a91"
+        "290e390dc2c284addc013f443a4b849cef403e2ac21cfaa6c4faa3944298d5dc"
     ),
     ".github/workflows/deploy-agent.yml": (
-        "5d5da4eb7955a1e7f3d804054805b267360e45c7e9ee5f74a9d9b1cda7213ef7"
+        "40096ffb8bcf7ec139a626dcfa87cf0ff8b89de4dcb288b10bc27c581dd0cb66"
     ),
 }
 AGENT_RELEASE_WORKFLOW_SECRET = "AGENT_SMOKE_BEARER_TOKEN"

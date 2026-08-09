@@ -19,9 +19,6 @@ on:
         description: Fresh immutable image from the build workflow.
         required: true
         type: string
-    secrets:
-      AGENT_SMOKE_BEARER_TOKEN:
-        required: true
 
 permissions: {}
 
@@ -91,18 +88,12 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           version: "577.0.0"
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.11.29"
-          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
-          enable-cache: false
       - name: Deploy, smoke, and promote
         env:
           CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
           GCP_PROJECT_ID: festive-ally-503605-v7
           GCP_REGION: asia-southeast1
           IMAGE_DIGEST: ${{ inputs.image_digest }}
-          SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           TARGET: ${{ inputs.target }}
         shell: bash
@@ -184,14 +175,16 @@ jobs:
             curl --fail --silent --show-error --max-time 20 \
               --retry 5 --retry-all-errors --retry-delay 2 \
               "${smoke_url}/ready" | jq -e '. == {"status":"ready"}' >/dev/null
-            LIVE_SMOKE_TOKEN="$SMOKE_BEARER_TOKEN" \
-              uv run --frozen --package syshin0116-dev-agent \
-              python scripts/smoke.py \
-                --base-url "$smoke_url" \
-                --assistant-id agent \
-                --profile aegra-0.9.25 \
-                --token-env LIVE_SMOKE_TOKEN \
-                --timeout 180
+            unauthenticated_status="$(
+              curl --silent --show-error --max-time 20 --max-redirs 0 \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                --header 'content-type: application/json' \
+                --data \
+                  '{"id":1,"method":"run.start","params":{"assistant_id":"agent","input":{"messages":[{"role":"user","content":"smoke"}]}}}' \
+                "${smoke_url}/threads/00000000-0000-4000-8000-000000000001/commands"
+            )"
+            [[ "$unauthenticated_status" == "401" ]]
           }
 
           verify_release

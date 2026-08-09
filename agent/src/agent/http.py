@@ -895,13 +895,13 @@ async def _read_body(
     return b"".join(parts)
 
 
-def _replay(body: bytes) -> Receive:
+def _replay(body: bytes, tail_receive: Receive) -> Receive:
     delivered = False
 
     async def receive() -> Message:
         nonlocal delivered
         if delivered:
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await tail_receive()
         delivered = True
         return {"type": "http.request", "body": body, "more_body": False}
 
@@ -1295,7 +1295,7 @@ class GuestRunGuard:
                     },
                 )
                 return
-            receive = _replay(normalized_body)
+            receive = _replay(normalized_body, receive)
         elif kind in bodyless_kinds:
             try:
                 length = _content_length(scope)
@@ -1316,7 +1316,7 @@ class GuestRunGuard:
                     },
                 )
                 return
-            receive = _replay(b"")
+            receive = _replay(b"", receive)
 
         if spends:
             allowed, retry_after = self._consume_run(identity)
@@ -1590,7 +1590,7 @@ class NativeThreadGuard:
                 },
             )
             return
-        receive = _replay(body)
+        receive = _replay(body, receive)
         command = _native_command(body)
         command_method = command.get("method") if command is not None else None
         if (
@@ -1690,7 +1690,7 @@ class NativeThreadGuard:
                 try:
                     locked_scope = dict(scope)
                     locked_scope[_GUEST_THREAD_LOCK_SCOPE_KEY] = thread_id
-                    await self(locked_scope, _replay(body), send)
+                    await self(locked_scope, receive, send)
                 finally:
                     await lock_context.__aexit__(None, None, None)
                 return

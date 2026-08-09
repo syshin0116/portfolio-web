@@ -56,6 +56,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "latest_created": f"{service}-old",
                     "latest_ready": f"{service}-old",
                     "serving": f"{service}-old",
+                    "serving_target_latest": True,
                     "smoke": False,
                     "service_image": previous_image_digest,
                     "revision_images": {
@@ -131,6 +132,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         + os.environ["DELIVERY_RUN_ATTEMPT"]
                     )
                     state["latest_ready"] = state["latest_created"]
+                    state["serving_target_latest"] = False
                     state["revision_images"][state["latest_created"]] = state[
                         "service_image"
                     ]
@@ -153,6 +155,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                             ]
                         else:
                             state["serving"] = target
+                        state["serving_target_latest"] = False
                 else:
                     raise SystemExit("unexpected fake gcloud argv: " + repr(args))
                 state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -389,25 +392,86 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     return template
 
                 def service_document():
-                    traffic = [{
-                        "percent": 100,
-                        "revision": f"{service_path}/revisions/{state['serving']}",
-                    }]
+                    service_uri = os.environ.get(
+                        "FAKE_SERVICE_URI",
+                        f"https://{service_name}-testhash-as.a.run.app",
+                    )
+                    if state["serving_target_latest"]:
+                        serving_target = {
+                            "type": os.environ.get(
+                                "FAKE_LATEST_TRAFFIC_TYPE",
+                                "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
+                            ),
+                            "percent": int(
+                                os.environ.get("FAKE_LATEST_TRAFFIC_PERCENT", "100")
+                            ),
+                        }
+                        if "FAKE_LATEST_TRAFFIC_REVISION" in os.environ:
+                            serving_target["revision"] = os.environ[
+                                "FAKE_LATEST_TRAFFIC_REVISION"
+                            ]
+                        for environment_name, field_name in (
+                            ("FAKE_LATEST_TRAFFIC_TYPE_JSON", "type"),
+                            ("FAKE_LATEST_TRAFFIC_TAG_JSON", "tag"),
+                            ("FAKE_LATEST_TRAFFIC_REVISION_JSON", "revision"),
+                        ):
+                            if environment_name in os.environ:
+                                serving_target[field_name] = json.loads(
+                                    os.environ[environment_name]
+                                )
+                        traffic = [serving_target]
+                    else:
+                        traffic = [{
+                            "type": os.environ.get(
+                                "FAKE_EXPLICIT_TRAFFIC_TYPE",
+                                "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+                            ),
+                            "percent": 100,
+                            "revision": (
+                                state["serving"]
+                                if os.environ.get(
+                                    "FAKE_EXPLICIT_TRAFFIC_SHORT_REVISION"
+                                )
+                                == "true"
+                                else f"{service_path}/revisions/{state['serving']}"
+                            ),
+                        }]
                     if state["smoke"]:
                         smoke_revision = os.environ.get(
                             "FAKE_SMOKE_REVISION", state["latest_created"]
                         )
-                        traffic.append({
+                        smoke_target = {
                             "tag": "smoke",
-                            "revision": (
-                                f"{service_path}/revisions/"
-                                f"{smoke_revision}"
+                            "type": os.environ.get(
+                                "FAKE_SMOKE_TYPE",
+                                "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
                             ),
-                            "uri": "https://smoke.example.invalid",
-                            "percent": int(
-                                os.environ.get("FAKE_SMOKE_PERCENT", "0")
+                            "revision": os.environ.get(
+                                "FAKE_SMOKE_REVISION_PATH",
+                                (
+                                    smoke_revision
+                                    if os.environ.get(
+                                        "FAKE_SMOKE_SHORT_REVISION"
+                                    )
+                                    == "true"
+                                    else f"{service_path}/revisions/{smoke_revision}"
+                                ),
                             ),
-                        })
+                            "uri": os.environ.get(
+                                "FAKE_SMOKE_URI",
+                                "https://smoke---"
+                                + service_uri.removeprefix("https://"),
+                            ),
+                        }
+                        if "FAKE_SMOKE_PERCENT" in os.environ:
+                            smoke_target["percent"] = int(
+                                os.environ["FAKE_SMOKE_PERCENT"]
+                            )
+                        if "FAKE_SMOKE_PERCENT_JSON" in os.environ:
+                            smoke_target["percent"] = json.loads(
+                                os.environ["FAKE_SMOKE_PERCENT_JSON"]
+                            )
+                        traffic.append(smoke_target)
                     if (
                         os.environ.get("FAKE_EXTRA_TRAFFIC_TAG") == "true"
                         or (
@@ -424,7 +488,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     document = {
                         "name": service_path,
                         "ingress": "INGRESS_TRAFFIC_ALL",
-                        "reconciling": False,
+                        "scaling": {"maxInstanceCount": 20},
                         "terminalCondition": {
                             "state": os.environ.get(
                                 "FAKE_SERVICE_STATE", "CONDITION_SUCCEEDED"
@@ -436,12 +500,20 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         "latestCreatedRevision": (
                             f"{service_path}/revisions/{state['latest_created']}"
                         ),
-                        "latestReadyRevision": (
-                            f"{service_path}/revisions/{state['latest_ready']}"
+                        "latestReadyRevision": os.environ.get(
+                            "FAKE_LATEST_READY_REVISION",
+                            f"{service_path}/revisions/{state['latest_ready']}",
                         ),
+                        "traffic": traffic,
                         "trafficStatuses": traffic,
-                        "uri": "https://agent.example.invalid",
+                        "uri": service_uri,
                     }
+                    if "FAKE_TRAFFIC_STATUSES_JSON" in os.environ:
+                        document["trafficStatuses"] = json.loads(
+                            os.environ["FAKE_TRAFFIC_STATUSES_JSON"]
+                        )
+                    if os.environ.get("FAKE_SERVICE_RECONCILING") == "true":
+                        document["reconciling"] = True
                     if os.environ.get("FAKE_SERVICE_BUILD_CONFIG") == "true":
                         document["buildConfig"] = {
                             "baseImage": "us-docker.pkg.dev/serverless-runtimes/x"
@@ -450,6 +522,12 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         document["customAudiences"] = ["https://attacker.invalid"]
                     if os.environ.get("FAKE_SERVICE_SCALING") == "true":
                         document["scaling"] = {"manualInstanceCount": 10}
+                    if "FAKE_SERVICE_MAX_INSTANCE_COUNT" in os.environ:
+                        document["scaling"] = {
+                            "maxInstanceCount": int(
+                                os.environ["FAKE_SERVICE_MAX_INSTANCE_COUNT"]
+                            )
+                        }
                     if os.environ.get("FAKE_SERVICE_IAP") == "true":
                         document["iapEnabled"] = True
                     return document
@@ -464,9 +542,8 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     result.update({
                         "name": f"{service_path}/revisions/{revision}",
                         "service": os.environ.get(
-                            "FAKE_REVISION_SERVICE", service_path
+                            "FAKE_REVISION_SERVICE", service_name
                         ),
-                        "reconciling": False,
                         "conditions": [{
                             "type": "Ready",
                             "state": os.environ.get(
@@ -474,6 +551,8 @@ class CloudRunDeliveryTests(unittest.TestCase):
                             ),
                         }],
                     })
+                    if os.environ.get("FAKE_REVISION_RECONCILING") == "true":
+                        result["reconciling"] = True
                     return result
 
                 def job_document(job):
@@ -532,7 +611,6 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         "name": (
                             f"projects/{project}/locations/{region}/jobs/{job}"
                         ),
-                        "reconciling": False,
                         "terminalCondition": {
                             "state": job_environment.get(
                                 "FAKE_JOB_STATE", "CONDITION_SUCCEEDED"
@@ -542,8 +620,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
                         "observedGeneration": "9",
                         "etag": state["job_etags"].get(job, "etag-" + job + "-9"),
                         "template": {
-                            "taskCount": 1,
-                            "parallelism": 1,
+                            "taskCount": int(
+                                job_environment.get("FAKE_JOB_TASK_COUNT", "1")
+                            ),
                             "template": {
                                 "serviceAccount": job_environment.get(
                                     "FAKE_JOB_SERVICE_ACCOUNT", expected_sa
@@ -608,6 +687,14 @@ class CloudRunDeliveryTests(unittest.TestCase):
                             },
                         },
                     }
+                    if job_environment.get("FAKE_JOB_RECONCILING") == "true":
+                        document["reconciling"] = True
+                    if "FAKE_JOB_PARALLELISM" in job_environment:
+                        document["template"]["parallelism"] = int(
+                            job_environment["FAKE_JOB_PARALLELISM"]
+                        )
+                    if job_environment.get("FAKE_JOB_PARALLELISM_FALSE") == "true":
+                        document["template"]["parallelism"] = False
                     task_template = document["template"]["template"]
                     if job_environment.get("FAKE_JOB_VOLUMES") == "true":
                         task_template["volumes"] = [{
@@ -662,42 +749,53 @@ class CloudRunDeliveryTests(unittest.TestCase):
                             "done": True,
                             "error": {"code": 13, "message": "injected failure"},
                         }
+                    response = {
+                        "@type": (
+                            "type.googleapis.com/"
+                            "google.cloud.run.v2.Execution"
+                        ),
+                        "name": os.environ.get(
+                            "FAKE_EXECUTION_NAME",
+                            f"{job_path}/executions/{job}-abcde",
+                        ),
+                        "job": (
+                            job_path
+                            if os.environ.get("FAKE_EXECUTION_FULL_JOB") == "true"
+                            else os.environ.get("FAKE_EXECUTION_JOB", job)
+                        ),
+                        "generation": "1",
+                        "observedGeneration": "1",
+                        "etag": "execution-etag-" + job,
+                        "completionTime": "2026-07-28T00:00:00Z",
+                        "taskCount": execution_template["taskCount"],
+                        "parallelism": execution_template.get("parallelism", 1),
+                        "template": execution_template["template"],
+                        "succeededCount": int(
+                            os.environ.get("FAKE_SUCCEEDED_COUNT", "1")
+                        ),
+                        "conditions": [{
+                            "type": "Completed",
+                            "state": "CONDITION_SUCCEEDED",
+                        }],
+                    }
+                    if os.environ.get("FAKE_EXECUTION_RECONCILING") == "true":
+                        response["reconciling"] = True
+                    if os.environ.get("FAKE_FAILED_COUNT_FALSE") == "true":
+                        response["failedCount"] = False
+                    for environment_name, field_name in (
+                        ("FAKE_FAILED_COUNT", "failedCount"),
+                        ("FAKE_CANCELLED_COUNT", "cancelledCount"),
+                        ("FAKE_RUNNING_COUNT", "runningCount"),
+                        ("FAKE_RETRIED_COUNT", "retriedCount"),
+                    ):
+                        if environment_name in os.environ:
+                            response[field_name] = int(
+                                os.environ[environment_name]
+                            )
                     return {
                         "name": operation_name,
                         "done": True,
-                        "response": {
-                            "@type": (
-                                "type.googleapis.com/"
-                                "google.cloud.run.v2.Execution"
-                            ),
-                            "name": f"{job_path}/executions/{job}-abcde",
-                            "job": job_path,
-                            "reconciling": False,
-                            "generation": "1",
-                            "observedGeneration": "1",
-                            "etag": "execution-etag-" + job,
-                            "completionTime": "2026-07-28T00:00:00Z",
-                            "taskCount": execution_template["taskCount"],
-                            "parallelism": execution_template["parallelism"],
-                            "template": execution_template["template"],
-                            "succeededCount": int(
-                                os.environ.get("FAKE_SUCCEEDED_COUNT", "1")
-                            ),
-                            "failedCount": int(
-                                os.environ.get("FAKE_FAILED_COUNT", "0")
-                            ),
-                            "cancelledCount": int(
-                                os.environ.get("FAKE_CANCELLED_COUNT", "0")
-                            ),
-                            "runningCount": 0,
-                            "retriedCount": int(
-                                os.environ.get("FAKE_RETRIED_COUNT", "0")
-                            ),
-                            "conditions": [{
-                                "type": "Completed",
-                                "state": "CONDITION_SUCCEEDED",
-                            }],
-                        },
+                        "response": response,
                     }
 
                 response_status = os.environ.get("FAKE_API_STATUS", "200")
@@ -895,7 +993,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertLess(promotion, scheduled_promotion)
         self.assertNotIn(ACCESS_TOKEN, operations)
 
-    def test_official_v2_service_without_terraform_only_field_passes(self) -> None:
+    def test_rest_v2_omitted_defaults_short_parents_and_latest_target_pass(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             environment = self._fixture(directory)
             result = self._run(directory, environment, "rollback", "agent-target")
@@ -905,6 +1005,44 @@ class CloudRunDeliveryTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("agent-target", state["serving"])
+
+    def test_rest_v2_explicit_defaults_and_full_parents_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            environment.update(
+                {
+                    "FAKE_REVISION_SERVICE": (
+                        "projects/festive-ally-503605-v7/"
+                        "locations/asia-southeast1/services/agent"
+                    ),
+                    "FAKE_EXECUTION_FULL_JOB": "true",
+                    "FAKE_EXPLICIT_TRAFFIC_TYPE": (
+                        "TRAFFIC_TARGET_ALLOCATION_TYPE_UNSPECIFIED"
+                    ),
+                    "FAKE_SMOKE_TYPE": ("TRAFFIC_TARGET_ALLOCATION_TYPE_UNSPECIFIED"),
+                    "FAKE_EXPLICIT_TRAFFIC_SHORT_REVISION": "true",
+                    "FAKE_SMOKE_SHORT_REVISION": "true",
+                    "FAKE_SMOKE_PERCENT": "0",
+                    "FAKE_FAILED_COUNT": "0",
+                    "FAKE_CANCELLED_COUNT": "0",
+                    "FAKE_RUNNING_COUNT": "0",
+                    "FAKE_RETRIED_COUNT": "0",
+                }
+            )
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            "https://smoke---agent-72919926064.asia-southeast1.run.app/live",
+            operations,
+        )
+        self.assertIn(
+            "https://agent-72919926064.asia-southeast1.run.app/live",
+            operations,
+        )
 
     def test_official_v2_omitted_empty_environment_values_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1109,6 +1247,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
             state_path = Path(directory) / "state.json"
             state = json.loads(state_path.read_text(encoding="utf-8"))
             state["latest_ready"] = "agent-unused-no-traffic"
+            state["serving_target_latest"] = False
             state_path.write_text(json.dumps(state), encoding="utf-8")
 
             result = self._run(directory, environment, "rollback", "agent-target")
@@ -1138,6 +1277,8 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 )
             },
             "not_ready": {"FAKE_REVISION_STATE": "CONDITION_FAILED"},
+            "reconciling": {"FAKE_REVISION_RECONCILING": "true"},
+            "wrong_short_service": {"FAKE_REVISION_SERVICE": "agent-preview"},
             "wrong_service": {
                 "FAKE_REVISION_SERVICE": (
                     "projects/festive-ally-503605-v7/locations/asia-southeast1/"
@@ -1213,6 +1354,10 @@ class CloudRunDeliveryTests(unittest.TestCase):
             "secret": {"FAKE_JOB_SECRET": "agent-database-url"},
             "secret_alias": {"FAKE_JOB_SECRET_VERSION": "latest"},
             "retries": {"FAKE_JOB_MAX_RETRIES": "1"},
+            "reconciling": {"FAKE_JOB_RECONCILING": "true"},
+            "task_count": {"FAKE_JOB_TASK_COUNT": "2"},
+            "parallelism": {"FAKE_JOB_PARALLELISM": "2"},
+            "false_parallelism": {"FAKE_JOB_PARALLELISM_FALSE": "true"},
             "timeout": {"FAKE_JOB_TIMEOUT": "600s"},
             "resources": {"FAKE_JOB_CPU": "2"},
             "image": {
@@ -1340,7 +1485,24 @@ class CloudRunDeliveryTests(unittest.TestCase):
                 "FAKE_CANCELLED_COUNT": "1",
                 "FAKE_SUCCEEDED_COUNT": "0",
             },
+            "running": {"FAKE_RUNNING_COUNT": "1"},
             "retried": {"FAKE_RETRIED_COUNT": "1"},
+            "reconciling": {"FAKE_EXECUTION_RECONCILING": "true"},
+            "false_failed_count": {"FAKE_FAILED_COUNT_FALSE": "true"},
+            "wrong_short_job": {"FAKE_EXECUTION_JOB": "agent-grants"},
+            "wrong_full_job": {
+                "FAKE_EXECUTION_JOB": (
+                    "projects/festive-ally-503605-v7/"
+                    "locations/asia-southeast1/jobs/agent-preview-migrate"
+                )
+            },
+            "wrong_execution_name_parent": {
+                "FAKE_EXECUTION_NAME": (
+                    "projects/festive-ally-503605-v7/"
+                    "locations/asia-southeast1/jobs/agent-preview-migrate/"
+                    "executions/agent-migrate-abcde"
+                )
+            },
         }
         for name, mutation in mutations.items():
             with (
@@ -1560,11 +1722,77 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertNotIn("gcloud run jobs update", operations)
 
+    def test_latest_traffic_rejects_noncanonical_resolution_before_jobs(
+        self,
+    ) -> None:
+        mutations = {
+            "revision_type_without_revision": {
+                "FAKE_LATEST_TRAFFIC_TYPE": ("TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION")
+            },
+            "latest_with_revision": {
+                "FAKE_LATEST_TRAFFIC_REVISION": (
+                    "projects/festive-ally-503605-v7/"
+                    "locations/asia-southeast1/services/agent/"
+                    "revisions/agent-old"
+                )
+            },
+            "false_type_with_revision": {
+                "FAKE_LATEST_TRAFFIC_TYPE_JSON": "false",
+                "FAKE_LATEST_TRAFFIC_REVISION": (
+                    "projects/festive-ally-503605-v7/"
+                    "locations/asia-southeast1/services/agent/"
+                    "revisions/agent-old"
+                ),
+            },
+            "false_tag": {"FAKE_LATEST_TRAFFIC_TAG_JSON": "false"},
+            "false_latest_revision": {"FAKE_LATEST_TRAFFIC_REVISION_JSON": "false"},
+            "non_100_percent": {"FAKE_LATEST_TRAFFIC_PERCENT": "99"},
+            "cross_service_explicit_revision": {
+                "FAKE_LATEST_TRAFFIC_TYPE": ("TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"),
+                "FAKE_LATEST_TRAFFIC_REVISION": (
+                    "projects/festive-ally-503605-v7/"
+                    "locations/asia-southeast1/services/agent-preview/"
+                    "revisions/agent-old"
+                ),
+            },
+            "cross_service_short_revision": {
+                "FAKE_LATEST_TRAFFIC_TYPE": ("TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"),
+                "FAKE_LATEST_TRAFFIC_REVISION": "agent-preview-old",
+            },
+            "cross_service_latest_ready": {
+                "FAKE_LATEST_READY_REVISION": (
+                    "projects/festive-ally-503605-v7/"
+                    "locations/asia-southeast1/services/agent-preview/"
+                    "revisions/agent-old"
+                )
+            },
+        }
+        for name, mutation in mutations.items():
+            with (
+                self.subTest(mutation=name),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                environment = self._fixture(directory)
+                environment.update(mutation)
+                result = self._run(directory, environment, "deploy")
+                operations = (Path(directory) / "operations.log").read_text(
+                    encoding="utf-8"
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertNotIn("gcloud run jobs update", operations)
+
     def test_unmanaged_service_input_drift_fails_before_jobs_run(self) -> None:
         mutations = {
             "build_config": {"FAKE_SERVICE_BUILD_CONFIG": "true"},
             "custom_audience": {"FAKE_SERVICE_CUSTOM_AUDIENCE": "true"},
             "manual_scaling": {"FAKE_SERVICE_SCALING": "true"},
+            "unexpected_service_cap": {"FAKE_SERVICE_MAX_INSTANCE_COUNT": "21"},
+            "reconciling": {"FAKE_SERVICE_RECONCILING": "true"},
+            "false_traffic_statuses": {"FAKE_TRAFFIC_STATUSES_JSON": "false"},
+            "foreign_service_uri": {
+                "FAKE_SERVICE_URI": ("https://agent-preview-testhash-as.a.run.app")
+            },
             "iap": {"FAKE_SERVICE_IAP": "true"},
         }
         for name, mutation in mutations.items():
@@ -1586,6 +1814,28 @@ class CloudRunDeliveryTests(unittest.TestCase):
     def test_smoke_tag_wrong_revision_or_percent_never_promotes(self) -> None:
         mutations = {
             "wrong_revision": {"FAKE_SMOKE_REVISION": "agent-unreviewed"},
+            "cross_service_revision_path": {
+                "FAKE_SMOKE_REVISION_PATH": (
+                    "projects/festive-ally-503605-v7/"
+                    "locations/asia-southeast1/services/agent-preview/"
+                    f"revisions/agent-g{SOURCE_SHA[:8]}-r{DELIVERY_RUN_ID}"
+                    f"-a{DELIVERY_RUN_ATTEMPT}"
+                )
+            },
+            "cross_service_short_revision": {
+                "FAKE_SMOKE_REVISION_PATH": (
+                    f"agent-preview-g{SOURCE_SHA[:8]}-r{DELIVERY_RUN_ID}"
+                    f"-a{DELIVERY_RUN_ATTEMPT}"
+                )
+            },
+            "latest_type": {"FAKE_SMOKE_TYPE": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"},
+            "foreign_smoke_uri": {
+                "FAKE_SMOKE_URI": (
+                    "https://smoke---agent-preview-testhash-as.a.run.app"
+                )
+            },
+            "false_percent": {"FAKE_SMOKE_PERCENT_JSON": "false"},
+            "string_percent": {"FAKE_SMOKE_PERCENT_JSON": '"0"'},
             "nonzero_percent": {"FAKE_SMOKE_PERCENT": "1"},
             "extra_tag": {"FAKE_EXTRA_SMOKE_STAGE_TAG": "true"},
         }

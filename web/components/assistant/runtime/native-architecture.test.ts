@@ -55,15 +55,16 @@ describe("native assistant-ui architecture contract", () => {
     const subscriptionStart = nativeClient.indexOf(
       "subscription = await thread.subscribe("
     )
+    const subscriptionClose = "\n        )"
     const subscriptionEnd = nativeClient.indexOf(
-      "\n      )",
+      subscriptionClose,
       subscriptionStart
     )
     expect(subscriptionStart).toBeGreaterThanOrEqual(0)
     expect(subscriptionEnd).toBeGreaterThan(subscriptionStart)
     const subscription = nativeClient.slice(
       subscriptionStart,
-      subscriptionEnd + "\n      )".length
+      subscriptionEnd + subscriptionClose.length
     )
     expect(subscription).toContain('"messages"')
     expect(subscription).toContain('"lifecycle"')

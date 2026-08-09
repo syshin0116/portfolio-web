@@ -823,6 +823,271 @@ describe("APv2 state and HITL normalization", () => {
 })
 
 describe("native stream lifecycle", () => {
+  test("reuses one root stream across immediate turns without leaking prior-run correlation or inspection", async () => {
+    const answerEvents = (
+      id: string,
+      text: string,
+      firstSequence: number,
+      eventRunId?: string
+    ): Event[] => {
+      const withSequence = (event: Event, offset: number) => {
+        const sequence = firstSequence + offset
+        return sequenced(
+          event,
+          sequence,
+          eventRunId
+            ? `${eventRunId}_event_${sequence}:0`
+            : undefined
+        )
+      }
+      return [
+        withSequence(
+          messageEvent({ event: "message-start", role: "ai", id }),
+          0
+        ),
+        withSequence(
+          messageEvent({
+            event: "content-block-start",
+            index: 0,
+            content: { type: "text", text: "" },
+          }),
+          1
+        ),
+        withSequence(
+          messageEvent({
+            event: "content-block-delta",
+            index: 0,
+            delta: { type: "text-delta", text },
+          }),
+          2
+        ),
+        withSequence(
+          messageEvent({
+            event: "content-block-finish",
+            index: 0,
+            content: { type: "text", text },
+          }),
+          3
+        ),
+        withSequence(messageEvent({ event: "message-finish" }), 4),
+      ]
+    }
+    const activities: AgentActivity[] = []
+    const secondEvents = [
+      sequenced(lifecycle("running"), 9, "stale-run_event_1:0"),
+      ...answerEvents(
+        "stale-answer",
+        "STALE_FIRST_RUN_REPLAY",
+        10,
+        "stale-run"
+      ),
+      sequenced(lifecycle("completed"), 15, "stale-run_event_7:0"),
+      sequenced(lifecycle("running"), 16),
+      sequenced(
+        toolEvent({
+          event: "tool-finished",
+          tool_call_id: "shared-call",
+          output: "PRIVATE_TOOL_OUTPUT",
+        }),
+        17
+      ),
+      ...answerEvents("answer-two", "FRESH_SECOND_ANSWER", 18),
+      sequenced(lifecycle("completed"), 23),
+    ]
+    const fakeClient = makeClient([
+      {
+        preserveEventId: true,
+        preserveSequence: true,
+        events: [
+          sequenced(lifecycle("running"), 1),
+          ...answerEvents("answer-one", "FIRST_ANSWER", 2),
+          sequenced(
+            toolEvent({
+              event: "tool-started",
+              tool_call_id: "shared-call",
+              tool_name: "first_turn_only_tool",
+            }),
+            7
+          ),
+          sequenced(lifecycle("completed"), 8),
+        ],
+      },
+      {
+        preserveEventId: true,
+        preserveSequence: true,
+        events: secondEvents,
+      },
+    ])
+    const native = makeNative(fakeClient, {
+      onActivity: (activity) => activities.push(activity),
+    })
+
+    const first = await collect(
+      native.stream(
+        [{ id: "human-1", type: "human", content: "첫 질문" }],
+        streamConfig()
+      )
+    )
+    const firstMetadata = fakeClient.testing.lastMetadata
+    const firstNonce = firstMetadata?.syshin_ui_submit_nonce
+    expect(typeof firstNonce).toBe("string")
+    for (const [index, event] of secondEvents.slice(0, 7).entries()) {
+      Object.assign(event, {
+        event_id: `run-${firstNonce}_event_${index + 1}:0`,
+      })
+    }
+    const secondActivityStart = activities.length
+    const second = await collect(
+      native.stream(
+        [{ id: "human-2", type: "human", content: "둘째 질문" }],
+        streamConfig()
+      )
+    )
+
+    expect(JSON.stringify(first)).toContain("FIRST_ANSWER")
+    expect(JSON.stringify(second)).toContain("FRESH_SECOND_ANSWER")
+    expect(JSON.stringify(second)).not.toContain("STALE_FIRST_RUN_REPLAY")
+    const secondTool = activities
+      .slice(secondActivityStart)
+      .find((activity) => activity.kind === "tool")
+    expect(secondTool).toMatchObject({
+      kind: "tool",
+      status: "completed",
+      toolCallId: "shared-call",
+    })
+    expect(secondTool).not.toHaveProperty("toolName")
+    expect(fakeClient.testing.streamStarts).toBe(1)
+    expect(fakeClient.testing.subscriptions).toHaveLength(1)
+    expect(fakeClient.testing.submissions).toHaveLength(2)
+    expect(fakeClient.testing.closes).toBe(0)
+    expect(fakeClient.testing.unsubscriptions).toBe(0)
+
+    await native.dispose()
+
+    expect(fakeClient.testing.closes).toBe(1)
+    expect(fakeClient.testing.unsubscriptions).toBe(1)
+  })
+
+  test("does not retain the stream lease after invalid source generation", async () => {
+    let generation = -1
+    const fakeClient = makeClient([
+      { events: [lifecycle("completed")] },
+      { events: [lifecycle("completed")] },
+    ])
+    const native = makeNative(fakeClient, {
+      getSourceGeneration: () => generation,
+    })
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "invalid", type: "human", content: "잘못된 세대" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toBeInstanceOf(Error)
+
+    generation = 1
+    await collect(
+      native.stream(
+        [{ id: "valid-1", type: "human", content: "정상 재시도" }],
+        streamConfig()
+      )
+    )
+    await collect(
+      native.stream(
+        [{ id: "valid-2", type: "human", content: "두 번째 정상 턴" }],
+        streamConfig()
+      )
+    )
+
+    expect(fakeClient.testing.streamStarts).toBe(1)
+    expect(fakeClient.testing.subscriptions).toHaveLength(1)
+    expect(fakeClient.testing.submissions).toHaveLength(2)
+    await native.dispose()
+  })
+
+  test("closes the retained session before binding a different thread", async () => {
+    const fakeClient = makeClient([
+      { events: [lifecycle("completed")] },
+      { events: [lifecycle("completed")] },
+    ])
+    const native = makeNative(fakeClient)
+
+    await collect(
+      native.stream(
+        [{ id: "thread-1-message", type: "human", content: "첫 스레드" }],
+        streamConfig()
+      )
+    )
+    expect(fakeClient.testing.closes).toBe(0)
+
+    await collect(
+      native.stream(
+        [{ id: "thread-2-message", type: "human", content: "둘째 스레드" }],
+        {
+          ...streamConfig(),
+          initialize: async () => ({
+            remoteId: "thread-2",
+            externalId: "thread-2",
+          }),
+        }
+      )
+    )
+
+    expect(fakeClient.testing.streamStarts).toBe(2)
+    expect(fakeClient.testing.subscriptions).toHaveLength(2)
+    expect(fakeClient.testing.closes).toBe(1)
+    expect(fakeClient.testing.unsubscriptions).toBe(1)
+    await native.dispose()
+    expect(fakeClient.testing.closes).toBe(2)
+    expect(fakeClient.testing.unsubscriptions).toBe(2)
+  })
+
+  test("clears credentials when an idle retained session never finishes closing", async () => {
+    let closeStarted = false
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("completed")],
+        closeThread: async () => {
+          closeStarted = true
+          await new Promise<void>(() => undefined)
+        },
+      },
+    ])
+    const auth = makeAuthHarness("idle-session-user")
+    const native = makeNative(fakeClient, {}, auth)
+
+    await collect(
+      native.stream(
+        [{ id: "idle-message", type: "human", content: "완료된 턴" }],
+        streamConfig()
+      )
+    )
+    expect(tokenBrokerTesting.inspect(auth.broker)).toEqual({
+      cached: true,
+      refreshing: false,
+      sealed: false,
+    })
+
+    const outcome = await Promise.race([
+      native.dispose().then(() => "disposed" as const),
+      Bun.sleep(100).then(() => "timeout" as const),
+    ])
+
+    expect(outcome).toBe("disposed")
+    expect(closeStarted).toBe(true)
+    expect(fakeClient.testing.closes).toBe(1)
+    expect(tokenBrokerTesting.inspect(auth.broker)).toEqual({
+      cached: false,
+      refreshing: false,
+      sealed: true,
+    })
+    await expect(
+      auth.broker.get(new AbortController().signal, true)
+    ).rejects.toThrow("disposed")
+  })
+
   test("projects and deduplicates a nested watcher interrupt, then resumes its exact namespace", async () => {
     const secret = "NESTED_OPAQUE_PAYLOAD_MUST_NOT_BE_RETAINED"
     const requested = inputRequested(
@@ -899,10 +1164,6 @@ describe("native stream lifecycle", () => {
     ])
     expect(nativeClientTesting.inspect(native).pendingInterrupts).toBe(0)
     expect(fakeClient.testing.subscriptions).toEqual([
-      {
-        channels: ["messages", "lifecycle", "input", "tools", "custom"],
-        options: { namespaces: [[]], depth: 0 },
-      },
       {
         channels: ["messages", "lifecycle", "input", "tools", "custom"],
         options: { namespaces: [[]], depth: 0 },
@@ -1717,6 +1978,47 @@ describe("native stream lifecycle", () => {
     await cancelRunAndWait(client, "thread-1", "run-1")
     expect(cancelCalls).toBe(1)
     expect(getCalls).toBe(2)
+  })
+
+  test("fails closed on overlapping consumers and opens a fresh stream after abort", async () => {
+    const fakeClient = makeClient([
+      {
+        events: [lifecycle("running")],
+        waitForClose: () => undefined,
+      },
+      { events: [lifecycle("running"), lifecycle("completed")] },
+    ])
+    const native = makeNative(fakeClient)
+    const controller = new AbortController()
+    const firstIterator = await native.stream(
+      [{ id: "human-1", type: "human", content: "첫 실행" }],
+      { ...streamConfig(), abortSignal: controller.signal }
+    )
+    const firstPending = firstIterator.next()
+    await waitUntil(() => fakeClient.testing.runStarts === 1)
+
+    await expect(
+      collect(
+        native.stream(
+          [{ id: "human-overlap", type: "human", content: "겹친 실행" }],
+          streamConfig()
+        )
+      )
+    ).rejects.toThrow("이미 진행 중인 에이전트 실행이 있습니다.")
+    expect(fakeClient.testing.streamStarts).toBe(1)
+
+    controller.abort(new DOMException("stop", "AbortError"))
+    await expect(firstPending).resolves.toMatchObject({ done: true })
+
+    await collect(
+      native.stream(
+        [{ id: "human-2", type: "human", content: "취소 뒤 재시도" }],
+        streamConfig()
+      )
+    )
+    expect(fakeClient.testing.streamStarts).toBe(2)
+    expect(fakeClient.testing.subscriptions).toHaveLength(2)
+    await native.dispose()
   })
 
   test("auth abort closes the APv2 stream and cancels the active run once", async () => {
@@ -2785,6 +3087,7 @@ function convertProjectedMessages(
 }
 
 interface FakeStreamPlan {
+  closeThread?: () => Promise<void>
   events: readonly Event[]
   initialEventsDelayMs?: number
   preDispatchEvents?: Event[]
@@ -2815,23 +3118,29 @@ function makeClient(
   } = {}
 ): Client & {
   testing: {
+    closes: number
     lastConfig?: Record<string, unknown>
     runStarts: number
     lastMetadata?: Record<string, unknown>
     responds: unknown[]
     stateReads: number
+    streamStarts: number
     submissions: unknown[]
     subscriptions: Array<{ channels: unknown; options: unknown }>
+    unsubscriptions: number
   }
 } {
   const testing = {
+    closes: 0,
     lastConfig: undefined as Record<string, unknown> | undefined,
     runStarts: 0,
     lastMetadata: undefined as Record<string, unknown> | undefined,
     responds: [] as unknown[],
     stateReads: 0,
+    streamStarts: 0,
     submissions: [] as unknown[],
     subscriptions: [] as Array<{ channels: unknown; options: unknown }>,
+    unsubscriptions: 0,
   }
   const client = {
     testing,
@@ -2848,8 +3157,14 @@ function makeClient(
         return await options.onGetState(stateOptions?.signal)
       },
       stream: () => {
-        const plan = plans.shift()
-        if (!plan) throw new Error("Missing fake stream plan")
+        testing.streamStarts += 1
+        const takePlan = (): FakeStreamPlan => {
+          const nextPlan = plans.shift()
+          if (!nextPlan) throw new Error("Missing fake stream plan")
+          return nextPlan
+        }
+        let plan = takePlan()
+        let commandStarted = false
         const listeners = new Set<(event: Event) => void>()
         const interrupts: Array<{
           interruptId: string
@@ -2863,9 +3178,12 @@ function makeClient(
         } = {}
         let nextSequence = 1
         let activeRunId: string | undefined
-        const emit = (rawEvent: Event): Event => {
+        const emit = (
+          rawEvent: Event,
+          sourcePlan: FakeStreamPlan = plan
+        ): Event => {
           const rawSequence = (rawEvent as Event & { seq?: number }).seq
-          const sequence = plan.preserveSequence
+          const sequence = sourcePlan.preserveSequence
             ? rawSequence
             : nextSequence++
           const rawEventId = (
@@ -2881,7 +3199,7 @@ function makeClient(
                 : `${activeRunId}_event_${sequence}:0`
               : undefined
           const eventId =
-            (plan.preserveEventId ? rawEventId : undefined) ??
+            (sourcePlan.preserveEventId ? rawEventId : undefined) ??
             defaultEventId ??
             (sequence === undefined ? undefined : `historical_event_${sequence}:0`)
           const event = {
@@ -2914,30 +3232,46 @@ function makeClient(
           }
           return event
         }
+        const selectCommandPlan = (): FakeStreamPlan => {
+          if (commandStarted) {
+            plan = takePlan()
+            for (const event of plan.preDispatchEvents ?? []) {
+              emit(event, plan)
+            }
+          }
+          commandStarted = true
+          return plan
+        }
         let close: (() => void) | undefined
         const closed = new Promise<void>((resolve) => {
           close = resolve
-          plan.waitForClose?.(resolve)
         })
+        let closedOnce = false
+        let unsubscribed = false
         const subscription = {
-          unsubscribe: async () => undefined,
+          unsubscribe: async () => {
+            if (unsubscribed) return
+            unsubscribed = true
+            testing.unsubscriptions += 1
+          },
           async *[Symbol.asyncIterator]() {
-            if (plan.initialEventsDelayMs !== undefined) {
-              await Bun.sleep(plan.initialEventsDelayMs)
+            const turnPlan = plan
+            if (turnPlan.initialEventsDelayMs !== undefined) {
+              await Bun.sleep(turnPlan.initialEventsDelayMs)
             }
-            for (const rawEvent of plan.events) {
-              const event = emit(rawEvent)
+            for (const rawEvent of turnPlan.events) {
+              const event = emit(rawEvent, turnPlan)
               if (
                 event.method === "lifecycle" &&
                 event.params.namespace.length === 0 &&
                 event.params.data.event === "interrupted" &&
-                plan.delayedWatcherEvents
+                turnPlan.delayedWatcherEvents
               ) {
                 setTimeout(() => {
-                  for (const delayed of plan.delayedWatcherEvents ?? []) {
-                    emit(delayed)
+                  for (const delayed of turnPlan.delayedWatcherEvents ?? []) {
+                    emit(delayed, turnPlan)
                   }
-                }, plan.watcherDelayMs ?? 10)
+                }, turnPlan.watcherDelayMs ?? 10)
               }
               if (
                 event.params.namespace.length === 0 &&
@@ -2950,13 +3284,16 @@ function makeClient(
                 yield event
               }
             }
-            if (plan.streamError !== undefined) throw plan.streamError
-            if (plan.waitForClose) await closed
+            if (turnPlan.streamError !== undefined) {
+              throw turnPlan.streamError
+            }
+            if (turnPlan.waitForClose) await closed
           },
         }
         return {
           ordering,
           submitRun: async (params: unknown) => {
+            const commandPlan = selectCommandPlan()
             testing.runStarts += 1
             testing.submissions.push(params)
             testing.lastMetadata = isTestRecord(params) &&
@@ -2970,20 +3307,25 @@ function makeClient(
             const submitNonce =
               testing.lastMetadata?.syshin_ui_submit_nonce
             activeRunId =
-              plan.runId ??
+              commandPlan.runId ??
               (typeof submitNonce === "string"
                 ? `run-${submitNonce}`
                 : `run-${testing.runStarts}`)
             ordering.lastAppliedThroughSeq =
-              plan.appliedThroughSeq ?? 0
-            if ((plan.watcherEvents?.length ?? 0) > 0) {
-              emit(lifecycle("running"))
+              commandPlan.appliedThroughSeq ?? 0
+            if ((commandPlan.watcherEvents?.length ?? 0) > 0) {
+              emit(lifecycle("running"), commandPlan)
             }
-            for (const event of plan.watcherEvents ?? []) emit(event)
-            if (plan.startRun) return await plan.startRun(params)
+            for (const event of commandPlan.watcherEvents ?? []) {
+              emit(event, commandPlan)
+            }
+            if (commandPlan.startRun) {
+              return await commandPlan.startRun(params)
+            }
             return { run_id: activeRunId }
           },
           respondInput: async (params: unknown) => {
+            const commandPlan = selectCommandPlan()
             testing.responds.push(params)
             testing.lastMetadata = isTestRecord(params) &&
               isTestRecord(params.metadata)
@@ -2996,17 +3338,19 @@ function makeClient(
             const submitNonce =
               testing.lastMetadata?.syshin_ui_submit_nonce
             activeRunId =
-              plan.runId ??
+              commandPlan.runId ??
               (typeof submitNonce === "string"
                 ? `run-${submitNonce}`
                 : `run-${testing.runStarts + 1}`)
             ordering.lastAppliedThroughSeq =
-              plan.appliedThroughSeq ?? 0
-            if ((plan.watcherEvents?.length ?? 0) > 0) {
-              emit(lifecycle("running"))
+              commandPlan.appliedThroughSeq ?? 0
+            if ((commandPlan.watcherEvents?.length ?? 0) > 0) {
+              emit(lifecycle("running"), commandPlan)
             }
-            for (const event of plan.watcherEvents ?? []) emit(event)
-            await plan.onRespond?.(params)
+            for (const event of commandPlan.watcherEvents ?? []) {
+              emit(event, commandPlan)
+            }
+            await commandPlan.onRespond?.(params)
           },
           interrupts,
           run: {
@@ -3031,7 +3375,13 @@ function makeClient(
             listeners.add(listener)
             return () => listeners.delete(listener)
           },
-          close: async () => close?.(),
+          close: async () => {
+            if (closedOnce) return
+            closedOnce = true
+            testing.closes += 1
+            await plan.closeThread?.()
+            close?.()
+          },
         } as unknown as ThreadStream
       },
     },
@@ -3043,13 +3393,16 @@ function makeClient(
   }
   return client as unknown as Client & {
     testing: {
+      closes: number
       lastConfig?: Record<string, unknown>
       runStarts: number
       lastMetadata?: Record<string, unknown>
       responds: unknown[]
       stateReads: number
+      streamStarts: number
       submissions: unknown[]
       subscriptions: Array<{ channels: unknown; options: unknown }>
+      unsubscriptions: number
     }
   }
 }
@@ -3216,6 +3569,7 @@ function cancellationRequests(harness: AuthHarness): AuthRequest[] {
 function makeNative(
   client: Client,
   callbacks: {
+    getSourceGeneration?: () => number
     onActivity?: (activity: AgentActivity) => void
     onError?: (error: Error) => void
   } = {},

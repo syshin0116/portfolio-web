@@ -116,6 +116,17 @@ interface ActiveNativeStream {
   stream?: ThreadStream
 }
 
+type NativeThreadSubscription = Awaited<
+  ReturnType<ThreadStream["subscribe"]>
+>
+
+interface NativeThreadSession {
+  closePromise?: Promise<void>
+  subscription: NativeThreadSubscription
+  thread: ThreadStream
+  threadId: string
+}
+
 type QueuedNestedInput =
   | { type: "pending"; pending: PendingInterrupt }
   | { type: "error"; error: Error }
@@ -1593,11 +1604,17 @@ async function* mergeContentAndNestedInputs(
       continue
     }
     if (!winner.result.done) {
-      contentNext = contentIterator.next()
+      const event = winner.result.value as ProtocolStreamEvent
+      const rootTerminal =
+        event.method === "lifecycle" && isRootTerminal(event)
+      // Do not leave a pending read that can consume the next run's first
+      // event when ThreadStream resumes this paused root subscription.
+      if (!rootTerminal) contentNext = contentIterator.next()
       yield {
         type: "content",
-        event: winner.result.value as ProtocolStreamEvent,
+        event,
       }
+      if (rootTerminal) contentNext = contentIterator.next()
       continue
     }
     if (!subscription.isPaused) {
@@ -1656,6 +1673,8 @@ export class NativeAgentClient {
   readonly #activeStreams = new Set<ActiveNativeStream>()
   #disposed = false
   #disposePromise?: Promise<void>
+  #streamLease?: symbol
+  #threadSession?: NativeThreadSession
 
   constructor(options: NativeAgentClientOptions) {
     this.#apiUrl = options.apiUrl
@@ -1690,6 +1709,15 @@ export class NativeAgentClient {
     }))
   }
 
+  #closeThreadSession(session: NativeThreadSession): Promise<void> {
+    if (this.#threadSession === session) this.#threadSession = undefined
+    session.closePromise ??= session.subscription
+      .unsubscribe()
+      .catch(() => undefined)
+      .then(() => session.thread.close().catch(() => undefined))
+    return session.closePromise
+  }
+
   dispose(): Promise<void> {
     if (this.#disposePromise) return this.#disposePromise
     this.#disposed = true
@@ -1698,6 +1726,10 @@ export class NativeAgentClient {
     this.tokenBroker.seal()
     this.#pendingInterrupts.clear()
     const activeStreams = [...this.#activeStreams]
+    const retainedSession = this.#threadSession
+    const retainedSessionClose = retainedSession
+      ? this.#closeThreadSession(retainedSession)
+      : Promise.resolve()
     let resolveDispose: (() => void) | undefined
     let rejectDispose: ((error: unknown) => void) | undefined
     this.#disposePromise = new Promise<void>((resolve, reject) => {
@@ -1708,9 +1740,12 @@ export class NativeAgentClient {
       active.controller.abort(
         new DOMException("Agent identity changed", "AbortError")
       )
-      closeThreadBestEffort(active.stream)
+      if (active.stream !== retainedSession?.thread) {
+        closeThreadBestEffort(active.stream)
+      }
     }
     void (async () => {
+      void retainedSessionClose
       await waitForActiveStreams(activeStreams)
       // A hung stream cannot retain bearer material beyond the bounded wait.
       // On the normal path, stream.finally has already disposed each snapshot.
@@ -1763,11 +1798,11 @@ export class NativeAgentClient {
       throw new AgentProtocolBoundaryError()
     }
     const active = createActiveStream()
-    this.#activeStreams.add(active)
     const signal = AbortSignal.any([
       config.abortSignal,
       active.controller.signal,
     ])
+    const streamLease = Symbol("native-stream")
     let threadId: string | undefined
     const runtimeSource = (
       currentThreadId: string | undefined = threadId
@@ -1776,9 +1811,9 @@ export class NativeAgentClient {
       threadId: currentThreadId,
     })
     let thread: ThreadStream | undefined
-    let subscription:
-      | Awaited<ReturnType<ThreadStream["subscribe"]>>
-      | undefined
+    let subscription: NativeThreadSubscription | undefined
+    let session: NativeThreadSession | undefined
+    let looseThreadClosePromise: Promise<void> | undefined
     let runId: string | undefined
     let terminal = false
     let cancelIssued = false
@@ -1801,10 +1836,23 @@ export class NativeAgentClient {
     const preBarrierWatcherEvents: ProtocolStreamEvent[] = []
     let watcherFailure: Error | undefined
     let unsubscribeThreadEvents: (() => void) | undefined
+    const closeLooseThread = () => {
+      if (!thread || session) return
+      looseThreadClosePromise ??= thread.close().catch(() => undefined)
+    }
     const closeOnAbort = () => {
-      closeThreadBestEffort(thread)
+      if (session) {
+        void this.#closeThreadSession(session)
+      } else {
+        closeLooseThread()
+      }
     }
 
+    if (this.#streamLease) {
+      throw new Error("이미 진행 중인 에이전트 실행이 있습니다.")
+    }
+    this.#streamLease = streamLease
+    this.#activeStreams.add(active)
     try {
       signal.throwIfAborted()
       active.cancellationSnapshot =
@@ -1820,21 +1868,34 @@ export class NativeAgentClient {
       const boundThreadId = threadId
       const inspection = new InspectionProjector()
       signal.throwIfAborted()
-      thread = this.client.threads.stream(boundThreadId, {
-        assistantId: this.assistantId,
-        transport: "sse",
-        fetch: this.tokenBroker.fetchWithAuthRetry as typeof fetch,
-        maxReconnectAttempts: 5,
-        onReconnect: ({ attempt }) => {
-          this.#onActivity?.({
-            id: "connection:reconnect",
-            kind: "connection",
-            namespace: [],
-            status: "reconnecting",
-            label: `연결을 복구하는 중입니다 (${attempt}/5).`,
-          }, runtimeSource(boundThreadId))
-        },
-      })
+      const previousSession = this.#threadSession
+      if (previousSession?.threadId !== boundThreadId) {
+        if (previousSession) {
+          await this.#closeThreadSession(previousSession)
+          signal.throwIfAborted()
+        }
+        thread = this.client.threads.stream(boundThreadId, {
+          assistantId: this.assistantId,
+          transport: "sse",
+          fetch: this.tokenBroker.fetchWithAuthRetry as typeof fetch,
+          maxReconnectAttempts: 5,
+          onReconnect: ({ attempt }) => {
+            this.#onActivity?.({
+              id: "connection:reconnect",
+              kind: "connection",
+              namespace: [],
+              status: "reconnecting",
+              label: `연결을 복구하는 중입니다 (${attempt}/5).`,
+            }, runtimeSource(boundThreadId))
+          },
+        })
+      } else {
+        // The pinned SDK pauses root subscriptions at terminal lifecycle and
+        // resumes them from submitRun/respondInput for the next turn.
+        session = previousSession
+        thread = session.thread
+        subscription = session.subscription
+      }
       active.stream = thread
       signal.addEventListener("abort", closeOnAbort, { once: true })
       if (signal.aborted) closeOnAbort()
@@ -1906,19 +1967,28 @@ export class NativeAgentClient {
           nestedInputs.fail()
         }
       })
-      subscription = await thread.subscribe(
-        [
-          "messages",
-          "lifecycle",
-          "input",
-          "tools",
-          "custom",
-        ],
-        {
-          namespaces: [[]],
-          depth: 0,
+      if (!subscription) {
+        subscription = await thread.subscribe(
+          [
+            "messages",
+            "lifecycle",
+            "input",
+            "tools",
+            "custom",
+          ],
+          {
+            namespaces: [[]],
+            depth: 0,
+          }
+        )
+        signal.throwIfAborted()
+        session = {
+          subscription,
+          thread,
+          threadId: boundThreadId,
         }
-      )
+        this.#threadSession = session
+      }
 
       const pending = config.command
         ? this.#pendingInterrupts.get(boundThreadId)
@@ -2212,10 +2282,24 @@ export class NativeAgentClient {
       signal.removeEventListener("abort", closeOnAbort)
       nestedInputs.close()
       unsubscribeThreadEvents?.()
-      await subscription?.unsubscribe().catch(() => undefined)
-      await thread?.close().catch(() => undefined)
+      const keepThreadSession =
+        terminal &&
+        session !== undefined &&
+        this.#threadSession === session &&
+        !signal.aborted &&
+        !this.#disposed
+      if (!keepThreadSession) {
+        if (session) {
+          await this.#closeThreadSession(session)
+        } else {
+          await subscription?.unsubscribe().catch(() => undefined)
+          closeLooseThread()
+          await looseThreadClosePromise
+        }
+      }
       active.cancellationSnapshot?.dispose()
       this.#activeStreams.delete(active)
+      if (this.#streamLease === streamLease) this.#streamLease = undefined
       active.settle()
     }
   }.bind(this)

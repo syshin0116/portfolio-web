@@ -142,12 +142,20 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
             encoding="utf-8"
         )
 
+        gate = release.index("Verify exact production revision passed CI")
+        auth = release.index("google-github-actions/auth@")
         deploy = release.index("gcloud run services update")
         smoke = release.index("python scripts/smoke.py")
         promote = release.index('--to-revisions "${revision}=100"')
+        self.assertLess(gate, auth)
         self.assertLess(deploy, smoke)
         self.assertLess(smoke, promote)
+        self.assertIn("ci/check protocol/compat wiki/verify", release)
+        self.assertIn(".app.id == 15368", release)
+        self.assertIn('select(.tag == "smoke") | .url', release)
+        self.assertIn("trap cleanup_smoke_tag EXIT", release)
         self.assertIn("--no-traffic", release)
+        self.assertNotIn("GCP_PROJECT_NUMBER", release)
         self.assertNotIn("scripts/deploy_cloud_run.sh", release)
         self.assertNotIn("gcloud run jobs", release)
 

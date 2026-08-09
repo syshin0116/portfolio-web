@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:
+      checks: read
       contents: read
       id-token: write
     steps:
@@ -39,6 +40,40 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.source_sha }}
+      - name: Verify exact production revision passed CI
+        if: inputs.target == 'production'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          require_current_main() {
+            [[ "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" == "$SOURCE_SHA" ]]
+          }
+          require_current_main
+          for attempt in {1..90}; do
+            checks="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/check-runs?filter=latest&per_page=100")"
+            pending=false
+            for name in ci/check protocol/compat wiki/verify; do
+              state="$(jq -r --arg name "$name" '
+                [.check_runs[] | select(.name == $name and .app.id == 15368)]
+                | if length == 0 or .[0].status != "completed" then "pending"
+                  elif length != 1 then "failure"
+                  else .[0].conclusion end
+              ' <<<"$checks")"
+              case "$state" in
+                success) ;;
+                pending) pending=true ;;
+                *) printf '%s did not pass: %s\n' "$name" "$state" >&2; exit 1 ;;
+              esac
+            done
+            [[ "$pending" == false ]] && break
+            (( attempt < 90 )) || { printf 'required CI checks timed out\n' >&2; exit 1; }
+            sleep 10
+          done
+          require_current_main
       - name: Select exact deployer identity
         id: delivery_identity
         env:
@@ -65,7 +100,6 @@ jobs:
         env:
           CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
           GCP_PROJECT_ID: festive-ally-503605-v7
-          GCP_PROJECT_NUMBER: "72919926064"
           GCP_REGION: asia-southeast1
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
@@ -91,6 +125,22 @@ jobs:
           [[ "$IMAGE_DIGEST" == "${expected_repository}@sha256:${digest}" ]]
           [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
 
+          smoke_tag_active=false
+          cleanup_smoke_tag() {
+            status=$?
+            trap - EXIT
+            if [[ "$smoke_tag_active" == true ]]; then
+              gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+                --project "$GCP_PROJECT_ID" \
+                --region "$GCP_REGION" \
+                --remove-tags smoke \
+                --quiet || true
+            fi
+            exit "$status"
+          }
+          trap cleanup_smoke_tag EXIT
+
+          smoke_tag_active=true
           gcloud run services update "$CLOUD_RUN_SERVICE" \
             --project "$GCP_PROJECT_ID" \
             --region "$GCP_REGION" \
@@ -113,7 +163,19 @@ jobs:
           )"
           [[ "$deployed_image" == "$IMAGE_DIGEST" ]]
 
-          smoke_url="https://smoke---${CLOUD_RUN_SERVICE}-${GCP_PROJECT_NUMBER}.${GCP_REGION}.run.app"
+          smoke_url="$(
+            gcloud run services describe "$CLOUD_RUN_SERVICE" \
+              --project "$GCP_PROJECT_ID" \
+              --region "$GCP_REGION" \
+              --format json \
+              | jq -er '
+                [.status.traffic[] | select(.tag == "smoke") | .url]
+                | if length == 1 and (.[0] | type == "string")
+                    and (.[0] | startswith("https://"))
+                  then .[0]
+                  else error("Cloud Run did not return exactly one smoke URL") end
+              '
+          )"
 
           verify_release() {
             curl --fail --silent --show-error --max-time 20 \
@@ -132,23 +194,18 @@ jobs:
                 --timeout 180
           }
 
-          if ! verify_release; then
-            gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
-              --project "$GCP_PROJECT_ID" \
-              --region "$GCP_REGION" \
-              --remove-tags smoke \
-              --quiet || true
-            exit 1
-          fi
+          verify_release
 
           gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
             --project "$GCP_PROJECT_ID" \
             --region "$GCP_REGION" \
             --remove-tags smoke \
             --quiet
+          smoke_tag_active=false
           gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
             --project "$GCP_PROJECT_ID" \
             --region "$GCP_REGION" \
             --to-revisions "${revision}=100" \
             --quiet
+          trap - EXIT
           printf 'Cloud Run release passed: %s %s\n' "$revision" "$IMAGE_DIGEST"

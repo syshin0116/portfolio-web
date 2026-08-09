@@ -864,20 +864,24 @@ class LocalGovernanceTests(unittest.TestCase):
                 ".github/workflows/preview-agent.yml",
                 "    if: needs.build.result == 'success'\n"
                 "    permissions:\n"
+                "      checks: read\n"
                 "      contents: read\n"
                 "      id-token: write\n",
                 "    if: needs.build.result == 'success'\n"
                 "    permissions:\n"
+                "      checks: read\n"
                 "      contents: read\n",
             ),
             (
                 ".github/workflows/deploy-agent.yml",
                 "    if: needs.build.result == 'success'\n"
                 "    permissions:\n"
+                "      checks: read\n"
                 "      contents: read\n"
                 "      id-token: write\n",
                 "    if: needs.build.result == 'success'\n"
                 "    permissions:\n"
+                "      checks: read\n"
                 "      contents: read\n",
             ),
         )

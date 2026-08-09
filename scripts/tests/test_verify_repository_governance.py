@@ -288,12 +288,6 @@ def copy_local_governance_fixture(directory: str) -> Path:
         REPO_ROOT / governance.AGENT_DELIVERY_IDENTITY_SCRIPT,
         identity_validator,
     )
-    candidate_validator = root / governance.AGENT_RELEASE_CANDIDATE_SCRIPT
-    candidate_validator.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(
-        REPO_ROOT / governance.AGENT_RELEASE_CANDIDATE_SCRIPT,
-        candidate_validator,
-    )
     vercel_config = root / governance.VERCEL_CONFIG
     vercel_config.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO_ROOT / governance.VERCEL_CONFIG, vercel_config)
@@ -839,7 +833,7 @@ class LocalGovernanceTests(unittest.TestCase):
                 errors,
             )
 
-    def test_agent_image_build_uses_attestation_capable_builder(self) -> None:
+    def test_agent_image_build_uses_one_runtime_manifest(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/agent-image-build.yml").read_text(
             encoding="utf-8"
         )
@@ -853,11 +847,14 @@ class LocalGovernanceTests(unittest.TestCase):
             "      - uses: google-github-actions/auth@"
             "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0\n"
         )
-        build = "      - name: Build fresh and resolve the registry digest\n"
+        build = "      - name: Build and push one immutable runtime image\n"
 
         self.assertEqual(workflow.count(setup), 1)
         self.assertEqual(workflow.count(auth), 1)
         self.assertEqual(workflow.count(build), 1)
+        self.assertIn("--provenance=false", workflow)
+        self.assertIn("--sbom=false", workflow)
+        self.assertNotIn("resolve_agent_runtime_image.py", workflow)
         self.assertLess(workflow.index(setup), workflow.index(auth))
         self.assertLess(workflow.index(setup), workflow.index(build))
 
@@ -865,16 +862,26 @@ class LocalGovernanceTests(unittest.TestCase):
         mutations = (
             (
                 ".github/workflows/preview-agent.yml",
-                "      checks: read\n",
-                "checks=none",
+                "    if: needs.build.result == 'success'\n"
+                "    permissions:\n"
+                "      contents: read\n"
+                "      id-token: write\n",
+                "    if: needs.build.result == 'success'\n"
+                "    permissions:\n"
+                "      contents: read\n",
             ),
             (
                 ".github/workflows/deploy-agent.yml",
-                "      pull-requests: read\n",
-                "pull-requests=none",
+                "    if: needs.build.result == 'success'\n"
+                "    permissions:\n"
+                "      contents: read\n"
+                "      id-token: write\n",
+                "    if: needs.build.result == 'success'\n"
+                "    permissions:\n"
+                "      contents: read\n",
             ),
         )
-        for relative, removed_permission, expected in mutations:
+        for relative, original_permissions, reduced_permissions in mutations:
             with (
                 self.subTest(workflow=relative),
                 tempfile.TemporaryDirectory() as directory,
@@ -882,7 +889,11 @@ class LocalGovernanceTests(unittest.TestCase):
                 root = copy_local_governance_fixture(directory)
                 workflow = root / relative
                 original = workflow.read_text(encoding="utf-8")
-                mutated = original.replace(removed_permission, "", 1)
+                mutated = original.replace(
+                    original_permissions,
+                    reduced_permissions,
+                    1,
+                )
                 self.assertNotEqual(original, mutated)
                 workflow.write_text(mutated, encoding="utf-8")
 
@@ -891,7 +902,7 @@ class LocalGovernanceTests(unittest.TestCase):
             self.assertTrue(
                 any(
                     "reusable workflow permissions cannot be elevated" in error
-                    and expected in error
+                    and "id-token=none" in error
                     for error in errors
                 ),
                 errors,
@@ -927,7 +938,7 @@ class LocalGovernanceTests(unittest.TestCase):
                 'docker buildx imagetools inspect "$image_tag" \\\n',
             ),
             (
-                "attestation-driver",
+                "runtime-driver",
                 ".github/workflows/agent-image-build.yml",
                 "driver: docker-container",
                 "driver: docker",
@@ -985,30 +996,6 @@ class LocalGovernanceTests(unittest.TestCase):
         self.assertTrue(
             any(
                 "exact reviewed target/phase identity selector" in error
-                for error in errors
-            ),
-            errors,
-        )
-
-    def test_agent_delivery_rejects_release_candidate_validator_drift(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = copy_local_governance_fixture(directory)
-            validator = root / governance.AGENT_RELEASE_CANDIDATE_SCRIPT
-            original = validator.read_text(encoding="utf-8")
-            mutated = original.replace(
-                "REQUIRED_PRODUCTION_CHECKS = frozenset("
-                '{"ci/check", "protocol/compat", "wiki/verify"})',
-                'REQUIRED_PRODUCTION_CHECKS = frozenset({"ci/check"})',
-                1,
-            )
-            self.assertNotEqual(original, mutated)
-            validator.write_text(mutated, encoding="utf-8")
-
-            errors = governance.validate_local(root, governance.load_policy())
-
-        self.assertTrue(
-            any(
-                "exact reviewed post-approval release candidate gate" in error
                 for error in errors
             ),
             errors,

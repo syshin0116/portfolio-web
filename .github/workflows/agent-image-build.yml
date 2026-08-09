@@ -52,7 +52,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           version: "577.0.0"
-      - name: Build fresh and resolve the registry digest
+      - name: Build and push one immutable runtime image
         id: image
         env:
           DELIVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -70,30 +70,19 @@ jobs:
           metadata_file="$RUNNER_TEMP/agent-image-metadata.json"
           docker buildx build \
             --platform linux/amd64 \
-            --provenance=mode=max \
-            --sbom=true \
+            --provenance=false \
+            --sbom=false \
             --build-arg "VCS_REF=${SOURCE_SHA}" \
             --tag "$image_tag" \
             --metadata-file "$metadata_file" \
             --push \
             .
-          index_digest="$(jq -er '."containerimage.digest"' "$metadata_file")"
-          [[ "$index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          index_image="${IMAGE_REPOSITORY}@${index_digest}"
-          index_manifest_file="$RUNNER_TEMP/agent-image-index.json"
-          docker buildx imagetools inspect --raw "$index_image" \
-            >"$index_manifest_file"
-          image_digest="$(
-            python3 scripts/resolve_agent_runtime_image.py \
-              --image-repository "$IMAGE_REPOSITORY" \
-              --index-digest "$index_digest" \
-              <"$index_manifest_file"
-          )"
-          [[ "$image_digest" =~ ^${IMAGE_REPOSITORY}@sha256:[0-9a-f]{64}$ ]]
+          digest="$(jq -er '."containerimage.digest"' "$metadata_file")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_digest="${IMAGE_REPOSITORY}@${digest}"
           docker buildx imagetools inspect "$image_digest" >/dev/null
           {
             printf '### Agent image identity\n\n'
-            printf -- '- Attested OCI index: %s\n' "$index_image"
             printf -- '- Linux amd64 runtime: %s\n' "$image_digest"
           } >>"$GITHUB_STEP_SUMMARY"
           printf 'image_digest=%s\n' "$image_digest" >>"$GITHUB_OUTPUT"

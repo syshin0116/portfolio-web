@@ -17,10 +17,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "scripts/build_index.py"
-      - "scripts/deploy_cloud_run.sh"
       - "scripts/smoke.py"
-      - "scripts/resolve_agent_runtime_image.py"
-      - "scripts/validate_agent_release_candidate.py"
       - "scripts/validate_agent_delivery_identity.sh"
       - ".github/workflows/agent-image-build.yml"
       - ".github/workflows/agent-release.yml"
@@ -54,17 +51,13 @@ jobs:
       - build
     if: needs.build.result == 'success'
     permissions:
-      checks: read
       contents: read
       id-token: write
-      pull-requests: read
     uses: ./.github/workflows/agent-release.yml
     secrets:
       AGENT_SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_PREVIEW_SMOKE_BEARER_TOKEN }}
     with:
       target: preview
       environment: Agent Preview
-      mode: deploy
       image_digest: ${{ needs.build.outputs.image_digest }}
-      pull_request_number: ${{ github.event.pull_request.number }}
       source_sha: ${{ github.event.pull_request.head.sha }}

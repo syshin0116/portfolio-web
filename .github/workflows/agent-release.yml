@@ -11,28 +11,13 @@ on:
         description: Exact reviewer-gated GitHub release environment.
         required: true
         type: string
-      mode:
-        description: Deploy the supplied digest or roll traffic back.
-        required: true
-        type: string
       source_sha:
         description: Exact source commit baked into the reviewed candidate.
         required: true
         type: string
-      pull_request_number:
-        description: Exact preview PR number; zero for production.
-        required: false
-        default: 0
-        type: number
       image_digest:
         description: Fresh immutable image from the build workflow.
-        required: false
-        default: ""
-        type: string
-      rollback_revision:
-        description: Exact existing revision for rollback mode.
-        required: false
-        default: ""
+        required: true
         type: string
     secrets:
       AGENT_SMOKE_BEARER_TOKEN:
@@ -42,55 +27,18 @@ permissions: {}
 
 jobs:
   release:
-    name: Release reviewed agent candidate
+    name: Deploy reviewed agent image
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:
-      checks: read
       contents: read
       id-token: write
-      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.source_sha }}
-      - name: Revalidate exact release candidate after approval
-        env:
-          AGENT_SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
-          CANDIDATE_EVENT_NAME: ${{ github.event_name }}
-          CANDIDATE_ENVIRONMENT: ${{ inputs.environment }}
-          CANDIDATE_IMAGE_DIGEST: ${{ inputs.image_digest }}
-          CANDIDATE_MODE: ${{ inputs.mode }}
-          CANDIDATE_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
-          CANDIDATE_REF: ${{ github.ref }}
-          CANDIDATE_REPOSITORY: ${{ github.repository }}
-          CANDIDATE_ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
-          CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha }}
-          CANDIDATE_TARGET: ${{ inputs.target }}
-          GITHUB_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          candidate_args=(
-            --target "$CANDIDATE_TARGET"
-            --environment "$CANDIDATE_ENVIRONMENT"
-            --mode "$CANDIDATE_MODE"
-            --repository "$CANDIDATE_REPOSITORY"
-            --source-sha "$CANDIDATE_SOURCE_SHA"
-            --event-name "$CANDIDATE_EVENT_NAME"
-            --ref "$CANDIDATE_REF"
-            --image-digest "$CANDIDATE_IMAGE_DIGEST"
-            --rollback-revision "$CANDIDATE_ROLLBACK_REVISION"
-          )
-          if [[ "$CANDIDATE_TARGET" == "preview" ]]; then
-            candidate_args+=(
-              --pull-request-number "$CANDIDATE_PULL_REQUEST_NUMBER"
-            )
-          fi
-          python3 scripts/validate_agent_release_candidate.py \
-            "${candidate_args[@]}"
       - name: Select exact deployer identity
         id: delivery_identity
         env:
@@ -113,27 +61,94 @@ jobs:
           version: "0.11.29"
           checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
           enable-cache: false
-      - name: Execute fail-closed deployment
-        if: inputs.mode == 'deploy'
+      - name: Deploy, smoke, and promote
         env:
           CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
-          DELIVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
-          DELIVERY_RUN_ID: ${{ github.run_id }}
           GCP_PROJECT_ID: festive-ally-503605-v7
+          GCP_PROJECT_NUMBER: "72919926064"
           GCP_REGION: asia-southeast1
-          GRANT_PROBE_JOB: ${{ steps.delivery_identity.outputs.grant_probe_job }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
-          MAINTENANCE_JOB: ${{ steps.delivery_identity.outputs.maintenance_job }}
-          MIGRATION_JOB: ${{ steps.delivery_identity.outputs.migration_job }}
           SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
           SOURCE_SHA: ${{ inputs.source_sha }}
-        run: scripts/deploy_cloud_run.sh deploy
-      - name: Execute fail-closed rollback
-        if: inputs.mode == 'rollback'
-        env:
-          CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
-          GCP_PROJECT_ID: festive-ally-503605-v7
-          GCP_REGION: asia-southeast1
-          ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
-          SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
-        run: scripts/deploy_cloud_run.sh rollback "$ROLLBACK_REVISION"
+          TARGET: ${{ inputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$TARGET" in
+            preview)
+              expected_repository="asia-southeast1-docker.pkg.dev/${GCP_PROJECT_ID}/agent-preview/agent"
+              ;;
+            production)
+              expected_repository="asia-southeast1-docker.pkg.dev/${GCP_PROJECT_ID}/agent/agent"
+              ;;
+            *)
+              printf 'unsupported deployment target\n' >&2
+              exit 1
+              ;;
+          esac
+          digest="${IMAGE_DIGEST#"${expected_repository}@sha256:"}"
+          [[ "$IMAGE_DIGEST" == "${expected_repository}@sha256:${digest}" ]]
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+
+          gcloud run services update "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --image "$IMAGE_DIGEST" \
+            --no-traffic \
+            --tag smoke \
+            --deploy-health-check \
+            --quiet
+          revision="$(
+            gcloud run services describe "$CLOUD_RUN_SERVICE" \
+              --project "$GCP_PROJECT_ID" \
+              --region "$GCP_REGION" \
+              --format 'value(status.latestReadyRevisionName)'
+          )"
+          deployed_image="$(
+            gcloud run revisions describe "$revision" \
+              --project "$GCP_PROJECT_ID" \
+              --region "$GCP_REGION" \
+              --format 'value(spec.containers[0].image)'
+          )"
+          [[ "$deployed_image" == "$IMAGE_DIGEST" ]]
+
+          smoke_url="https://smoke---${CLOUD_RUN_SERVICE}-${GCP_PROJECT_NUMBER}.${GCP_REGION}.run.app"
+
+          verify_release() {
+            curl --fail --silent --show-error --max-time 20 \
+              --retry 5 --retry-all-errors --retry-delay 2 \
+              "${smoke_url}/live" | jq -e '. == {"status":"alive"}' >/dev/null
+            curl --fail --silent --show-error --max-time 20 \
+              --retry 5 --retry-all-errors --retry-delay 2 \
+              "${smoke_url}/ready" | jq -e '. == {"status":"ready"}' >/dev/null
+            LIVE_SMOKE_TOKEN="$SMOKE_BEARER_TOKEN" \
+              uv run --frozen --package syshin0116-dev-agent \
+              python scripts/smoke.py \
+                --base-url "$smoke_url" \
+                --assistant-id agent \
+                --profile aegra-0.9.25 \
+                --token-env LIVE_SMOKE_TOKEN \
+                --timeout 180
+          }
+
+          if ! verify_release; then
+            gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+              --project "$GCP_PROJECT_ID" \
+              --region "$GCP_REGION" \
+              --remove-tags smoke \
+              --quiet || true
+            exit 1
+          fi
+
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --remove-tags smoke \
+            --quiet
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --to-revisions "${revision}=100" \
+            --quiet
+          printf 'Cloud Run release passed: %s %s\n' "$revision" "$IMAGE_DIGEST"

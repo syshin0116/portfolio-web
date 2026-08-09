@@ -236,16 +236,16 @@ EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
 )
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (
-        "291e63968a0a7773fce862ba423bd84f21bbf5a251de2e56fbc1bc6fa281f3af"
+        "c74bbc48930c45af877437f0ea820f49913c3dd8d06daabd15a436e9aa1c6427"
     ),
     ".github/workflows/agent-release.yml": (
-        "87b9f80f01e0fa25b150d7ea02cd9c91b8eaa699b5a2a66518467c7622974961"
+        "ef841b0a90df70a309d3e49ade353d60ca5db75270ff2ae430d6f289c38f2e70"
     ),
     ".github/workflows/preview-agent.yml": (
-        "290e390dc2c284addc013f443a4b849cef403e2ac21cfaa6c4faa3944298d5dc"
+        "629d250a252bab786cc1a3518a6f66d65595749929dc0b60cf1f289fe34f87ad"
     ),
     ".github/workflows/deploy-agent.yml": (
-        "40096ffb8bcf7ec139a626dcfa87cf0ff8b89de4dcb288b10bc27c581dd0cb66"
+        "9e1eb14db5706c5b68ff9a77d1e7af6f47600145616a35507177004896207f47"
     ),
 }
 AGENT_RELEASE_WORKFLOW_SECRET = "AGENT_SMOKE_BEARER_TOKEN"
@@ -255,11 +255,7 @@ AGENT_RELEASE_CALLER_SECRET_SOURCES = {
 }
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
 AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
-    "05517f3f6e0a2119f1e88706e71eac4393bf4dab986d347b43cff568c3aa4688"
-)
-AGENT_RELEASE_CANDIDATE_SCRIPT = "scripts/validate_agent_release_candidate.py"
-AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
-    "7fd935a23fd5cfccbb713f17eceefcf6ff288e50b20af1e927b232da42321118"
+    "5694607d9b8281a23cf484df056f5b09f95489ba336050df16e666f11dbad8fb"
 )
 VERCEL_CONFIG = "web/vercel.json"
 EXPECTED_VERCEL_AUTODEPLOY_CONFIG = {
@@ -1339,22 +1335,6 @@ def validate_agent_delivery_permission_chain(
         errors.append(
             f"{AGENT_DELIVERY_IDENTITY_SCRIPT} must be the exact reviewed "
             "target/phase identity selector"
-        )
-    candidate_script_path = repository_root / AGENT_RELEASE_CANDIDATE_SCRIPT
-    try:
-        candidate_script_sha256 = hashlib.sha256(
-            candidate_script_path.read_bytes()
-        ).hexdigest()
-    except OSError:
-        candidate_script_sha256 = None
-    if (
-        not candidate_script_path.is_file()
-        or candidate_script_path.is_symlink()
-        or candidate_script_sha256 != AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256
-    ):
-        errors.append(
-            f"{AGENT_RELEASE_CANDIDATE_SCRIPT} must be the exact reviewed "
-            "post-approval release candidate gate"
         )
     return errors
 

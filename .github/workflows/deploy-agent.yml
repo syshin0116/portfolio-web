@@ -15,28 +15,12 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "scripts/build_index.py"
-      - "scripts/deploy_cloud_run.sh"
       - "scripts/smoke.py"
-      - "scripts/resolve_agent_runtime_image.py"
-      - "scripts/validate_agent_release_candidate.py"
       - "scripts/validate_agent_delivery_identity.sh"
       - ".github/workflows/agent-image-build.yml"
       - ".github/workflows/agent-release.yml"
       - ".github/workflows/deploy-agent.yml"
   workflow_dispatch:
-    inputs:
-      mode:
-        description: Deploy main or roll traffic back to an existing revision.
-        required: true
-        default: deploy
-        type: choice
-        options:
-          - deploy
-          - rollback
-      rollback_revision:
-        description: Required only for rollback mode.
-        required: false
-        type: string
 
 permissions: {}
 
@@ -47,9 +31,7 @@ concurrency:
 jobs:
   build:
     name: agent/production-build
-    if: >-
-      vars.AGENT_CLOUD_RUN_ENABLED == 'true'
-      && (github.event_name != 'workflow_dispatch' || inputs.mode == 'deploy')
+    if: vars.AGENT_CLOUD_RUN_ENABLED == 'true'
     permissions:
       contents: read
       id-token: write
@@ -62,29 +44,15 @@ jobs:
     name: agent/production-release
     needs:
       - build
-    if: >-
-      always()
-      && vars.AGENT_CLOUD_RUN_ENABLED == 'true'
-      && (
-        needs.build.result == 'success'
-        || (
-          github.event_name == 'workflow_dispatch'
-          && inputs.mode == 'rollback'
-          && needs.build.result == 'skipped'
-        )
-      )
+    if: needs.build.result == 'success'
     permissions:
-      checks: read
       contents: read
       id-token: write
-      pull-requests: read
     uses: ./.github/workflows/agent-release.yml
     secrets:
       AGENT_SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_PRODUCTION_SMOKE_BEARER_TOKEN }}
     with:
       target: production
       environment: Agent Production
-      mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'deploy' }}
-      image_digest: ${{ needs.build.outputs.image_digest || '' }}
-      rollback_revision: ${{ inputs.rollback_revision || '' }}
+      image_digest: ${{ needs.build.outputs.image_digest }}
       source_sha: ${{ github.sha }}

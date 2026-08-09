@@ -5,6 +5,7 @@ import {
 } from "@/lib/agent-token-intent"
 
 const TOKEN_ENDPOINT = "/api/agent-token"
+const ANONYMOUS_TOKEN_ENDPOINT = "/api/anonymous-agent-token"
 export const TOKEN_REFRESH_MARGIN_SECONDS = 60
 const MAX_CANCELLATION_STATUS_POLLS = 32
 const MAX_RUN_RESOLUTION_POLLS = 32
@@ -773,18 +774,18 @@ export class AgentTokenBroker {
         [AGENT_TOKEN_INTENT_HEADER]: this.#tokenIntent,
       }
     }
-    const response = await this.#fetch(TOKEN_ENDPOINT, requestInit)
+    const endpoint =
+      this.#tokenIntent === ANONYMOUS_AGENT_TOKEN_INTENT
+        ? ANONYMOUS_TOKEN_ENDPOINT
+        : TOKEN_ENDPOINT
+    const response = await this.#fetch(endpoint, requestInit)
     if (!response.ok) {
       if (
         response.status === 400 ||
         response.status === 401 ||
         response.status === 403
       ) {
-        try {
-          this.#onAuthenticationExpired?.()
-        } catch {
-          // Recovery UI callbacks cannot weaken the credential boundary.
-        }
+        this.#notifyAuthenticationExpired()
       }
       throw new AgentAuthenticationError(
         response.status === 403
@@ -796,20 +797,30 @@ export class AgentTokenBroker {
 
     const body = (await response.json()) as { token?: unknown }
     if (typeof body.token !== "string" || body.token.trim() === "") {
-      try {
-        this.#onAuthenticationExpired?.()
-      } catch {
-        // Recovery UI callbacks cannot weaken the credential boundary.
-      }
+      this.#notifyAuthenticationExpired()
       throw new AgentAuthenticationError("Agent token response is malformed")
     }
     const token = body.token.trim()
-    const expiresAt = validateAgentToken(
-      token,
-      identity,
-      this.#nowSeconds()
-    )
+    let expiresAt: number
+    try {
+      expiresAt = validateAgentToken(
+        token,
+        identity,
+        this.#nowSeconds()
+      )
+    } catch (error) {
+      this.#notifyAuthenticationExpired()
+      throw error
+    }
     return { token, expiresAt, identity }
+  }
+
+  #notifyAuthenticationExpired(): void {
+    try {
+      this.#onAuthenticationExpired?.()
+    } catch {
+      // Recovery UI callbacks cannot weaken the credential boundary.
+    }
   }
 
   #assertAgentOrigin(url: URL): void {

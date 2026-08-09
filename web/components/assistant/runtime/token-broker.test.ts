@@ -79,6 +79,25 @@ describe("AgentTokenBroker", () => {
     expect(expired).toBe(1)
   })
 
+  test("notifies anonymous recovery when a remint changes subjects", async () => {
+    let expired = 0
+    const broker = new AgentTokenBroker("anon:user-1", {
+      agentOrigin: "https://agent.example",
+      nowSeconds: () => 1_000,
+      tokenIntent: ANONYMOUS_AGENT_TOKEN_INTENT,
+      onAuthenticationExpired: () => {
+        expired += 1
+      },
+      fetch: async () =>
+        jsonResponse({ token: token(2_000, "anon:user-2") }),
+    })
+
+    await expect(
+      broker.get(new AbortController().signal)
+    ).rejects.toThrow("invalid claims")
+    expect(expired).toBe(1)
+  })
+
   test("coalesces refreshes and refreshes 60 seconds before JWT exp", async () => {
     let now = 1_000
     let mintCalls = 0
@@ -122,7 +141,7 @@ describe("AgentTokenBroker", () => {
       nowSeconds: () => now,
       tokenIntent: ANONYMOUS_AGENT_TOKEN_INTENT,
       fetch: async (input, init) => {
-        if (String(input) === "/api/agent-token") {
+        if (String(input) === "/api/anonymous-agent-token") {
           mintCalls += 1
           mintIntents.push(
             new Headers(init?.headers).get(AGENT_TOKEN_INTENT_HEADER)
@@ -555,7 +574,7 @@ describe("AgentTokenBroker", () => {
       tokenIntent: ANONYMOUS_AGENT_TOKEN_INTENT,
       fetch: async (input, init) => {
         const url = String(input)
-        if (url === "/api/agent-token") {
+        if (url === "/api/anonymous-agent-token") {
           mintCalls += 1
           mintIntents.push(
             new Headers(init?.headers).get(AGENT_TOKEN_INTENT_HEADER)
@@ -610,7 +629,7 @@ describe("AgentTokenBroker", () => {
       nowSeconds: () => 1_000,
       tokenIntent: ANONYMOUS_AGENT_TOKEN_INTENT,
       fetch: async (input, init) => {
-        if (String(input) === "/api/agent-token") {
+        if (String(input) === "/api/anonymous-agent-token") {
           mintCalls += 1
           mintIntents.push(
             new Headers(init?.headers).get(AGENT_TOKEN_INTENT_HEADER)

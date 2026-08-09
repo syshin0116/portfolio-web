@@ -51,7 +51,6 @@ export default defineConfig({
         NEXT_PUBLIC_AGENT_API_URL: "http://127.0.0.1:3130",
         NEXT_PUBLIC_AGENT_ASSISTANT_ID: "agent",
         NEXT_PUBLIC_AGENT_ANONYMOUS_ENABLED: "true",
-        NEXT_PUBLIC_TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
       },
     },
   ],

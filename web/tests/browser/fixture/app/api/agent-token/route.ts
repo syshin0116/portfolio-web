@@ -75,26 +75,13 @@ export async function POST(request: Request) {
   ) {
     return json({ error: "Invalid anonymous token intent" }, 400)
   }
+  if ((await request.arrayBuffer()).byteLength !== 0) {
+    return json({ error: "Anonymous token request must be bodyless" }, 400)
+  }
 
   let subject = cookieSubject(request)
   let createdSubject = false
   if (subject === undefined) {
-    let body: unknown
-    try {
-      body = await request.json()
-    } catch {
-      return json({ challengeRequired: true })
-    }
-    if (
-      body === null ||
-      typeof body !== "object" ||
-      Array.isArray(body) ||
-      Object.keys(body).length !== 1 ||
-      !("turnstileToken" in body) ||
-      body.turnstileToken !== "fixture-turnstile-token"
-    ) {
-      return json({ error: "Verification failed" }, 403)
-    }
     subject = `anon:${randomUUID()}`
     createdSubject = true
   }

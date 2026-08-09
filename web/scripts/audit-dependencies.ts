@@ -37,29 +37,19 @@ const ASSISTANT_UI_STORE_PATCH_FILES = new Map([
   ],
 ])
 
-export const TEMPORARY_ADVISORY = {
-  cve: "CVE-2026-14257",
-  ghsa: "GHSA-mh99-v99m-4gvg",
-  id: 1130588,
-  packageName: "brace-expansion",
-  severity: "high",
-  vulnerableVersions: "<1.1.17",
-  expiresAfter: "2026-08-31",
-} as const
-
 const EXPECTED_BRACE_RECORDS = new Map([
-  ["brace-expansion", "brace-expansion@5.0.8"],
+  ["brace-expansion", "brace-expansion@5.0.9"],
   [
     "eslint-plugin-import/minimatch/brace-expansion",
-    "brace-expansion@1.1.16",
+    "brace-expansion@1.1.18",
   ],
   [
     "eslint-plugin-jsx-a11y/minimatch/brace-expansion",
-    "brace-expansion@1.1.16",
+    "brace-expansion@1.1.18",
   ],
   [
     "eslint-plugin-react/minimatch/brace-expansion",
-    "brace-expansion@1.1.16",
+    "brace-expansion@1.1.18",
   ],
 ])
 
@@ -86,8 +76,9 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
   ["@langchain/langgraph-sdk", "@langchain/langgraph-sdk@1.9.28"],
   ["@langchain/protocol", "@langchain/protocol@0.0.18"],
   ["@neondatabase/serverless", "@neondatabase/serverless@1.1.0"],
+  ["botid", "botid@1.5.11"],
   ["eslint-config-next", "eslint-config-next@16.2.12"],
-  ["mermaid", "mermaid@11.16.0"],
+  ["mermaid", "mermaid@11.16.1"],
   ["next", "next@16.2.12"],
   ["next-auth", "next-auth@5.0.0-beta.32"],
   ["pg", "pg@8.22.0"],
@@ -186,12 +177,10 @@ export interface AuditCommandResult {
 export interface AuditPolicyEvidence {
   production: AuditCommandResult
   complete: AuditCommandResult
-  ignored: AuditCommandResult
   packageJson: string
   bunLock: string
   assistantUiPatchAttributes: string
   assistantUiStorePatch: string
-  now: Date
 }
 
 function fail(message: string): never {
@@ -232,18 +221,6 @@ function requireEmptySuccessfulAudit(
   const findings = parseAuditJson(result, label)
   if (Object.keys(findings).length !== 0) {
     fail(`${label} audit must contain zero findings`)
-  }
-}
-
-function requireSuccessfulIgnoredAudit(result: AuditCommandResult): void {
-  if (result.exitCode !== 0) {
-    fail(
-      `reviewed-exception audit exited ${result.exitCode}; ` +
-        `stderr=${result.stderr.trim()}`,
-    )
-  }
-  if (result.stdout.trim() !== "") {
-    fail("reviewed-exception audit emitted an unexpected finding")
   }
 }
 
@@ -480,7 +457,7 @@ function requireExactAssistantUiStorePatch(
   }
 }
 
-function requireDevOnlyException(
+function requireDependencyBaseline(
   packageJson: string,
   bunLock: string,
   assistantUiPatchAttributes: string,
@@ -580,76 +557,20 @@ function requireDevOnlyException(
   requireDirectResolutionBaseline(records, dependencies, devDependencies)
 }
 
-function requireExactTemporaryAdvisory(result: AuditCommandResult): void {
-  if (result.exitCode !== 1) {
-    fail(
-      `complete audit must exit 1 while the reviewed exception exists; ` +
-        `found ${result.exitCode}`,
-    )
-  }
-  const findings = parseAuditJson(result, "complete")
-  if (
-    JSON.stringify(Object.keys(findings)) !==
-    JSON.stringify([TEMPORARY_ADVISORY.packageName])
-  ) {
-    fail(
-      `complete audit must contain only ${TEMPORARY_ADVISORY.packageName}`,
-    )
-  }
-  const advisories = findings[TEMPORARY_ADVISORY.packageName]
-  if (!Array.isArray(advisories) || advisories.length !== 1) {
-    fail("complete audit must contain exactly one reviewed advisory")
-  }
-  const advisory = advisories[0]
-  if (!isRecord(advisory)) {
-    fail("reviewed advisory must be one object")
-  }
-  const expected = {
-    id: TEMPORARY_ADVISORY.id,
-    url: `https://github.com/advisories/${TEMPORARY_ADVISORY.ghsa}`,
-    severity: TEMPORARY_ADVISORY.severity,
-    vulnerable_versions: TEMPORARY_ADVISORY.vulnerableVersions,
-  }
-  for (const [key, value] of Object.entries(expected)) {
-    if (advisory[key] !== value) {
-      fail(
-        `reviewed advisory field ${key} drifted; ` +
-          `actual=${JSON.stringify(advisory[key])}, ` +
-          `expected=${JSON.stringify(value)}`,
-      )
-    }
-  }
-}
-
-function requireUnexpiredException(now: Date): void {
-  if (!Number.isFinite(now.getTime())) {
-    fail("policy clock is invalid")
-  }
-  const expiry = Date.parse(`${TEMPORARY_ADVISORY.expiresAfter}T23:59:59.999Z`)
-  if (now.getTime() > expiry) {
-    fail(
-      `${TEMPORARY_ADVISORY.cve} exception expired after ` +
-        TEMPORARY_ADVISORY.expiresAfter,
-    )
-  }
-}
-
 export function validateAuditPolicy(evidence: AuditPolicyEvidence): void {
   requireEmptySuccessfulAudit(evidence.production, "production")
-  requireExactTemporaryAdvisory(evidence.complete)
-  requireUnexpiredException(evidence.now)
-  requireDevOnlyException(
+  requireEmptySuccessfulAudit(evidence.complete, "complete")
+  requireDependencyBaseline(
     evidence.packageJson,
     evidence.bunLock,
     evidence.assistantUiPatchAttributes,
     evidence.assistantUiStorePatch,
   )
-  requireSuccessfulIgnoredAudit(evidence.ignored)
 }
 
-function runAudit(args: string[], json = true): AuditCommandResult {
+function runAudit(args: string[]): AuditCommandResult {
   const result = Bun.spawnSync({
-    cmd: [process.execPath, "audit", ...args, ...(json ? ["--json"] : [])],
+    cmd: [process.execPath, "audit", ...args, "--json"],
     cwd: resolve(import.meta.dir, ".."),
     stdout: "pipe",
     stderr: "pipe",
@@ -667,11 +588,6 @@ async function main(): Promise<void> {
   const evidence: AuditPolicyEvidence = {
     production: runAudit(["--prod", "--audit-level=high"]),
     complete: runAudit(["--audit-level=high"]),
-    ignored: runAudit([
-      "--audit-level=high",
-      "--ignore",
-      TEMPORARY_ADVISORY.ghsa,
-    ], false),
     packageJson: await readFile(resolve(webRoot, "package.json"), "utf8"),
     bunLock: await readFile(resolve(webRoot, "bun.lock"), "utf8"),
     assistantUiPatchAttributes: await readFile(
@@ -682,13 +598,11 @@ async function main(): Promise<void> {
       resolve(webRoot, ASSISTANT_UI_STORE_PATCH.path),
       "utf8",
     ),
-    now: new Date(),
   }
   validateAuditPolicy(evidence)
   console.log(
-    "dependency audit policy passed: production high/critical=0; " +
-      `temporary dev-only exception=${TEMPORARY_ADVISORY.cve}; ` +
-      `review by ${TEMPORARY_ADVISORY.expiresAfter}; ` +
+    "dependency audit policy passed: production and complete " +
+      "high/critical=0; " +
       `unrelated direct resolutions preserved=` +
       EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS.size,
   )

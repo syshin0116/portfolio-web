@@ -673,7 +673,9 @@ export class InspectionProjector {
     return projectInspectionCustomEvent(event)
   }
 
-  consumeTool(event: ToolsEvent): AgentActivity {
+  consumeTool(
+    event: ToolsEvent
+  ): Extract<AgentActivity, { kind: "tool" }> {
     const data = event.params.data
     const previous = this.#tools.get(data.tool_call_id)
     const toolName =

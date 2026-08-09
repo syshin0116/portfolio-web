@@ -516,6 +516,29 @@ export class NativeMessageProjection {
   }
 }
 
+function projectToolResult(
+  activity: Extract<AgentActivity, { kind: "tool" }>
+): LangGraphMessagesEvent<LangChainMessage> | undefined {
+  if (
+    !activity.toolName ||
+    (activity.status !== "completed" && activity.status !== "failed")
+  ) {
+    return undefined
+  }
+  return {
+    event: "messages/complete",
+    data: [
+      {
+        type: "tool",
+        content: activity.label,
+        tool_call_id: activity.toolCallId,
+        name: activity.toolName,
+        status: activity.status === "completed" ? "success" : "error",
+      },
+    ],
+  }
+}
+
 function safeInterruptIdentifier(value: unknown): string | undefined {
   return boundedUtf8String(value, MAX_INTERRUPT_ID_BYTES) &&
     SAFE_INTERRUPT_ID.test(value)
@@ -2081,10 +2104,10 @@ export class NativeAgentClient {
           continue
         }
         if (event.method === "tools") {
-          this.#onActivity?.(
-            inspection.consumeTool(event),
-            runtimeSource(boundThreadId)
-          )
+          const activity = inspection.consumeTool(event)
+          this.#onActivity?.(activity, runtimeSource(boundThreadId))
+          const result = projectToolResult(activity)
+          if (result) yield result
           continue
         }
         if (event.method === "custom") {

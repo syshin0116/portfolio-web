@@ -6,9 +6,11 @@ import {
   type ThreadStream,
 } from "@langchain/langgraph-sdk"
 import type { Command, Event, Message } from "@langchain/protocol"
-import type {
-  LangChainMessage,
-  LangGraphMessagesEvent,
+import { unstable_convertExternalMessages as convertExternalMessages } from "@assistant-ui/react"
+import {
+  convertLangChainMessages,
+  type LangChainMessage,
+  type LangGraphMessagesEvent,
 } from "@assistant-ui/react-langgraph"
 
 import aegraDialect from "../../../../protocol/fixtures/aegra-dialect-translation.json"
@@ -1562,6 +1564,111 @@ describe("native stream lifecycle", () => {
     expect(JSON.stringify(output)).not.toContain("근거를 찾았습니다.")
   })
 
+  test("projects successful tool completion without exposing its output", async () => {
+    const fakeClient = makeClient([
+      { events: protocolEvents(contentToolRun) },
+    ])
+    const output = await collect(
+      makeNative(fakeClient).stream(
+        [{ id: "human-1", type: "human", content: "도커 검색" }],
+        streamConfig()
+      )
+    )
+
+    expect(
+      output.flatMap((event) => event.data).filter((message) =>
+        isTestRecord(message) && message.type === "tool"
+      )
+    ).toEqual([
+      {
+        type: "tool",
+        content: "도구 실행이 끝났습니다.",
+        tool_call_id: "call-search-001",
+        name: "search_blog",
+        status: "success",
+      },
+    ])
+    expect(JSON.stringify(output)).not.toContain(
+      "content/Tools/Docker/example.md"
+    )
+    expect(convertProjectedMessages(output)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          status: expect.objectContaining({ type: "complete" }),
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool-call",
+              toolCallId: "call-search-001",
+              result: "도구 실행이 끝났습니다.",
+              isError: false,
+            }),
+          ]),
+        }),
+      ])
+    )
+  })
+
+  test("projects failed tool completion without exposing its error", async () => {
+    const privateError = "postgres://owner:secret@db.internal"
+    const fakeClient = makeClient([
+      {
+        events: [
+          lifecycle("running"),
+          ...toolCallMessageEvents("call-error-1", "search_blog"),
+          toolEvent({
+            event: "tool-started",
+            tool_call_id: "call-error-1",
+            tool_name: "search_blog",
+          }),
+          toolEvent({
+            event: "tool-error",
+            tool_call_id: "call-error-1",
+            message: privateError,
+          }),
+          lifecycle("completed"),
+        ],
+      },
+    ])
+    const output = await collect(
+      makeNative(fakeClient).stream(
+        [{ id: "human-1", type: "human", content: "검색 실패" }],
+        streamConfig()
+      )
+    )
+
+    expect(
+      output.flatMap((event) => event.data).filter((message) =>
+        isTestRecord(message) && message.type === "tool"
+      )
+    ).toEqual([
+      {
+        type: "tool",
+        content: "도구 실행을 완료하지 못했습니다.",
+        tool_call_id: "call-error-1",
+        name: "search_blog",
+        status: "error",
+      },
+    ])
+    expect(JSON.stringify(output)).not.toContain(privateError)
+    expect(convertProjectedMessages(output)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          status: expect.objectContaining({ type: "complete" }),
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool-call",
+              toolCallId: "call-error-1",
+              result: "도구 실행을 완료하지 못했습니다.",
+              isError: true,
+            }),
+          ]),
+        }),
+      ])
+    )
+  })
+
   test("starts one APv2 run and surfaces lifecycle failure safely", async () => {
     const error = `postgres://owner:secret@db.internal ${"x".repeat(400)}`
     const observedErrors: Error[] = []
@@ -2619,6 +2726,62 @@ function customEvent(
       data,
     },
   } as unknown as Event
+}
+
+function toolEvent(data: Record<string, unknown>): Event {
+  return {
+    type: "event",
+    method: "tools",
+    params: {
+      namespace: [],
+      timestamp: 1,
+      data,
+    },
+  } as unknown as Event
+}
+
+function toolCallMessageEvents(toolCallId: string, toolName: string): Event[] {
+  return [
+    messageEvent({
+      event: "message-start",
+      role: "ai",
+      id: `message-${toolCallId}`,
+    }),
+    messageEvent({
+      event: "content-block-start",
+      index: 0,
+      content: {
+        type: "tool_call_chunk",
+        id: toolCallId,
+        name: toolName,
+        args: "",
+      },
+    }),
+    messageEvent({
+      event: "content-block-finish",
+      index: 0,
+      content: {
+        type: "tool_call",
+        id: toolCallId,
+        name: toolName,
+        args: {},
+      },
+    }),
+    messageEvent({ event: "message-finish" }),
+  ]
+}
+
+function convertProjectedMessages(
+  output: LangGraphMessagesEvent<LangChainMessage>[]
+) {
+  return convertExternalMessages(
+    output.flatMap((event) =>
+      Array.isArray(event.data) ? event.data : []
+    ),
+    convertLangChainMessages,
+    false,
+    {}
+  )
 }
 
 interface FakeStreamPlan {

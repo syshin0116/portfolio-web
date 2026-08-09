@@ -158,6 +158,7 @@ const ReasoningPart = memo(function ReasoningPart({
 const ToolPart = memo(function ToolPart({
   toolName,
   argsText,
+  isError,
   status,
 }: ToolCallMessagePartProps) {
   const running =
@@ -177,7 +178,7 @@ const ToolPart = memo(function ToolPart({
         <span className="text-xs font-normal text-muted-foreground">
           {running
             ? "실행 중"
-            : status.type === "incomplete"
+            : isError || status.type === "incomplete"
               ? "완료하지 못함"
               : "완료"}
         </span>

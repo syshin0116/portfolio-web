@@ -4,6 +4,7 @@ set -eEuo pipefail
 readonly MODE="${1:-}"
 readonly REQUESTED_ROLLBACK_REVISION="${2:-}"
 readonly EXPECTED_PROJECT_ID="festive-ally-503605-v7"
+readonly EXPECTED_PROJECT_NUMBER="72919926064"
 readonly EXPECTED_REGION="asia-southeast1"
 readonly CLOUD_RUN_API_ORIGIN="https://run.googleapis.com"
 readonly CLOUD_RUN_API_MAX_BYTES="1048576"
@@ -193,22 +194,98 @@ operation_json() {
 
 serving_revision() {
   service_json |
-    jq -er '
-      (.trafficStatuses // .traffic) as $traffic
-      | if (
-          ($traffic | length) == 1
-          and (($traffic[0].tag // "") == "")
-          and (($traffic[0].percent // 0) == 100)
-          and (($traffic[0].revision | type) == "string")
+    jq -er \
+      --arg expected_service "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}" \
+      --arg expected_service_short "$CLOUD_RUN_SERVICE" \
+      '
+      def canonical_revision_id($value):
+        ($value | type) == "string"
+        and ($value | test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"))
+        and ($value | startswith($expected_service_short + "-"))
+        and (
+          $expected_service_short != "agent"
+          or ($value | startswith("agent-preview-") | not)
+        );
+      def full_revision_id($value):
+        if (
+          ($value | type) == "string"
+          and ($value | startswith($expected_service + "/revisions/"))
+          and (
+            $value
+            | ltrimstr($expected_service + "/revisions/")
+            | canonical_revision_id(.)
+          )
         )
-        then ($traffic[0].revision | split("/")[-1])
+        then ($value | ltrimstr($expected_service + "/revisions/"))
+        else error("revision is outside the selected service")
+        end;
+      def explicit_revision_id($value):
+        if canonical_revision_id($value)
+        then $value
+        else full_revision_id($value)
+        end;
+      def absent_or_empty_string($value):
+        $value == null
+        or (($value | type) == "string" and $value == "");
+      def explicit_revision_type($value):
+        $value == null
+        or (
+          ($value | type) == "string"
+          and (
+            $value == "TRAFFIC_TARGET_ALLOCATION_TYPE_UNSPECIFIED"
+            or $value == "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"
+          )
+        );
+      def resolved_revision($target):
+        if (
+          $target.type
+            == "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+          and absent_or_empty_string($target.revision)
+        )
+        then full_revision_id(.latestReadyRevision)
+        elif (
+          explicit_revision_type($target.type)
+        )
+        then explicit_revision_id($target.revision)
+        else error("serving target does not resolve to a canonical revision")
+        end;
+      def observed_traffic:
+        if .trafficStatuses == null
+        then .traffic
+        else .trafficStatuses
+        end;
+
+      observed_traffic as $traffic
+      | if (
+          ($traffic | type) == "array"
+          and ($traffic | length) == 1
+          and absent_or_empty_string($traffic[0].tag)
+          and ($traffic[0].percent == 100)
+        )
+        then resolved_revision($traffic[0])
         else error("expected exactly one untagged 100% serving revision")
         end
-    '
+      '
 }
 
 service_url() {
-  service_json | jq -er '.uri | select(type == "string" and startswith("https://"))'
+  local document
+  document="$(service_json)"
+
+  jq -e \
+    --arg expected_service "$CLOUD_RUN_SERVICE" \
+    '
+      .uri
+      | type == "string"
+      and test("^https://[a-z0-9-]+(\\.[a-z0-9-]+)*\\.run\\.app$")
+      and startswith("https://" + $expected_service + "-")
+      and (
+        $expected_service != "agent"
+        or (startswith("https://agent-preview-") | not)
+      )
+    ' >/dev/null <<<"$document"
+  printf 'https://%s-%s.%s.run.app\n' \
+    "$CLOUD_RUN_SERVICE" "$EXPECTED_PROJECT_NUMBER" "$GCP_REGION"
 }
 
 runtime_expectations() {
@@ -460,6 +537,7 @@ verify_service_contract() {
 
   jq -e \
     --arg expected_name "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}" \
+    --arg expected_service_short "$CLOUD_RUN_SERVICE" \
     '
       def absent_or_empty_array:
         . == null or . == [];
@@ -467,25 +545,59 @@ verify_service_contract() {
         . == null or . == {};
       def absent_or_false:
         . == null or . == false;
+      def canonical_revision_name:
+        type == "string"
+        and startswith($expected_name + "/revisions/")
+        and (
+          ltrimstr($expected_name + "/revisions/")
+          | test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+            and startswith($expected_service_short + "-")
+            and (
+              $expected_service_short != "agent"
+              or (startswith("agent-preview-") | not)
+            )
+        );
+      def canonical_service_scaling:
+        . == null
+        or . == {}
+        or (
+          type == "object"
+          and (keys == ["maxInstanceCount"])
+          and .maxInstanceCount == 20
+        );
+      def canonical_cloud_run_uri:
+        type == "string"
+        and test("^https://[a-z0-9-]+(\\.[a-z0-9-]+)*\\.run\\.app$")
+        and startswith("https://" + $expected_service_short + "-")
+        and (
+          $expected_service_short != "agent"
+          or (startswith("https://agent-preview-") | not)
+        );
+      def observed_traffic:
+        if .trafficStatuses == null
+        then .traffic
+        else .trafficStatuses
+        end;
 
       .name == $expected_name
       and .ingress == "INGRESS_TRAFFIC_ALL"
       and (.binaryAuthorization | absent_or_empty_object)
-      and (.scaling | absent_or_empty_object)
+      and (.scaling | canonical_service_scaling)
       and (.invokerIamDisabled | absent_or_false)
       and (.defaultUriDisabled | absent_or_false)
       and (.iapEnabled | absent_or_false)
       and (.multiRegionSettings | absent_or_empty_object)
       and (.customAudiences | absent_or_empty_array)
       and (.buildConfig | absent_or_empty_object)
-      and .reconciling == false
+      and (.reconciling | absent_or_false)
       and .terminalCondition.state == "CONDITION_SUCCEEDED"
       and (.generation | type) == "string"
       and (.generation | test("^[1-9][0-9]*$"))
       and .observedGeneration == .generation
-      and (.latestReadyRevision | type) == "string"
-      and (.latestCreatedRevision | type) == "string"
-      and ((.trafficStatuses // .traffic) | type) == "array"
+      and (.latestReadyRevision | canonical_revision_name)
+      and (.latestCreatedRevision | canonical_revision_name)
+      and ((observed_traffic) | type) == "array"
+      and (.uri | canonical_cloud_run_uri)
     ' >/dev/null <<<"$document" || {
     printf 'Cloud Run service is not a reconciled canonical REST v2 resource.\n' >&2
     return 1
@@ -502,10 +614,14 @@ verify_revision_contract() {
   jq -e \
     --arg expected_name "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}/revisions/${revision}" \
     --arg expected_service "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}" \
+    --arg expected_service_short "$CLOUD_RUN_SERVICE" \
     '
+      def absent_or_false:
+        . == null or . == false;
+
       .name == $expected_name
-      and .service == $expected_service
-      and .reconciling == false
+      and (.service == $expected_service or .service == $expected_service_short)
+      and (.reconciling | absent_or_false)
       and any(
         .conditions[]?;
         .type == "Ready" and .state == "CONDITION_SUCCEEDED"
@@ -590,9 +706,11 @@ verify_job_contract() {
         . == null or . == "";
       def absent_or_false:
         . == null or . == false;
+      def absent_or_one:
+        . == null or (type == "number" and . == 1);
 
       .name == $expected_name
-      and .reconciling == false
+      and (.reconciling | absent_or_false)
       and .terminalCondition.state == "CONDITION_SUCCEEDED"
       and (.generation | type) == "string"
       and (.generation | test("^[1-9][0-9]*$"))
@@ -601,8 +719,8 @@ verify_job_contract() {
       and (.etag | length) >= 1
       and (.etag | length) <= 1024
       and (.binaryAuthorization | absent_or_empty_object)
-      and (.template.taskCount // 1) == 1
-      and (.template.parallelism // 1) == 1
+      and (.template.taskCount | absent_or_one)
+      and (.template.parallelism | absent_or_one)
       and .template.template.serviceAccount == $expected_service_account
       and .template.template.timeout == $expected_timeout
       and .template.template.executionEnvironment == "EXECUTION_ENVIRONMENT_GEN2"
@@ -723,6 +841,7 @@ wait_for_job_operation() {
   local document="$1"
   local execution_document
   local expected_job="$2"
+  local expected_job_name="projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/jobs/${expected_job}"
   local max_attempts
   local operation_id
   local operation_name
@@ -772,24 +891,33 @@ wait_for_job_operation() {
   done
 
   jq -e \
-    --arg expected_job "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/jobs/${expected_job}" \
+    --arg expected_job "$expected_job_name" \
+    --arg expected_job_short "$expected_job" \
     --arg expected_name "$operation_name" \
     '
+      def absent_or_false:
+        . == null or . == false;
+      def absent_or_zero:
+        . == null or (type == "number" and . == 0);
+
       .name == $expected_name
       and .done == true
       and (has("error") | not)
       and (.response | type) == "object"
       and .response["@type"]
         == "type.googleapis.com/google.cloud.run.v2.Execution"
-      and .response.job == $expected_job
+      and (
+        .response.job == $expected_job
+        or .response.job == $expected_job_short
+      )
       and (
         .response.name
         | type == "string"
           and startswith($expected_job + "/executions/")
           and (ltrimstr($expected_job + "/executions/")
-            | test("^[a-z0-9][a-z0-9-]{0,62}$"))
+            | test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"))
       )
-      and .response.reconciling == false
+      and (.response.reconciling | absent_or_false)
       and (.response.generation | type) == "string"
       and (.response.generation | test("^[1-9][0-9]*$"))
       and .response.observedGeneration == .response.generation
@@ -798,10 +926,10 @@ wait_for_job_operation() {
       and .response.taskCount == 1
       and .response.parallelism == 1
       and .response.succeededCount == 1
-      and (.response.failedCount // 0) == 0
-      and (.response.cancelledCount // 0) == 0
-      and (.response.runningCount // 0) == 0
-      and (.response.retriedCount // 0) == 0
+      and (.response.failedCount | absent_or_zero)
+      and (.response.cancelledCount | absent_or_zero)
+      and (.response.runningCount | absent_or_zero)
+      and (.response.retriedCount | absent_or_zero)
       and any(
         .response.conditions[]?;
         .type == "Completed" and .state == "CONDITION_SUCCEEDED"
@@ -813,10 +941,12 @@ wait_for_job_operation() {
   }
 
   execution_document="$(
-    jq -ce '
+    jq -ce \
+      --arg expected_job "$expected_job_name" \
+      '
       .response
       | {
-          name:.job,
+          name:$expected_job,
           reconciling:.reconciling,
           terminalCondition:{state:"CONDITION_SUCCEEDED"},
           generation:.generation,
@@ -828,7 +958,7 @@ wait_for_job_operation() {
             template:.template
           }
         }
-    ' <<<"$document"
+      ' <<<"$document"
   )"
   verify_job_contract "$expected_job" "$execution_document" >/dev/null || {
     printf 'Cloud Run immutable execution drifted from the verified job template.\n' \
@@ -979,32 +1109,103 @@ verified_smoke_url() {
   document="$(service_json)"
 
   jq -er \
+    --arg expected_service "projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${CLOUD_RUN_SERVICE}" \
+    --arg expected_service_short "$CLOUD_RUN_SERVICE" \
     --arg expected_serving_revision "$expected_serving_revision" \
     --arg expected_smoke_revision "$expected_smoke_revision" \
+    --arg expected_smoke_url "https://smoke---${CLOUD_RUN_SERVICE}-${EXPECTED_PROJECT_NUMBER}.${GCP_REGION}.run.app" \
     '
-      (.trafficStatuses // .traffic) as $traffic
+      def canonical_revision_id($value):
+        ($value | type) == "string"
+        and ($value | test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"))
+        and ($value | startswith($expected_service_short + "-"))
+        and (
+          $expected_service_short != "agent"
+          or ($value | startswith("agent-preview-") | not)
+        );
+      def full_revision_id($value):
+        if (
+          ($value | type) == "string"
+          and ($value | startswith($expected_service + "/revisions/"))
+          and (
+            $value
+            | ltrimstr($expected_service + "/revisions/")
+            | canonical_revision_id(.)
+          )
+        )
+        then ($value | ltrimstr($expected_service + "/revisions/"))
+        else error("revision is outside the selected service")
+        end;
+      def explicit_revision_id($value):
+        if canonical_revision_id($value)
+        then $value
+        else full_revision_id($value)
+        end;
+      def absent_or_empty_string($value):
+        $value == null
+        or (($value | type) == "string" and $value == "");
+      def absent_or_zero($value):
+        $value == null
+        or (($value | type) == "number" and $value == 0);
+      def explicit_revision_type($value):
+        $value == null
+        or (
+          ($value | type) == "string"
+          and (
+            $value == "TRAFFIC_TARGET_ALLOCATION_TYPE_UNSPECIFIED"
+            or $value == "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"
+          )
+        );
+      def resolved_revision($target):
+        if (
+          $target.type
+            == "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+          and absent_or_empty_string($target.revision)
+        )
+        then full_revision_id(.latestReadyRevision)
+        elif (
+          explicit_revision_type($target.type)
+        )
+        then explicit_revision_id($target.revision)
+        else error("traffic target does not resolve to a canonical revision")
+        end;
+      def canonical_service_uri:
+        type == "string"
+        and test("^https://[a-z0-9-]+(\\.[a-z0-9-]+)*\\.run\\.app$")
+        and startswith("https://" + $expected_service_short + "-")
+        and (
+          $expected_service_short != "agent"
+          or (startswith("https://agent-preview-") | not)
+        );
+      def observed_traffic:
+        if .trafficStatuses == null
+        then .traffic
+        else .trafficStatuses
+        end;
+
+      observed_traffic as $traffic
       | [
         $traffic[]
-        | select((.tag // "") == "")
+        | select(absent_or_empty_string(.tag))
       ] as $serving
       | [
         $traffic[]
-        | select((.tag // "") == "smoke")
+        | select(.tag == "smoke")
       ] as $smoke
       | if (
-          ($traffic | length) == 2
+          ($traffic | type) == "array"
+          and ($traffic | length) == 2
           and ($serving | length) == 1
-          and (($serving[0].revision | split("/")[-1])
-            == $expected_serving_revision)
-          and (($serving[0].percent // 0) == 100)
+          and (resolved_revision($serving[0]) == $expected_serving_revision)
+          and ($serving[0].percent == 100)
           and ($smoke | length) == 1
-          and (($smoke[0].revision | split("/")[-1])
-            == $expected_smoke_revision)
-          and (($smoke[0].percent // 0) == 0)
-          and ($smoke[0].uri | type) == "string"
-          and ($smoke[0].uri | startswith("https://"))
+          and explicit_revision_type($smoke[0].type)
+          and (explicit_revision_id($smoke[0].revision) == $expected_smoke_revision)
+          and absent_or_zero($smoke[0].percent)
+          and (.uri | canonical_service_uri)
+          and ($smoke[0].uri == ("https://smoke---" + (.uri | ltrimstr("https://"))))
         )
-        then $smoke[0].uri
+        then $expected_smoke_url
         else error("traffic does not match the exact smoke-stage shape")
         end
     ' <<<"$document" || {
@@ -1018,7 +1219,16 @@ remove_smoke_tag() {
   local document
   document="$(service_json)"
 
-  if jq -e 'any((.trafficStatuses // .traffic)[]?; .tag == "smoke")' \
+  if jq -e '
+    def observed_traffic:
+      if .trafficStatuses == null
+      then .traffic
+      else .trafficStatuses
+      end;
+    observed_traffic as $traffic
+    | ($traffic | type) == "array"
+      and any($traffic[]; .tag == "smoke")
+  ' \
     >/dev/null <<<"$document"; then
     gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
       --project "$GCP_PROJECT_ID" \
@@ -1028,7 +1238,16 @@ remove_smoke_tag() {
   fi
 
   service_json |
-    jq -e 'all((.trafficStatuses // .traffic)[]?; (.tag // "") != "smoke")' \
+    jq -e '
+      def observed_traffic:
+        if .trafficStatuses == null
+        then .traffic
+        else .trafficStatuses
+        end;
+      observed_traffic as $traffic
+      | ($traffic | type) == "array"
+        and all($traffic[]; .tag != "smoke")
+    ' \
       >/dev/null || {
     printf 'Cloud Run smoke tag cleanup did not reach verified absence.\n' >&2
     return 1

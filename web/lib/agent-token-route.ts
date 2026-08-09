@@ -6,14 +6,10 @@ import {
   ANONYMOUS_COOKIE_NAME,
   ANONYMOUS_SESSION_TTL_SECONDS,
   ANONYMOUS_TOKEN_TTL_SECONDS,
-  type FetchLike,
-  InvalidAnonymousTokenRequest,
   createAnonymousSessionCookie,
   createAnonymousSubject,
   readAnonymousAgentTokenFeature,
   readAnonymousSessionCookie,
-  readTurnstileRequest,
-  verifyTurnstileToken,
 } from "@/lib/anonymous-agent-token"
 
 interface AgentTokenSession {
@@ -28,16 +24,17 @@ interface AgentTokenSession {
 
 export interface AgentTokenPostDependencies {
   authenticate: () => Promise<AgentTokenSession | null>
+  checkBot: () => Promise<unknown>
   createToken: typeof createAgentToken
   isAllowed: (email: string | null | undefined) => boolean
   isAdmin: (email: string | null | undefined) => boolean
   env: Readonly<Record<string, unknown>>
-  fetchImpl: FetchLike
   nowSeconds: () => number
   randomUUID: () => string
   nodeEnv: string | undefined
-  turnstileTimeoutMs: number
 }
+
+export type AgentTokenRouteMode = "anonymous" | "combined" | "owner"
 
 function jsonResponse(
   body: Record<string, unknown>,
@@ -112,16 +109,18 @@ function requestCookieValues(
     .map((part) => part.slice(prefix.length))
 }
 
-function isBodylessCookieResume(request: NextRequest): boolean {
+function isBodylessAnonymousRequest(request: NextRequest): boolean {
   const contentLength = request.headers.get("content-length")
   return (
     request.headers.get("content-type") === null &&
+    request.headers.get("transfer-encoding") === null &&
     (contentLength === null || contentLength === "0")
   )
 }
 
 export function createAgentTokenPostHandler(
-  dependencies: AgentTokenPostDependencies
+  dependencies: AgentTokenPostDependencies,
+  mode: AgentTokenRouteMode = "combined"
 ): (request: NextRequest) => Promise<NextResponse> {
   const handleAnonymousRequest = async (
     request: NextRequest
@@ -135,6 +134,33 @@ export function createAgentTokenPostHandler(
         { error: "Anonymous authentication is unavailable" },
         503
       )
+    }
+    if (!isBodylessAnonymousRequest(request)) {
+      return jsonResponse({ error: "Invalid request" }, 400)
+    }
+
+    let verdict: unknown
+    try {
+      verdict = await dependencies.checkBot()
+    } catch {
+      return jsonResponse(
+        { error: "Anonymous authentication is unavailable" },
+        503
+      )
+    }
+    if (
+      verdict === null ||
+      typeof verdict !== "object" ||
+      !("isBot" in verdict) ||
+      typeof verdict.isBot !== "boolean"
+    ) {
+      return jsonResponse(
+        { error: "Anonymous authentication is unavailable" },
+        503
+      )
+    }
+    if (verdict.isBot) {
+      return jsonResponse({ error: "Forbidden" }, 403)
     }
 
     const nowSeconds = dependencies.nowSeconds()
@@ -161,42 +187,6 @@ export function createAgentTokenPostHandler(
           { error: "Anonymous authentication is unavailable" },
           503
         )
-      )
-    }
-
-    if (isBodylessCookieResume(request)) {
-      return jsonResponse({ challengeRequired: true })
-    }
-
-    let turnstileToken: string
-    try {
-      ;({ turnstileToken } = await readTurnstileRequest(request))
-    } catch (error) {
-      if (error instanceof InvalidAnonymousTokenRequest) {
-        return jsonResponse({ error: "Invalid request" }, 400)
-      }
-      return jsonResponse(
-        { error: "Anonymous authentication is unavailable" },
-        503
-      )
-    }
-
-    const verification = await verifyTurnstileToken({
-      token: turnstileToken,
-      secret: feature.config.turnstileSecret,
-      expectedHostname: feature.config.expectedHostname,
-      expectedAction: feature.config.expectedAction,
-      fetchImpl: dependencies.fetchImpl,
-      timeoutMs: dependencies.turnstileTimeoutMs,
-      nowSeconds,
-    })
-    if (verification === "rejected") {
-      return jsonResponse({ error: "Verification failed" }, 403)
-    }
-    if (verification === "unavailable") {
-      return jsonResponse(
-        { error: "Anonymous authentication is unavailable" },
-        503
       )
     }
 
@@ -240,7 +230,16 @@ export function createAgentTokenPostHandler(
   }
 
   return async (request: NextRequest): Promise<NextResponse> => {
-    if (hasAnonymousAgentTokenIntent(request)) {
+    const anonymousIntent = hasAnonymousAgentTokenIntent(request)
+    if (mode === "anonymous") {
+      return anonymousIntent
+        ? handleAnonymousRequest(request)
+        : jsonResponse({ error: "Forbidden" }, 403)
+    }
+    if (anonymousIntent) {
+      if (mode === "owner") {
+        return jsonResponse({ error: "Forbidden" }, 403)
+      }
       return handleAnonymousRequest(request)
     }
 
@@ -260,6 +259,6 @@ export function createAgentTokenPostHandler(
       return jsonResponse({ error: "Forbidden" }, 403)
     }
 
-    return handleAnonymousRequest(request)
+    return jsonResponse({ error: "Unauthorized" }, 401)
   }
 }

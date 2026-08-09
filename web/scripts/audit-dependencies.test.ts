@@ -26,12 +26,6 @@ const emptyAudit: AuditCommandResult = {
   stderr: "",
 }
 
-const ignoredAudit: AuditCommandResult = {
-  exitCode: 0,
-  stdout: "",
-  stderr: "",
-}
-
 const reviewedAudit: AuditCommandResult = {
   exitCode: 1,
   stdout: JSON.stringify({
@@ -50,18 +44,16 @@ const reviewedAudit: AuditCommandResult = {
 function evidence() {
   return {
     production: emptyAudit,
-    complete: reviewedAudit,
-    ignored: ignoredAudit,
+    complete: emptyAudit,
     packageJson,
     bunLock,
     assistantUiPatchAttributes,
     assistantUiStorePatch,
-    now: new Date("2026-07-27T00:00:00Z"),
   }
 }
 
-describe("dependency audit exception policy", () => {
-  test("accepts only the reviewed dev-only advisory before expiry", () => {
+describe("dependency audit policy", () => {
+  test("accepts clean production and complete audits", () => {
     expect(() => validateAuditPolicy(evidence())).not.toThrow()
   })
 
@@ -74,26 +66,12 @@ describe("dependency audit exception policy", () => {
     )
   })
 
-  test("rejects a second complete-audit advisory", () => {
+  test("rejects any complete-audit advisory", () => {
     const candidate = evidence()
-    candidate.complete = {
-      exitCode: 1,
-      stdout: JSON.stringify({
-        "brace-expansion": JSON.parse(reviewedAudit.stdout)["brace-expansion"],
-        sharp: [
-          {
-            id: 1,
-            url: "https://github.com/advisories/GHSA-test-test-test",
-            severity: "high",
-            vulnerable_versions: "<1.0.0",
-          },
-        ],
-      }),
-      stderr: "",
-    }
+    candidate.complete = reviewedAudit
 
     expect(() => validateAuditPolicy(candidate)).toThrow(
-      "must contain only brace-expansion",
+      "complete audit exited 1",
     )
   })
 
@@ -114,9 +92,9 @@ describe("dependency audit exception policy", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
       '"eslint-plugin-react/minimatch/brace-expansion": ' +
-        '["brace-expansion@1.1.16"',
+        '["brace-expansion@1.1.18"',
       '"other-runtime/minimatch/brace-expansion": ' +
-        '["brace-expansion@1.1.16"',
+        '["brace-expansion@1.1.18"',
     )
 
     expect(() => validateAuditPolicy(candidate)).toThrow(
@@ -298,21 +276,4 @@ describe("dependency audit exception policy", () => {
     },
   )
 
-  test("rejects the exception after its review deadline", () => {
-    const candidate = evidence()
-    candidate.now = new Date("2026-09-01T00:00:00Z")
-
-    expect(() => validateAuditPolicy(candidate)).toThrow(
-      "exception expired after 2026-08-31",
-    )
-  })
-
-  test("rejects an ignored audit that hides another finding", () => {
-    const candidate = evidence()
-    candidate.ignored = reviewedAudit
-
-    expect(() => validateAuditPolicy(candidate)).toThrow(
-      "reviewed-exception audit exited 1",
-    )
-  })
 })

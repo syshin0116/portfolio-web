@@ -587,7 +587,7 @@ test.describe.serial("native assistant-ui production journey", () => {
   })
 })
 
-test("bootstraps and resumes the public Turnstile journey with the native runtime", async ({
+test("bootstraps and resumes the public anonymous journey with the native runtime", async ({
   page,
 }, testInfo) => {
   const diagnostics = collectDiagnostics(page)
@@ -601,52 +601,11 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
     "public-root-state-fallback",
     "anonymous"
   )
-  await page.route(
-    "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
-    async (route) => {
-      await route.fulfill({
-        contentType: "application/javascript",
-        body: `
-          window.turnstile = (() => {
-            const widgets = new Map();
-            let sequence = 0;
-            return {
-              render(_container, options) {
-                const id = "fixture-turnstile-" + (++sequence);
-                widgets.set(id, options);
-                const count = Number(
-                  sessionStorage.getItem("fixture-turnstile-renders") || "0"
-                ) + 1;
-                sessionStorage.setItem(
-                  "fixture-turnstile-renders",
-                  String(count)
-                );
-                setTimeout(
-                  () => options.callback("fixture-turnstile-token"),
-                  0
-                );
-                return id;
-              },
-              reset(id) {
-                const options = widgets.get(id);
-                if (options) {
-                  setTimeout(
-                    () => options.callback("fixture-turnstile-token"),
-                    0
-                  );
-                }
-              },
-              remove(id) {
-                widgets.delete(id);
-              }
-            };
-          })();
-        `,
-      })
-    }
-  )
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/agent-token") {
+    if (
+      new URL(request.url()).pathname ===
+      "/api/anonymous-agent-token"
+    ) {
       tokenRequests.push({
         body: request.postData(),
         intent: request.headers()["x-agent-token-intent"] ?? null,
@@ -663,17 +622,8 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
   ).toBeVisible({ timeout: 12_000 })
   expect(tokenRequests).toEqual([
     { body: null, intent: "anonymous" },
-    {
-      body: JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
-      intent: "anonymous",
-    },
     { body: null, intent: "anonymous" },
   ])
-  expect(
-    await page.evaluate(() =>
-      sessionStorage.getItem("fixture-turnstile-renders")
-    )
-  ).toBe("1")
 
   await page.getByRole("button", { name: "대화 목록 열기" }).click()
   await page
@@ -748,93 +698,69 @@ test("bootstraps and resumes the public Turnstile journey with the native runtim
   ).toBeVisible()
   expect(tokenRequests).toEqual([
     { body: null, intent: "anonymous" },
-    {
-      body: JSON.stringify({ turnstileToken: "fixture-turnstile-token" }),
-      intent: "anonymous",
-    },
     { body: null, intent: "anonymous" },
     { body: null, intent: "anonymous" },
   ])
-  expect(
-    await page.evaluate(() =>
-      sessionStorage.getItem("fixture-turnstile-renders")
-    )
-  ).toBe("1")
   await expectA11yClean(page)
   await expectNoBrowserErrors(page, diagnostics)
-  await attachEvidence(page, testInfo, "public-anonymous-turnstile")
+  await attachEvidence(page, testInfo, "public-anonymous-bootstrap")
 })
 
-test("keeps the public Turnstile challenge accessible at mobile widths", async ({
-  browser,
+test("retries the public anonymous bootstrap without a challenge", async ({
+  page,
 }, testInfo) => {
-  for (const width of [320, 390]) {
-    const context = await browser.newContext({
-      reducedMotion: "reduce",
-      viewport: { width, height: 820 },
-    })
-    const page = await context.newPage()
-    const diagnostics = collectDiagnostics(page)
-    const tokenRequests: Array<string | null> = []
-    await resetFixture(page, "default", "anonymous")
-    await page.route(
-      "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
-      async (route) => {
-        await route.fulfill({
-          contentType: "application/javascript",
-          body: `
-            window.turnstile = {
-              render(container) {
-                const control = document.createElement("button");
-                control.type = "button";
-                control.textContent = "로봇이 아닙니다";
-                container.appendChild(control);
-                return "fixture-pending-turnstile";
-              },
-              reset() {},
-              remove() {}
-            };
-          `,
-        })
-      }
-    )
-    page.on("request", (request) => {
-      if (new URL(request.url()).pathname === "/api/agent-token") {
-        tokenRequests.push(request.postData())
-      }
-    })
+  const diagnostics = collectDiagnostics(page)
+  const tokenRequests: Array<string | null> = []
+  const externalChallengeRequests: string[] = []
+  let rejectFirstBootstrap = true
+  await page.setViewportSize({ width: 390, height: 820 })
+  await resetFixture(page, "default", "anonymous")
+  page.on("request", (request) => {
+    if (request.url().includes("challenges.cloudflare.com")) {
+      externalChallengeRequests.push(request.url())
+    }
+  })
+  await page.route("**/api/anonymous-agent-token", async (route) => {
+    tokenRequests.push(route.request().postData())
+    if (rejectFirstBootstrap) {
+      rejectFirstBootstrap = false
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "cache-control": "no-store" },
+        body: JSON.stringify({ error: "fixture unavailable" }),
+      })
+      return
+    }
+    await route.fallback()
+  })
 
-    await page.goto("/anonymous")
-    await expect(
-      page.getByRole("heading", { name: "누구나 테스트할 수 있어요" })
-    ).toBeVisible()
-    await expect(
-      page.getByRole("button", { name: "로봇이 아닙니다" })
-    ).toBeVisible()
-    await expect(
-      page.getByText("대화는 이 브라우저에서 이어지며 최대 14일 뒤 삭제됩니다.")
-    ).toBeVisible()
-    await expect(
-      page.getByRole("link", { name: "소유자 계정으로 로그인" })
-    ).toBeVisible()
-    expect(tokenRequests).toEqual([null])
+  await page.goto("/anonymous")
+  await expect(
+    page.getByRole("heading", {
+      name: "공개 체험에 연결하지 못했습니다",
+    })
+  ).toBeVisible()
+  expect(tokenRequests).toEqual([null])
 
-    const dimensions = await page.evaluate(() => ({
-      clientWidth: document.documentElement.clientWidth,
-      scrollWidth: document.documentElement.scrollWidth,
-    }))
-    expect(dimensions.scrollWidth).toBeLessThanOrEqual(
-      dimensions.clientWidth
-    )
-    await expectA11yClean(page)
-    await expectNoBrowserErrors(page, diagnostics)
-    await attachEvidence(
-      page,
-      testInfo,
-      `public-anonymous-challenge-${width}px`
-    )
-    await context.close()
-  }
+  await page.getByRole("button", { name: "다시 연결" }).click()
+  await expect(
+    page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
+  ).toBeVisible({ timeout: 12_000 })
+  await expect.poll(() => tokenRequests.length).toBe(3)
+  expect(tokenRequests).toEqual([null, null, null])
+  expect(externalChallengeRequests).toEqual([])
+
+  const dimensions = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }))
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(
+    dimensions.clientWidth
+  )
+  await expectA11yClean(page)
+  await expectNoBrowserErrors(page, diagnostics)
+  await attachEvidence(page, testInfo, "public-anonymous-retry")
 })
 
 test("has no horizontal overflow at supported widths and honors reduced motion", async ({

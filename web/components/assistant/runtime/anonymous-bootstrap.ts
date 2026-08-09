@@ -3,23 +3,20 @@ import {
   ANONYMOUS_AGENT_TOKEN_INTENT,
 } from "@/lib/agent-token-intent"
 
-const TOKEN_ENDPOINT = "/api/agent-token"
+const TOKEN_ENDPOINT = "/api/anonymous-agent-token"
 const TOKEN_ISSUER = "syshin0116.dev"
 const TOKEN_AUDIENCE = "agent-api"
 const TOKEN_SCOPE = "anon"
 const TOKEN_TTL_SECONDS = 300
 const MAX_RESPONSE_BYTES = 8 * 1_024
 const MAX_TOKEN_BYTES = 4 * 1_024
-const MAX_TURNSTILE_TOKEN_BYTES = 2_048
 const ANONYMOUS_SUBJECT_PATTERN =
   /^anon:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-const SITE_KEY_PATTERN = /^[A-Za-z0-9_-]{10,128}$/
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/
 
 export type AnonymousChatConfig =
   | { state: "disabled" }
-  | { state: "misconfigured"; message: string }
-  | { state: "enabled"; siteKey: string }
+  | { state: "enabled" }
 
 export interface AnonymousCredential {
   readonly expiresAt: number
@@ -28,10 +25,8 @@ export interface AnonymousCredential {
 }
 
 export type AnonymousBootstrapFailure =
-  | "challenge-required"
   | "network"
   | "rate-limited"
-  | "rejected"
   | "unavailable"
 
 export class AnonymousBootstrapError extends Error {
@@ -56,7 +51,6 @@ interface AnonymousBootstrapOptions {
   fetch?: FetchLike
   nowSeconds?: () => number
   signal: AbortSignal
-  turnstileToken?: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -206,30 +200,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   }
 }
 
-function validatedTurnstileToken(value: string | undefined):
-  | string
-  | undefined {
-  if (value === undefined) return undefined
-  if (
-    value.length === 0 ||
-    value.trim() !== value ||
-    new TextEncoder().encode(value).length > MAX_TURNSTILE_TOKEN_BYTES
-  ) {
-    throw new AnonymousBootstrapError("rejected", 400)
-  }
-  return value
-}
-
-function bootstrapFailure(
-  status: number,
-  usedChallenge: boolean
-): AnonymousBootstrapError {
-  if (!usedChallenge && status === 400) {
-    return new AnonymousBootstrapError("challenge-required", status)
-  }
-  if (status === 400 || status === 403) {
-    return new AnonymousBootstrapError("rejected", status)
-  }
+function bootstrapFailure(status: number): AnonymousBootstrapError {
   if (status === 429) {
     return new AnonymousBootstrapError("rate-limited", status)
   }
@@ -237,28 +208,16 @@ function bootstrapFailure(
 }
 
 export function resolveAnonymousChatConfig(
-  enabled: string | undefined,
-  siteKey: string | undefined
+  enabled: string | undefined
 ): AnonymousChatConfig {
   if (enabled !== "true") return { state: "disabled" }
-  if (
-    siteKey === undefined ||
-    siteKey.trim() !== siteKey ||
-    !SITE_KEY_PATTERN.test(siteKey)
-  ) {
-    return {
-      state: "misconfigured",
-      message: "공개 AI 체험 설정이 완료되지 않았습니다.",
-    }
-  }
-  return { state: "enabled", siteKey }
+  return { state: "enabled" }
 }
 
 export async function bootstrapAnonymousSession(
   options: AnonymousBootstrapOptions
 ): Promise<AnonymousCredential> {
   options.signal.throwIfAborted()
-  const turnstileToken = validatedTurnstileToken(options.turnstileToken)
   const fetchImpl =
     options.fetch ?? ((input, init) => fetch(input, init))
   const init: RequestInit = {
@@ -272,12 +231,6 @@ export async function bootstrapAnonymousSession(
     referrerPolicy: "no-referrer",
     signal: options.signal,
   }
-  if (turnstileToken !== undefined) {
-    const headers = new Headers(init.headers)
-    headers.set("Content-Type", "application/json")
-    init.headers = headers
-    init.body = JSON.stringify({ turnstileToken })
-  }
 
   let response: Response
   try {
@@ -288,18 +241,10 @@ export async function bootstrapAnonymousSession(
   }
   if (!response.ok) {
     await response.body?.cancel()
-    throw bootstrapFailure(response.status, turnstileToken !== undefined)
+    throw bootstrapFailure(response.status)
   }
 
   const body = await readBoundedJson(response)
-  if (
-    turnstileToken === undefined &&
-    isRecord(body) &&
-    exactKeys(body, ["challengeRequired"]) &&
-    body.challengeRequired === true
-  ) {
-    throw new AnonymousBootstrapError("challenge-required", response.status)
-  }
   if (!isRecord(body) || !exactKeys(body, ["expiresAt", "token"])) {
     throw new AnonymousBootstrapError("unavailable")
   }

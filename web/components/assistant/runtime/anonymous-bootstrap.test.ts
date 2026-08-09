@@ -46,47 +46,27 @@ describe("resolveAnonymousChatConfig", () => {
   test.each([undefined, "", "false", "TRUE", "1"])(
     "stays disabled unless the flag is exactly true: %s",
     (flag) => {
-      expect(resolveAnonymousChatConfig(flag, "site-key-123")).toEqual({
+      expect(resolveAnonymousChatConfig(flag)).toEqual({
         state: "disabled",
       })
     }
   )
 
-  test.each([
-    undefined,
-    "",
-    " short",
-    "short",
-    "site key with spaces",
-    "site-key-123 ",
-  ])("fails closed on an invalid public site key: %s", (siteKey) => {
-    expect(resolveAnonymousChatConfig("true", siteKey)).toHaveProperty(
-      "state",
-      "misconfigured"
-    )
-  })
-
-  test("accepts one bounded public site key", () => {
-    expect(
-      resolveAnonymousChatConfig(
-        "true",
-        "1x00000000000000000000AA"
-      )
-    ).toEqual({
+  test("enables public chat from the exact flag alone", () => {
+    expect(resolveAnonymousChatConfig("true")).toEqual({
       state: "enabled",
-      siteKey: "1x00000000000000000000AA",
     })
   })
 })
 
 describe("bootstrapAnonymousSession", () => {
-  test("resumes a cookie session without sending a body", async () => {
+  test("mints or resumes a session without sending a body", async () => {
     let captured: RequestInit | undefined
     const credential = await bootstrapAnonymousSession({
       signal: new AbortController().signal,
       nowSeconds: () => 1_001,
       fetch: async (input, init) => {
-        expect(input).toBe("/api/agent-token")
+        expect(input).toBe("/api/anonymous-agent-token")
         captured = init
         return response({ token: token(), expiresAt: 1_300 })
       },
@@ -110,30 +90,7 @@ describe("bootstrapAnonymousSession", () => {
     expect(captured?.body).toBeUndefined()
   })
 
-  test("sends one exact Turnstile request and never persists the token", async () => {
-    let captured: RequestInit | undefined
-    await bootstrapAnonymousSession({
-      signal: new AbortController().signal,
-      turnstileToken: "one-time-challenge",
-      nowSeconds: () => 1_001,
-      fetch: async (_input, init) => {
-        captured = init
-        return response({ token: token(), expiresAt: 1_300 })
-      },
-    })
-
-    expect(new Headers(captured?.headers).get("content-type")).toBe(
-      "application/json"
-    )
-    expect(new Headers(captured?.headers).get("x-agent-token-intent")).toBe(
-      "anonymous"
-    )
-    expect(captured?.body).toBe(
-      JSON.stringify({ turnstileToken: "one-time-challenge" })
-    )
-  })
-
-  test("maps an empty-cookie resume to a new challenge", async () => {
+  test("rejects the removed challenge response contract", async () => {
     await expect(
       bootstrapAnonymousSession({
         signal: new AbortController().signal,
@@ -141,23 +98,22 @@ describe("bootstrapAnonymousSession", () => {
       })
     ).rejects.toMatchObject({
       name: "AnonymousBootstrapError",
-      kind: "challenge-required",
-      status: 200,
+      kind: "unavailable",
     })
   })
 
   test.each([
-    [400, "rejected"],
-    [403, "rejected"],
+    [400, "unavailable"],
+    [401, "unavailable"],
+    [403, "unavailable"],
     [429, "rate-limited"],
     [503, "unavailable"],
   ] as const)(
-    "maps challenged status %s to %s",
+    "maps bodyless bootstrap status %s to %s",
     async (status, kind) => {
       await expect(
         bootstrapAnonymousSession({
           signal: new AbortController().signal,
-          turnstileToken: "one-time-challenge",
           fetch: async () => response({}, status),
         })
       ).rejects.toMatchObject({ kind, status })

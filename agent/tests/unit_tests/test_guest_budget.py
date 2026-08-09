@@ -69,7 +69,7 @@ class _Session:
         ("100000", "100001", "cannot exceed"),
         ("100000", "6892", "conservative accounting floor"),
         ("100000", "8868", "conservative accounting floor"),
-        ("100000", "18891", "conservative accounting floor"),
+        ("100000", "17945", "conservative accounting floor"),
     ],
 )
 def test_required_guest_budget_configuration_fails_closed(
@@ -103,12 +103,12 @@ def test_optional_guest_budget_is_absent_or_exact(monkeypatch):
 
 
 def test_guest_accounting_floor_adds_count_risk_and_uses_exact_ceiling():
-    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 18_892
+    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 17_946
     assert (
         minimum_guest_run_reservation_micro_usd(
             max_model_calls=4,
-            max_output_tokens=1_024,
-            max_total_tokens=12_000,
+            max_output_tokens=512,
+            max_total_tokens=16_000,
             max_count_risk_tokens=48_000,
         )
         == GUEST_MIN_RUN_RESERVATION_MICRO_USD
@@ -120,15 +120,15 @@ def test_guest_accounting_floor_is_maximized_at_the_output_ceiling():
         minimum_guest_run_reservation_micro_usd(
             max_model_calls=4,
             max_output_tokens=output_tokens,
-            max_total_tokens=12_000,
+            max_total_tokens=16_000,
             max_count_risk_tokens=48_000,
         )
-        for output_tokens in range(1, 1_025)
+        for output_tokens in range(1, 513)
     ]
 
-    assert costs[0] == 15_004
-    assert costs[-2] == 18_888
-    assert costs[-1] == 18_892
+    assert costs[0] == 16_004
+    assert costs[-2] == 17_942
+    assert costs[-1] == 17_946
     assert max(costs) == costs[-1]
 
 

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from datetime import date
 from pathlib import Path
+from threading import Barrier, BrokenBarrierError, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +18,7 @@ from langgraph.prebuilt import ToolRuntime
 from agent import tools
 from agent.graph import _build_backend
 from agent.inspection import INSPECTION_EVENT_NAME, InspectionContractError
+from agent.retrieval import serving
 from agent.retrieval.corpus import CorpusManifestError, content_checksum
 from agent.retrieval.corpus_build import build_index
 from agent.retrieval.protocol import DocId
@@ -156,6 +160,36 @@ def test_generic_filesystem_has_no_blog_content_route() -> None:
     assert set(backend.routes) == {"/memories/", "/skills/"}
     assert isinstance(backend.routes["/skills/"], FilesystemBackend)
     assert "/blog/" not in backend.routes
+
+
+def test_serving_runtime_cold_start_is_single_flight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    constructor_barrier = Barrier(2)
+    constructor_lock = Lock()
+    constructor_calls = 0
+
+    class FakeRuntime:
+        def __init__(self, index_root: Path, *, method_id: str) -> None:
+            del index_root, method_id
+            nonlocal constructor_calls
+            with constructor_lock:
+                constructor_calls += 1
+            with suppress(BrokenBarrierError):
+                constructor_barrier.wait(timeout=0.1)
+
+    monkeypatch.setattr(serving, "ServingRuntime", FakeRuntime)
+    monkeypatch.setenv("BLOG_INDEX_PATH", str(tmp_path))
+    monkeypatch.setenv("RAG_RETRIEVER_METHOD", "bm25")
+    reset_serving_runtime_cache()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        runtimes = tuple(executor.map(lambda _: get_serving_runtime(), range(2)))
+
+    assert runtimes[0] is runtimes[1]
+    assert constructor_calls == 1
+    assert serving._cached_runtime.cache_info().misses == 1
+    reset_serving_runtime_cache()
 
 
 def test_every_curated_tool_excludes_non_published_sources(

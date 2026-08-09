@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from threading import Lock
 
 from agent.retrieval import registry
 from agent.retrieval.corpus import (
@@ -75,6 +76,7 @@ _DATE_LIKE = re.compile(
     r")?$"
 )
 _MAX_GRAPH_RESULTS = 50
+_RUNTIME_INIT_LOCK = Lock()
 
 
 class ServingArtifactError(ValueError):
@@ -859,13 +861,16 @@ def get_serving_runtime() -> ServingRuntime:
         Path(os.environ.get("BLOG_INDEX_PATH", str(DEFAULT_INDEX_ROOT)))
     )
     method_id = os.environ.get("RAG_RETRIEVER_METHOD", DEFAULT_RETRIEVER_METHOD)
-    return _cached_runtime(str(index_root), method_id)
+    # ponytail: one global cold-start lock; shard only if concurrent runtime keys matter.
+    with _RUNTIME_INIT_LOCK:
+        return _cached_runtime(str(index_root), method_id)
 
 
 def reset_serving_runtime_cache() -> None:
     """Clear process-local serving state for tests and controlled reloads."""
 
-    _cached_runtime.cache_clear()
+    with _RUNTIME_INIT_LOCK:
+        _cached_runtime.cache_clear()
 
 
 __all__ = [

@@ -93,7 +93,7 @@ jobs:
           docker buildx imagetools inspect "$image_digest" >/dev/null
           {
             printf '### Agent image identity\n\n'
-            printf -- '- Attested OCI index: `%s`\n' "$index_image"
-            printf -- '- Linux amd64 runtime: `%s`\n' "$image_digest"
+            printf -- '- Attested OCI index: %s\n' "$index_image"
+            printf -- '- Linux amd64 runtime: %s\n' "$image_digest"
           } >>"$GITHUB_STEP_SUMMARY"
           printf 'image_digest=%s\n' "$image_digest" >>"$GITHUB_OUTPUT"

@@ -236,7 +236,7 @@ EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
 )
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (
-        "d7e764e97de3f6d6fde5bec8c6265bf58c50769c15a8d2f8131eb854c410ef9b"
+        "291e63968a0a7773fce862ba423bd84f21bbf5a251de2e56fbc1bc6fa281f3af"
     ),
     ".github/workflows/agent-release.yml": (
         "87b9f80f01e0fa25b150d7ea02cd9c91b8eaa699b5a2a66518467c7622974961"

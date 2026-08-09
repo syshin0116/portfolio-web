@@ -2358,6 +2358,56 @@ async def test_guest_sse_rejects_nested_frame_before_unsafe_body_bytes_are_sent(
     assert secret.encode() not in raw_bodies
 
 
+async def test_guest_stream_replay_waits_for_the_original_disconnect():
+    body = json.dumps({"channels": ["messages"]}).encode()
+    headers = {
+        **_guest_headers(),
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    }
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/threads/guest-thread/stream/events",
+        "raw_path": b"/threads/guest-thread/stream/events",
+        "query_string": b"",
+        "headers": [
+            (key.lower().encode(), value.encode()) for key, value in headers.items()
+        ],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+    tail_started = asyncio.Event()
+    disconnect = asyncio.Event()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        tail_started.set()
+        await disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    async def downstream(_scope, guarded_receive, _send):
+        assert json.loads(await _request_body(guarded_receive)) == {
+            "channels": ["messages"],
+            "depth": 0,
+            "namespaces": [[]],
+        }
+        followup = asyncio.create_task(guarded_receive())
+        await asyncio.wait_for(tail_started.wait(), timeout=1)
+        assert not followup.done()
+        disconnect.set()
+        assert await followup == {"type": "http.disconnect"}
+
+    await GuestRunGuard(downstream)(scope, receive, lambda _message: None)
+
+
 async def test_guest_stream_response_has_chunk_and_total_byte_limits():
     async def oversized_stream(scope, receive, send):
         await send(

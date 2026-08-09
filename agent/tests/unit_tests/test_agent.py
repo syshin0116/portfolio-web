@@ -356,6 +356,19 @@ def test_guest_accounting_floor_tracks_the_runtime_policy():
     )
 
 
+def test_guest_budget_leaves_capacity_for_the_final_answer_after_retrieval():
+    budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
+
+    first = budget.reserve_model(input_tokens=1_113)
+    budget.settle_model(first, actual_tokens=1_190)
+    second = budget.reserve_model(input_tokens=3_196)
+    budget.settle_model(second, actual_tokens=3_300)
+    final = budget.reserve_model(input_tokens=10_998)
+
+    assert final.reserved_tokens == 11_510
+    assert budget.snapshot().charged_tokens == 16_000
+
+
 @pytest.fixture(autouse=True)
 def _replace_provider_token_count(monkeypatch):
     monkeypatch.setattr(
@@ -1368,7 +1381,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     )
     assert WRITE_TODOS_SYSTEM_PROMPT not in guest_system_text
     snapshot = budget.snapshot()
-    assert snapshot.policy_id == "anonymous-public-v2"
+    assert snapshot.policy_id == "anonymous-public-v3"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
 

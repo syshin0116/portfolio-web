@@ -28,7 +28,7 @@ OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH = 64
 # snapshot here only after OpenAI publishes one and its response metadata is
 # captured by a separately reviewed provider-backed test.
 OPENAI_GUEST_RESPONSE_MODEL_NAMES = frozenset({OPENAI_GUEST_MODEL_NAME})
-OPENAI_GUEST_MAX_OUTPUT_TOKENS = 1_024
+OPENAI_GUEST_MAX_OUTPUT_TOKENS = 512
 OPENAI_GUEST_TIMEOUT_SECONDS = 60.0
 
 OPENAI_API_BASE_URL = "https://api.openai.com/v1"

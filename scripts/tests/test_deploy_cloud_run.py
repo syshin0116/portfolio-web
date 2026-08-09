@@ -39,6 +39,7 @@ class CloudRunDeliveryTests(unittest.TestCase):
         image_digest = PREVIEW_IMAGE_DIGEST if preview else IMAGE_DIGEST
         image_prefix = image_digest.rsplit(":", 1)[0] + ":"
         previous_image_digest = image_prefix + "4" * 64
+        previous_index_digest = image_prefix + "6" * 64
         rollback_image_digest = image_prefix + "5" * 64
         job_images = {
             f"{service}-migrate": previous_image_digest,
@@ -58,7 +59,9 @@ class CloudRunDeliveryTests(unittest.TestCase):
                     "serving": f"{service}-old",
                     "serving_target_latest": True,
                     "smoke": False,
-                    "service_image": previous_image_digest,
+                    # Cloud Run keeps the requested OCI index on the Service but
+                    # exposes its selected Linux manifest on the Revision.
+                    "service_image": previous_index_digest,
                     "revision_images": {
                         f"{service}-old": previous_image_digest,
                         f"{service}-target": rollback_image_digest,
@@ -1412,6 +1415,26 @@ class CloudRunDeliveryTests(unittest.TestCase):
         self.assertIn("drifted from the exact executable contract", result.stderr)
         self.assertNotIn("gcloud run jobs update", operations)
         self.assertNotIn("gcloud run services update", operations)
+
+    def test_service_index_and_revision_runtime_digest_are_distinct(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = self._fixture(directory)
+            state_path = Path(directory) / "state.json"
+            before = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertNotEqual(
+                before["service_image"],
+                before["revision_images"]["agent-old"],
+            )
+            result = self._run(directory, environment, "deploy")
+            operations = (Path(directory) / "operations.log").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            1,
+            operations.count("gcloud run jobs update agent-scheduled-maintenance"),
+        )
 
     def test_job_etag_drift_fails_closed_before_execution_or_service_update(
         self,

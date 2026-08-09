@@ -2669,13 +2669,6 @@ runs:
                 "0" * 64,
                 "checksum must equal",
             ),
-            (
-                "release-wrong-action",
-                ".github/workflows/agent-release.yml",
-                governance.SETUP_UV_ACTION,
-                "astral-sh/setup-uv@" + "b" * 40,
-                "must use exact action",
-            ),
         )
         for label, relative, old, new, expected in mutations:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:

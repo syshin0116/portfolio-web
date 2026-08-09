@@ -20,8 +20,10 @@ from langchain_core.messages import (
     ToolMessage,
     message_chunk_to_message,
 )
+from langchain_core.runnables.config import var_child_runnable_config
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+from langgraph.pregel._messages import StreamMessagesHandlerV2
 from openai.resources.responses.input_tokens import AsyncInputTokens
 
 import agent.capabilities.token_counting as token_counting
@@ -1086,6 +1088,30 @@ async def test_openai_native_stream_and_capture_have_identical_token_payloads():
         snapshot.provider_cache_read_input_tokens,
         snapshot.provider_cache_write_input_tokens,
     ) == (2, 2, 0, 1)
+
+
+async def test_openai_capture_ignores_ambient_v2_streaming_callback():
+    request = ModelRequest(
+        model=_openai_guest_model(),
+        system_message=SystemMessage(content="ambient stream system"),
+        messages=[HumanMessage(content="ambient stream question")],
+        tools=[exact_count_tool],
+    )
+    emitted = []
+    handler = StreamMessagesHandlerV2(emitted.append, False)
+    token = var_child_runnable_config.set(
+        {
+            "callbacks": [handler],
+            "metadata": {"langgraph_checkpoint_ns": "model"},
+        }
+    )
+    try:
+        captured_payload = await _capture_openai_generation_payload(request)
+    finally:
+        var_child_runnable_config.reset(token)
+
+    assert captured_payload["stream"] is False
+    assert emitted == []
 
 
 @pytest.mark.parametrize("result", [-1, True, "321"])

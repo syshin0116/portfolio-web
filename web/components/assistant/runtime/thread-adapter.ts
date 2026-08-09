@@ -169,8 +169,9 @@ export class AegraThreadAdapter implements RemoteThreadListAdapter {
   }
 
   async initialize(threadId: string) {
+    const remoteThreadId = `aui-${threadId}`
     const thread = await this.#client.threads.create({
-      threadId,
+      threadId: remoteThreadId,
       ifExists: "do_nothing",
       graphId: this.#assistantId,
       metadata: {

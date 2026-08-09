@@ -7,7 +7,7 @@ import {
 } from "./thread-adapter"
 
 describe("AegraThreadAdapter", () => {
-  test("uses identical remote and external IDs and stamps deferred metadata", async () => {
+  test("maps local IDs to server-safe remote IDs and stamps deferred metadata", async () => {
     const calls: unknown[] = []
     const client = fakeClient({
       create: async (payload: unknown) => {
@@ -19,13 +19,13 @@ describe("AegraThreadAdapter", () => {
       assistantId: "blog-agent",
     })
 
-    expect(await adapter.initialize("thread-1")).toEqual({
+    expect(await adapter.initialize("__LOCALID_84fIWOf")).toEqual({
       remoteId: "thread-1",
       externalId: "thread-1",
     })
     expect(calls).toEqual([
       {
-        threadId: "thread-1",
+        threadId: "aui-__LOCALID_84fIWOf",
         ifExists: "do_nothing",
         graphId: "blog-agent",
         metadata: {

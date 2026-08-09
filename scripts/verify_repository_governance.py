@@ -206,7 +206,6 @@ UV_REQUIRED_VERSION = f"=={UV_VERSION}"
 UV_CHECKSUM = "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829"
 SETUP_UV_ACTION = "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
 EXPECTED_SETUP_UV_WORKFLOW_COUNTS = {
-    ".github/workflows/agent-release.yml": 1,
     ".github/workflows/ci.yml": 5,
     ".github/workflows/dependency-audit.yml": 2,
     ".github/workflows/protocol-compat.yml": 1,
@@ -236,30 +235,21 @@ EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
 )
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (
-        "291e63968a0a7773fce862ba423bd84f21bbf5a251de2e56fbc1bc6fa281f3af"
+        "c74bbc48930c45af877437f0ea820f49913c3dd8d06daabd15a436e9aa1c6427"
     ),
     ".github/workflows/agent-release.yml": (
-        "87b9f80f01e0fa25b150d7ea02cd9c91b8eaa699b5a2a66518467c7622974961"
+        "6e7916d7b22deb4d07af9b76f8bf832e937da4856ba1a5ea8198cb1c68b869a3"
     ),
     ".github/workflows/preview-agent.yml": (
-        "290e390dc2c284addc013f443a4b849cef403e2ac21cfaa6c4faa3944298d5dc"
+        "2d42339a073f8b5c40f3a9b9573554d4f2d8b070f3cbdd93a19655e060f526e8"
     ),
     ".github/workflows/deploy-agent.yml": (
-        "40096ffb8bcf7ec139a626dcfa87cf0ff8b89de4dcb288b10bc27c581dd0cb66"
+        "191bcae1f9db80a5951fda7ce446a22c957c12b509a42bd02b5cbed3a6073feb"
     ),
-}
-AGENT_RELEASE_WORKFLOW_SECRET = "AGENT_SMOKE_BEARER_TOKEN"
-AGENT_RELEASE_CALLER_SECRET_SOURCES = {
-    ".github/workflows/preview-agent.yml": "AGENT_PREVIEW_SMOKE_BEARER_TOKEN",
-    ".github/workflows/deploy-agent.yml": "AGENT_PRODUCTION_SMOKE_BEARER_TOKEN",
 }
 AGENT_DELIVERY_IDENTITY_SCRIPT = "scripts/validate_agent_delivery_identity.sh"
 AGENT_DELIVERY_IDENTITY_SCRIPT_SHA256 = (
-    "05517f3f6e0a2119f1e88706e71eac4393bf4dab986d347b43cff568c3aa4688"
-)
-AGENT_RELEASE_CANDIDATE_SCRIPT = "scripts/validate_agent_release_candidate.py"
-AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256 = (
-    "7fd935a23fd5cfccbb713f17eceefcf6ff288e50b20af1e927b232da42321118"
+    "5694607d9b8281a23cf484df056f5b09f95489ba336050df16e666f11dbad8fb"
 )
 VERCEL_CONFIG = "web/vercel.json"
 EXPECTED_VERCEL_AUTODEPLOY_CONFIG = {
@@ -1201,59 +1191,6 @@ def validate_agent_delivery_permission_chain(
                 f"actual_sha256={actual_sha256}"
             )
 
-    release_relative = ".github/workflows/agent-release.yml"
-    release_document = documents.get((repository_root / release_relative).resolve())
-    if release_document is not None:
-        try:
-            workflow_call = workflow_trigger_config(release_document).get(
-                "workflow_call"
-            )
-            if not isinstance(workflow_call, dict):
-                raise GovernanceError("workflow_call must be a mapping")
-            secrets = workflow_call.get("secrets")
-            if not isinstance(secrets, dict):
-                raise GovernanceError("workflow_call.secrets must be a mapping")
-            secret_names = set(secrets)
-            definition = secrets.get(AGENT_RELEASE_WORKFLOW_SECRET)
-            if secret_names != {AGENT_RELEASE_WORKFLOW_SECRET} or not isinstance(
-                definition, dict
-            ):
-                raise GovernanceError(
-                    "workflow_call.secrets must contain only the smoke token"
-                )
-            if definition.get("required") != "true":
-                raise GovernanceError("the smoke token must be required")
-        except GovernanceError as exc:
-            errors.append(
-                f"{release_relative}: {AGENT_RELEASE_WORKFLOW_SECRET} must be "
-                "declared as the sole required workflow_call secret: "
-                f"{exc}"
-            )
-
-    for caller_relative, source_secret in AGENT_RELEASE_CALLER_SECRET_SOURCES.items():
-        caller_document = documents.get((repository_root / caller_relative).resolve())
-        if caller_document is None:
-            continue
-        try:
-            release_job = _workflow_jobs(caller_document)["release"]
-            secret_node = _mapping_value(release_job, "secrets")
-            actual_secrets = (
-                _node_to_data(secret_node) if secret_node is not None else None
-            )
-            expected_secrets = {
-                AGENT_RELEASE_WORKFLOW_SECRET: (f"${{{{ secrets.{source_secret} }}}}")
-            }
-            if actual_secrets != expected_secrets:
-                raise GovernanceError(
-                    f"expected {expected_secrets!r}, found {actual_secrets!r}"
-                )
-        except (GovernanceError, KeyError) as exc:
-            errors.append(
-                f"{caller_relative}: release job must pass only "
-                f"{AGENT_RELEASE_WORKFLOW_SECRET} from {source_secret}; "
-                f"secret inheritance is forbidden: {exc}"
-            )
-
     permission_chains = (
         (
             ".github/workflows/preview-agent.yml",
@@ -1339,22 +1276,6 @@ def validate_agent_delivery_permission_chain(
         errors.append(
             f"{AGENT_DELIVERY_IDENTITY_SCRIPT} must be the exact reviewed "
             "target/phase identity selector"
-        )
-    candidate_script_path = repository_root / AGENT_RELEASE_CANDIDATE_SCRIPT
-    try:
-        candidate_script_sha256 = hashlib.sha256(
-            candidate_script_path.read_bytes()
-        ).hexdigest()
-    except OSError:
-        candidate_script_sha256 = None
-    if (
-        not candidate_script_path.is_file()
-        or candidate_script_path.is_symlink()
-        or candidate_script_sha256 != AGENT_RELEASE_CANDIDATE_SCRIPT_SHA256
-    ):
-        errors.append(
-            f"{AGENT_RELEASE_CANDIDATE_SCRIPT} must be the exact reviewed "
-            "post-approval release candidate gate"
         )
     return errors
 

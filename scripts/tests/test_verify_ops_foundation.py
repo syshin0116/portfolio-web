@@ -194,20 +194,6 @@ class StaticVerifierMutationTests(unittest.TestCase):
         )
         self.assertIn('MODEL                     = "openai:gpt-5.6-luna"', production)
 
-        deploy_source = (REPO_ROOT / "scripts/deploy_cloud_run.sh").read_text(
-            encoding="utf-8"
-        )
-        preview_expectation, production_expectation = deploy_source.split(
-            "    agent)", 1
-        )
-        self.assertNotIn("OPENAI_API_KEY", preview_expectation)
-        self.assertIn(
-            '{"name":"OPENAI_API_KEY","secret":"openai-api-key"}',
-            production_expectation,
-        )
-        self.assertNotIn("ANTHROPIC_API_KEY", production_expectation)
-        self.assertNotIn("LANGCHAIN_API_KEY", production_expectation)
-
     def test_delivery_versions_are_four_production_numeric_pins(self) -> None:
         variables = (REPO_ROOT / "infra/gcp/variables.tf").read_text(encoding="utf-8")
         version_contract = variables.split('variable "agent_secret_versions" {', 1)[1]

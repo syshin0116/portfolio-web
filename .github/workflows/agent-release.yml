@@ -11,86 +11,66 @@ on:
         description: Exact reviewer-gated GitHub release environment.
         required: true
         type: string
-      mode:
-        description: Deploy the supplied digest or roll traffic back.
-        required: true
-        type: string
       source_sha:
         description: Exact source commit baked into the reviewed candidate.
         required: true
         type: string
-      pull_request_number:
-        description: Exact preview PR number; zero for production.
-        required: false
-        default: 0
-        type: number
       image_digest:
         description: Fresh immutable image from the build workflow.
-        required: false
-        default: ""
-        type: string
-      rollback_revision:
-        description: Exact existing revision for rollback mode.
-        required: false
-        default: ""
-        type: string
-    secrets:
-      AGENT_SMOKE_BEARER_TOKEN:
         required: true
+        type: string
 
 permissions: {}
 
 jobs:
   release:
-    name: Release reviewed agent candidate
+    name: Deploy reviewed agent image
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:
       checks: read
       contents: read
       id-token: write
-      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.source_sha }}
-      - name: Revalidate exact release candidate after approval
+      - name: Verify exact production revision passed CI
+        if: inputs.target == 'production'
         env:
-          AGENT_SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
-          CANDIDATE_EVENT_NAME: ${{ github.event_name }}
-          CANDIDATE_ENVIRONMENT: ${{ inputs.environment }}
-          CANDIDATE_IMAGE_DIGEST: ${{ inputs.image_digest }}
-          CANDIDATE_MODE: ${{ inputs.mode }}
-          CANDIDATE_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
-          CANDIDATE_REF: ${{ github.ref }}
-          CANDIDATE_REPOSITORY: ${{ github.repository }}
-          CANDIDATE_ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
-          CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha }}
-          CANDIDATE_TARGET: ${{ inputs.target }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          candidate_args=(
-            --target "$CANDIDATE_TARGET"
-            --environment "$CANDIDATE_ENVIRONMENT"
-            --mode "$CANDIDATE_MODE"
-            --repository "$CANDIDATE_REPOSITORY"
-            --source-sha "$CANDIDATE_SOURCE_SHA"
-            --event-name "$CANDIDATE_EVENT_NAME"
-            --ref "$CANDIDATE_REF"
-            --image-digest "$CANDIDATE_IMAGE_DIGEST"
-            --rollback-revision "$CANDIDATE_ROLLBACK_REVISION"
-          )
-          if [[ "$CANDIDATE_TARGET" == "preview" ]]; then
-            candidate_args+=(
-              --pull-request-number "$CANDIDATE_PULL_REQUEST_NUMBER"
-            )
-          fi
-          python3 scripts/validate_agent_release_candidate.py \
-            "${candidate_args[@]}"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          require_current_main() {
+            [[ "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" == "$SOURCE_SHA" ]]
+          }
+          require_current_main
+          for attempt in {1..90}; do
+            checks="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/check-runs?filter=latest&per_page=100")"
+            pending=false
+            for name in ci/check protocol/compat wiki/verify; do
+              state="$(jq -r --arg name "$name" '
+                [.check_runs[] | select(.name == $name and .app.id == 15368)]
+                | if length == 0 or .[0].status != "completed" then "pending"
+                  elif length != 1 then "failure"
+                  else .[0].conclusion end
+              ' <<<"$checks")"
+              case "$state" in
+                success) ;;
+                pending) pending=true ;;
+                *) printf '%s did not pass: %s\n' "$name" "$state" >&2; exit 1 ;;
+              esac
+            done
+            [[ "$pending" == false ]] && break
+            (( attempt < 90 )) || { printf 'required CI checks timed out\n' >&2; exit 1; }
+            sleep 10
+          done
+          require_current_main
       - name: Select exact deployer identity
         id: delivery_identity
         env:
@@ -108,32 +88,117 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           version: "577.0.0"
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.11.29"
-          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
-          enable-cache: false
-      - name: Execute fail-closed deployment
-        if: inputs.mode == 'deploy'
+      - name: Deploy, smoke, and promote
         env:
           CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
-          DELIVERY_RUN_ATTEMPT: ${{ github.run_attempt }}
-          DELIVERY_RUN_ID: ${{ github.run_id }}
           GCP_PROJECT_ID: festive-ally-503605-v7
           GCP_REGION: asia-southeast1
-          GRANT_PROBE_JOB: ${{ steps.delivery_identity.outputs.grant_probe_job }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
-          MAINTENANCE_JOB: ${{ steps.delivery_identity.outputs.maintenance_job }}
-          MIGRATION_JOB: ${{ steps.delivery_identity.outputs.migration_job }}
-          SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
           SOURCE_SHA: ${{ inputs.source_sha }}
-        run: scripts/deploy_cloud_run.sh deploy
-      - name: Execute fail-closed rollback
-        if: inputs.mode == 'rollback'
-        env:
-          CLOUD_RUN_SERVICE: ${{ steps.delivery_identity.outputs.cloud_run_service }}
-          GCP_PROJECT_ID: festive-ally-503605-v7
-          GCP_REGION: asia-southeast1
-          ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
-          SMOKE_BEARER_TOKEN: ${{ secrets.AGENT_SMOKE_BEARER_TOKEN }}
-        run: scripts/deploy_cloud_run.sh rollback "$ROLLBACK_REVISION"
+          TARGET: ${{ inputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$TARGET" in
+            preview)
+              expected_repository="asia-southeast1-docker.pkg.dev/${GCP_PROJECT_ID}/agent-preview/agent"
+              ;;
+            production)
+              expected_repository="asia-southeast1-docker.pkg.dev/${GCP_PROJECT_ID}/agent/agent"
+              ;;
+            *)
+              printf 'unsupported deployment target\n' >&2
+              exit 1
+              ;;
+          esac
+          digest="${IMAGE_DIGEST#"${expected_repository}@sha256:"}"
+          [[ "$IMAGE_DIGEST" == "${expected_repository}@sha256:${digest}" ]]
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+
+          smoke_tag_active=false
+          cleanup_smoke_tag() {
+            status=$?
+            trap - EXIT
+            if [[ "$smoke_tag_active" == true ]]; then
+              gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+                --project "$GCP_PROJECT_ID" \
+                --region "$GCP_REGION" \
+                --remove-tags smoke \
+                --quiet || true
+            fi
+            exit "$status"
+          }
+          trap cleanup_smoke_tag EXIT
+
+          smoke_tag_active=true
+          gcloud run services update "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --image "$IMAGE_DIGEST" \
+            --no-traffic \
+            --tag smoke \
+            --deploy-health-check \
+            --quiet
+          revision="$(
+            gcloud run services describe "$CLOUD_RUN_SERVICE" \
+              --project "$GCP_PROJECT_ID" \
+              --region "$GCP_REGION" \
+              --format 'value(status.latestReadyRevisionName)'
+          )"
+          deployed_image="$(
+            gcloud run revisions describe "$revision" \
+              --project "$GCP_PROJECT_ID" \
+              --region "$GCP_REGION" \
+              --format 'value(spec.containers[0].image)'
+          )"
+          [[ "$deployed_image" == "$IMAGE_DIGEST" ]]
+
+          smoke_url="$(
+            gcloud run services describe "$CLOUD_RUN_SERVICE" \
+              --project "$GCP_PROJECT_ID" \
+              --region "$GCP_REGION" \
+              --format json \
+              | jq -er '
+                [.status.traffic[] | select(.tag == "smoke") | .url]
+                | if length == 1 and (.[0] | type == "string")
+                    and (.[0] | startswith("https://"))
+                  then .[0]
+                  else error("Cloud Run did not return exactly one smoke URL") end
+              '
+          )"
+
+          verify_release() {
+            curl --fail --silent --show-error --max-time 20 \
+              --retry 5 --retry-all-errors --retry-delay 2 \
+              "${smoke_url}/live" | jq -e '. == {"status":"alive"}' >/dev/null
+            curl --fail --silent --show-error --max-time 20 \
+              --retry 5 --retry-all-errors --retry-delay 2 \
+              "${smoke_url}/ready" | jq -e '. == {"status":"ready"}' >/dev/null
+            unauthenticated_status="$(
+              curl --silent --show-error --max-time 20 --max-redirs 0 \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                --header 'content-type: application/json' \
+                --data \
+                  '{"id":1,"method":"run.start","params":{"assistant_id":"agent","input":{"messages":[{"role":"user","content":"smoke"}]}}}' \
+                "${smoke_url}/threads/00000000-0000-4000-8000-000000000001/commands"
+            )"
+            [[ "$unauthenticated_status" == "401" ]]
+          }
+
+          verify_release
+
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --remove-tags smoke \
+            --quiet
+          smoke_tag_active=false
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" \
+            --region "$GCP_REGION" \
+            --to-revisions "${revision}=100" \
+            --quiet
+          trap - EXIT
+          printf 'Cloud Run release passed: %s %s\n' "$revision" "$IMAGE_DIGEST"

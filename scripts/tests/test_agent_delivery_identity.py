@@ -21,9 +21,6 @@ TARGETS = {
             "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent"
         ),
         "service": "agent-preview",
-        "migration": "agent-preview-migrate",
-        "grant": "agent-preview-grants",
-        "maintenance": "agent-preview-maintenance",
     },
     "production": {
         "environment": "Agent Production",
@@ -37,9 +34,6 @@ TARGETS = {
             "asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent"
         ),
         "service": "agent",
-        "migration": "agent-migrate",
-        "grant": "agent-grants",
-        "maintenance": "agent-maintenance",
     },
 }
 PROVIDER = (
@@ -63,7 +57,7 @@ def _environment(target: str, role: str) -> dict[str, str]:
 
 
 class AgentDeliveryIdentityTests(unittest.TestCase):
-    def test_builder_initializes_attestation_driver_before_gcp_auth(self) -> None:
+    def test_builder_pushes_one_linux_runtime_digest(self) -> None:
         builder = (REPO_ROOT / ".github/workflows/agent-image-build.yml").read_text(
             encoding="utf-8"
         )
@@ -75,8 +69,10 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
         build = builder.index("docker buildx build")
 
         self.assertIn("driver: docker-container", builder)
-        self.assertIn("--provenance=mode=max", builder)
-        self.assertIn("--sbom=true", builder)
+        self.assertIn("--platform linux/amd64", builder)
+        self.assertIn("--provenance=false", builder)
+        self.assertIn("--sbom=false", builder)
+        self.assertNotIn("resolve_agent_runtime_image.py", builder)
         self.assertLess(setup, auth)
         self.assertLess(auth, build)
 
@@ -94,10 +90,7 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
         )
         self.assertIn("vars.AGENT_CLOUD_RUN_ENABLED == 'true'", preview)
         self.assertNotIn("AGENT_CLOUD_RUN_PREVIEW_ENABLED", production)
-        self.assertEqual(
-            2,
-            production.count("vars.AGENT_CLOUD_RUN_ENABLED == 'true'"),
-        )
+        self.assertEqual(1, production.count("vars.AGENT_CLOUD_RUN_ENABLED == 'true'"))
 
     def test_preview_build_and_release_pin_pr_head_not_synthetic_merge_sha(
         self,
@@ -121,10 +114,7 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
         self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", builder)
         self.assertIn("ref: ${{ inputs.source_sha }}", release)
         self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", release)
-        self.assertIn(
-            "MAINTENANCE_JOB: ${{ steps.delivery_identity.outputs.maintenance_job }}",
-            release,
-        )
+        self.assertNotIn("gcloud run jobs", release)
 
     def test_caller_only_concurrency_never_cancels_an_approved_release(self) -> None:
         preview = (REPO_ROOT / ".github/workflows/preview-agent.yml").read_text(
@@ -147,22 +137,30 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
         )
         self.assertNotIn("\n    concurrency:\n", release)
 
-    def test_release_candidate_tuple_is_checked_before_gcp_auth(self) -> None:
+    def test_release_uses_native_cloud_run_candidate_promotion(self) -> None:
         release = (REPO_ROOT / ".github/workflows/agent-release.yml").read_text(
             encoding="utf-8"
         )
 
-        gate = release.index("python3 scripts/validate_agent_release_candidate.py")
+        gate = release.index("Verify exact production revision passed CI")
         auth = release.index("google-github-actions/auth@")
+        deploy = release.index("gcloud run services update")
+        smoke = release.index('unauthenticated_status="$(')
+        promote = release.index('--to-revisions "${revision}=100"')
         self.assertLess(gate, auth)
-        for argument in (
-            '--environment "$CANDIDATE_ENVIRONMENT"',
-            '--image-digest "$CANDIDATE_IMAGE_DIGEST"',
-            '--mode "$CANDIDATE_MODE"',
-            '--rollback-revision "$CANDIDATE_ROLLBACK_REVISION"',
-            '--source-sha "$CANDIDATE_SOURCE_SHA"',
-        ):
-            self.assertIn(argument, release)
+        self.assertLess(deploy, smoke)
+        self.assertLess(smoke, promote)
+        self.assertIn("ci/check protocol/compat wiki/verify", release)
+        self.assertIn(".app.id == 15368", release)
+        self.assertIn('select(.tag == "smoke") | .url', release)
+        self.assertIn("trap cleanup_smoke_tag EXIT", release)
+        self.assertIn('[[ "$unauthenticated_status" == "401" ]]', release)
+        self.assertIn("--no-traffic", release)
+        self.assertNotIn("AGENT_SMOKE_BEARER_TOKEN", release)
+        self.assertNotIn("GCP_PROJECT_NUMBER", release)
+        self.assertNotIn("astral-sh/setup-uv@", release)
+        self.assertNotIn("scripts/deploy_cloud_run.sh", release)
+        self.assertNotIn("gcloud run jobs", release)
 
     def test_each_builder_is_secretless_and_selects_only_its_repository(self) -> None:
         for target, values in TARGETS.items():
@@ -200,11 +198,6 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
                 self.assertIn(f"workload_identity_provider={PROVIDER}\n", result.stdout)
                 self.assertIn(f"service_account={values['deployer']}\n", result.stdout)
                 self.assertIn(f"cloud_run_service={values['service']}\n", result.stdout)
-                self.assertIn(f"migration_job={values['migration']}\n", result.stdout)
-                self.assertIn(f"grant_probe_job={values['grant']}\n", result.stdout)
-                self.assertIn(
-                    f"maintenance_job={values['maintenance']}\n", result.stdout
-                )
                 self.assertNotIn("image_repository=", result.stdout)
 
     def test_builder_rejects_any_release_environment(self) -> None:

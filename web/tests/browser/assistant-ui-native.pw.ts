@@ -332,7 +332,6 @@ test.describe.serial("native assistant-ui production journey", () => {
     expect((await fixtureState(page)).streamSubscriptions).toEqual([
       ...initialState.streamSubscriptions,
       ...initialState.streamSubscriptions,
-      ...initialState.streamSubscriptions,
     ])
     await expect(
       page.getByText("중첩 작업이 끝났습니다.")

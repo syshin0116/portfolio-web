@@ -982,7 +982,7 @@ class LocalGovernanceTests(unittest.TestCase):
             ),
             "attestation": (
                 (
-                    "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+                    "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
                     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                 ),
             ),
@@ -1033,7 +1033,7 @@ class LocalGovernanceTests(unittest.TestCase):
             "    services:\n"
             "      postgres:\n"
             "        image: postgres:17@sha256:"
-            "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d\n"
+            "7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317\n"
         )
         mutations = {
             "name": ((header, header.replace("name: ci/agent", "name: ci/agent-v2")),),
@@ -1063,7 +1063,7 @@ class LocalGovernanceTests(unittest.TestCase):
                     postgres_image,
                     postgres_image.replace(
                         "postgres:17@sha256:"
-                        "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d",
+                        "7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317",
                         "attacker.invalid/service:latest",
                     ),
                 ),
@@ -1097,7 +1097,7 @@ class LocalGovernanceTests(unittest.TestCase):
             "database-version": (
                 (
                     "        image: postgres:17@sha256:"
-                    "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d\n",
+                    "7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317\n",
                     "        image: postgres:16\n",
                 ),
             ),
@@ -1214,9 +1214,9 @@ class LocalGovernanceTests(unittest.TestCase):
             "# v9.0.0\n"
             "        if: needs.changes.outputs.agent == 'true'\n"
             "        with:\n"
-            '          version: "0.11.29"\n'
+            '          version: "0.12.3"\n'
             "          checksum: "
-            "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829\n"
+            "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101\n"
             "          enable-cache: true\n"
             "          cache-dependency-glob: uv.lock\n"
         )
@@ -2386,12 +2386,12 @@ runs:
         mutations = (
             (
                 "checksum",
-                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829",
+                "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101",
                 "0" * 64,
             ),
             (
                 "uv-version",
-                'version: "0.11.29"',
+                'version: "0.12.3"',
                 'version: "0.11.28"',
             ),
             (
@@ -2428,12 +2428,12 @@ runs:
         mutations = (
             (
                 "checksum",
-                "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829",
+                "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101",
                 "0" * 64,
             ),
             (
                 "uv-version",
-                'version: "0.11.29"',
+                'version: "0.12.3"',
                 'version: "0.11.28"',
             ),
             (
@@ -2644,21 +2644,21 @@ runs:
             (
                 "root-required-version",
                 "pyproject.toml",
-                'required-version = "==0.11.29"',
-                'required-version = ">=0.11.29"',
+                'required-version = "==0.12.3"',
+                'required-version = ">=0.12.3"',
                 "tool.uv.required-version must equal",
             ),
             (
                 "docker-version",
                 "Dockerfile",
-                'ARG UV_VERSION="0.11.29"',
+                'ARG UV_VERSION="0.12.3"',
                 'ARG UV_VERSION="0.11.28"',
                 "UV_VERSION ARG must remain exact",
             ),
             (
                 "ci-unpinned-version",
                 ".github/workflows/ci.yml",
-                '          version: "0.11.29"\n',
+                '          version: "0.12.3"\n',
                 "",
                 "version must equal",
             ),

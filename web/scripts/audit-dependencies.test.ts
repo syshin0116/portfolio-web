@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
 import {
-  ASSISTANT_UI_STORE_PATCH,
   type AuditCommandResult,
   validateAuditPolicy,
 } from "./audit-dependencies"
@@ -11,14 +10,6 @@ import {
 const webRoot = resolve(import.meta.dir, "..")
 const packageJson = readFileSync(resolve(webRoot, "package.json"), "utf8")
 const bunLock = readFileSync(resolve(webRoot, "bun.lock"), "utf8")
-const assistantUiPatchAttributes = readFileSync(
-  resolve(webRoot, ASSISTANT_UI_STORE_PATCH.attributesPath),
-  "utf8",
-)
-const assistantUiStorePatch = readFileSync(
-  resolve(webRoot, ASSISTANT_UI_STORE_PATCH.path),
-  "utf8",
-)
 
 const emptyAudit: AuditCommandResult = {
   exitCode: 0,
@@ -47,8 +38,6 @@ function evidence() {
     complete: emptyAudit,
     packageJson,
     bunLock,
-    assistantUiPatchAttributes,
-    assistantUiStorePatch,
   }
 }
 
@@ -105,7 +94,7 @@ describe("dependency audit policy", () => {
   test("rejects production override resolution drift", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
-      '"postcss": ["postcss@8.5.24"',
+      '"postcss": ["postcss@8.5.26"',
       '"postcss": ["postcss@8.5.23"',
     )
 
@@ -131,7 +120,7 @@ describe("dependency audit policy", () => {
   test("rejects unrelated direct resolution drift outside the security allowlist", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
-      '"framer-motion": ["framer-motion@12.42.2"',
+      '"framer-motion": ["framer-motion@12.43.0"',
       '"framer-motion": ["framer-motion@12.23.25"',
     )
 
@@ -143,7 +132,7 @@ describe("dependency audit policy", () => {
   test("rejects rolling lucide-react back from the reviewed resolution", () => {
     const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
-      '"lucide-react": ["lucide-react@1.26.0"',
+      '"lucide-react": ["lucide-react@1.31.0"',
       '"lucide-react": ["lucide-react@1.25.0"',
     )
 
@@ -163,54 +152,28 @@ describe("dependency audit policy", () => {
     )
   })
 
-  test("applies the upstream StrictMode patch only to store 0.3.2", () => {
+  test("rejects reintroducing an assistant-ui package patch", () => {
     const candidate = evidence()
     const manifest = JSON.parse(candidate.packageJson)
-    manifest.patchedDependencies["@assistant-ui/store@0.3.3"] =
-      manifest.patchedDependencies[ASSISTANT_UI_STORE_PATCH.target]
-    delete manifest.patchedDependencies[ASSISTANT_UI_STORE_PATCH.target]
+    manifest.patchedDependencies = {
+      "@assistant-ui/store@0.3.8": "patches/store.patch",
+    }
     candidate.packageJson = JSON.stringify(manifest)
+
+    expect(() => validateAuditPolicy(candidate)).toThrow(
+      "must not reintroduce assistant-ui patches",
+    )
+  })
+
+  test("requires the assistant-ui store release with the upstream StrictMode fix", () => {
+    const candidate = evidence()
     candidate.bunLock = candidate.bunLock.replace(
-      ASSISTANT_UI_STORE_PATCH.target,
-      "@assistant-ui/store@0.3.3",
+      '"@assistant-ui/store": ["@assistant-ui/store@0.3.8"',
+      '"@assistant-ui/store": ["@assistant-ui/store@0.3.7"',
     )
 
     expect(() => validateAuditPolicy(candidate)).toThrow(
-      "assistant-ui store patch target drifted",
-    )
-  })
-
-  test("forces exact assistant-ui patch bytes across CRLF checkouts", () => {
-    const candidate = evidence()
-    candidate.assistantUiPatchAttributes =
-      "*.patch whitespace=-blank-at-eol,-space-before-tab\n"
-
-    expect(() => validateAuditPolicy(candidate)).toThrow(
-      "patch checkout must force LF line endings",
-    )
-  })
-
-  test("requires matching source, distribution, and source-map postimages", () => {
-    const candidate = evidence()
-    candidate.assistantUiStorePatch = candidate.assistantUiStorePatch.replace(
-      "2090d3b792386d35e7ed30a8cee4cad391d558aa",
-      "0000000000000000000000000000000000000000",
-    )
-
-    expect(() => validateAuditPolicy(candidate)).toThrow(
-      "patch postimage drifted for dist/utils/NotificationManager.js.map",
-    )
-  })
-
-  test("rejects any drift from the exact merged upstream patch", () => {
-    const candidate = evidence()
-    candidate.assistantUiStorePatch = candidate.assistantUiStorePatch.replace(
-      'import { useState } from "react";',
-      'import { useMemo } from "react";',
-    )
-
-    expect(() => validateAuditPolicy(candidate)).toThrow(
-      "patch content drifted from upstream commit",
+      "must retain the upstream StrictMode fix",
     )
   })
 
@@ -257,8 +220,8 @@ describe("dependency audit policy", () => {
   })
 
   test.each([
-    ["@assistant-ui/react", "0.15.1", "0.15.0"],
-    ["@assistant-ui/react-langgraph", "0.14.17", "0.14.15"],
+    ["@assistant-ui/react", "0.15.13", "0.15.12"],
+    ["@assistant-ui/react-langgraph", "0.14.23", "0.14.22"],
     ["@langchain/langgraph-sdk", "1.9.28", "1.9.27"],
     ["@langchain/protocol", "0.0.18", "0.0.17"],
   ])(

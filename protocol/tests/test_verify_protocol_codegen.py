@@ -62,15 +62,15 @@ class CodegenRuntimeTests(unittest.TestCase):
             codegen.require_version(
                 "node",
                 actual="v24.13.0",
-                expected="24.14.0",
+                expected="24.19.0",
                 prefix="v",
             )
 
     def test_runtime_version_accepts_only_exact_normalized_value(self) -> None:
         codegen.require_version(
             "node",
-            actual="v24.14.0\n",
-            expected="24.14.0",
+            actual="v24.19.0\n",
+            expected="24.19.0",
             prefix="v",
         )
         with self.assertRaisesRegex(

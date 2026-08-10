@@ -46,8 +46,8 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.29"
-          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
+          version: "0.12.3"
+          checksum: 600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Verify and export the committed agent lock
@@ -84,8 +84,8 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.11.29"
-          checksum: 04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
+          version: "0.12.3"
+          checksum: 600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Verify and export the committed dense eval lock

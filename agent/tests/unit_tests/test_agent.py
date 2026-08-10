@@ -2400,7 +2400,7 @@ Stop after the first supported DocId.
     snapshot = asdict(budget.snapshot())
     snapshot.pop("elapsed_ms")
     assert snapshot == {
-        "policy_id": "owner-capability-lab-v3",
+        "policy_id": "owner-capability-lab-v4",
         "model_calls": 3,
         "model_reservations_in_flight": 0,
         "tool_calls": 1,

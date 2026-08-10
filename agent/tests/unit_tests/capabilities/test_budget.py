@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pickle
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, asdict, replace
 from threading import Barrier
@@ -146,7 +147,7 @@ def test_task_reservation_with_100_concurrent_attempts_commits_exactly_two():
     assert len(reservations) == 2
     assert accepted.count(None) == 98
     assert asdict(budget.snapshot()) == {
-        "policy_id": "owner-capability-lab-v3",
+        "policy_id": "owner-capability-lab-v4",
         "model_calls": 0,
         "model_reservations_in_flight": 0,
         "tool_calls": 2,
@@ -495,12 +496,42 @@ def test_successful_exact_counts_remain_in_the_aggregate_count_risk_ledger():
     assert snapshot.exhausted is True
 
 
+def test_owner_budget_allows_cumulative_prepared_input_counts():
+    assert (
+        DEFAULT_RUN_BUDGET_POLICY.max_total_tokens,
+        DEFAULT_RUN_BUDGET_POLICY.max_count_risk_tokens_per_attempt,
+        DEFAULT_RUN_BUDGET_POLICY.max_count_risk_tokens_per_run,
+    ) == (sys.maxsize, sys.maxsize, sys.maxsize)
+    budget = RunBudget(clock=lambda: 0.0)
+
+    for upper_bound, exact_count in (
+        (11_000, 2_000),
+        (20_000, 4_000),
+        (30_000, 6_000),
+        (40_000, 8_000),
+    ):
+        attempt = budget.reserve_model_attempt(input_upper_bound=upper_bound)
+        reservation = budget.reserve_model_input(
+            attempt,
+            input_tokens=exact_count,
+        )
+        budget.settle_model(reservation, actual_tokens=exact_count)
+
+    snapshot = budget.finalize()
+    assert snapshot.model_calls == 4
+    assert snapshot.charged_tokens == 20_000
+    assert snapshot.count_risk_tokens == 20_000
+    assert snapshot.exhausted is False
+
+
 def test_concurrent_bounded_model_attempts_cannot_share_the_same_input_capacity():
     policy = replace(
         DEFAULT_RUN_BUDGET_POLICY,
         max_model_calls=100,
         max_output_tokens=1_024,
         max_total_tokens=12_000,
+        max_count_risk_tokens_per_attempt=12_000,
+        max_count_risk_tokens_per_run=48_000,
     )
     budget = RunBudget(policy, clock=lambda: 0.0)
     barrier = Barrier(100)
@@ -1170,7 +1201,7 @@ async def test_any_missing_or_invalid_message_usage_prevents_partial_refund(
 
 
 async def test_dense_unicode_input_is_rejected_before_calling_provider():
-    budget = RunBudget()
+    budget = RunBudget(replace(DEFAULT_RUN_BUDGET_POLICY, max_total_tokens=48_000))
     dense_content = "🧑🏽‍💻" * 7_000
 
     async def exact_dense_count(request):
@@ -1356,6 +1387,8 @@ async def test_prepared_input_count_that_cannot_fit_never_reaches_provider():
         DEFAULT_RUN_BUDGET_POLICY,
         max_output_tokens=1_024,
         max_total_tokens=12_000,
+        max_count_risk_tokens_per_attempt=48_000,
+        max_count_risk_tokens_per_run=48_000,
     )
     budget = RunBudget(policy)
     provider_calls = 0
@@ -1538,6 +1571,8 @@ async def test_concurrent_prepared_counts_cannot_reuse_unreserved_capacity():
         DEFAULT_RUN_BUDGET_POLICY,
         max_output_tokens=1_024,
         max_total_tokens=12_000,
+        max_count_risk_tokens_per_attempt=48_000,
+        max_count_risk_tokens_per_run=48_000,
     )
     budget = RunBudget(policy)
     provider_entered = asyncio.Event()
@@ -1975,7 +2010,7 @@ def test_run_budget_is_non_serializable_but_snapshot_is_bounded_json():
         '"elapsed_ms": 0, "exhausted": false, '
         '"finalized": false, "model_calls": 1, '
         '"model_reservations_in_flight": 1, '
-        '"policy_id": "owner-capability-lab-v3", '
+        '"policy_id": "owner-capability-lab-v4", '
         '"provider_cache_read_input_tokens": 0, '
         '"provider_cache_write_input_tokens": 0, '
         '"provider_input_tokens": 0, "provider_output_tokens": 0, '
@@ -2143,7 +2178,7 @@ def test_elapsed_deadline_rejects_reservation_without_spending_counters():
         budget.reserve_tool()
 
     assert asdict(budget.snapshot()) == {
-        "policy_id": "owner-capability-lab-v3",
+        "policy_id": "owner-capability-lab-v4",
         "model_calls": 0,
         "model_reservations_in_flight": 0,
         "tool_calls": 0,

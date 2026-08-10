@@ -87,7 +87,7 @@ EXPECTED_TERRAFORM_LOADABLE_FILES = EXPECTED_TERRAFORM_FILES | frozenset(
     EXPECTED_TERRAFORM_TEST_FILES
 )
 HCL2_VERSION = "7.3.1"
-TERRAFORM_VERSION = "1.13.5"
+TERRAFORM_VERSION = "1.15.8"
 EXPECTED_TOP_LEVEL_KEYS = {
     "infra/gcp/backend.tf": frozenset({"terraform"}),
     "infra/gcp/cloud_run.tf": frozenset({"locals", "resource"}),
@@ -180,12 +180,12 @@ EXPECTED_TERRAFORM_BLOCKS = {
     ],
     "infra/gcp/versions.tf": [
         {
-            "required_version": "= 1.13.5",
+            "required_version": "= 1.15.8",
             "required_providers": [
                 {
                     "google": {
                         "source": "hashicorp/google",
-                        "version": "7.40.0",
+                        "version": "7.43.0",
                     }
                 }
             ],

@@ -147,7 +147,7 @@ terraform -chdir=infra/gcp plan \
   -var-file=/absolute/private/path/agent-secret-versions.tfvars
 ```
 
-Terraform is pinned to `1.13.5` in both configuration and `.terraform-version`. Every
+Terraform is pinned to `1.15.8` in both configuration and `.terraform-version`. Every
 remote plan is mandatory review material. Do not apply until the operator has confirmed
 that the plan contains only the intended imports, additions, metadata changes, and IAM
 member removals; any resource replacement or persistent-resource destroy is a blocker.
@@ -212,7 +212,7 @@ deeply nested Cloud Run and Scheduler resources are protected by a byte-exact ha
 `.tftest.hcl` file is SHA-256 pinned because the pinned HCL parser cannot parse every valid
 Terraform test expression. Before every wrapped Terraform command, an on-disk preflight
 uses directory metadata—not candidate contents—to reject any extra tracked, untracked, or
-gitignored Terraform 1.13.5 `.tf`, `.tfvars`, `.tftest.hcl`, `.tfmock.hcl`, or
+gitignored Terraform 1.15.8 `.tf`, `.tfvars`, `.tftest.hcl`, `.tfmock.hcl`, or
 `.tfmock.json` candidate, including every reviewed JSON/load variant, and every symlink
 or non-regular candidate.
 It permits `.terraform/` only as an ignored, untracked real directory, checks that

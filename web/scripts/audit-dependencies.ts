@@ -1,41 +1,8 @@
-import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
-export const ASSISTANT_UI_STORE_PATCH = {
-  target: "@assistant-ui/store@0.3.2",
-  path: "patches/@assistant-ui%2Fstore@0.3.2.patch",
-  attributesPath: "patches/.gitattributes",
-  attributes:
-    "*.patch text eol=lf whitespace=-blank-at-eol,-space-before-tab",
-  sha256: "ac77e9bbe13f204f3ac27435322ff4d752fc35d6427292792bb41972e4e4109b",
-  // Exact NotificationManager fix merged upstream in assistant-ui PR #5411.
-  upstreamCommit: "90b3003b943e083fa6cd81e30181bf5b88904361",
-} as const
-
-const ASSISTANT_UI_STORE_PATCH_FILES = new Map([
-  [
-    "dist/utils/NotificationManager.js",
-    {
-      before: "572041797dd447788048d24b29320d3e18986e16",
-      after: "80b4b62716be5782092577e52f3e9b19e8852369",
-    },
-  ],
-  [
-    "dist/utils/NotificationManager.js.map",
-    {
-      before: "33ea8d795445cf6bbd03e359ba62344cb80d3962",
-      after: "2090d3b792386d35e7ed30a8cee4cad391d558aa",
-    },
-  ],
-  [
-    "src/utils/NotificationManager.ts",
-    {
-      before: "df1f393e541ea25aae6d98d7861d913e1532295b",
-      after: "202fed60f28b4de2c257407a071f83beb6d2d370",
-    },
-  ],
-])
+const EXPECTED_ASSISTANT_UI_STORE_RESOLUTION =
+  "@assistant-ui/store@0.3.8"
 
 const EXPECTED_BRACE_RECORDS = new Map([
   ["brace-expansion", "brace-expansion@5.0.9"],
@@ -66,28 +33,28 @@ const EXPECTED_ESLINT_PLUGIN_RECORDS = new Map([
 ])
 
 const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
-  ["@assistant-ui/react", "@assistant-ui/react@0.15.1"],
+  ["@assistant-ui/react", "@assistant-ui/react@0.15.13"],
   [
     "@assistant-ui/react-langgraph",
-    "@assistant-ui/react-langgraph@0.14.17",
+    "@assistant-ui/react-langgraph@0.14.23",
   ],
   ["@auth/neon-adapter", "@auth/neon-adapter@1.11.3"],
-  ["@langchain/core", "@langchain/core@1.2.3"],
+  ["@langchain/core", "@langchain/core@1.2.5"],
   ["@langchain/langgraph-sdk", "@langchain/langgraph-sdk@1.9.28"],
   ["@langchain/protocol", "@langchain/protocol@0.0.18"],
   ["@neondatabase/serverless", "@neondatabase/serverless@1.1.0"],
   ["botid", "botid@1.5.11"],
-  ["eslint-config-next", "eslint-config-next@16.2.12"],
+  ["eslint-config-next", "eslint-config-next@16.3.0"],
   ["mermaid", "mermaid@11.16.1"],
-  ["next", "next@16.2.12"],
+  ["next", "next@16.3.0"],
   ["next-auth", "next-auth@5.0.0-beta.32"],
-  ["pg", "pg@8.22.0"],
-  ["postcss", "postcss@8.5.24"],
+  ["pg", "pg@8.23.0"],
+  ["postcss", "postcss@8.5.26"],
 ])
 
 const EXPECTED_NATIVE_AGENT_PINS = new Map([
-  ["@assistant-ui/react", "0.15.1"],
-  ["@assistant-ui/react-langgraph", "0.14.17"],
+  ["@assistant-ui/react", "0.15.13"],
+  ["@assistant-ui/react-langgraph", "0.14.23"],
   ["@langchain/langgraph-sdk", "1.9.28"],
   ["@langchain/protocol", "0.0.18"],
 ])
@@ -98,15 +65,15 @@ const EXPECTED_AUTH_DATABASE_PINS = new Map([
 ])
 
 const EXPECTED_REACT_TYPE_OVERRIDES = new Map([
-  ["@types/react", "19.2.17"],
-  ["@types/react-dom", "19.2.3"],
+  ["@types/react", "19.2.18"],
+  ["@types/react-dom", "19.2.4"],
 ])
 
 const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@axe-core/playwright", "@axe-core/playwright@4.12.1"],
   ["@eslint/compat", "@eslint/compat@2.1.0"],
   ["@giscus/react", "@giscus/react@3.1.0"],
-  ["@playwright/test", "@playwright/test@1.62.0"],
+  ["@playwright/test", "@playwright/test@1.62.1"],
   ["@radix-ui/react-accordion", "@radix-ui/react-accordion@1.2.20"],
   ["@radix-ui/react-avatar", "@radix-ui/react-avatar@1.2.6"],
   ["@radix-ui/react-checkbox", "@radix-ui/react-checkbox@1.3.11"],
@@ -129,10 +96,10 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["@tailwindcss/postcss", "@tailwindcss/postcss@4.3.3"],
   ["@types/bun", "@types/bun@1.3.14"],
   ["@types/d3", "@types/d3@7.4.3"],
-  ["@types/node", "@types/node@26.1.2"],
-  ["@types/pg", "@types/pg@8.20.0"],
-  ["@types/react", "@types/react@19.2.17"],
-  ["@types/react-dom", "@types/react-dom@19.2.3"],
+  ["@types/node", "@types/node@26.2.0"],
+  ["@types/pg", "@types/pg@8.21.0"],
+  ["@types/react", "@types/react@19.2.18"],
+  ["@types/react-dom", "@types/react-dom@19.2.4"],
   ["@vercel/analytics", "@vercel/analytics@2.0.1"],
   ["@vercel/speed-insights", "@vercel/speed-insights@2.0.0"],
   ["class-variance-authority", "class-variance-authority@0.7.1"],
@@ -140,10 +107,10 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["cmdk", "cmdk@1.1.1"],
   ["d3", "d3@7.9.0"],
   ["embla-carousel-react", "embla-carousel-react@8.6.0"],
-  ["eslint", "eslint@10.8.0"],
-  ["framer-motion", "framer-motion@12.42.2"],
-  ["lucide-react", "lucide-react@1.26.0"],
-  ["marked", "marked@18.0.7"],
+  ["eslint", "eslint@10.8.1"],
+  ["framer-motion", "framer-motion@12.43.0"],
+  ["lucide-react", "lucide-react@1.31.0"],
+  ["marked", "marked@18.0.9"],
   ["medium-zoom", "medium-zoom@1.1.0"],
   ["next-themes", "next-themes@0.4.6"],
   ["nuartz", "nuartz@0.2.0"],
@@ -155,7 +122,7 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
   ["react-markdown", "react-markdown@10.1.0"],
   ["remark-breaks", "remark-breaks@4.0.0"],
   ["remark-gfm", "remark-gfm@4.0.1"],
-  ["shiki", "shiki@4.3.1"],
+  ["shiki", "shiki@4.4.3"],
   ["tailwind-merge", "tailwind-merge@3.6.0"],
   ["tailwindcss", "tailwindcss@4.3.3"],
   ["tailwindcss-animate", "tailwindcss-animate@1.0.7"],
@@ -164,7 +131,7 @@ const EXPECTED_UNCHANGED_DIRECT_RESOLUTIONS = new Map([
 ])
 
 const EXPECTED_PRODUCTION_OVERRIDE_RECORDS = [
-  new Map([["postcss", "postcss@8.5.24"]]),
+  new Map([["postcss", "postcss@8.5.26"]]),
   new Map([["sharp", "sharp@0.35.3"]]),
 ]
 
@@ -179,8 +146,6 @@ export interface AuditPolicyEvidence {
   complete: AuditCommandResult
   packageJson: string
   bunLock: string
-  assistantUiPatchAttributes: string
-  assistantUiStorePatch: string
 }
 
 function fail(message: string): never {
@@ -372,96 +337,9 @@ function requireAuthDatabasePins(
   }
 }
 
-function requireExactAssistantUiStorePatch(
-  manifest: Record<string, unknown>,
-  records: Map<string, { resolved: string; line: string }>,
-  bunLock: string,
-  patchAttributes: string,
-  patch: string,
-): void {
-  if (patchAttributes.trim() !== ASSISTANT_UI_STORE_PATCH.attributes) {
-    fail("assistant-ui patch checkout must force LF line endings")
-  }
-
-  const patchedDependencies = manifest.patchedDependencies
-  if (!isRecord(patchedDependencies)) {
-    fail("package.json must contain one patchedDependencies object")
-  }
-  const manifestEntries = Object.entries(patchedDependencies)
-  const expectedEntry = [
-    ASSISTANT_UI_STORE_PATCH.target,
-    ASSISTANT_UI_STORE_PATCH.path,
-  ]
-  if (
-    manifestEntries.length !== 1 ||
-    JSON.stringify(manifestEntries[0]) !== JSON.stringify(expectedEntry)
-  ) {
-    fail(
-      `assistant-ui store patch target drifted; ` +
-        `actual=${JSON.stringify(manifestEntries)}, ` +
-        `expected=${JSON.stringify([expectedEntry])}`,
-    )
-  }
-
-  const lockSections = [
-    ...bunLock.matchAll(
-      /^  "patchedDependencies": \{\r?\n([\s\S]*?)^  \},$/gmu,
-    ),
-  ]
-  const expectedLockLine =
-    `    "${ASSISTANT_UI_STORE_PATCH.target}": ` +
-    `"${ASSISTANT_UI_STORE_PATCH.path}",`
-  if (
-    lockSections.length !== 1 ||
-    lockSections[0]?.[1]?.trim() !== expectedLockLine.trim()
-  ) {
-    fail("bun.lock assistant-ui store patchedDependencies entry drifted")
-  }
-  if (
-    records.get("@assistant-ui/store")?.resolved !==
-    ASSISTANT_UI_STORE_PATCH.target
-  ) {
-    fail("assistant-ui store patch must apply only to resolved store 0.3.2")
-  }
-
-  const actualPatchedFiles = [
-    ...patch.matchAll(/^diff --git a\/(\S+) b\/\1$/gmu),
-  ].map((match) => match[1])
-  if (
-    JSON.stringify(actualPatchedFiles) !==
-    JSON.stringify([...ASSISTANT_UI_STORE_PATCH_FILES.keys()])
-  ) {
-    fail(
-      `assistant-ui store patch file set drifted; ` +
-        `actual=${JSON.stringify(actualPatchedFiles)}`,
-    )
-  }
-  for (const [file, hashes] of ASSISTANT_UI_STORE_PATCH_FILES) {
-    const expectedHeader =
-      `diff --git a/${file} b/${file}\n` +
-      `index ${hashes.before}..${hashes.after} 100644\n` +
-      `--- a/${file}\n` +
-      `+++ b/${file}\n`
-    if (!patch.includes(expectedHeader)) {
-      fail(`assistant-ui store patch postimage drifted for ${file}`)
-    }
-  }
-
-  const actualSha256 = createHash("sha256").update(patch).digest("hex")
-  if (actualSha256 !== ASSISTANT_UI_STORE_PATCH.sha256) {
-    fail(
-      `assistant-ui store patch content drifted from upstream commit ` +
-        `${ASSISTANT_UI_STORE_PATCH.upstreamCommit}; ` +
-        `actual=${actualSha256}`,
-    )
-  }
-}
-
 function requireDependencyBaseline(
   packageJson: string,
   bunLock: string,
-  assistantUiPatchAttributes: string,
-  assistantUiStorePatch: string,
 ): void {
   let manifest: unknown
   try {
@@ -487,7 +365,7 @@ function requireDependencyBaseline(
   if ("eslint-config-next" in dependencies) {
     fail("eslint-config-next must not enter production dependencies")
   }
-  if (devDependencies["eslint-config-next"] !== "^16.2.12") {
+  if (devDependencies["eslint-config-next"] !== "^16.3.0") {
     fail("eslint-config-next devDependency drift requires exception review")
   }
   if (
@@ -498,7 +376,7 @@ function requireDependencyBaseline(
   ) {
     fail("package.json override set drifted")
   }
-  if (overrides.postcss !== "8.5.24" || overrides.sharp !== "0.35.3") {
+  if (overrides.postcss !== "8.5.26" || overrides.sharp !== "0.35.3") {
     fail("reviewed production override versions drifted")
   }
   for (const [name, version] of EXPECTED_REACT_TYPE_OVERRIDES) {
@@ -512,13 +390,15 @@ function requireDependencyBaseline(
   }
 
   const records = packageRecords(bunLock)
-  requireExactAssistantUiStorePatch(
-    manifest,
-    records,
-    bunLock,
-    assistantUiPatchAttributes,
-    assistantUiStorePatch,
-  )
+  if ("patchedDependencies" in manifest) {
+    fail("package.json must not reintroduce assistant-ui patches")
+  }
+  if (
+    records.get("@assistant-ui/store")?.resolved !==
+    EXPECTED_ASSISTANT_UI_STORE_RESOLUTION
+  ) {
+    fail("assistant-ui store must retain the upstream StrictMode fix")
+  }
   requireNativeAgentPins(records, dependencies)
   requireAuthDatabasePins(records, dependencies)
   requireExactRecords(
@@ -538,15 +418,15 @@ function requireDependencyBaseline(
   }
 
   requireLineFragments(records, "eslint-config-next", [
-    "eslint-config-next@16.2.12",
+    "eslint-config-next@16.3.0",
     '"eslint-plugin-import": "^2.32.0"',
     '"eslint-plugin-jsx-a11y": "^6.10.0"',
     '"eslint-plugin-react": "^7.37.0"',
   ])
   requireLineFragments(records, "next", [
-    "next@16.2.12",
-    '"postcss": "8.4.31"',
-    '"sharp": "^0.34.5"',
+    "next@16.3.0",
+    '"postcss": "8.5.23"',
+    '"sharp": "^0.35.3"',
   ])
   for (const plugin of EXPECTED_ESLINT_PLUGIN_RECORDS.keys()) {
     requireLineFragments(records, plugin, ['"minimatch": "^3.1.2"'])
@@ -563,8 +443,6 @@ export function validateAuditPolicy(evidence: AuditPolicyEvidence): void {
   requireDependencyBaseline(
     evidence.packageJson,
     evidence.bunLock,
-    evidence.assistantUiPatchAttributes,
-    evidence.assistantUiStorePatch,
   )
 }
 
@@ -590,14 +468,6 @@ async function main(): Promise<void> {
     complete: runAudit(["--audit-level=high"]),
     packageJson: await readFile(resolve(webRoot, "package.json"), "utf8"),
     bunLock: await readFile(resolve(webRoot, "bun.lock"), "utf8"),
-    assistantUiPatchAttributes: await readFile(
-      resolve(webRoot, ASSISTANT_UI_STORE_PATCH.attributesPath),
-      "utf8",
-    ),
-    assistantUiStorePatch: await readFile(
-      resolve(webRoot, ASSISTANT_UI_STORE_PATCH.path),
-      "utf8",
-    ),
   }
   validateAuditPolicy(evidence)
   console.log(

@@ -1,6 +1,8 @@
 "use client"
 
 import {
+  ActionBarPrimitive,
+  AuiIf,
   ComposerPrimitive,
   ErrorPrimitive,
   MessagePrimitive,
@@ -21,12 +23,12 @@ import {
   Archive,
   ArrowDown,
   ArrowUp,
-  Bot,
   BrainCircuit,
   Check,
   ChevronRight,
   CircleStop,
   Clock3,
+  Copy,
   History,
   ListTree,
   LoaderCircle,
@@ -84,15 +86,15 @@ import {
 
 const SUGGESTIONS = [
   {
-    prompt: "블로그에서 LangGraph 관련 글을 찾아줘",
+    prompt: "LangGraph 관련 글을 찾아줘",
     icon: Search,
   },
   {
-    prompt: "최근 AI 프로젝트에서 어떤 문제를 해결했어?",
+    prompt: "최근 AI 프로젝트를 요약해줘",
     icon: Sparkles,
   },
   {
-    prompt: "Aegra와 RAG 평가 계획을 요약해줘",
+    prompt: "RAG 평가 계획을 설명해줘",
     icon: BrainCircuit,
   },
 ] as const
@@ -139,7 +141,7 @@ const ReasoningPart = memo(function ReasoningPart({
 }: ReasoningMessagePartProps) {
   const running = status.type === "running"
   return (
-    <div className="my-2 flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+    <div className="my-3 flex items-center gap-2 text-xs text-muted-foreground">
       <BrainCircuit
         className={cn(
           "size-3.5",
@@ -166,8 +168,8 @@ const ToolPart = memo(function ToolPart({
     status.type === "requires-action"
   const query = toolQueryFromArgs(argsText)
   return (
-    <details className="my-2 rounded-xl border bg-muted/30" open={running}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium">
+    <details className="my-3 rounded-xl bg-muted/50" open={running}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm">
         <ToolCase
           className={cn(
             "size-4",
@@ -184,7 +186,7 @@ const ToolPart = memo(function ToolPart({
         </span>
         <ChevronRight className="size-3.5 transition-transform motion-reduce:transition-none [[open]>&]:rotate-90" />
       </summary>
-      <div className="space-y-2 border-t px-3 py-3 text-xs">
+      <div className="space-y-2 border-t border-border/60 px-3 py-3 text-xs">
         <p className="text-muted-foreground">
           질의: {query ?? "서버 미제공"}
         </p>
@@ -283,13 +285,32 @@ function SourceItems({ sources }: { sources: readonly InspectionSource[] }) {
 
 function AnswerSources({ sources }: { sources: readonly InspectionSource[] }) {
   return (
-    <section
-      aria-label="답변 인용 출처"
-      className="mt-4 rounded-xl border bg-muted/30 p-3 text-xs"
+    <details className="mt-5 rounded-xl border border-border/70 bg-muted/30 text-xs">
+      <summary className="cursor-pointer list-none px-3 py-2.5 font-medium">
+        인용 출처 {sources.length}개
+      </summary>
+      <div aria-label="답변 인용 출처" className="border-t px-3 py-3">
+        <SourceItems sources={sources} />
+      </div>
+    </details>
+  )
+}
+
+function MessageActions() {
+  return (
+    <ActionBarPrimitive.Root
+      hideWhenRunning
+      className="mt-1 flex h-8 items-center"
     >
-      <p className="mb-2 font-medium">인용 출처</p>
-      <SourceItems sources={sources} />
-    </section>
+      <ActionBarPrimitive.Copy
+        aria-label="메시지 복사"
+        copiedDuration={2_000}
+        className="group/copy flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors motion-reduce:transition-none hover:bg-muted hover:text-foreground"
+      >
+        <Copy className="size-3.5 group-data-[copied]/copy:hidden" />
+        <Check className="hidden size-3.5 group-data-[copied]/copy:block" />
+      </ActionBarPrimitive.Copy>
+    </ActionBarPrimitive.Root>
   )
 }
 
@@ -307,21 +328,16 @@ function ChatMessage() {
   return (
     <MessagePrimitive.Root
       className={cn(
-        "group mx-auto flex w-full max-w-3xl gap-3 px-4 py-4 md:px-6",
-        role === "user" && "justify-end"
+        "group/message mx-auto flex w-full max-w-3xl flex-col px-4 py-5 md:px-6",
+        role === "user" ? "items-end" : "items-start"
       )}
     >
-      {role === "assistant" ? (
-        <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full border bg-card shadow-sm">
-          <Bot className="size-4" />
-        </div>
-      ) : null}
       <div
         className={cn(
-          "min-w-0 text-sm leading-7",
-          role === "assistant" && "max-w-[calc(100%-2.75rem)] flex-1",
+          "min-w-0 text-[15px] leading-7",
+          role === "assistant" && "w-full",
           role === "user" &&
-            "max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-primary-foreground"
+            "max-w-[82%] rounded-[22px] rounded-br-lg bg-muted px-4 py-2.5 text-foreground sm:max-w-[75%]"
         )}
       >
         <MessagePrimitive.Parts components={MESSAGE_COMPONENTS} />
@@ -336,44 +352,42 @@ function ChatMessage() {
           </ErrorPrimitive.Root>
         </MessagePrimitive.Error>
       </div>
+      {role === "assistant" ? <MessageActions /> : null}
     </MessagePrimitive.Root>
   )
 }
 
 function EmptyConversation() {
   return (
-    <ThreadPrimitive.Empty>
-      <div className="mx-auto flex min-h-full max-w-3xl flex-col items-center justify-center px-6 py-14 text-center">
-        <div className="mb-5 flex size-14 items-center justify-center rounded-2xl border bg-card shadow-sm">
-          <BrainCircuit className="size-7" />
+    <AuiIf condition={(state) => state.thread.isEmpty}>
+      <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-4 py-10 md:px-6 md:py-16">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Sparkles className="size-4" />
+          <span>Syshin AI</span>
         </div>
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-          RAG evaluation lab
-        </p>
-        <h1 className="mt-3 text-balance text-2xl font-semibold tracking-tight md:text-3xl">
-          블로그를 아는 AI가 아니라,
-          <br />
-          검색 방법을 비교하는 실험실입니다.
+        <h1 className="mt-5 text-balance text-3xl font-medium tracking-[-0.035em] sm:text-4xl">
+          무엇이 궁금하세요?
         </h1>
-        <p className="mt-4 max-w-xl text-pretty text-sm leading-6 text-muted-foreground">
-          현재 선택된 검색기를 실제 블로그 글에 적용해 답합니다. 답변은 틀릴 수
-          있으며, 대화와 도구 실행 기록은 품질 평가에 사용될 수 있습니다.
+        <p className="mt-3 max-w-xl text-pretty text-sm leading-6 text-muted-foreground sm:text-base">
+          블로그와 프로젝트를 검색하고, 사용된 방법과 출처를 함께 확인할 수
+          있어요.
         </p>
-        <div className="mt-8 grid w-full gap-2 sm:grid-cols-3">
+        <Composer centered />
+        <div className="mt-3 flex w-full flex-col gap-2 sm:flex-row">
           {SUGGESTIONS.map(({ prompt, icon: Icon }) => (
             <ThreadPrimitive.Suggestion
               key={prompt}
               prompt={prompt}
               send
-              className="group flex min-h-24 flex-col items-start justify-between rounded-xl border bg-card p-3 text-left text-sm transition-colors motion-reduce:transition-none hover:bg-muted"
+              className="group flex min-h-11 flex-1 items-center gap-2 rounded-xl border border-border/70 bg-background px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors motion-reduce:transition-none hover:bg-muted hover:text-foreground"
             >
-              <Icon className="size-4 text-muted-foreground transition-colors motion-reduce:transition-none group-hover:text-foreground" />
+              <Icon className="size-3.5 shrink-0" />
               <span>{prompt}</span>
             </ThreadPrimitive.Suggestion>
           ))}
         </div>
       </div>
-    </ThreadPrimitive.Empty>
+    </AuiIf>
   )
 }
 
@@ -400,6 +414,8 @@ function InterruptResponseCard({
   const [response, setResponse] = useState("")
   const [sending, setSending] = useState(false)
   const [resumeError, setResumeError] = useState<string>()
+  const responseInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => responseInputRef.current?.focus(), [])
   const respond = async (answer: string) => {
     const normalized = answer.trim()
     if (
@@ -413,17 +429,20 @@ function InterruptResponseCard({
     }
     setResumeError(undefined)
     setSending(true)
+    let resumed = false
     try {
       // Resume carries only the user's bounded decision/input. The opaque
       // interrupt value remains protocol state and is never echoed back.
       await sendCommand({ resume: normalized })
+      resumed = true
     } catch {
       setResumeError(
         "응답을 보내지 못했습니다. 승인 요청은 유지되었습니다. 다시 시도해 주세요."
       )
+      responseInputRef.current?.focus()
     } finally {
       setSending(false)
-      restoreComposerFocus()
+      if (resumed) restoreComposerFocus()
     }
   }
 
@@ -469,6 +488,7 @@ function InterruptResponseCard({
           수정해서 재개할 응답
         </label>
         <input
+          ref={responseInputRef}
           id="interrupt-response"
           value={response}
           onChange={(event) => {
@@ -515,19 +535,25 @@ function interruptViewKey(interrupt: InterruptState): number {
   return created
 }
 
-function InterruptCard() {
+function ConversationFooter() {
   const interrupt = useLangGraphInterruptState()
-  if (!interrupt) return null
-  const projection = readRuntimeInterruptProjection(interrupt.value)
+  if (interrupt) {
+    const projection = readRuntimeInterruptProjection(interrupt.value)
+    return (
+      <InterruptResponseCard
+        key={interruptViewKey(interrupt)}
+        projection={projection}
+      />
+    )
+  }
   return (
-    <InterruptResponseCard
-      key={interruptViewKey(interrupt)}
-      projection={projection}
-    />
+    <AuiIf condition={(state) => !state.thread.isEmpty}>
+      <Composer />
+    </AuiIf>
   )
 }
 
-function Composer() {
+function Composer({ centered = false }: { centered?: boolean }) {
   const runtimeUi = useAgentRuntimeUi()
   const compositionRef = useRef(false)
   const composerInputRef = useRef<HTMLTextAreaElement>(null)
@@ -547,6 +573,9 @@ function Composer() {
     runtimeUi.dismissTurnError()
     restoreComposerFocus()
   }
+  useEffect(() => {
+    if (!centered) composerInputRef.current?.focus()
+  }, [centered])
   const rejectOversizedComposer = () => {
     const value = composerInputRef.current?.value ?? ""
     if (
@@ -562,7 +591,14 @@ function Composer() {
   }
 
   return (
-    <div className="border-t bg-background/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur md:px-6">
+    <div
+      className={cn(
+        "w-full px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6",
+        centered
+          ? "mt-8 px-0 pb-0 md:px-0"
+          : "bg-gradient-to-t from-background via-background to-transparent pt-6"
+      )}
+    >
       {runtimeUi.connectionStatus === "connecting" ? (
         <div
           role="status"
@@ -603,7 +639,7 @@ function Composer() {
         </div>
       ) : null}
       <ComposerPrimitive.Root
-        className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border bg-card p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/20"
+        className="mx-auto flex max-w-3xl items-end gap-2 rounded-[28px] border border-border/80 bg-background p-2 shadow-[0_8px_30px_rgb(0_0_0/0.06)] transition-shadow motion-reduce:transition-none focus-within:border-foreground/30 focus-within:shadow-[0_12px_40px_rgb(0_0_0/0.1)] dark:bg-muted/60"
         onSubmitCapture={(event) => {
           if (rejectOversizedComposer()) {
             event.preventDefault()
@@ -643,17 +679,17 @@ function Composer() {
             compositionRef.current = false
           }}
           onKeyDownCapture={guardImeEnter}
-          className="max-h-48 min-h-10 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted-foreground"
+          className="max-h-48 min-h-11 min-w-0 flex-1 resize-none bg-transparent px-3 py-2.5 text-[15px] outline-none placeholder:text-muted-foreground"
         />
-        <ThreadPrimitive.If running>
+        <AuiIf condition={(state) => state.thread.isRunning}>
           <ComposerPrimitive.Cancel
             aria-label="응답 중지"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full border bg-background transition-colors motion-reduce:transition-none hover:bg-muted"
+            className="flex size-10 shrink-0 items-center justify-center rounded-full border bg-background transition-colors motion-reduce:transition-none hover:bg-muted"
           >
             <CircleStop className="size-4" />
           </ComposerPrimitive.Cancel>
-        </ThreadPrimitive.If>
-        <ThreadPrimitive.If running={false}>
+        </AuiIf>
+        <AuiIf condition={(state) => !state.thread.isRunning}>
           <ComposerPrimitive.Send
             aria-label="메시지 보내기"
             onClick={(event) => {
@@ -664,11 +700,11 @@ function Composer() {
                 event.preventDefault()
               }
             }}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform motion-reduce:transition-none hover:scale-105 motion-reduce:hover:scale-100 disabled:opacity-40"
+            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform motion-reduce:transition-none hover:scale-105 motion-reduce:hover:scale-100 disabled:opacity-40"
           >
             <ArrowUp className="size-4" />
           </ComposerPrimitive.Send>
-        </ThreadPrimitive.If>
+        </AuiIf>
       </ComposerPrimitive.Root>
       {composerError ? (
         <p
@@ -679,7 +715,7 @@ function Composer() {
           {composerError}
         </p>
       ) : null}
-      <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">
+      <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground max-sm:hidden">
         AI 답변은 부정확할 수 있습니다. Enter로 전송 · Shift+Enter로 줄바꿈
       </p>
     </div>
@@ -689,10 +725,15 @@ function Composer() {
 function Conversation() {
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col bg-background">
-      <ThreadPrimitive.Viewport className="relative min-h-0 flex-1 overflow-y-auto">
+      <ThreadPrimitive.Viewport
+        turnAnchor="top"
+        className="relative min-h-0 flex-1 overflow-y-auto"
+      >
         <EmptyConversation />
-        <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
-        <ThreadPrimitive.If running>
+        <ThreadPrimitive.Messages>
+          {() => <ChatMessage />}
+        </ThreadPrimitive.Messages>
+        <AuiIf condition={(state) => state.thread.isRunning}>
           <div
             role="status"
             aria-live="polite"
@@ -701,16 +742,17 @@ function Conversation() {
             <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
             검색하고 답변을 구성하고 있습니다.
           </div>
-        </ThreadPrimitive.If>
-        <ThreadPrimitive.ScrollToBottom
-          aria-label="최신 메시지로 이동"
-          className="sticky bottom-3 left-1/2 z-10 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border bg-background shadow-md"
-        >
-          <ArrowDown className="size-4" />
-        </ThreadPrimitive.ScrollToBottom>
+        </AuiIf>
+        <AuiIf condition={(state) => !state.thread.isEmpty}>
+          <ThreadPrimitive.ScrollToBottom
+            aria-label="최신 메시지로 이동"
+            className="sticky bottom-3 left-1/2 z-10 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border bg-background shadow-md disabled:invisible"
+          >
+            <ArrowDown className="size-4" />
+          </ThreadPrimitive.ScrollToBottom>
+        </AuiIf>
       </ThreadPrimitive.Viewport>
-      <InterruptCard />
-      <Composer />
+      <ConversationFooter />
     </ThreadPrimitive.Root>
   )
 }
@@ -851,35 +893,34 @@ function ThreadListItem() {
 
 function ThreadRail() {
   return (
-    <ThreadListPrimitive.Root className="flex h-full min-h-0 flex-col">
-      <div className="border-b p-3">
-        <ThreadListPrimitive.New className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-medium shadow-sm transition-none hover:bg-muted data-[active=true]:bg-primary data-[active=true]:text-primary-foreground">
+    <ThreadListPrimitive.Root className="flex h-full min-h-0 flex-col bg-background">
+      <div className="border-b p-4">
+        <ThreadListPrimitive.New className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-none hover:opacity-90 data-[active=true]:opacity-70">
           <Plus className="size-4" />
           새 대화
         </ThreadListPrimitive.New>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <p className="px-2 pb-2 pt-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <p className="px-2 pb-2 pt-1 text-xs font-medium text-muted-foreground">
           최근 대화
         </p>
-        <ThreadListPrimitive.Items
-          components={{ ThreadListItem }}
-        />
+        <ThreadListPrimitive.Items>
+          {() => <ThreadListItem />}
+        </ThreadListPrimitive.Items>
         <ThreadListPrimitive.LoadMore className="mt-2 w-full rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-muted">
           대화 더 보기
         </ThreadListPrimitive.LoadMore>
         <div className="mt-5 border-t pt-4">
-          <p className="flex items-center gap-2 px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="flex items-center gap-2 px-2 pb-2 text-xs font-medium text-muted-foreground">
             <Archive className="size-3" />
             보관됨
           </p>
-          <ThreadListPrimitive.Items
-            archived
-            components={{ ThreadListItem }}
-          />
+          <ThreadListPrimitive.Items archived>
+            {() => <ThreadListItem />}
+          </ThreadListPrimitive.Items>
         </div>
       </div>
-      <div className="border-t p-3 text-[11px] leading-5 text-muted-foreground">
+      <div className="border-t p-4 text-[11px] leading-5 text-muted-foreground">
         현재 서버는 대화 삭제를 지원하지 않습니다. 보관과 복원은 가능합니다.
       </div>
     </ThreadListPrimitive.Root>
@@ -1114,11 +1155,20 @@ function ThreadSheet() {
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="대화 목록 열기">
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="대화 목록 열기"
+          className="gap-2 rounded-xl px-2.5 sm:px-3"
+        >
           <Menu className="size-4" />
+          <span className="hidden lg:inline">대화</span>
         </Button>
       </SheetTrigger>
-      <SheetContent side="left" className="w-[min(88vw,320px)] p-0">
+      <SheetContent
+        side="left"
+        className="w-[min(90vw,340px)] px-0 pb-0 pt-10"
+      >
         <SheetHeader className="sr-only">
           <SheetTitle>대화 목록</SheetTitle>
           <SheetDescription>대화를 만들거나 전환합니다.</SheetDescription>
@@ -1133,11 +1183,17 @@ function DetailSheet() {
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="실행 상세 열기">
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="실행 상세 열기"
+          className="gap-2 rounded-xl px-2.5 sm:px-3"
+        >
           <ListTree className="size-4" />
+          <span className="hidden lg:inline">실행</span>
         </Button>
       </SheetTrigger>
-      <SheetContent side="right" className="w-[min(88vw,360px)] p-0">
+      <SheetContent side="right" className="w-[min(92vw,420px)] p-0">
         <SheetHeader className="sr-only">
           <SheetTitle>실행 상세</SheetTitle>
           <SheetDescription>
@@ -1150,12 +1206,59 @@ function DetailSheet() {
   )
 }
 
-function MobileControls() {
+function NewThreadButton() {
   return (
-    <div className="flex items-center gap-1 md:hidden">
-      <ThreadSheet />
-      <DetailSheet />
-    </div>
+    <ThreadListPrimitive.Root>
+      <ThreadListPrimitive.New
+        aria-label="새 대화"
+        className="flex min-h-9 items-center gap-2 rounded-xl bg-primary px-2.5 text-sm font-medium text-primary-foreground transition-opacity motion-reduce:transition-none hover:opacity-90 data-[active=true]:opacity-60 sm:px-3"
+      >
+        <Plus className="size-4" />
+        <span className="hidden sm:inline">새 대화</span>
+      </ThreadListPrimitive.New>
+    </ThreadListPrimitive.Root>
+  )
+}
+
+function WorkspaceHeader() {
+  const { connectionStatus } = useAgentRuntimeUi()
+  const status =
+    connectionStatus === "ready"
+      ? "연결됨"
+      : connectionStatus === "error"
+        ? "연결 확인 필요"
+        : "연결 중"
+
+  return (
+    <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border/70 px-3 sm:px-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <Sparkles className="size-4" />
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold tracking-tight">Syshin AI</p>
+          <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span
+              aria-hidden="true"
+              className={cn(
+                "size-1.5 rounded-full",
+                connectionStatus === "ready"
+                  ? "bg-emerald-500"
+                  : connectionStatus === "error"
+                    ? "bg-destructive"
+                    : "animate-pulse bg-amber-500 motion-reduce:animate-none"
+              )}
+            />
+            {status}
+          </p>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-0.5">
+        <NewThreadButton />
+        <ThreadSheet />
+        <DetailSheet />
+      </div>
+    </header>
   )
 }
 
@@ -1187,39 +1290,12 @@ export function ChatShell() {
   return (
     <section
       aria-label="RAG 평가 챗봇"
-      className="flex h-[calc(100svh-4.5rem)] min-h-0 flex-col border-t bg-muted/20 supports-[height:100dvh]:h-[calc(100dvh-4.5rem)]"
+      className="relative flex h-[calc(100svh-4.5rem)] min-h-0 bg-muted/30 p-0 sm:p-3 md:p-5 supports-[height:100dvh]:h-[calc(100dvh-4.5rem)]"
     >
-      <OnlineStatus />
-      <div className="flex items-center justify-between border-b bg-background px-4 py-2 md:hidden">
-        <div>
-          <p className="text-sm font-medium">AI 검색 실험실</p>
-          <p className="text-[11px] text-muted-foreground">Aegra APv2</p>
-        </div>
-        <MobileControls />
-      </div>
-      <div className="hidden items-center justify-between border-b bg-background px-4 py-2 md:flex xl:hidden">
-        <div>
-          <p className="text-sm font-medium">AI 검색 실험실</p>
-          <p className="text-[11px] text-muted-foreground">
-            실행 상세는 오른쪽 버튼에서 확인할 수 있습니다.
-          </p>
-        </div>
-        <DetailSheet />
-      </div>
-      <div className="grid min-h-0 flex-1 md:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_320px]">
-        <aside
-          aria-label="대화 목록"
-          className="hidden min-h-0 border-r bg-muted/30 md:block"
-        >
-          <ThreadRail />
-        </aside>
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden bg-background sm:rounded-[28px] sm:border sm:border-border/70 sm:shadow-[0_24px_80px_rgb(0_0_0/0.08)]">
+        <OnlineStatus />
+        <WorkspaceHeader />
         <Conversation />
-        <aside
-          aria-label="실행 상세"
-          className="hidden min-h-0 border-l bg-muted/20 xl:block"
-        >
-          <ActivityPanel />
-        </aside>
       </div>
     </section>
   )
@@ -1227,19 +1303,19 @@ export function ChatShell() {
 
 export function SignedOutChat() {
   return (
-    <section className="flex min-h-[70svh] items-center justify-center border-t bg-muted/20 px-6 py-16">
-      <div className="max-w-lg rounded-3xl border bg-card p-8 text-center shadow-sm">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+    <section className="flex min-h-[70svh] items-center justify-center bg-muted/30 px-6 py-16">
+      <div className="w-full max-w-lg text-center">
+        <div className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
           <UserRound className="size-5" />
         </div>
-        <h1 className="mt-5 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-6 text-3xl font-medium tracking-[-0.035em]">
           AI 검색 실험실
         </h1>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+        <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground">
           공개 체험은 현재 비활성 상태입니다. 소유자 계정으로 로그인하면
           AI 검색 실험실을 계속 테스트할 수 있습니다.
         </p>
-        <Button asChild className="mt-6">
+        <Button asChild className="mt-7 rounded-xl px-5">
           <Link href="/login">로그인해서 테스트</Link>
         </Button>
       </div>

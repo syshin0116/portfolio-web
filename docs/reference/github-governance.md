@@ -122,7 +122,7 @@ self-hosted runner, any additional service, or any other extra or changed job ke
 changing any field of the one reviewed PostgreSQL service also fails. All twelve steps
 are exact and ordered: checkout is pinned to its
 reviewed SHA with only `persist-credentials: false`; setup-python v7.0.0 is
-pinned with Python 3.12; setup-uv v9.0.0 is pinned with uv 0.11.29, its reviewed
+pinned with Python 3.12; setup-uv v9.0.0 is pinned with uv 0.12.3, its reviewed
 checksum, and the reviewed cache inputs; the eight ordinary run steps retain their exact
 names, conditions, commands, and allowed keys; and the twelfth step builds, inspects,
 migrates, boots, probes, logs, and removes the real delivery image.
@@ -133,7 +133,7 @@ tests.
 The setup-python v7 major removes only the unused `pip-install` input from this
 repository's surface. Every setup-uv invocation uses the same full-SHA v9.0.0 action,
 explicit `version` and `checksum`, plus only its job's reviewed cache inputs. The root
-`[tool.uv] required-version = "==0.11.29"` rejects a mismatched local binary, and the
+`[tool.uv] required-version = "==0.12.3"` rejects a mismatched local binary, and the
 agent Dockerfile binds the same version to its immutable uv image digest. The repository
 verifier rejects a missing call, a new unreviewed call, or drift in any of those three
 surfaces.
@@ -425,12 +425,12 @@ pin, and canonical-repository failures exit `2`. Both fail the scheduled/manual 
 The full target, stable-release, triage, and extension contract is in the
 [upstream version audit runbook](../runbooks/upstream-version-audit.md).
 
-Its agent job uses the repository-wide uv 0.11.29 and setup-uv v9.0.0 pins, including
+Its agent job uses the repository-wide uv 0.12.3 and setup-uv v9.0.0 pins, including
 the reviewed official archive SHA-256 rather than allowing an unverified download. Local
 uv commands validate the version gate and lock/export semantics but cannot emulate the
 GitHub Action's Node runtime, release download, checksum, and cache path. After this action
 rollup is pushed, manually dispatch **Dependency audit** and require its agent job to
-install uv 0.11.29 and pass before considering that scheduled path verified.
+install uv 0.12.3 and pass before considering that scheduled path verified.
 
 The web policy is executable in
 [`audit-dependencies.ts`](../../web/scripts/audit-dependencies.ts) and fails

@@ -280,7 +280,7 @@ terraform -chdir=infra/gcp plan \
   -var-file=/absolute/private/path/agent-secret-versions.tfvars
 ```
 
-Use Terraform `1.13.5`; `required_version` and `infra/gcp/.terraform-version` pin the same
+Use Terraform `1.15.8`; `required_version` and `infra/gcp/.terraform-version` pin the same
 exact release. A fresh remote plan is mandatory before every apply. Review the full plan,
 including imports and IAM removals, and stop on any persistent-resource replacement or
 destroy. The mock plan in CI is not evidence of live safety and cannot substitute for
@@ -494,7 +494,7 @@ shellcheck scripts/deploy_cloud_run.sh scripts/verify_ops_foundation.sh \
 ```
 
 Each `--terraform-*` wrapper performs an on-disk preflight before invoking Terraform.
-The preflight enumerates Terraform 1.13.5's native `.tf`, `.tfvars`, `.tftest.hcl`,
+The preflight enumerates Terraform 1.15.8's native `.tf`, `.tfvars`, `.tftest.hcl`,
 `.tfmock.hcl`, and `.tfmock.json` candidates plus the reviewed JSON/load variants below
 `infra/gcp`, then requires the exact reviewed tracked allowlist of regular files. An extra
 tracked, untracked, or gitignored candidate, symlink, FIFO, socket, device, or directory

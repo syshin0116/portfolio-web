@@ -661,7 +661,7 @@ resource "google_project_service" "required" {
             fake_terraform.write_text(
                 """#!/bin/bash
 printf '%s\n' \
-  '{"type":"version","terraform":"1.13.5"}' \
+  '{"type":"version","terraform":"1.15.8"}' \
   '{"type":"test_abstract","test_abstract":{}}' \
   '{"type":"test_summary","test_summary":{"status":"pass","passed":0,"failed":0,"errored":0,"skipped":0}}'
 """,

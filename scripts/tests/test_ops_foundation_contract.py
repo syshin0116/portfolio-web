@@ -144,7 +144,7 @@ def _terraform_test_records() -> list[dict[str, object]]:
     return [
         {
             "type": "version",
-            "terraform": "1.13.5",
+            "terraform": "1.15.8",
         },
         {
             "type": "test_abstract",

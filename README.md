@@ -58,7 +58,7 @@ A personal tech blog, portfolio, and AI chatbot - built with [Next.js 16](https:
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) 1.3.10 - for `web/`
+- [Bun](https://bun.sh/) 1.3.14 - for `web/`
 - [uv](https://github.com/astral-sh/uv) and Python 3.12+ - for `agent/` and `eval/`
 - Postgres database (Neon, Supabase, or local) and API keys (Anthropic, OAuth providers) - see `.env.example`
 

@@ -641,6 +641,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
   expect(tokenRequests).toEqual([
     { body: null, intent: "anonymous" },
     { body: null, intent: "anonymous" },
+    { body: null, intent: "anonymous" },
   ])
   await attachEvidence(page, testInfo, "public-empty")
 
@@ -731,6 +732,8 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
     { body: null, intent: "anonymous" },
     { body: null, intent: "anonymous" },
     { body: null, intent: "anonymous" },
+    { body: null, intent: "anonymous" },
+    { body: null, intent: "anonymous" },
   ])
   await expectA11yClean(page)
   await expectNoBrowserErrors(page, diagnostics)
@@ -743,7 +746,7 @@ test("retries the public anonymous bootstrap without a challenge", async ({
   const diagnostics = collectDiagnostics(page)
   const tokenRequests: Array<string | null> = []
   const externalChallengeRequests: string[] = []
-  let rejectFirstBootstrap = true
+  let remainingRejectedBootstraps = 2
   await page.setViewportSize({ width: 390, height: 820 })
   await resetFixture(page, "default", "anonymous")
   page.on("request", (request) => {
@@ -753,8 +756,8 @@ test("retries the public anonymous bootstrap without a challenge", async ({
   })
   await page.route("**/api/anonymous-agent-token", async (route) => {
     tokenRequests.push(route.request().postData())
-    if (rejectFirstBootstrap) {
-      rejectFirstBootstrap = false
+    if (remainingRejectedBootstraps > 0) {
+      remainingRejectedBootstraps -= 1
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -772,14 +775,14 @@ test("retries the public anonymous bootstrap without a challenge", async ({
       name: "공개 체험에 연결하지 못했습니다",
     })
   ).toBeVisible()
-  expect(tokenRequests).toEqual([null])
+  expect(tokenRequests).toEqual([null, null])
 
   await page.getByRole("button", { name: "다시 연결" }).click()
   await expect(
     page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
   ).toBeVisible({ timeout: 12_000 })
-  await expect.poll(() => tokenRequests.length).toBe(3)
-  expect(tokenRequests).toEqual([null, null, null])
+  await expect.poll(() => tokenRequests.length).toBe(4)
+  expect(tokenRequests).toEqual([null, null, null, null])
   expect(externalChallengeRequests).toEqual([])
 
   const dimensions = await page.evaluate(() => ({

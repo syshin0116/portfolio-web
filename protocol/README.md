@@ -17,7 +17,7 @@ bindings are byte-for-byte copies of that release.
 The exact OpenAPI, CDDL, upstream package manifest, pnpm lock/workspace,
 Python fixup, generated bindings, and Aegra implementation hashes are in
 [`agent-protocol.lock.json`](agent-protocol.lock.json). The generator runtime
-is also fixed to Node 24.14.0, Corepack 0.34.6, pnpm 10.33.0, Python 3.12,
+is also fixed to Node 24.19.0, Corepack 0.35.0, pnpm 10.33.0, Python 3.12,
 `cddl` 0.20.1, `cddl2py` 0.2.2, and `cddl2ts` 0.9.1. A future protocol bump
 must update the lock, regenerate both bindings from that revision, update the
 fixtures, and rerun the complete P0 compatibility gate.

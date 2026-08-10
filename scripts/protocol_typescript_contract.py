@@ -24,7 +24,7 @@ FIXTURES_ROOT = PROTOCOL_ROOT / "fixtures"
 TYPESCRIPT_ROOT = PROTOCOL_ROOT / "tests/typescript"
 GENERATED_BINDING = PROTOCOL_ROOT / "generated/typescript/protocol.ts"
 TYPESCRIPT_VERSION = "5.9.3"
-NODE_VERSION = "24.14.0"
+NODE_VERSION = "24.19.0"
 EXPECTED_REPLAY_OUTPUT = (
     "typescript protocol fixtures ok: 53 records, 37 typed events, 13 shapes"
 )

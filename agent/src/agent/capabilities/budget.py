@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
@@ -107,7 +108,7 @@ class RunBudgetPolicy:
 
 
 DEFAULT_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="owner-capability-lab-v3",
+    policy_id="owner-capability-lab-v4",
     max_model_calls=12,
     max_tool_calls=24,
     max_quickjs_calls=4,
@@ -118,9 +119,9 @@ DEFAULT_RUN_BUDGET_POLICY = RunBudgetPolicy(
     max_tasks_in_flight=2,
     max_depth=1,
     max_output_tokens=2_048,
-    max_total_tokens=48_000,
-    max_count_risk_tokens_per_attempt=48_000,
-    max_count_risk_tokens_per_run=48_000,
+    max_total_tokens=sys.maxsize,
+    max_count_risk_tokens_per_attempt=sys.maxsize,
+    max_count_risk_tokens_per_run=sys.maxsize,
     max_elapsed_seconds=90,
 )
 

@@ -982,7 +982,7 @@ class LocalGovernanceTests(unittest.TestCase):
             ),
             "attestation": (
                 (
-                    "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+                    "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
                     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                 ),
             ),
@@ -1033,7 +1033,7 @@ class LocalGovernanceTests(unittest.TestCase):
             "    services:\n"
             "      postgres:\n"
             "        image: postgres:17@sha256:"
-            "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d\n"
+            "7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317\n"
         )
         mutations = {
             "name": ((header, header.replace("name: ci/agent", "name: ci/agent-v2")),),
@@ -1063,7 +1063,7 @@ class LocalGovernanceTests(unittest.TestCase):
                     postgres_image,
                     postgres_image.replace(
                         "postgres:17@sha256:"
-                        "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d",
+                        "7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317",
                         "attacker.invalid/service:latest",
                     ),
                 ),
@@ -1097,7 +1097,7 @@ class LocalGovernanceTests(unittest.TestCase):
             "database-version": (
                 (
                     "        image: postgres:17@sha256:"
-                    "a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d\n",
+                    "7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317\n",
                     "        image: postgres:16\n",
                 ),
             ),

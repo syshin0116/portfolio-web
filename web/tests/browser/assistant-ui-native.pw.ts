@@ -642,6 +642,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
     { body: null, intent: "anonymous" },
     { body: null, intent: "anonymous" },
   ])
+  await attachEvidence(page, testInfo, "public-empty")
 
   const composer = page.getByRole("textbox", {
     name: "AI에게 보낼 메시지",
@@ -656,6 +657,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
   await expect
     .poll(async () => (await fixtureState(page)).commands.length)
     .toBe(0)
+  await attachEvidence(page, testInfo, "public-composing")
   await composer.dispatchEvent("compositionend")
   await composer.press("Enter")
   await expect(
@@ -664,6 +666,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
   await expect(
     page.getByRole("textbox", { name: "수정해서 재개할 응답" })
   ).toBeFocused()
+  await attachEvidence(page, testInfo, "public-hitl")
   await expect(publicQuestionBubble).toHaveCount(1)
   const interruptedState = await fixtureState(page)
   const createdThreadId = interruptedState.streamSubscriptions[0]?.threadId
@@ -697,6 +700,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
     page.getByText("브라우저 fixture 응답이 완료되었습니다.")
   ).toBeVisible({ timeout: 12_000 })
   await expect(publicQuestionBubble).toHaveCount(1)
+  await attachEvidence(page, testInfo, "public-completed")
   const resumedState = await fixtureState(page)
   expect(resumedState.errors).toEqual([])
   expect(resumedState.responses).toEqual([

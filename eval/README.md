@@ -409,5 +409,5 @@ uv sync --frozen --package syshin0116-dev-eval --all-groups
 uv run --frozen --package syshin0116-dev-eval ruff check eval/src eval/tests
 uv run --frozen --package syshin0116-dev-eval \
   ruff format --check eval/src eval/tests
-uv run --frozen --package syshin0116-dev-eval pytest
+uv run --frozen --package syshin0116-dev-eval pytest eval/tests
 ```

@@ -96,7 +96,7 @@ async function attachEvidence(
   name: string
 ): Promise<void> {
   await testInfo.attach(`${name}-${revision}.png`, {
-    body: await page.screenshot(),
+    body: await page.screenshot({ animations: "disabled" }),
     contentType: "image/png",
   })
   await testInfo.attach(`${name}-${revision}.json`, {
@@ -178,6 +178,19 @@ function collectDiagnostics(page: Page): BrowserDiagnostics {
   return diagnostics
 }
 
+async function selectFixtureThread(
+  page: Page,
+  closeThreadList = true
+): Promise<void> {
+  await page.getByRole("button", { name: "대화 목록 열기" }).click()
+  await page
+    .getByRole("button", { name: /브라우저 테스트 대화/ })
+    .click()
+  if (closeThreadList) {
+    await page.getByRole("button", { name: "Close" }).click()
+  }
+}
+
 test.describe.serial("native assistant-ui production journey", () => {
   test("keeps remote thread-list and composer notifications live under StrictMode", async ({
     page,
@@ -188,12 +201,20 @@ test.describe.serial("native assistant-ui production journey", () => {
     await expect(
       page.getByTestId("production-native-runtime-fixture")
     ).toBeVisible()
+    await expect(
+      page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
+    ).toBeEnabled()
 
-    const fixtureThread = page.getByRole("button", {
-      name: /브라우저 테스트 대화/,
-    })
-    await expect(fixtureThread).toBeVisible()
-    await fixtureThread.click()
+    await attachEvidence(page, testInfo, "chat-empty")
+    await page.getByRole("button", { name: "대화 목록 열기" }).click()
+    await expect(
+      page.getByRole("dialog", { name: "대화 목록" })
+    ).toBeVisible()
+    await attachEvidence(page, testInfo, "chat-thread-list")
+    await page
+      .getByRole("button", { name: /브라우저 테스트 대화/ })
+      .click()
+    await page.getByRole("button", { name: "Close" }).click()
 
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
@@ -205,6 +226,12 @@ test.describe.serial("native assistant-ui production journey", () => {
       .poll(async () => (await fixtureState(page)).commands.length)
       .toBe(0)
 
+    await page.getByRole("button", { name: "실행 상세 열기" }).click()
+    await expect(
+      page.getByRole("dialog", { name: "실행 상세" })
+    ).toBeVisible()
+    await attachEvidence(page, testInfo, "chat-run-detail")
+    await page.getByRole("button", { name: "Close" }).click()
     await attachEvidence(page, testInfo, "strict-mode-notifications")
     await expectNoBrowserErrors(page, diagnostics)
   })
@@ -218,9 +245,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     await expect(
       page.getByTestId("production-native-runtime-fixture")
     ).toBeVisible()
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
 
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
@@ -245,6 +270,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     await expect(
       page.getByText("브라우저 fixture 검색을 계속할까요?")
     ).toBeVisible({ timeout: 12_000 })
+    await expect(composer).toBeHidden()
     const initialState = await fixtureState(page)
     expect(initialState.errors).toEqual([])
     expect(initialState.commands).toHaveLength(1)
@@ -295,7 +321,9 @@ test.describe.serial("native assistant-ui production journey", () => {
     await expect(
       page.getByText("브라우저 fixture 검색을 계속할까요?")
     ).toBeVisible()
-    await expect(composer).toBeFocused()
+    await expect(
+      page.getByRole("textbox", { name: "수정해서 재개할 응답" })
+    ).toBeFocused()
     expect((await fixtureState(page)).responses).toEqual([
       expect.objectContaining({
         namespace: ["nested_subgraph:browser-task"],
@@ -311,6 +339,9 @@ test.describe.serial("native assistant-ui production journey", () => {
     await expect(
       page.getByText("브라우저 fixture 응답이 완료되었습니다.")
     ).toBeVisible()
+    await expect(composer).toBeVisible()
+    await expect(composer).toBeFocused()
+    await page.getByRole("button", { name: "실행 상세 열기" }).click()
     expect((await fixtureState(page)).responses).toEqual([
       expect.objectContaining({
         namespace: ["nested_subgraph:browser-task"],
@@ -336,11 +367,10 @@ test.describe.serial("native assistant-ui production journey", () => {
     await expect(
       page.getByText("중첩 작업이 끝났습니다.")
     ).toBeVisible()
+    await page.getByRole("button", { name: "Close" }).click()
 
     await page.reload()
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
     await expect(
       page.getByText("브라우저 fixture 응답이 완료되었습니다.")
     ).toBeVisible()
@@ -356,9 +386,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     const diagnostics = collectDiagnostics(page)
     await resetFixture(page)
     await page.goto("/")
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page, false)
 
     await page.getByRole("button", { name: "대화 제목 변경" }).click()
     const title = page.getByRole("textbox", { name: "대화 제목" })
@@ -375,6 +403,7 @@ test.describe.serial("native assistant-ui production journey", () => {
       page.getByText("안전한 새 제목", { exact: true })
     ).toBeVisible()
     expect((await fixtureState(page)).renameAttempts).toBe(2)
+    await page.getByRole("button", { name: "Close" }).click()
 
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
@@ -407,9 +436,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     const diagnostics = collectDiagnostics(page)
     await resetFixture(page, "load-error")
     await page.goto("/")
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
     await expect(
       page.getByText(
         "에이전트 실행을 완료하지 못했습니다. 같은 대화에서 다시 시도해 주세요."
@@ -425,9 +452,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     const diagnostics = collectDiagnostics(page)
     await resetFixture(page, "cancel-auth-failure")
     await page.goto("/")
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
     })
@@ -465,9 +490,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     const diagnostics = collectDiagnostics(page)
     await resetFixture(page, "reconnect")
     await page.goto("/")
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
     })
@@ -486,6 +509,7 @@ test.describe.serial("native assistant-ui production journey", () => {
           (await fixtureState(page)).streamSubscriptions.length
       )
       .toBeGreaterThanOrEqual(3)
+    await page.getByRole("button", { name: "실행 상세 열기" }).click()
     await expect(
       page.getByText("중첩 작업이 입력을 기다립니다.")
     ).toHaveCount(1)
@@ -505,9 +529,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     const diagnostics = collectDiagnostics(page)
     await resetFixture(page, "delayed-replay")
     await page.goto("/")
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
     })
@@ -529,9 +551,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     const diagnostics = collectDiagnostics(page)
     await resetFixture(page, "stale-source")
     await page.goto("/")
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
     })
@@ -544,12 +564,13 @@ test.describe.serial("native assistant-ui production journey", () => {
     await page.getByRole("button", { name: "새 대화" }).click()
     await expect(
       page.getByRole("heading", {
-        name: /블로그를 아는 AI가 아니라/,
+        name: "무엇이 궁금하세요?",
       })
     ).toBeVisible()
     await expect
       .poll(async () => (await fixtureState(page)).staleSourceDeliveries)
       .toBeGreaterThanOrEqual(2)
+    await page.getByRole("button", { name: "실행 상세 열기" }).click()
     await expect(
       page.getByText("중첩 작업을 실행 중입니다.")
     ).toHaveCount(0)
@@ -570,9 +591,7 @@ test.describe.serial("native assistant-ui production journey", () => {
     const diagnostics = collectDiagnostics(page)
     await resetFixture(page)
     await page.goto("/")
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
+    await selectFixtureThread(page)
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
     })
@@ -623,12 +642,8 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
     { body: null, intent: "anonymous" },
     { body: null, intent: "anonymous" },
   ])
+  await attachEvidence(page, testInfo, "public-empty")
 
-  await page.getByRole("button", { name: "대화 목록 열기" }).click()
-  await page
-    .getByRole("button", { name: /브라우저 테스트 대화/ })
-    .click()
-  await page.getByRole("button", { name: "Close" }).click()
   const composer = page.getByRole("textbox", {
     name: "AI에게 보낼 메시지",
   })
@@ -636,13 +651,29 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
   const publicQuestionBubble = page.getByText(publicQuestion, {
     exact: true,
   })
+  await composer.dispatchEvent("compositionstart")
   await composer.fill(publicQuestion)
+  await composer.press("Enter")
+  await expect
+    .poll(async () => (await fixtureState(page)).commands.length)
+    .toBe(0)
+  await attachEvidence(page, testInfo, "public-composing")
+  await composer.dispatchEvent("compositionend")
   await composer.press("Enter")
   await expect(
     page.getByText("공개 fixture 검색을 계속할까요?")
   ).toBeVisible({ timeout: 12_000 })
+  await expect(
+    page.getByRole("textbox", { name: "수정해서 재개할 응답" })
+  ).toBeFocused()
+  await attachEvidence(page, testInfo, "public-hitl")
   await expect(publicQuestionBubble).toHaveCount(1)
   const interruptedState = await fixtureState(page)
+  const createdThreadId = interruptedState.streamSubscriptions[0]?.threadId
+  if (!createdThreadId) {
+    throw new Error("fixture did not record the created public thread")
+  }
+  expect(createdThreadId).toMatch(/^aui-/)
   expect(interruptedState.messageIdMappings).toHaveLength(1)
   const messageIdMapping = interruptedState.messageIdMappings[0]
   expect(messageIdMapping).toBeDefined()
@@ -659,7 +690,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
       {
         authorization: true,
         interrupted: true,
-        threadId: "browser-thread-1",
+        threadId: createdThreadId,
       },
     ])
   )
@@ -669,6 +700,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
     page.getByText("브라우저 fixture 응답이 완료되었습니다.")
   ).toBeVisible({ timeout: 12_000 })
   await expect(publicQuestionBubble).toHaveCount(1)
+  await attachEvidence(page, testInfo, "public-completed")
   const resumedState = await fixtureState(page)
   expect(resumedState.errors).toEqual([])
   expect(resumedState.responses).toEqual([
@@ -688,7 +720,7 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
   ).toBeVisible({ timeout: 12_000 })
   await page.getByRole("button", { name: "대화 목록 열기" }).click()
   await page
-    .getByRole("button", { name: /브라우저 테스트 대화/ })
+    .getByRole("button", { name: new RegExp(publicQuestion) })
     .click()
   await page.getByRole("button", { name: "Close" }).click()
   await expect(publicQuestionBubble).toHaveCount(1)
@@ -778,17 +810,7 @@ test("has no horizontal overflow at supported widths and honors reduced motion",
     await expect(
       page.getByTestId("production-native-runtime-fixture")
     ).toBeVisible()
-    if (width < 768) {
-      await page
-        .getByRole("button", { name: "대화 목록 열기" })
-        .click()
-    }
-    await page
-      .getByRole("button", { name: /브라우저 테스트 대화/ })
-      .click()
-    if (width < 768) {
-      await page.getByRole("button", { name: "Close" }).click()
-    }
+    await selectFixtureThread(page)
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
     })

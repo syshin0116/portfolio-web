@@ -82,7 +82,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
         env:
           POSTGRES_DB: postgres
           POSTGRES_HOST_AUTH_METHOD: trust
@@ -122,7 +122,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: needs.changes.outputs.web == 'true'
         with:
-          node-version: "24.14.0"
+          node-version: "24.19.0"
           package-manager-cache: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: needs.changes.outputs.web == 'true'
@@ -180,7 +180,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
         env:
           POSTGRES_DB: aegra_ci
           POSTGRES_HOST_AUTH_METHOD: trust
@@ -367,7 +367,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
         env:
           POSTGRES_DB: aegra_ci
           POSTGRES_HOST_AUTH_METHOD: trust
@@ -399,7 +399,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'
         with:
-          node-version: "24.14.0"
+          node-version: "24.19.0"
           package-manager-cache: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: needs.changes.outputs.web == 'true' || needs.changes.outputs.agent == 'true'

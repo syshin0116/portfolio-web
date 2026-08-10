@@ -110,8 +110,8 @@ class UpstreamArtifactTests(unittest.TestCase):
                     },
                 },
                 "codegen": {
-                    "nodeVersion": "24.14.0",
-                    "corepackVersion": "0.34.6",
+                    "nodeVersion": "24.19.0",
+                    "corepackVersion": "0.35.0",
                     "pythonVersion": "3.12",
                     "packageManager": "pnpm@10.33.0",
                     "packages": {

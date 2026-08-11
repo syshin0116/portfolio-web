@@ -55,7 +55,7 @@ oversized, pagination, and schema errors fail closed.
 
 The GPT-5.6 Luna guest Responses payload, including its explicit
 `reasoning.context=current_turn` override, is serialized by exact
-`langchain-openai==1.3.5` and `openai==2.52.0` pins. Both dependencies remain
+`langchain-openai==1.3.5` and `openai==2.53.0` pins. Both dependencies remain
 required manifest/lock audit targets and isolated from routine grouped
 Dependabot updates. `langchain-openai` is audited
 against the latest stable release below the reviewed exclusive `1.4.0`

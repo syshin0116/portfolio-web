@@ -76,9 +76,10 @@ MAIN_RULESET_CONDITIONS = {
         "exclude": [],
     }
 }
-MERGE_METHODS = ["merge", "squash", "rebase"]
+REPOSITORY_MERGE_METHODS = ["merge", "squash", "rebase"]
+ALLOWED_MERGE_METHODS = ["rebase"]
 SOLO_PULL_REQUEST_PARAMETERS = {
-    "allowed_merge_methods": MERGE_METHODS,
+    "allowed_merge_methods": ALLOWED_MERGE_METHODS,
     "dismiss_stale_reviews_on_push": False,
     "require_code_owner_review": False,
     "require_last_push_approval": False,
@@ -3427,7 +3428,7 @@ def _repository_merge_methods(payload: Any) -> list[str]:
         raise GovernanceError(
             "GitHub repository merge-method settings must be explicit booleans"
         )
-    return [method for method in MERGE_METHODS if settings[method]]
+    return [method for method in REPOSITORY_MERGE_METHODS if settings[method]]
 
 
 def verify_live(policy: JsonObject, api_get: ApiGet) -> list[str]:

@@ -50,8 +50,8 @@ def desired_live_responses() -> dict[str, object]:
         "": {
             "full_name": "syshin0116/syshin0116.dev",
             "default_branch": "main",
-            "allow_merge_commit": True,
-            "allow_squash_merge": True,
+            "allow_merge_commit": False,
+            "allow_squash_merge": False,
             "allow_rebase_merge": True,
             "security_and_analysis": {
                 "dependabot_security_updates": {"status": "enabled"}
@@ -90,11 +90,7 @@ def desired_live_responses() -> dict[str, object]:
                 {
                     "type": "pull_request",
                     "parameters": {
-                        "allowed_merge_methods": [
-                            "merge",
-                            "squash",
-                            "rebase",
-                        ],
+                        "allowed_merge_methods": ["rebase"],
                         "dismiss_stale_reviews_on_push": False,
                         "required_approving_review_count": 0,
                         "require_code_owner_review": False,
@@ -3494,19 +3490,23 @@ class LiveGovernanceTests(unittest.TestCase):
         self.assertEqual([], errors)
 
     def test_repository_merge_methods_must_match_pull_request_rule(self) -> None:
-        responses = desired_live_responses()
-        repository = json.loads(json.dumps(responses[""]))
-        repository["allow_rebase_merge"] = False
-        responses[""] = repository
+        for setting in (
+            "allow_merge_commit",
+            "allow_squash_merge",
+            "allow_rebase_merge",
+        ):
+            with self.subTest(setting=setting):
+                responses = desired_live_responses()
+                repository = json.loads(json.dumps(responses[""]))
+                repository[setting] = not repository[setting]
+                responses[""] = repository
 
-        errors = governance.verify_live(self.policy, responses.__getitem__)
+                errors = governance.verify_live(self.policy, responses.__getitem__)
 
-        self.assertTrue(
-            any(
-                "repository merge methods" in error and "'rebase'" in error
-                for error in errors
-            )
-        )
+                self.assertTrue(
+                    any("repository merge methods" in error for error in errors),
+                    errors,
+                )
 
     def test_repository_full_name_rejects_rename_or_redirect(self) -> None:
         for full_name in (

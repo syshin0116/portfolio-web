@@ -146,7 +146,7 @@ seventh tool. The guest prompt contains this retrieval workflow inline and mount
 skill. A forged filesystem/todo/task/QuickJS call must fail before execution.
 
 The serialization boundary is pinned to `langchain-openai==1.3.5` and
-`openai==2.52.0`; the dependency audit isolates both and keeps
+`openai==2.53.0`; the dependency audit isolates both and keeps
 `langchain-openai` below the reviewed exclusive 1.4.0 compatibility ceiling
 until `langchain-core` moves beyond 1.4.9. The model's
 [official catalogue entry](https://developers.openai.com/api/docs/models/gpt-5.6-luna)

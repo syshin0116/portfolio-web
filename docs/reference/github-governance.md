@@ -191,8 +191,9 @@ In **Settings → Rules → Rulesets**, create one active branch ruleset named
 1. Restrict deletions.
 2. Require a pull request before merging.
 3. Require **zero** approving reviews.
-4. Allow merge commits, squash merges, and rebases, matching the repository
-   settings.
+4. Allow rebases only. Disable merge commits and squash merges in the
+   repository settings because GitHub has no separate default merge-method
+   setting.
 5. Leave stale-review dismissal, Code Owner review, last-push approval, and
    required review-thread resolution disabled. Leave review-dismissal
    restrictions disabled and the beta required-reviewer list empty. GitHub's

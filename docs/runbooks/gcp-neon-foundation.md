@@ -87,7 +87,7 @@ and their direct IAM, state-bucket and state-object metadata, exact-project serv
 accounts and user-managed keys, Secret Manager metadata and direct IAM, WIF, Cloud Run
 services/jobs and their direct IAM, and the maintenance Scheduler.
 For anonymous runtime drift, Production must expose exactly
-`openai:gpt-5.6-luna / 500000 / 51892`; Preview must remain disabled with blank guest
+`openai:gpt-5.6-luna / 500000 / 53837`; Preview must remain disabled with blank guest
 model, daily budget, and run reservation. This verifies deployed direct state only and
 does not authorize public launch or claim a provider-side hard spend stop.
 

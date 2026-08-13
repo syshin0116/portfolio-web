@@ -900,6 +900,7 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
                     response_metadata={
                         "model_provider": "openai",
                         "model_name": response_model,
+                        "status": "completed",
                     },
                     usage_metadata={
                         "input_tokens": 120,
@@ -937,34 +938,68 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.4-mini"},
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-5.4-mini",
+                "status": "completed",
+            },
             {"cache_read": 40, "cache_creation": 0},
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": []},
+            {
+                "model_provider": "openai",
+                "model_name": [],
+                "status": "completed",
+            },
             {"cache_read": 40, "cache_creation": 0},
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-5.6-luna",
+                "status": "completed",
+            },
             {"cache_read": 40},
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-5.6-luna",
+                "status": "completed",
+            },
             {"cache_read": 100, "cache_creation": 21},
             {"reasoning": 0},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-5.6-luna",
+                "status": "completed",
+            },
             {"cache_read": 40, "cache_creation": 0},
             {"reasoning": 1},
         ),
         (
-            {"model_provider": "openai", "model_name": "gpt-5.6-luna"},
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-5.6-luna",
+                "status": "completed",
+            },
             {"cache_read": 40, "cache_creation": 0},
             {"reasoning": 0, "audio": 0},
+        ),
+        (
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-5.6-luna",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+            {"cache_read": 40, "cache_creation": 0},
+            {"reasoning": 0},
         ),
     ],
     ids=[
@@ -975,6 +1010,7 @@ async def test_openai_usage_tracks_exact_provider_pricing_buckets(response_model
         "cache-buckets-exceed-input",
         "reasoning",
         "unknown-output-bucket",
+        "incomplete",
     ],
 )
 async def test_openai_usage_drift_fails_the_run_closed(
@@ -1056,6 +1092,7 @@ async def test_openai_provider_input_must_equal_the_exact_precount():
                     response_metadata={
                         "model_provider": "openai",
                         "model_name": "gpt-5.6-luna",
+                        "status": "completed",
                     },
                     usage_metadata={
                         "input_tokens": 1_000,

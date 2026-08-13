@@ -203,6 +203,7 @@ def _openai_response(
         response_metadata={
             "model_provider": "openai",
             "model_name": "gpt-5.6-luna",
+            "status": "completed",
         },
         usage_metadata={
             "input_tokens": 1,

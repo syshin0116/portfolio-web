@@ -1129,6 +1129,8 @@ def _openai_provider_token_usage(
             or response_metadata.get("model_provider") != "openai"
             or not isinstance(response_model, str)
             or response_model not in expected_response_models
+            or response_metadata.get("status") != "completed"
+            or response_metadata.get("incomplete_details") is not None
         ):
             return None
 

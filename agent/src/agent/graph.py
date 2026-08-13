@@ -171,7 +171,7 @@ _POSTGRES_CREATE_MEMORY_SQL = """
 """
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="anonymous-public-v6",
+    policy_id="anonymous-public-v7",
     max_model_calls=8,
     max_tool_calls=24,
     max_quickjs_calls=1,

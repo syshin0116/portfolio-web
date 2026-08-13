@@ -166,7 +166,7 @@ def _guest_count_risk_budget() -> RunBudget:
     return RunBudget(
         replace(
             DEFAULT_RUN_BUDGET_POLICY,
-            policy_id="anonymous-public-v6",
+            policy_id="anonymous-public-v7",
             max_model_calls=8,
             max_output_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS,
             max_total_tokens=64_000,
@@ -216,6 +216,7 @@ def _openai_fixture_response(
                 response_metadata={
                     "model_provider": "openai",
                     "model_name": OPENAI_GUEST_MODEL_NAME,
+                    "status": "completed",
                 },
                 usage_metadata={
                     "input_tokens": input_tokens,
@@ -496,7 +497,7 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
 
     async def answer(_request: ModelRequest) -> ModelResponse:
         snapshot = budget.snapshot()
-        assert snapshot.charged_tokens == 7_933
+        assert snapshot.charged_tokens == 8_189
         assert snapshot.count_risk_tokens == 7_293
         assert snapshot.count_risk_tokens_in_flight == 0
         return _openai_fixture_response(input_tokens=4_100)

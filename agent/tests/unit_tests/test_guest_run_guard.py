@@ -49,7 +49,7 @@ def _enable_guest_agent(monkeypatch):
     monkeypatch.setenv("AGENT_ANONYMOUS_ACCESS_ENABLED", "true")
     monkeypatch.setenv("GUEST_MODEL", "openai:gpt-5.6-luna")
     monkeypatch.setenv("GUEST_DAILY_BUDGET_MICRO_USD", "500000")
-    monkeypatch.setenv("GUEST_RUN_RESERVATION_MICRO_USD", "51892")
+    monkeypatch.setenv("GUEST_RUN_RESERVATION_MICRO_USD", "53837")
 
     @asynccontextmanager
     async def no_database_lock(_thread_id, *, timeout_seconds):

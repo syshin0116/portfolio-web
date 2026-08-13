@@ -21,6 +21,7 @@ from agent.capabilities.budget import (
 from agent.capabilities.quickjs import QUICKJS_TOOL_NAME, BoundedQuickJSMiddleware
 from agent.capabilities.token_counting import InputTokenCountError
 from agent.retrieval.protocol import DocId
+from agent.tools import keyword_search
 from deepagents.profiles.harness.harness_profiles import _harness_profile_for_model
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -258,9 +259,9 @@ def _responses_for(context) -> list[AIMessage]:
                     "",
                     tool_calls=[
                         {
-                            "args": {},
-                            "id": f"{context.attempt_id}-child-skill",
-                            "name": "read_blog_retrieval_skill",
+                            "args": {"query": "Docker", "top_k": 1},
+                            "id": f"{context.attempt_id}-child-retrieval",
+                            "name": "keyword_search",
                             "type": "tool_call",
                         }
                     ],
@@ -351,6 +352,10 @@ class DeterministicCapabilityExecutor:
         model = RecordingFakeModel(responses=_responses_for(context))
         quickjs_active, _subagents_active = activated_capabilities(context)
         quickjs = BoundedQuickJSMiddleware(enabled=quickjs_active)
+        original_keyword_search = keyword_search.func
+        keyword_search.func = lambda query, top_k=10, runtime=None: (
+            f"{query}:{top_k}:{runtime is None}"
+        )
         try:
             compiled = build_capability_graph(
                 context,
@@ -387,6 +392,7 @@ class DeterministicCapabilityExecutor:
                 context.run_config,
             )
         finally:
+            keyword_search.func = original_keyword_search
             await quickjs.aclose()
 
         self.records.append(
@@ -924,9 +930,7 @@ def test_provider_free_graph_exercises_real_four_arm_topology_with_isolation() -
         if record["arm_id"] == "quickjs-on_subagents-on"
         and record["task_id"] == "combined-metric-evidence"
     )
-    child_surface = frozenset(
-        {"keyword_search", "read_blog_retrieval_skill", "read_post"}
-    )
+    child_surface = frozenset({"keyword_search", "read_post"})
     assert any(
         surface == frozenset({QUICKJS_TOOL_NAME, "task"})
         for surface in combined["bound_tool_names"]

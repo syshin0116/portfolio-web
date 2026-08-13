@@ -420,6 +420,19 @@ def test_guest_budget_admits_the_observed_subagent_synthesis_payload():
     assert GUEST_RUN_BUDGET_POLICY.max_tool_calls == 24
 
 
+def test_guest_budget_admits_eight_calls_just_below_the_generation_ceiling():
+    budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
+
+    for _call in range(8):
+        reservation = budget.reserve_model(input_tokens=7_487)
+        budget.settle_model(reservation, actual_tokens=7_999)
+
+    snapshot = budget.snapshot()
+    assert snapshot.model_calls == 8
+    assert snapshot.charged_tokens == 63_992
+    assert GUEST_RUN_BUDGET_POLICY.max_total_tokens == 64_000
+
+
 @pytest.fixture(autouse=True)
 def _replace_provider_token_count(monkeypatch):
     monkeypatch.setattr(
@@ -1447,8 +1460,9 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
         if block["type"] == "text"
     )
     assert WRITE_TODOS_SYSTEM_PROMPT not in guest_system_text
+    assert "within 400 output tokens" in guest_system_text
     snapshot = budget.snapshot()
-    assert snapshot.policy_id == "anonymous-public-v5"
+    assert snapshot.policy_id == "anonymous-public-v6"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
 
@@ -1458,17 +1472,19 @@ async def test_canonical_guest_can_delegate_to_one_isolated_specialist(monkeypat
     monkeypatch.setattr(
         keyword_search,
         "func",
-        lambda query, top_k=10, runtime=None: f"{query}:{top_k}:{runtime is None}",
+        lambda query, top_k=10, runtime=None: (
+            f"{query}:{top_k}:{runtime is None}\ncontent/AI/a.md\ncontent/AI/b.md"
+        ),
     )
     description = """\
 Question:
-Check one supplied blog claim.
+Compare two RAG posts.
 Allowed corpus/method scope:
 Published retrieval evidence only.
 Expected output schema:
-One supported verdict.
+One comparison with two source paths.
 Stopping condition:
-Stop after one verdict.
+Stop after one comparison.
 """
     model = ToolCapableFakeModel(
         responses=[
@@ -1481,17 +1497,14 @@ Stop after one verdict.
                 "guest-specialist-task",
             ),
             _openai_tool_message(
-                "read_blog_retrieval_skill",
-                {},
-                "guest-specialist-skill",
-            ),
-            _openai_tool_message(
                 "keyword_search",
                 {"query": "Docker", "top_k": 1},
                 "guest-specialist-retrieval",
             ),
             _openai_final_message("The claim is supported."),
-            _openai_final_message("Final answer uses the checked evidence."),
+            _openai_final_message(
+                "Compared [A](content/AI/a.md) and [B](content/AI/b.md)."
+            ),
         ]
     )
     child_tool_names = []
@@ -1515,19 +1528,37 @@ Stop after one verdict.
     )
 
     result = await compiled.ainvoke(
-        {"messages": [{"role": "user", "content": "delegate once"}]},
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "서브에이전트를 활용해서 내 블로그의 RAG 관련 글 두 편을 찾아, "
+                        "각 글의 핵심 주장과 서로 다른 점을 출처와 함께 비교해줘."
+                    ),
+                }
+            ]
+        },
         {"configurable": {"thread_id": "guest-specialist"}},
     )
 
-    assert result["messages"][-1].content == "Final answer uses the checked evidence."
-    assert len(child_tool_names) == 3
+    final_answer = result["messages"][-1].content
+    assert "content/AI/a.md" in final_answer
+    assert "content/AI/b.md" in final_answer
+    assert len(child_tool_names) == 2
     for tool_names in child_tool_names:
-        assert "read_blog_retrieval_skill" in tool_names
-        assert {"task", QUICKJS_TOOL_NAME, "write_file", "edit_file"}.isdisjoint(
-            tool_names
-        )
+        assert {
+            "task",
+            "read_blog_retrieval_skill",
+            QUICKJS_TOOL_NAME,
+            "write_file",
+            "edit_file",
+        }.isdisjoint(tool_names)
     snapshot = budget.snapshot()
-    assert (snapshot.model_calls, snapshot.tool_calls, snapshot.task_calls) == (5, 3, 1)
+    assert (snapshot.model_calls, snapshot.tool_calls, snapshot.task_calls) == (4, 2, 1)
+    assert snapshot.charged_tokens <= 64_000
+    assert snapshot.count_risk_tokens <= 128_000
+    assert snapshot.exhausted is False
     assert GUEST_RUN_BUDGET_POLICY.max_task_calls == 8
     assert GUEST_RUN_BUDGET_POLICY.max_tasks_in_flight == 2
 
@@ -2743,9 +2774,9 @@ Stop after one verdict.
             tool.get("name") if isinstance(tool, dict) else tool.name
             for tool in request.tools
         }
-        assert "read_blog_retrieval_skill" in tool_names
         assert {
             "task",
+            "read_blog_retrieval_skill",
             "ls",
             "read_file",
             "write_file",
@@ -2768,6 +2799,11 @@ Stop after one verdict.
 
 
 async def test_aegra_run_config_reaches_child_without_carrying_budget(monkeypatch):
+    monkeypatch.setattr(
+        keyword_search,
+        "func",
+        lambda query, top_k=10, runtime=None: f"{query}:{top_k}:{runtime is None}",
+    )
     description = """\
 Question:
 Verify one supplied DocId.
@@ -2799,21 +2835,10 @@ Stop after one verdict.
                     "total_tokens": 10,
                 },
             ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "read_blog_retrieval_skill",
-                        "args": {},
-                        "id": "child-config-tool",
-                        "type": "tool_call",
-                    }
-                ],
-                usage_metadata={
-                    "input_tokens": 9,
-                    "output_tokens": 1,
-                    "total_tokens": 10,
-                },
+            _openai_tool_message(
+                "keyword_search",
+                {"query": "DocId", "top_k": 1},
+                "child-config-retrieval",
             ),
             _final_message("Child observed the server config."),
             _final_message("Root completed."),

@@ -26,17 +26,14 @@ EXPECTED_TOOLS = {
         "keyword_search",
         "list_posts",
         "metadata_filter",
-        "read_blog_retrieval_skill",
         "read_post",
         "semantic_search",
     },
     "evidence-checker": {
         "keyword_search",
-        "read_blog_retrieval_skill",
         "read_post",
     },
     "comparison-synthesizer": {
-        "read_blog_retrieval_skill",
         "read_post",
     },
     "general-purpose": {
@@ -44,7 +41,6 @@ EXPECTED_TOOLS = {
         "keyword_search",
         "list_posts",
         "metadata_filter",
-        "read_blog_retrieval_skill",
         "read_post",
         "semantic_search",
     },
@@ -172,10 +168,18 @@ async def test_compiled_subagents_enforce_real_state_and_backend_isolation():
             "process",
             "env",
         }.isdisjoint(tool_names)
-        system_text = str(request.system_message.content)
+        system_text = "\n".join(
+            block["text"]
+            for block in request.system_message.content_blocks
+            if block["type"] == "text"
+        )
+        normalized_system_text = " ".join(system_text.split())
         assert "Exactly one server-owned skill" in system_text
-        assert "blog-retrieval" in system_text
+        assert "complete instructions are already loaded" in normalized_system_text
         assert "/blog-retrieval/SKILL.md" in system_text
+        assert "Start with `semantic_search(query, top_k)`" in system_text
+        assert "The tools read one generated, checksum-verified snapshot" in system_text
+        assert "read_blog_retrieval_skill" not in tool_names
         assert QUICKJS_SYSTEM_PROMPT.strip() not in system_text
         assert "QuickJS" not in system_text
         assert "tools.eval" not in system_text

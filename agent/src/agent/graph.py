@@ -171,7 +171,7 @@ _POSTGRES_CREATE_MEMORY_SQL = """
 """
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="anonymous-public-v5",
+    policy_id="anonymous-public-v6",
     max_model_calls=8,
     max_tool_calls=24,
     max_quickjs_calls=1,
@@ -182,7 +182,7 @@ GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     max_tasks_in_flight=2,
     max_depth=1,
     max_output_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
-    max_total_tokens=48_000,
+    max_total_tokens=64_000,
     max_count_risk_tokens_per_attempt=128_000,
     max_count_risk_tokens_per_run=128_000,
     max_elapsed_seconds=GUEST_RUN_MAX_ELAPSED_SECONDS,

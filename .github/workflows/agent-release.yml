@@ -109,7 +109,7 @@ jobs:
               expected_repository="asia-southeast1-docker.pkg.dev/${GCP_PROJECT_ID}/agent/agent"
               set -- \
                 --update-env-vars \
-                "GUEST_RUN_RESERVATION_MICRO_USD=47892"
+                "GUEST_RUN_RESERVATION_MICRO_USD=51892"
               ;;
             *)
               printf 'unsupported deployment target\n' >&2

@@ -20,7 +20,7 @@ _OPENAI_GUEST_CACHE_WRITE_USD_MICROS_PER_MILLION_TOKENS = 250_000
 _OPENAI_GUEST_OUTPUT_USD_MICROS_PER_MILLION_TOKENS = 1_200_000
 _OPENAI_GUEST_MAX_MODEL_CALLS = 8
 _OPENAI_GUEST_MAX_OUTPUT_TOKENS_PER_CALL = 512
-_OPENAI_GUEST_MAX_TOTAL_TOKENS = 48_000
+_OPENAI_GUEST_MAX_TOTAL_TOKENS = 64_000
 _OPENAI_GUEST_MAX_COUNT_RISK_TOKENS_PER_RUN = 128_000
 
 _RESERVE_GUEST_BUDGET_SQL = text(
@@ -97,7 +97,7 @@ def minimum_guest_run_reservation_micro_usd(
 ) -> int:
     """Return the conservative gpt-5.6-luna accounting reserve for one run.
 
-    Generation uses the exact 48k token ledger. Count requests use a separate 128k
+    Generation uses the exact 64k token ledger. Count requests use a separate 128k
     aggregate risk ledger because their conservative preflight reservation is based
     on payload bytes, not the exact count returned after provider I/O. Until OpenAI
     documents count billing, price the full risk ledger at Luna's most expensive

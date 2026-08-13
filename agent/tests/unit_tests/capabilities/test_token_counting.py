@@ -166,10 +166,10 @@ def _guest_count_risk_budget() -> RunBudget:
     return RunBudget(
         replace(
             DEFAULT_RUN_BUDGET_POLICY,
-            policy_id="anonymous-public-v5",
+            policy_id="anonymous-public-v6",
             max_model_calls=8,
             max_output_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS,
-            max_total_tokens=48_000,
+            max_total_tokens=64_000,
             max_count_risk_tokens_per_attempt=128_000,
             max_count_risk_tokens_per_run=128_000,
         )
@@ -448,9 +448,9 @@ async def test_published_semantic_top10_answer_fits_both_guest_ledgers(
     # independently reviewed literal interval accepts both and rejects material
     # payload/schema drift without becoming a production-derived constant.
     assert len(observed_reservations) == 1
-    assert 11_000 <= observed_reservations[0] <= 11_200
+    assert 11_000 <= observed_reservations[0] <= 11_350
     assert observed_reservations == ledger_reservations
-    assert sum(observed_reservations) < 48_000
+    assert sum(observed_reservations) < 64_000
     assert snapshot.charged_tokens == 2_564
     assert snapshot.count_risk_tokens == exact_count_fixture
     assert snapshot.provider_input_tokens == exact_count_fixture
@@ -510,12 +510,12 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     # variance between the pinned CPython 3.12 runner and local CPython 3.13.
     for reservation, (minimum, maximum) in zip(
         observed_reservations,
-        ((6_100, 6_327), (11_000, 11_200), (16_250, 16_450)),
+        ((6_100, 6_425), (11_000, 11_350), (16_250, 16_600)),
         strict=True,
     ):
         assert minimum <= reservation <= maximum
     assert observed_reservations == ledger_reservations
-    assert sum(observed_reservations) < 48_000
+    assert sum(observed_reservations) < 64_000
     assert snapshot.charged_tokens == 7_485
     assert snapshot.count_risk_tokens == 7_293
     assert snapshot.provider_input_tokens == 7_293
@@ -526,7 +526,7 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
 
 @pytest.mark.parametrize(
     ("attack", "minimum_reservation", "maximum_reservation"),
-    [("user", 22_400, 22_650), ("read-post", 22_750, 23_000)],
+    [("user", 22_400, 22_750), ("read-post", 22_750, 23_100)],
 )
 async def test_16_kib_guest_input_is_admitted_within_the_actual_token_cap(
     monkeypatch: pytest.MonkeyPatch,

@@ -83,7 +83,7 @@ P6  Go public                        PUBLICATION GATE
 | P4 | Harness, first dense arm, and topic-review tooling implemented: the default provider-free sweep remains model-free; pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods; a versioned topic seed, deterministic blind pool, checksum seal, finalizer, and dataset-selectable publication gate are present | Owner completion/sealing of `topic-smoke-v1` qrels and a publication-qualified digest-pinned run |
 | P4.5 | Runtime, 2x2 harness, and manual Luna adapter implemented: bounded QuickJS and dynamic subagents share `RunBudget`; canonical Luna guests may use the server-declared specialists while QuickJS remains owner/eval-only | A complete retained v5 provider-backed quality/cost artifact plus owner/publication review for evaluation publication |
 | P5 | Repository controls implemented: anonymous JWT/cookie, Vercel BotID Basic bodyless bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secret payload/version, and input-count billing confirmation |
-| P6 | Production desired state approved: anonymous Agent access uses `openai:gpt-5.6-luna`, 500,000 µUSD/day, and 47,892 µUSD/run for up to 8 calls at 512 output tokens each, a 48,000-token generation ledger, and a separate 128,000-token aggregate count-risk ledger; a numeric OpenAI secret version is pinned, while Preview and both Vercel public flags remain fail-closed | Exact-project plan/apply, first bounded Scheduler execution, input-count billing confirmation, Vercel BotID Basic configuration, deployed abuse/spend/browser proofs, and provider-side spend protection |
+| P6 | Production desired state approved: anonymous Agent access uses `openai:gpt-5.6-luna`, 500,000 µUSD/day, and 51,892 µUSD/run for up to 8 calls at 512 output tokens each, a 64,000-token generation ledger, and a separate 128,000-token aggregate count-risk ledger; a numeric OpenAI secret version is pinned, while Preview and both Vercel public flags remain fail-closed | Exact-project plan/apply, first bounded Scheduler execution, input-count billing confirmation, Vercel BotID Basic configuration, deployed abuse/spend/browser proofs, and provider-side spend protection |
 
 The operational source of truth for those live gates is the
 [GCP/Neon foundation](../runbooks/gcp-neon-foundation.md),
@@ -117,8 +117,8 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 The anonymous model is a separate fail-closed runtime contract, not an install-time
 dependency. Production accepts only `openai:gpt-5.6-luna`, with
 `reasoning.effort=none`, provider storage disabled, a 500,000 µUSD UTC-day ceiling,
-and a 47,892 µUSD per-run provider-request reservation: 15,892 µUSD for the worst
-48,000-token generation allocation across up to 8 calls at 512 output tokens per call,
+and a 51,892 µUSD per-run provider-request reservation: 19,892 µUSD for the worst
+64,000-token generation allocation across up to 8 calls at 512 output tokens per call,
 plus 32,000 µUSD for the separate 128,000-token count-risk ledger.
 Preview remains disabled, unpriced, and
 OpenAI-free. These committed Cloud Run values are desired state, not proof of a live
@@ -842,7 +842,8 @@ the bounded code interpreter.
   delegate through `task`.
 - Subagents are stateless. Every dispatch must contain the complete question, allowed
   corpus/method scope, expected output schema, and stopping condition. Custom subagents
-  receive their skills explicitly; they do not inherit the main agent's skills.
+  receive their fixed skill preloaded through child `SkillsMiddleware`; they do not
+  inherit the main agent's skills or spend a model tool call loading it.
 - Give specialists the smallest tool set they need. They return evidence and ranked IDs;
   only the main agent writes the final visitor-facing answer.
 - Add an atomic `RunBudget` outside the model loop. Reserve before every model, tool, and
@@ -942,10 +943,10 @@ confirmation, and provider-side spend protection remain mandatory.
   apply, and first bounded execution pass.
 - Per-run model/token limits and a durable UTC-day micro-dollar ledger are implemented for
   the fixed `openai:gpt-5.6-luna` guest contract. Production now owns the exact model,
-  500,000/47,892 µUSD ceilings, anonymous Agent flag, and numeric OpenAI secret
+  500,000/51,892 µUSD ceilings, anonymous Agent flag, and numeric OpenAI secret
   reference while Preview remains absent/disabled. The per-run ceiling adds a separately
   capped 128,000-token count-risk ledger, priced at the highest input bucket, to the
-  48,000-token generation allocation across up to 8 calls at 512 output tokens per call
+  64,000-token generation allocation across up to 8 calls at 512 output tokens per call
   because count billing is undocumented. This is not
   a documented provider price or hidden-token bound. Input-count billing confirmation,
   provider-account spend protection, and the
@@ -985,7 +986,7 @@ confirmation, and provider-side spend protection remain mandatory.
 | `HIGH` | Auth dispatch differs across legacy and AP v2 streaming/commands paths | Protocol fixtures test every production endpoint; SQL identity predicate plus outer ASGI guard is the boundary. Pin `aegra-api >= 0.9.7` |
 | `HIGH` | Client-supplied `configurable.user_id` wins over the server's | The graph reads the authoritative server runtime identity; PostgreSQL isolation tests retain a forged field and prove it cannot cross namespaces |
 | `HIGH` | Aegra thread deletion strands checkpoints and cannot commit both stores atomically | Native DELETE is fail-closed with 403. Do not expose a faux-safe route; design admin GC separately |
-| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | The Production Agent desired state reserves 500,000 µUSD/day and 47,892 µUSD/run; the run value combines the 48,000-token generation allocation across up to 8 calls at 512 output tokens per call with a separate 128,000-token aggregate count-risk ledger priced at the highest input bucket, but is not a documented provider hard bound. Vercel issuance stays disabled until input-count billing, the implemented ledgers/guard, and a separately verified OpenAI account cap all pass. Luna has no Free tier |
+| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | The Production Agent desired state reserves 500,000 µUSD/day and 51,892 µUSD/run; the run value combines the 64,000-token generation allocation across up to 8 calls at 512 output tokens per call with a separate 128,000-token aggregate count-risk ledger priced at the highest input bucket, but is not a documented provider hard bound. Vercel issuance stays disabled until input-count billing, the implemented ledgers/guard, and a separately verified OpenAI account cap all pass. Luna has no Free tier |
 | `MED` | **Regressing the corrected baseline.** A tokenizer or fitted-artifact change would invalidate every comparison | P1.3 executable literal-term, raw-score, determinism, memory, and registry tests remain required |
 | `MED` | Pre-1.0 churn. Aegra and assistant-ui compatibility can change between patch releases; three `unstable_` assistant-ui options remain on the happy path | Exact pins, committed lockfiles, protocol/browser replay, and `smoke.py` as the bump gate |
 | `MED` | Eval cost creep - embedding N models × M queries × K retrievers plus judge calls | Cache embeddings by fingerprint; local results as system of record; `upload_results=False` while iterating |
@@ -996,7 +997,7 @@ confirmation, and provider-side spend protection remain mandatory.
 1. **Region:** dedicated GCP project and Cloud Run use `asia-southeast1`; the Neon
    projects remain in their reviewed US region.
 2. **Model policy:** the guest contract accepts only `openai:gpt-5.6-luna` at the reviewed
-   500,000/47,892 µUSD ceilings. Signed-in users with `model:select` may choose the exact
+   500,000/51,892 µUSD ceilings. Signed-in users with `model:select` may choose the exact
    OpenAI GPT-5.6 Luna, Terra, or Sol IDs through the same bounded Responses contract.
 3. **Guest persistence:** an httpOnly anonymous-session cookie resumes the pseudonymous
    subject; the bodyless BotID Basic verdict is never retained.

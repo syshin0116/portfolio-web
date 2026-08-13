@@ -15,7 +15,7 @@ from deepagents.middleware.subagents import (
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableLambda
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool
 from langgraph_sdk.runtime import ServerRuntime
 
 from agent.capabilities.budget import RunBudget, RunBudgetMiddleware
@@ -107,18 +107,24 @@ stated stopping condition. Never write files, delegate work, run code, change ca
 settings, or produce the visitor-facing final answer.
 """
 
-_CHILD_SKILLS_SYSTEM_PROMPT = """\
+_CHILD_SKILLS_SYSTEM_PROMPT = f"""\
 ## Assigned skill
 
-Exactly one server-owned skill is assigned to this specialist.
+Exactly one server-owned skill is assigned to this specialist. Its complete
+instructions are already loaded below, so follow them directly without spending a
+tool call to load them.
 
-{skills_locations}{skills_load_warnings}
+Source: `/blog-retrieval/SKILL.md`
 
-{skills_list}
+{{skills_locations}}{{skills_load_warnings}}
 
-Call `read_blog_retrieval_skill` to load its complete instructions before using
-retrieval tools. No general filesystem, parent working files, persistent memories,
-or sibling state is available.
+Metadata for provenance only:
+{{skills_list}}
+
+{_BLOG_RETRIEVAL_SKILL_TEXT.replace("{", "{{").replace("}", "}}")}
+
+No general filesystem, parent working files, persistent memories, or sibling state
+is available.
 """
 
 _SUBAGENT_DEFINITIONS: tuple[
@@ -279,12 +285,6 @@ def validate_capability_config(
     _reject_reserved_keys(configurable, location="config.configurable")
 
 
-@tool
-def read_blog_retrieval_skill() -> str:
-    """Read the one server-curated blog-retrieval skill assigned to this child."""
-    return _BLOG_RETRIEVAL_SKILL_TEXT
-
-
 def _isolated_skill_backend() -> CompositeBackend:
     """Expose one read-only virtual skill tree and no parent/store backend."""
     skill_files = FilesystemBackend(
@@ -329,7 +329,7 @@ def _compiled_subagent(
     skill_backend = _isolated_skill_backend()
     child = create_agent(
         model,
-        tools=[*tools, read_blog_retrieval_skill],
+        tools=list(tools),
         system_prompt=system_prompt,
         middleware=[
             SkillsMiddleware(
@@ -402,6 +402,5 @@ __all__ = [
     "SUBAGENT_SKILLS",
     "build_subagents",
     "dynamic_subagents_allowed",
-    "read_blog_retrieval_skill",
     "validate_capability_config",
 ]

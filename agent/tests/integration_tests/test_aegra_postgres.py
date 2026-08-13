@@ -1544,9 +1544,9 @@ Stop after one verdict.
                 tool.get("name") if isinstance(tool, dict) else tool.name
                 for tool in request.tools
             }
-            assert "read_blog_retrieval_skill" in tool_names
             assert {
                 "task",
+                "read_blog_retrieval_skill",
                 "ls",
                 "read_file",
                 "write_file",

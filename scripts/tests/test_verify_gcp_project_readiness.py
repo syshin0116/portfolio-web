@@ -665,7 +665,7 @@ class ExactProjectCommandBoundaryTests(unittest.TestCase):
         from scripts import verify_gcp_project_readiness as readiness
 
         self.assertEqual(
-            "18892", PRODUCTION_RUNTIME_ENV["GUEST_RUN_RESERVATION_MICRO_USD"]
+            "19892", PRODUCTION_RUNTIME_ENV["GUEST_RUN_RESERVATION_MICRO_USD"]
         )
         with patch.object(
             readiness,

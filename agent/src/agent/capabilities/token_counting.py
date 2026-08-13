@@ -28,6 +28,10 @@ OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH = 64
 # snapshot here only after OpenAI publishes one and its response metadata is
 # captured by a separately reviewed provider-backed test.
 OPENAI_GUEST_RESPONSE_MODEL_NAMES = frozenset({OPENAI_GUEST_MODEL_NAME})
+# These are the only owner-visible OpenAI models accepted from the signed
+# model selector. Each selected model still uses the same reviewed Responses
+# request contract and exact input-token counting path.
+OPENAI_OWNER_MODEL_NAMES = frozenset({"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"})
 OPENAI_GUEST_MAX_OUTPUT_TOKENS = 512
 OPENAI_GUEST_TIMEOUT_SECONDS = 60.0
 
@@ -852,6 +856,7 @@ __all__ = [
     "OPENAI_GUEST_MODEL_NAME",
     "OPENAI_GUEST_RESPONSE_MODEL_NAMES",
     "OPENAI_GUEST_MODEL_SPEC",
+    "OPENAI_OWNER_MODEL_NAMES",
     "OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH",
     "OPENAI_GUEST_SAFETY_IDENTIFIER_PREFIX",
     "OPENAI_GUEST_TIMEOUT_SECONDS",

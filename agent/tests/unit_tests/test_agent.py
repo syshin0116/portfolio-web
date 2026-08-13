@@ -98,7 +98,7 @@ from agent.guest_budget import (
 )
 from agent.inspection import InspectionEventTransformer
 from agent.run_liveness import GuestExecutionFenceUnavailableError
-from agent.tools import TOOLS
+from agent.tools import TOOLS, keyword_search
 
 
 class ToolCapableFakeModel(FakeMessagesListChatModel):
@@ -334,6 +334,34 @@ def _openai_final_message(content: str) -> AIMessage:
     )
 
 
+def _openai_tool_message(name: str, args: dict, tool_call_id: str) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": name,
+                "args": args,
+                "id": tool_call_id,
+                "type": "tool_call",
+            }
+        ],
+        response_metadata={
+            "model_provider": "openai",
+            "model_name": "gpt-5.6-luna",
+        },
+        usage_metadata={
+            "input_tokens": 1,
+            "output_tokens": 9,
+            "total_tokens": 10,
+            "input_token_details": {
+                "cache_creation": 0,
+                "cache_read": 0,
+            },
+            "output_token_details": {"reasoning": 0},
+        },
+    )
+
+
 async def _exact_anthropic_test_input_tokens(_request) -> int:
     return 1
 
@@ -382,6 +410,10 @@ def _replace_provider_token_count(monkeypatch):
     monkeypatch.setattr(
         "agent.graph._OWNER_OPENAI_INPUT_TOKEN_COUNTER",
         _exact_openai_test_input_tokens,
+    )
+    monkeypatch.setattr(
+        "agent.graph._owner_openai_input_token_counter",
+        lambda _model_spec: _exact_openai_test_input_tokens,
     )
 
 
@@ -986,21 +1018,33 @@ def test_create_graph_for_selected_model_keeps_declared_task_dispatch(
     assert compiled_graph.stream_transformers[-1] is InspectionEventTransformer
 
 
-def test_bounded_owner_model_uses_exact_luna_responses_contract(monkeypatch):
+@pytest.mark.parametrize(
+    ("model_spec", "model_name"),
+    [
+        ("openai:gpt-5.6-luna", "gpt-5.6-luna"),
+        ("openai:gpt-5.6-terra", "gpt-5.6-terra"),
+        ("openai:gpt-5.6-sol", "gpt-5.6-sol"),
+    ],
+)
+def test_bounded_owner_model_uses_exact_responses_contract(
+    monkeypatch,
+    model_spec,
+    model_name,
+):
     for variable in OPENAI_ROUTING_ENVIRONMENT_VARIABLES:
         monkeypatch.delenv(variable, raising=False)
     api_key = "test-openai-owner-construction-key"
     monkeypatch.setenv("OPENAI_API_KEY", api_key)
     _bounded_model.cache_clear()
     try:
-        resolved = _bounded_model(DEFAULT_MODEL)
-        cached = _bounded_model(DEFAULT_MODEL)
+        resolved = _bounded_model(model_spec)
+        cached = _bounded_model(model_spec)
     finally:
         _bounded_model.cache_clear()
 
     assert isinstance(resolved, ChatOpenAI)
     assert cached is resolved
-    assert resolved.model_name == "gpt-5.6-luna"
+    assert resolved.model_name == model_name
     assert resolved.openai_api_key.get_secret_value() == api_key
     assert resolved.max_tokens == MODEL_MAX_OUTPUT_TOKENS
     assert resolved.max_retries == 0
@@ -1129,7 +1173,7 @@ def test_guest_and_owner_graphs_route_distinct_server_owned_counters(monkeypatch
     assert (
         guest_middleware._expected_response_models == OPENAI_GUEST_RESPONSE_MODEL_NAMES
     )
-    assert guest_middleware._root_tool_allowlist == GUEST_ROOT_TOOL_NAMES
+    assert guest_middleware._root_tool_allowlist == GUEST_ROOT_TOOL_NAMES | {"task"}
     assert owner_middleware._input_token_counter is _exact_anthropic_test_input_tokens
     assert owner_middleware._model_provider == "anthropic"
     assert owner_middleware._expected_response_models == frozenset()
@@ -1372,7 +1416,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     )
 
     assert result["messages"][-1].content == "guest answer"
-    assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
+    assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES | {"task"}]
     assert len(model.invoked_messages) == 1
     guest_system_text = "\n".join(
         block["text"]
@@ -1381,9 +1425,161 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     )
     assert WRITE_TODOS_SYSTEM_PROMPT not in guest_system_text
     snapshot = budget.snapshot()
-    assert snapshot.policy_id == "anonymous-public-v3"
+    assert snapshot.policy_id == "anonymous-public-v4"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
+
+
+async def test_canonical_guest_can_delegate_to_one_isolated_specialist(monkeypatch):
+    monkeypatch.setenv("GUEST_MODEL", OPENAI_GUEST_MODEL_SPEC)
+    monkeypatch.setattr(
+        keyword_search,
+        "func",
+        lambda query, top_k=10, runtime=None: f"{query}:{top_k}:{runtime is None}",
+    )
+    description = """\
+Question:
+Check one supplied blog claim.
+Allowed corpus/method scope:
+Published retrieval evidence only.
+Expected output schema:
+One supported verdict.
+Stopping condition:
+Stop after one verdict.
+"""
+    model = ToolCapableFakeModel(
+        responses=[
+            _openai_tool_message(
+                "task",
+                {
+                    "description": description,
+                    "subagent_type": "evidence-checker",
+                },
+                "guest-specialist-task",
+            ),
+            _openai_tool_message(
+                "read_blog_retrieval_skill",
+                {},
+                "guest-specialist-skill",
+            ),
+            _openai_tool_message(
+                "keyword_search",
+                {"query": "Docker", "top_k": 1},
+                "guest-specialist-retrieval",
+            ),
+            _openai_final_message("The claim is supported."),
+            _openai_final_message("Final answer uses the checked evidence."),
+        ]
+    )
+    child_tool_names = []
+
+    async def capture_child_tools(request):
+        tool_names = {
+            tool.get("name") if isinstance(tool, dict) else tool.name
+            for tool in request.tools
+        }
+        if "task" not in tool_names:
+            child_tool_names.append(tool_names)
+        return 1
+
+    budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
+    compiled = create_graph(
+        runtime=_guest_runtime(),
+        config={"configurable": {"thread_id": "guest-specialist"}},
+        model=model,
+        budget=budget,
+        input_token_counter=capture_child_tools,
+    )
+
+    result = await compiled.ainvoke(
+        {"messages": [{"role": "user", "content": "delegate once"}]},
+        {"configurable": {"thread_id": "guest-specialist"}},
+    )
+
+    assert result["messages"][-1].content == "Final answer uses the checked evidence."
+    assert len(child_tool_names) == 3
+    for tool_names in child_tool_names:
+        assert "read_blog_retrieval_skill" in tool_names
+        assert {"task", QUICKJS_TOOL_NAME, "write_file", "edit_file"}.isdisjoint(
+            tool_names
+        )
+    snapshot = budget.snapshot()
+    assert (snapshot.model_calls, snapshot.tool_calls, snapshot.task_calls) == (5, 3, 1)
+    assert GUEST_RUN_BUDGET_POLICY.max_task_calls == 8
+    assert GUEST_RUN_BUDGET_POLICY.max_tasks_in_flight == 2
+
+
+def test_guest_model_selection_is_rejected_even_with_a_signed_override():
+    with pytest.raises(ValueError, match="server-owned"):
+        create_graph(
+            runtime=_guest_runtime(),
+            config={
+                "configurable": {
+                    "thread_id": "guest-model-selection",
+                    "model": "gpt-5.6-terra",
+                }
+            },
+            model=ToolCapableFakeModel(responses=[_final_message("unused")]),
+        )
+
+
+def test_owner_model_selection_uses_server_allowlist(monkeypatch):
+    selected = []
+    model = ToolCapableFakeModel(responses=[_final_message("selected")])
+
+    def select_model(model_spec):
+        selected.append(model_spec)
+        return model
+
+    monkeypatch.setattr("agent.graph._bounded_model", select_model)
+    compiled = create_graph(
+        runtime=_server_runtime(["model:select"]),
+        config={
+            "configurable": {
+                "thread_id": "owner-model-selection",
+                "model": "gpt-5.6-terra",
+            }
+        },
+        input_token_counter=_exact_anthropic_test_input_tokens,
+        dynamic_subagents_enabled=False,
+        quickjs_enabled=False,
+    )
+
+    assert isinstance(compiled, CompiledStateGraph)
+    assert selected == ["openai:gpt-5.6-terra"]
+
+
+@pytest.mark.parametrize(
+    "requested",
+    ["openai:gpt-5.6-terra", "gpt-5.6-arbitrary", 1],
+)
+def test_owner_model_selection_rejects_values_outside_server_allowlist(requested):
+    with pytest.raises(ValueError, match="not an allowed model"):
+        create_graph(
+            runtime=_server_runtime(["model:select"]),
+            config={
+                "configurable": {
+                    "thread_id": "owner-model-selection-invalid",
+                    "model": requested,
+                }
+            },
+            dynamic_subagents_enabled=False,
+            quickjs_enabled=False,
+        )
+
+
+def test_owner_model_selection_requires_server_permission():
+    with pytest.raises(ValueError, match="server-owned"):
+        create_graph(
+            runtime=_server_runtime([]),
+            config={
+                "configurable": {
+                    "thread_id": "owner-model-selection-denied",
+                    "model": "gpt-5.6-terra",
+                }
+            },
+            model=ToolCapableFakeModel(responses=[_final_message("unused")]),
+        )
 
 
 async def test_eval_injected_openai_contract_uses_provider_native_settlement(
@@ -1495,7 +1691,7 @@ async def test_canonical_guest_runtime_rejects_a_forged_filesystem_tool_call(
             {"configurable": {"thread_id": "guest-forged-filesystem"}},
         )
 
-    assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES]
+    assert model.bound_tool_names == [GUEST_ROOT_TOOL_NAMES | {"task"}]
     assert budget.snapshot().tool_calls == 0
 
 
@@ -1951,7 +2147,7 @@ async def test_exact_counter_sees_the_token_affecting_payload_delivered_to_model
     )
     assert isinstance(task_description, str)
     assert "shared run budget" in task_description
-    assert "at most two task dispatches" in task_description
+    assert "limits task dispatch count" in task_description
     assert all(f"- {name}:" in task_description for name in SUBAGENT_NAMES)
 
 
@@ -2151,7 +2347,7 @@ async def test_server_capability_axes_have_exact_prompt_and_tool_order(
         assert isinstance(task_description, str)
         assert all(f"- {name}:" in task_description for name in SUBAGENT_NAMES)
         assert "shared run budget" in task_description
-        assert "at most two task dispatches" in task_description
+        assert "limits task dispatch count" in task_description
         assert "Question:" in task_description
         assert "Stopping condition:" in task_description
         assert system_text.count(root_prompt) == 1

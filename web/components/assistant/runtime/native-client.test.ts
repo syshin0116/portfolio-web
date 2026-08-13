@@ -43,6 +43,35 @@ const protocolEvents = (fixture: {
   )
 
 describe("@langchain/langgraph-sdk 1.9.28 public ThreadStream contract", () => {
+  test("snapshots an allowlisted model into each run config and strips it for anonymous runs", () => {
+    const selected = nativeClientTesting.runConfigWithModel(
+      {
+        configurable: {
+          thread_id: "thread-1",
+          model: "gpt-5.6-arbitrary",
+        },
+        model: "gpt-5.6-arbitrary",
+      },
+      "gpt-5.6-terra"
+    )
+    expect(selected.configurable).toMatchObject({
+      thread_id: "thread-1",
+      model: "gpt-5.6-terra",
+    })
+    expect(selected).not.toHaveProperty("model")
+
+    const anonymous = nativeClientTesting.runConfigWithModel(
+      selected,
+      undefined
+    )
+    expect(anonymous.configurable).toEqual({ thread_id: "thread-1" })
+    expect(anonymous).not.toHaveProperty("model")
+
+    expect(
+      nativeClientTesting.runConfigWithModel({ metadata: { source: "guest" } }, undefined)
+    ).toEqual({ metadata: { source: "guest" } })
+  })
+
   test("retains a server-projected root input payload when payload and value aliases are identical", async () => {
     const interruptId = "0123456789abcdef0123456789abcdef"
     const payload = {

@@ -95,18 +95,18 @@ def test_optional_guest_budget_is_absent_or_exact(monkeypatch):
     assert guest_budget_config(required=False) is None
 
     monkeypatch.setenv(GUEST_DAILY_BUDGET_ENV, "500000")
-    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "18892")
+    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "19892")
     assert guest_budget_config(required=False) == GuestBudgetConfig(
         daily_limit_micro_usd=500_000,
-        run_reservation_micro_usd=18_892,
+        run_reservation_micro_usd=19_892,
     )
 
 
 def test_guest_accounting_floor_adds_count_risk_and_uses_exact_ceiling():
-    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 17_946
+    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 19_892
     assert (
         minimum_guest_run_reservation_micro_usd(
-            max_model_calls=4,
+            max_model_calls=8,
             max_output_tokens=512,
             max_total_tokens=16_000,
             max_count_risk_tokens=48_000,
@@ -118,7 +118,7 @@ def test_guest_accounting_floor_adds_count_risk_and_uses_exact_ceiling():
 def test_guest_accounting_floor_is_maximized_at_the_output_ceiling():
     costs = [
         minimum_guest_run_reservation_micro_usd(
-            max_model_calls=4,
+            max_model_calls=8,
             max_output_tokens=output_tokens,
             max_total_tokens=16_000,
             max_count_risk_tokens=48_000,
@@ -126,9 +126,9 @@ def test_guest_accounting_floor_is_maximized_at_the_output_ceiling():
         for output_tokens in range(1, 513)
     ]
 
-    assert costs[0] == 16_004
-    assert costs[-2] == 17_942
-    assert costs[-1] == 17_946
+    assert costs[0] == 16_008
+    assert costs[-2] == 19_884
+    assert costs[-1] == 19_892
     assert max(costs) == costs[-1]
 
 
@@ -155,7 +155,7 @@ def test_guest_accounting_floor_is_maximized_at_the_output_ceiling():
         ),
         (
             {
-                "max_model_calls": 4,
+                "max_model_calls": 8,
                 "max_output_tokens": 3_001,
                 "max_total_tokens": 12_000,
                 "max_count_risk_tokens": 48_000,

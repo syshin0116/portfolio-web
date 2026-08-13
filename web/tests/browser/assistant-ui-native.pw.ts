@@ -246,6 +246,11 @@ test.describe.serial("native assistant-ui production journey", () => {
       page.getByTestId("production-native-runtime-fixture")
     ).toBeVisible()
     await selectFixtureThread(page)
+    await page.getByRole("button", { name: "모델 선택" }).click()
+    await page.getByRole("menuitemradio", { name: /Terra/ }).click()
+    await expect(
+      page.getByRole("button", { name: "모델 선택" })
+    ).toHaveText("Terra")
 
     const composer = page.getByRole("textbox", {
       name: "AI에게 보낼 메시지",
@@ -274,6 +279,14 @@ test.describe.serial("native assistant-ui production journey", () => {
     const initialState = await fixtureState(page)
     expect(initialState.errors).toEqual([])
     expect(initialState.commands).toHaveLength(1)
+    expect(initialState.commands[0]).toMatchObject({
+      method: "run.start",
+      params: {
+        config: {
+          configurable: { model: "gpt-5.6-terra" },
+        },
+      },
+    })
     expect(initialState.streamSubscriptions).toEqual([
       {
         authorization: true,
@@ -638,6 +651,10 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
   await expect(
     page.getByRole("textbox", { name: "AI에게 보낼 메시지" })
   ).toBeVisible({ timeout: 12_000 })
+  await expect(page.getByText(/공개 체험 · Luna/)).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "모델 선택" })
+  ).toHaveCount(0)
   expect(tokenRequests).toEqual([
     { body: null, intent: "anonymous" },
     { body: null, intent: "anonymous" },
@@ -670,6 +687,9 @@ test("bootstraps and resumes the public anonymous journey with the native runtim
   await attachEvidence(page, testInfo, "public-hitl")
   await expect(publicQuestionBubble).toHaveCount(1)
   const interruptedState = await fixtureState(page)
+  expect(JSON.stringify(interruptedState.commands[0])).not.toContain(
+    '"model"'
+  )
   const createdThreadId = interruptedState.streamSubscriptions[0]?.threadId
   if (!createdThreadId) {
     throw new Error("fixture did not record the created public thread")

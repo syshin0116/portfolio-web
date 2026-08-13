@@ -15,6 +15,11 @@ import {
   useState,
 } from "react"
 import type { AgentTokenIntent } from "@/lib/agent-token-intent"
+import {
+  DEFAULT_AGENT_MODEL,
+  normalizeAgentModel,
+  type AgentModel,
+} from "@/lib/agent-model"
 
 import {
   NativeAgentClient,
@@ -42,6 +47,9 @@ type AgentRuntimeUiState = AgentErrorRoutingState & {
   inspectionAvailability: InspectionAvailability
   dismissTurnError: () => void
   retryConnection: () => void
+  modelSelection: boolean
+  selectedModel: AgentModel
+  setSelectedModel: (model: AgentModel) => void
 }
 
 const AgentRuntimeUiContext = createContext<AgentRuntimeUiState | null>(null)
@@ -59,6 +67,7 @@ interface AgentRuntimeProviderProps {
   initialToken?: string
   onAuthenticationExpired?: () => void
   tokenIntent?: AgentTokenIntent
+  modelSelection?: boolean
   children: React.ReactNode
 }
 
@@ -79,6 +88,7 @@ function ConfiguredAgentRuntimeProvider({
   initialToken,
   onAuthenticationExpired,
   tokenIntent,
+  modelSelection = false,
   apiUrl,
   assistantId,
   children,
@@ -91,6 +101,14 @@ function ConfiguredAgentRuntimeProvider({
   const [inspectionAvailability, setInspectionAvailability] =
     useState<InspectionAvailability>("waiting")
   const [connectionAttempt, setConnectionAttempt] = useState(0)
+  const [selectedModel, setSelectedModelState] =
+    useState<AgentModel>(DEFAULT_AGENT_MODEL)
+  const selectedModelRef = useRef<AgentModel>(DEFAULT_AGENT_MODEL)
+  const setSelectedModel = useCallback((model: AgentModel) => {
+    const normalized = normalizeAgentModel(model)
+    selectedModelRef.current = normalized
+    setSelectedModelState(normalized)
+  }, [])
   const [errorRouting, setErrorRouting] = useState<AgentErrorRoutingState>({
     connectionStatus: "connecting",
   })
@@ -141,6 +159,9 @@ function ConfiguredAgentRuntimeProvider({
         initialToken,
         onAuthenticationExpired,
         tokenIntent,
+        getSelectedModel: modelSelection
+          ? () => selectedModelRef.current
+          : undefined,
         getSourceGeneration: () =>
           activeThreadSourceRef.current.generation,
         onActivity: handleActivity,
@@ -153,6 +174,7 @@ function ConfiguredAgentRuntimeProvider({
       handleRuntimeError,
       identity,
       initialToken,
+      modelSelection,
       onAuthenticationExpired,
       tokenIntent,
     ]
@@ -280,6 +302,9 @@ function ConfiguredAgentRuntimeProvider({
       inspectionAvailability,
       dismissTurnError,
       retryConnection,
+      modelSelection,
+      selectedModel,
+      setSelectedModel,
     }),
     [
       activeThreadId,
@@ -288,6 +313,9 @@ function ConfiguredAgentRuntimeProvider({
       errorRouting,
       inspectionAvailability,
       retryConnection,
+      selectedModel,
+      setSelectedModel,
+      modelSelection,
     ]
   )
 
@@ -305,6 +333,7 @@ export function AgentRuntimeProvider({
   initialToken,
   onAuthenticationExpired,
   tokenIntent,
+  modelSelection,
   children,
 }: AgentRuntimeProviderProps) {
   const config = resolveAgentConfig()
@@ -328,6 +357,7 @@ export function AgentRuntimeProvider({
       initialToken={initialToken}
       onAuthenticationExpired={onAuthenticationExpired}
       tokenIntent={tokenIntent}
+      modelSelection={modelSelection}
       apiUrl={config.apiUrl}
       assistantId={config.assistantId}
     >

@@ -200,7 +200,7 @@ def test_bounded_task_description_preserves_native_inventory_and_budget_hooks():
     assert "{available_agents}" in BOUNDED_TASK_TOOL_DESCRIPTION
     assert "Launch an ephemeral subagent" in BOUNDED_TASK_TOOL_DESCRIPTION
     assert "shared run budget" in BOUNDED_TASK_TOOL_DESCRIPTION
-    assert "at most two task dispatches" in BOUNDED_TASK_TOOL_DESCRIPTION
+    assert "limits task dispatch count" in BOUNDED_TASK_TOOL_DESCRIPTION
     for heading in (
         "Question:",
         "Allowed corpus/method scope:",

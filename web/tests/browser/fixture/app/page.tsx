@@ -9,7 +9,10 @@ export default function BrowserFixturePage() {
       <span className="sr-only" data-testid="fixture-revision">
         {process.env.GITHUB_SHA ?? "local"}
       </span>
-      <AgentRuntimeProvider identity={FIXTURE_OWNER_IDENTITY}>
+      <AgentRuntimeProvider
+        identity={FIXTURE_OWNER_IDENTITY}
+        modelSelection
+      >
         <ChatShell />
       </AgentRuntimeProvider>
     </main>

@@ -39,7 +39,7 @@ _BLOG_RETRIEVAL_SKILL_FILE = _BLOG_RETRIEVAL_SKILL_DIR / "SKILL.md"
 _BLOG_RETRIEVAL_SKILL_TEXT = _BLOG_RETRIEVAL_SKILL_FILE.read_text(encoding="utf-8")
 
 SUBAGENT_ROOT_PROMPT = """\
-Dynamic delegation is an owner/evaluation capability. Use it only when isolating a
+Dynamic delegation is a bounded RAG capability. Use it only when isolating a
 multi-step investigation materially improves the result. Every `task` description must
 be a complete, stateless envelope with these headings in this exact order:
 
@@ -48,8 +48,8 @@ Allowed corpus/method scope:
 Expected output schema:
 Stopping condition:
 
-The child cannot ask follow-up questions or remember another dispatch. Delegate at most
-two independent tasks, never ask a child to create another child, and synthesize the
+The child cannot ask follow-up questions or remember another dispatch. Delegate only the
+minimum independent tasks, never ask a child to create another child, and synthesize the
 visitor-facing answer in the root agent. Do not request a dynamic response schema through
 run configuration.
 """
@@ -59,8 +59,8 @@ BOUNDED_TASK_TOOL_DESCRIPTION = (
     + "\n\n"
     + """\
 Server-enforced RAG harness contract:
-- The shared run budget permits at most two task dispatches, and may permit fewer for a
-  selected experiment. Calls beyond that budget fail closed.
+- The shared run budget limits task dispatch count and concurrency. Calls beyond that
+  budget fail closed.
 """
     + "- Every description must contain these exact headings, in order: Question:, "
     + "Allowed corpus/method scope:, Expected output schema:, Stopping condition:.\n"
@@ -260,7 +260,11 @@ def _reject_reserved_keys(mapping: Mapping[Any, Any], *, location: str) -> None:
             raise ValueError(f"{location}.{key} is server-owned")
 
 
-def validate_capability_config(config: Mapping[str, Any]) -> None:
+def validate_capability_config(
+    config: Mapping[str, Any],
+    *,
+    allow_model_selection: bool = False,
+) -> None:
     """Reject client fields that could alter model, budget, or child capabilities."""
     if not isinstance(config, Mapping):
         raise ValueError("run config must be a mapping")
@@ -268,6 +272,10 @@ def validate_capability_config(config: Mapping[str, Any]) -> None:
     configurable = config.get("configurable", {})
     if not isinstance(configurable, Mapping):
         raise ValueError("config.configurable must be a mapping")
+    if allow_model_selection and "model" in configurable:
+        configurable = {
+            key: value for key, value in configurable.items() if key != "model"
+        }
     _reject_reserved_keys(configurable, location="config.configurable")
 
 

@@ -162,11 +162,13 @@ environment is rejected.
 
 ## Secret Manager payloads
 
-The foundation owns four runtime secrets for Preview and five for Production. The
-owner/evaluation model remains Anthropic; only Production uses the exact
-`openai:gpt-5.6-luna / 500000 / 18892` guest tuple and adds the numeric-version-pinned
-`openai-api-key`. The run reservation combines the 6,892 µUSD worst generation
-allocation with the separate 48,000-token aggregate count-risk ledger priced at Luna's
+The foundation owns four runtime secrets for Preview and five for Production. Owner
+and evaluation runtimes use their existing server-held model configuration; only
+Production uses the exact
+`openai:gpt-5.6-luna / 500000 / 19892` guest tuple and adds the numeric-version-pinned
+`openai-api-key`. The run reservation combines the 7,892 µUSD worst generation
+allocation from 8 calls at 512 output tokens per call and a 16,000-token generation
+ceiling with the separate 48,000-token aggregate count-risk ledger priced at Luna's
 highest input bucket (12,000 µUSD). This is not a documented count-endpoint price,
 hidden-token bound, or provider hard cap, so the public billing and account-stop gates
 remain closed. Preview owns no OpenAI
@@ -225,8 +227,8 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    registry-resolved values:
 
    ```text
-   us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:<64 lowercase hex>
-   us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:<64 lowercase hex>
+   asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:<64 lowercase hex>
+   asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:<64 lowercase hex>
    ```
 
    A tag is not accepted. The two digests may happen to contain identical image bytes,
@@ -240,8 +242,8 @@ remote state and advance the explicit `agent_delivery_stage` in order:
    ```sh
    terraform -chdir=infra/gcp plan \
      -var 'agent_delivery_stage=jobs' \
-     -var 'agent_bootstrap_image=us-east4-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:REPLACE' \
-     -var 'agent_preview_bootstrap_image=us-east4-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:REPLACE' \
+     -var 'agent_bootstrap_image=asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent/agent@sha256:REPLACE' \
+     -var 'agent_preview_bootstrap_image=asia-southeast1-docker.pkg.dev/festive-ally-503605-v7/agent-preview/agent@sha256:REPLACE' \
      -var-file=/absolute/private/path/agent-secret-versions.tfvars
    ```
 
@@ -330,7 +332,7 @@ production policies as a dry run:
    ```sh
    gcloud artifacts repositories set-cleanup-policies agent \
      --project=festive-ally-503605-v7 \
-     --location=us-east4 \
+     --location=asia-southeast1 \
      --policy=/absolute/private/path/agent-cleanup.json \
      --dry-run
    ```
@@ -567,9 +569,10 @@ secret references. A revision from the wrong repository or service, an alias suc
 changes. The workflow then runs health/auth and the two-turn APv2 smoke, and restores the
 previous revision automatically if that smoke fails.
 
-Production rollback also verifies the exact `openai:gpt-5.6-luna / 500000 / 18892`
-guest tuple. A revision carrying either the generation-only 6,892 µUSD reservation or
-the superseded 8,868 µUSD duplicate-input reservation is not an eligible rollback
+Production rollback also verifies the exact `openai:gpt-5.6-luna / 500000 / 19892`
+guest tuple. A revision carrying the generation-only 6,892 µUSD reservation, the
+superseded 8,868 µUSD duplicate-input reservation, or the 18,892 µUSD four-call
+reservation is not an eligible rollback
 target; close guest issuance and deploy a reviewed replacement instead of weakening the
 provider-cost boundary during recovery.
 

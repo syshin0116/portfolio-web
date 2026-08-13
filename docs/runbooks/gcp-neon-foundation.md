@@ -29,7 +29,7 @@ template: spec
 
 - project: `festive-ally-503605-v7` (`syshin0116-prod`);
 - project number: `72919926064`;
-- region: `us-east4`;
+- snapshot region: `us-east4` (legacy); active delivery region: `asia-southeast1`;
 - Artifact Registry repository: `agent`;
 - service accounts: production runtime `agent-runtime`, preview deployer
   `agent-preview-deployer`, and production deployer `agent-prod-deployer`;
@@ -87,7 +87,7 @@ and their direct IAM, state-bucket and state-object metadata, exact-project serv
 accounts and user-managed keys, Secret Manager metadata and direct IAM, WIF, Cloud Run
 services/jobs and their direct IAM, and the maintenance Scheduler.
 For anonymous runtime drift, Production must expose exactly
-`openai:gpt-5.6-luna / 500000 / 18892`; Preview must remain disabled with blank guest
+`openai:gpt-5.6-luna / 500000 / 19892`; Preview must remain disabled with blank guest
 model, daily budget, and run reservation. This verifies deployed direct state only and
 does not authorize public launch or claim a provider-side hard spend stop.
 
@@ -330,10 +330,12 @@ The exact-project live gate checks secret metadata, exact direct accessors, and 
 positive numeric references exposed by Cloud Run. It never reads or validates a secret
 payload, so payload correctness remains an independent smoke-test responsibility.
 
-The owner/evaluation Cloud Run model remains Anthropic. Production additionally pins the
-reviewed Luna guest tier to `openai-api-key`; Preview remains OpenAI-free. The previously
-managed Preview OpenAI secret stays forgotten from Terraform state without destroying the
-external Secret Manager object; removal of that object is a separate, explicitly
+Both Cloud Run environments declare Luna as the default model. Production injects
+`openai-api-key`, pins anonymous runs to Luna, and lets signed runs select the reviewed
+Luna, Terra, or Sol models. Preview remains OpenAI-free, so it cannot complete provider
+calls until a separately reviewed Preview provider contract is added. The previously
+managed Preview OpenAI secret stays forgotten from Terraform state without destroying
+the external Secret Manager object; removal of that object is a separate, explicitly
 approved cleanup.
 
 Inject each value out of band:
@@ -596,8 +598,8 @@ necessary; do not add organization/folder traversal to this repository.
 
 Even a passing `--live` result is not public-launch or spend acceptance. Keep both Vercel
 anonymous flags disabled until the exact services-stage plan/apply, first bounded
-Scheduler execution, real-Neon migration/grant/retention probes, Turnstile configuration,
-and browser journey pass. Luna input-count billing, including rejected or oversized
+Scheduler execution, real-Neon migration/grant/retention probes, Vercel BotID Basic
+configuration, and browser journey pass. Luna input-count billing, including rejected or oversized
 count requests and a proven pre-provider upper bound, remains unresolved; the configured
 daily ledger and per-run reservation do not prove a provider-wide hard cap or zero spend.
 

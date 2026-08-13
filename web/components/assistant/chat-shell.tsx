@@ -58,6 +58,15 @@ import remarkGfm from "remark-gfm"
 
 import { Button } from "@/components/ui/button"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { isAgentModel, type AgentModel } from "@/lib/agent-model"
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -167,6 +176,14 @@ const ToolPart = memo(function ToolPart({
     status.type === "running" ||
     status.type === "requires-action"
   const query = toolQueryFromArgs(argsText)
+  const subagentType =
+    toolName === "task" ? taskSubagentTypeFromArgs(argsText) : undefined
+  const label =
+    toolName === "task"
+      ? subagentType
+        ? `서브에이전트 · ${subagentType}`
+        : "서브에이전트"
+      : toolName
   return (
     <details className="my-3 rounded-xl bg-muted/50" open={running}>
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm">
@@ -176,7 +193,7 @@ const ToolPart = memo(function ToolPart({
             running && "animate-pulse motion-reduce:animate-none"
           )}
         />
-        <span className="min-w-0 flex-1 truncate">{toolName}</span>
+        <span className="min-w-0 flex-1 truncate">{label}</span>
         <span className="text-xs font-normal text-muted-foreground">
           {running
             ? "실행 중"
@@ -212,6 +229,26 @@ function toolQueryFromArgs(argsText: string): string | undefined {
       parsed.query.length <= 1_000
     ) {
       return parsed.query.trim()
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+function taskSubagentTypeFromArgs(argsText: string): string | undefined {
+  if (!argsText) return undefined
+  try {
+    const parsed = JSON.parse(argsText) as unknown
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      "subagent_type" in parsed &&
+      typeof parsed.subagent_type === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(parsed.subagent_type)
+    ) {
+      return parsed.subagent_type
     }
   } catch {
     return undefined
@@ -1220,6 +1257,50 @@ function NewThreadButton() {
   )
 }
 
+const MODEL_LABELS: Record<AgentModel, string> = {
+  "gpt-5.6-luna": "Luna",
+  "gpt-5.6-terra": "Terra",
+  "gpt-5.6-sol": "Sol",
+}
+
+function ModelSelector() {
+  const { modelSelection, selectedModel, setSelectedModel } =
+    useAgentRuntimeUi()
+  const running = useAuiState((state) => state.thread.isRunning)
+  if (!modelSelection) return null
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="모델 선택"
+          disabled={running}
+          className="max-w-28 gap-1.5 rounded-xl px-2.5 sm:max-w-none sm:px-3"
+        >
+          <span className="truncate">{MODEL_LABELS[selectedModel]}</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>응답 모델</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={selectedModel}
+          onValueChange={(value) => {
+            if (isAgentModel(value)) setSelectedModel(value)
+          }}
+        >
+          {(Object.keys(MODEL_LABELS) as AgentModel[]).map((model) => (
+            <DropdownMenuRadioItem key={model} value={model}>
+              <span>{MODEL_LABELS[model]}</span>
+              <span className="text-xs text-muted-foreground">{model}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function WorkspaceHeader() {
   const { connectionStatus } = useAgentRuntimeUi()
   const status =
@@ -1254,6 +1335,7 @@ function WorkspaceHeader() {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-0.5">
+        <ModelSelector />
         <NewThreadButton />
         <ThreadSheet />
         <DetailSheet />

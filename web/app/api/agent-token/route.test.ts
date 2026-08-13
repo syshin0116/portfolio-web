@@ -150,13 +150,16 @@ describe("POST /api/agent-token signed-in precedence", () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get("cache-control")).toBe("no-store")
-    expect(payload).toMatchObject({ sub: "owner-id", scope: "admin" })
+    expect(payload).toMatchObject({
+      sub: "owner-id",
+      scope: "admin model:select",
+    })
     expect((payload.exp as number) - (payload.iat as number)).toBe(900)
     expect(setCookie(response)).toBeNull()
     expect(botChecks).toBe(0)
   })
 
-  test("preserves the signed-in non-admin scope", async () => {
+  test("grants signed-in users model selection without admin access", async () => {
     const session: Session = {
       user: {
         id: "member-id",
@@ -178,7 +181,7 @@ describe("POST /api/agent-token signed-in precedence", () => {
 
     expect(response.status).toBe(200)
     expect(payload.sub).toBe("member-id")
-    expect(payload).not.toHaveProperty("scope")
+    expect(payload).toMatchObject({ scope: "model:select" })
   })
 
   test("canonicalizes a numeric adapter user id before signing", async () => {

@@ -1,12 +1,12 @@
 ---
 title: "Public anonymous chat rollout"
 description: >
-  Configure and safely enable the Turnstile-gated anonymous assistant-ui
+  Configure and safely enable the Vercel BotID Basic-gated anonymous assistant-ui
   experience after the agent-side wire, spend, and retention gates pass.
 when_to_read: >
-  Before creating the Cloudflare Turnstile widget, setting Vercel anonymous-chat
-  variables, enabling either public flag, or closing public access during an incident.
-tags: [runbook, web, turnstile, anonymous, assistant-ui, vercel]
+  Before enabling Vercel BotID Basic, setting Vercel anonymous-chat variables,
+  enabling either public flag, or closing public access during an incident.
+tags: [runbook, web, botid, anonymous, assistant-ui, vercel]
 status: accepted
 date: "2026-07-28"
 owners: ["@syshin0116"]
@@ -42,7 +42,7 @@ Production alone carries the owner-approved launch tuple:
 - `GUEST_MODEL=openai:gpt-5.6-luna`
 - `GUEST_DAILY_BUDGET_MICRO_USD=500000` ($0.50 per UTC day for the durable
   provider-request accounting ledger)
-- `GUEST_RUN_RESERVATION_MICRO_USD=18892`
+- `GUEST_RUN_RESERVATION_MICRO_USD=19892`
 
 Do not make these values apply-time Terraform variables or change them in the
 console. An ordinary image delivery verifies and preserves the reviewed values;
@@ -60,7 +60,7 @@ Responses input-token count endpoint before every generation. Before provider I/
 runtime captures the final token-bearing payload locally and computes a defense-in-depth
 admission reservation `U` from its canonical UTF-8 bytes plus per-node and fixed framing
 margins. Under one lock, `RunBudget` reserves `U` in a separate count-risk ledger and the
-call's 1,024-token output ceiling in the 12,000-token generation ledger. Count risk is
+call's 512-token output ceiling in the 16,000-token generation ledger. Count risk is
 capped at 48,000 per attempt and 48,000 in aggregate per run; concurrent calls cannot
 observe or reuse the same remaining capacity. The prepared canonical count payload is
 sent exactly once and the same request is recaptured before generation. Only a valid
@@ -70,17 +70,25 @@ failure to admit `n` under the generation cap retain `U` and exhaust the run. Th
 margin is a local heuristic, not a provider-documented hidden-token maximum or a
 last-mile wire proof.
 
+Signed-in tokens carry `model:select` and may select only `gpt-5.6-luna`,
+`gpt-5.6-terra`, or `gpt-5.6-sol` through `config.configurable.model`. All three use the
+same server-held OpenAI key and bounded Responses client contract. Unknown values,
+top-level model overrides, and model selection without that permission fail before model
+construction. Guest commands continue to strip `configurable` entirely and always use
+Luna, so this adds no guest-controlled provider choice or cloud secret.
+
 Independently, the durable spend ledger reserves the accepted provider accounting case
 before the first count request. The configured per-run reservation may never be below
-18,892 µUSD, the sum of the reviewed generation and count-risk floors below.
+19,892 µUSD, the sum of the reviewed generation and count-risk floors below.
 
-At four calls, the generation output ceiling is 4,096 tokens and leaves 7,904 generation
-input tokens. Its worst allocation is
-`7,904 × $0.25/M + 4,096 × $1.20/M = 6,891.2 µUSD`, rounded up to 6,892 µUSD.
+At eight calls, the per-call output ceiling is 512 tokens, for a maximum of 4,096
+output tokens. The 16,000-token generation ceiling leaves 11,904 generation input
+tokens. Its worst allocation is
+`11,904 × $0.25/M + 4,096 × $1.20/M = 7,891.2 µUSD`, rounded up to 7,892 µUSD.
 Until OpenAI documents otherwise, separately price the entire 48,000-token aggregate
 count-risk ledger at the most expensive Luna input bucket:
 `48,000 × $0.25/M = 12,000 µUSD`. The repository floor is therefore
-`6,892 + 12,000 = 18,892 µUSD`. Luna's
+`7,892 + 12,000 = 19,892 µUSD`. Luna's
 ordinary uncached input is $0.20/M, implicit cache writes are $0.25/M, and cache reads
 are $0.02/M; a cheaper observed bucket never lowers the pre-dispatch reservation.
 Provider settlement accepts and records exact cache-read and cache-write buckets.
@@ -139,11 +147,19 @@ assistant-ui text blocks. It must reject client assistant/tool history and non-t
 content before any paid rate or spend consumption. Each accepted client message ID is
 wrapped in a server-unique checkpoint ID; public state/SSE projection restores the safe
 client ID for native assistant-ui correlation. Bodyless guest GET and cancel routes reject
-any payload bytes. The root model's bound tools must equal, in this literal order,
+any payload bytes. The root model's direct retrieval tools must equal, in this literal order,
 `keyword_search`, `semantic_search`, `metadata_filter`, `graph_traverse`, `list_posts`,
 and `read_post`; startup and graph creation must reject duplicates, reordering, or a
-seventh tool. The guest prompt contains this retrieval workflow inline and mounts no
-skill. A forged filesystem/todo/task/QuickJS call must fail before execution.
+seventh direct retrieval tool. Canonical guests additionally receive the native `task`
+tool for the existing server-declared specialists. The guest root mounts no skill,
+filesystem, persistent memory, todo, or QuickJS capability; children are stateless,
+read-only, depth one, and cannot delegate. Task calls share up to eight model calls,
+16,000-token, 45-second, rate, concurrency, and daily spend ceilings, with 512 output
+tokens per call. The separate
+one-task limit is removed, but at most two tasks may run concurrently. Public projection
+keeps child transcripts and task arguments and results private while exposing root task
+lifecycle. A forged filesystem, todo, QuickJS, nested task, or undeclared specialist call
+must fail before execution.
 
 The serialization boundary is pinned to `langchain-openai==1.3.5` and
 `openai==2.53.0`; the dependency audit isolates both and keeps
@@ -161,14 +177,14 @@ succeed before either Vercel public flag becomes `true`.
 
 ## Provider spend stop and rollback boundary
 
-The 18,892 µUSD calculation combines the worst 12,000-token generation allocation with
+The 19,892 µUSD calculation combines the worst 16,000-token generation allocation with
 the whole 48,000-token count-risk budget priced at the highest Luna input bucket. The
 atomic local `U` reservation blocks attempts above 48,000 and aggregate or overlapping
 count risk above 48,000 before provider I/O, and retains the reservation on failure.
 However, OpenAI does not publish a hard hidden-framing maximum or count-endpoint billing
 rate; a provider count could exceed the heuristic `U`, and the count request has already
 reached OpenAI when that is learned. The application ledger is therefore not the sole hard
-stop for that edge, and 18,892 µUSD is not a provider-wide mathematical ceiling.
+stop for that edge, and 19,892 µUSD is not a provider-wide mathematical ceiling.
 
 Before either Vercel public flag becomes `true`, isolate the guest API key in its reviewed
 OpenAI project and verify a provider-enforced hard usage/spend stop that bounds count and
@@ -180,22 +196,25 @@ enforce the reviewed stop, public issuance remains disabled.
 If provider telemetry exceeds the conservative reservation, the hard stop cannot be
 verified, or count behavior changes, close both Vercel flags first, revoke the guest key or
 set its provider stop to zero, and follow the exact-project emergency-close sequence below.
-Do not increase the cap to restore service. Do not roll back to a 6,892 or 8,868 µUSD
+Do not increase the cap to restore service. Do not roll back to a 6,892, 8,868, or 18,892 µUSD
 revision: startup and delivery verification intentionally reject both superseded
-contracts. A Cloud Run rollback target must retain the exact 18,892 µUSD tuple;
+contracts. A Cloud Run rollback target must retain the exact 19,892 µUSD tuple;
 otherwise keep guest access closed and land a reviewed replacement.
 
-## Cloudflare Turnstile
+## Vercel BotID Basic
 
-Create separate production and preview widgets. Configure the exact canonical
-deployment hostname and use action `agent-token`. The browser receives only the
-site key; the secret remains a Vercel server variable. Local and browser CI use
-Cloudflare's documented dummy key, never a production secret.
+Enable Vercel BotID Basic protection for the anonymous bootstrap route only:
+`POST /api/anonymous-agent-token`. The browser registers that exact path with
+`botid/client/core`, using `checkLevel: "basic"`; the server calls
+`checkBotId({ advancedOptions: { checkLevel: "basic" } })`. Do not add a challenge
+widget, site key, or BotID secret to the application.
 
-Turnstile is rendered explicitly from Cloudflare's canonical script URL. Its
-single-use token is posted once to same-origin `/api/agent-token`, is never
-stored, and is replaced by an httpOnly anonymous-session cookie plus a
-five-minute agent credential.
+The bootstrap request is bodyless: it has no `Content-Type`, `Transfer-Encoding`, or
+non-zero `Content-Length`. BotID runs before cookie lookup, so both a new visitor and
+an existing cookie resume receive the same Basic check. A passing request creates or
+resumes the httpOnly anonymous-session cookie and returns a five-minute agent token.
+The cookie is the only retained visitor credential; no BotID verdict or bootstrap body
+is stored.
 
 ## Vercel variables
 
@@ -204,18 +223,14 @@ Set these server-only Production values:
 - `AGENT_AUTH_SECRET`: the exact secret used by the production Cloud Run agent.
 - `AGENT_ANONYMOUS_TOKEN_ENABLED=false` until the final enable deployment.
 - `ANONYMOUS_SESSION_SECRET`: an independent random value of at least 32 bytes.
-- `TURNSTILE_SECRET_KEY`: the production widget secret.
-- `TURNSTILE_EXPECTED_HOSTNAME`: the exact canonical production hostname.
-- `TURNSTILE_EXPECTED_ACTION=agent-token`.
 
 Set these browser-visible Production values:
 
 - `NEXT_PUBLIC_AGENT_API_URL`: the production Cloud Run service origin.
 - `NEXT_PUBLIC_AGENT_ASSISTANT_ID=agent`.
-- `NEXT_PUBLIC_TURNSTILE_SITE_KEY`: the production widget site key.
 - `NEXT_PUBLIC_AGENT_ANONYMOUS_ENABLED=false` until the final enable deployment.
 
-Do not copy secrets into any `NEXT_PUBLIC_*` value. Preview uses its own widget,
+Do not copy secrets into any `NEXT_PUBLIC_*` value. Preview uses its own BotID,
 hostname, agent origin, database, and secrets; it must not share production
 guest identity or spend state.
 
@@ -226,12 +241,12 @@ guest identity or spend state.
 2. After both environments' migration, grant-probe, and maintenance jobs pass, review
    and apply the exact services-stage plan. It must combine the active Production
    maintenance Scheduler with only Production's `true / openai:gpt-5.6-luna / 500000 /
-   18892` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
+   19892` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
 3. Verify Terraform read-back and the first bounded checkpoint-first scheduled
    maintenance execution. A paused or unverified Scheduler blocks launch.
 4. Release the exact reviewed revision, then run owner, PostgreSQL, public raw-wire,
    rate, concurrency, spend, retention, input-count billing, and provider-cap proofs
-   while Vercel still cannot mint or display anonymous access.
+   while Vercel BotID still cannot mint or display anonymous access.
 5. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
    real browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.
@@ -241,21 +256,22 @@ owner approval. Do not pause or activate it with an untracked console-only toggl
 not interpret the configuration change as proof that step 3 completed: the exact plan,
 apply, and first bounded execution remain required before either public flag is enabled.
 
-The web gate first attempts a bodyless cookie resume. A missing or expired
-cookie returns to Turnstile. A successful challenge injects its returned
-credential into the existing `AgentTokenBroker`; all later AP v2 operations use
-the same native assistant-ui/LangGraph runtime.
+The web gate first attempts the bodyless `/api/anonymous-agent-token` cookie resume.
+A missing or expired cookie still passes Vercel BotID Basic before the server creates a
+new subject. The response injects its five-minute credential into the existing
+`AgentTokenBroker`; all later AP v2 operations use the same native assistant-ui/LangGraph
+runtime.
 
-The bodyless resume, Turnstile submission, and every later `AgentTokenBroker`
-remint carry the exact `X-Agent-Token-Intent: anonymous` request header. The
+The bodyless BotID bootstrap and every later `AgentTokenBroker` remint carry the exact
+`X-Agent-Token-Intent: anonymous` request header. The
 intent is immutable for that native runtime's lifetime, including expiry-margin
 refreshes, forced 401 retries, and refreshes retained by a run-scoped
 cancellation snapshot after the general broker is sealed. Owner runtimes are
 constructed without an intent and remain headerless. The token route dispatches
 only the exactly marked branch before invoking Auth.js, so an Auth.js, Neon, or
-OAuth outage cannot prevent a valid anonymous cookie remint or challenge
-exchange. The header is routing metadata, not authority: the server-side public
-feature flag and the cookie or Turnstile verification remain mandatory.
+OAuth outage cannot prevent a valid anonymous cookie remint or BotID Basic check. The
+header is routing metadata, not authority: the server-side public feature flag and the
+cookie or BotID verification remain mandatory.
 Missing, unknown, or unrecognized intent values stay on the existing owner path,
 where session lookup failures remain a generic fail-closed `503`.
 

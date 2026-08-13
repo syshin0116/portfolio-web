@@ -320,6 +320,7 @@ def _openai_final_message(content: str) -> AIMessage:
         response_metadata={
             "model_provider": "openai",
             "model_name": "gpt-5.6-luna",
+            "status": "completed",
         },
         usage_metadata={
             "input_tokens": 1,
@@ -348,6 +349,7 @@ def _openai_tool_message(name: str, args: dict, tool_call_id: str) -> AIMessage:
         response_metadata={
             "model_provider": "openai",
             "model_name": "gpt-5.6-luna",
+            "status": "completed",
         },
         usage_metadata={
             "input_tokens": 1,
@@ -393,8 +395,8 @@ def test_guest_budget_leaves_capacity_for_the_final_answer_after_retrieval():
     budget.settle_model(second, actual_tokens=3_300)
     final = budget.reserve_model(input_tokens=10_998)
 
-    assert final.reserved_tokens == 11_510
-    assert budget.snapshot().charged_tokens == 16_000
+    assert final.reserved_tokens == 11_766
+    assert budget.snapshot().charged_tokens == 16_256
 
 
 def test_guest_budget_admits_the_observed_subagent_synthesis_payload():
@@ -424,12 +426,13 @@ def test_guest_budget_admits_eight_calls_just_below_the_generation_ceiling():
     budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
 
     for _call in range(8):
-        reservation = budget.reserve_model(input_tokens=7_487)
+        reservation = budget.reserve_model(input_tokens=7_231)
         budget.settle_model(reservation, actual_tokens=7_999)
 
     snapshot = budget.snapshot()
     assert snapshot.model_calls == 8
     assert snapshot.charged_tokens == 63_992
+    assert GUEST_RUN_BUDGET_POLICY.max_output_tokens == 768
     assert GUEST_RUN_BUDGET_POLICY.max_total_tokens == 64_000
 
 
@@ -1460,9 +1463,9 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
         if block["type"] == "text"
     )
     assert WRITE_TODOS_SYSTEM_PROMPT not in guest_system_text
-    assert "within 400 output tokens" in guest_system_text
+    assert "within 600 output tokens" in guest_system_text
     snapshot = budget.snapshot()
-    assert snapshot.policy_id == "anonymous-public-v6"
+    assert snapshot.policy_id == "anonymous-public-v7"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
 
@@ -1717,6 +1720,7 @@ async def test_canonical_guest_runtime_rejects_a_forged_filesystem_tool_call(
                 response_metadata={
                     "model_provider": "openai",
                     "model_name": "gpt-5.6-luna",
+                    "status": "completed",
                 },
                 usage_metadata={
                     "input_tokens": 1,

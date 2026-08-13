@@ -176,8 +176,8 @@ invoker, stop a running service, or guarantee zero cost.
 
 Owner/evaluation runs may use the existing Anthropic path or the signed-in OpenAI
 selector. Anonymous production runs use the exact
-`openai:gpt-5.6-luna / 500000 / 51892` tuple, requiring the restored
-`openai-api-key` resource and one positive numeric version, and combines the 19,892 µUSD
+`openai:gpt-5.6-luna / 500000 / 53837` tuple, requiring the restored
+`openai-api-key` resource and one positive numeric version, and combines the 21,837 µUSD
 worst generation allocation with a separate 128,000-token aggregate count-risk ledger
 priced at 32,000 µUSD. This is not a documented count price, hidden-token bound, or
 provider hard cap; the public billing and account-stop gates remain mandatory. Preview

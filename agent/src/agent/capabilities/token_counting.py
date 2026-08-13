@@ -32,7 +32,7 @@ OPENAI_GUEST_RESPONSE_MODEL_NAMES = frozenset({OPENAI_GUEST_MODEL_NAME})
 # model selector. Each selected model still uses the same reviewed Responses
 # request contract and exact input-token counting path.
 OPENAI_OWNER_MODEL_NAMES = frozenset({"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"})
-OPENAI_GUEST_MAX_OUTPUT_TOKENS = 512
+OPENAI_GUEST_MAX_OUTPUT_TOKENS = 768
 OPENAI_GUEST_TIMEOUT_SECONDS = 60.0
 
 OPENAI_API_BASE_URL = "https://api.openai.com/v1"

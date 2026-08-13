@@ -275,14 +275,16 @@ blocker, not an alternative retention policy.
 - LLM spend becomes a function of traffic rather than of one person's usage. The durable
   application daily reservation ledger is the repository-owned hard stop for the reviewed
   accepted Luna provider-request accounting envelope; process-local request limits only
-  slow that burn. Because OpenAI does not document input-count billing, the 51,892 µUSD
-  run reservation combines the 19,892 µUSD worst 64,000-token generation allocation with
+  slow that burn. Because OpenAI does not document input-count billing, the 53,837 µUSD
+  run reservation combines the 21,837 µUSD worst 64,000-token generation allocation with
   a separate 128,000-token aggregate count-risk ledger priced at the highest input bucket
-  (32,000 µUSD). Up to eight model calls share a 512-token output ceiling per call and
+  (32,000 µUSD). Up to eight model calls share a 768-token output ceiling per call and
   the 64,000-token generation total. Each count attempt reserves its canonical-payload heuristic `U` before
   provider I/O; success settles `U` to exact `n`, while error, cancellation, overflow,
   parity drift, or generation-ledger rejection retains `U`. That is conservative
-  repository accounting, not a provider hidden-token bound or price guarantee.
+  repository accounting, not a provider hidden-token bound or price guarantee. An OpenAI
+  response must report a complete terminal state with no incomplete details; otherwise
+  the run fails closed and does not expose the partial answer as a successful result.
   Input-count billing evidence and provider-account spend protection remain launch
   blockers; this ADR assumes no provider-side hard cap.
 - Reputational surface: content generated under this domain by anonymous prompting.

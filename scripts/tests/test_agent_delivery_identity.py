@@ -162,8 +162,8 @@ class AgentDeliveryIdentityTests(unittest.TestCase):
         self.assertNotIn("scripts/deploy_cloud_run.sh", release)
         self.assertNotIn("gcloud run jobs", release)
         self.assertNotIn("runtime_env_args", release)
-        self.assertIn('preview)\n              expected_repository=', release)
-        self.assertIn('              set --\n              ;;', release)
+        self.assertIn("preview)\n              expected_repository=", release)
+        self.assertIn("              set --\n              ;;", release)
         self.assertIn('            "$@" \\\n            --quiet', release)
 
     def test_each_builder_is_secretless_and_selects_only_its_repository(self) -> None:

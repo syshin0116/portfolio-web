@@ -165,11 +165,11 @@ environment is rejected.
 The foundation owns four runtime secrets for Preview and five for Production. Owner
 and evaluation runtimes use their existing server-held model configuration; only
 Production uses the exact
-`openai:gpt-5.6-luna / 500000 / 19892` guest tuple and adds the numeric-version-pinned
-`openai-api-key`. The run reservation combines the 7,892 µUSD worst generation
-allocation from 8 calls at 512 output tokens per call and a 16,000-token generation
-ceiling with the separate 48,000-token aggregate count-risk ledger priced at Luna's
-highest input bucket (12,000 µUSD). This is not a documented count-endpoint price,
+`openai:gpt-5.6-luna / 500000 / 47892` guest tuple and adds the numeric-version-pinned
+`openai-api-key`. The run reservation combines the 15,892 µUSD worst generation
+allocation from 8 calls at 512 output tokens per call and a 48,000-token generation
+ceiling with the separate 128,000-token aggregate count-risk ledger priced at Luna's
+highest input bucket (32,000 µUSD). This is not a documented count-endpoint price,
 hidden-token bound, or provider hard cap, so the public billing and account-stop gates
 remain closed. Preview owns no OpenAI
 credential. Add one separate migration URL secret per environment:
@@ -569,10 +569,10 @@ secret references. A revision from the wrong repository or service, an alias suc
 changes. The workflow then runs health/auth and the two-turn APv2 smoke, and restores the
 previous revision automatically if that smoke fails.
 
-Production rollback also verifies the exact `openai:gpt-5.6-luna / 500000 / 19892`
+Production rollback also verifies the exact `openai:gpt-5.6-luna / 500000 / 47892`
 guest tuple. A revision carrying the generation-only 6,892 µUSD reservation, the
 superseded 8,868 µUSD duplicate-input reservation, or the 18,892 µUSD four-call
-reservation is not an eligible rollback
+reservation, or the 19,892 µUSD pre-delegation reservation is not an eligible rollback
 target; close guest issuance and deploy a reviewed replacement instead of weakening the
 provider-cost boundary during recovery.
 

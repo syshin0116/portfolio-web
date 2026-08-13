@@ -1225,14 +1225,22 @@ def _validate_task_call(
         raise InvalidDelegationError("task subagent_type is not server-declared")
 
     lines = description.splitlines()
-    section_indexes: list[int] = []
+    section_matches: list[tuple[int, str]] = []
     for section in REQUIRED_TASK_SECTIONS:
-        matches = [index for index, line in enumerate(lines) if line == section]
+        matches: list[tuple[int, str]] = []
+        for index, line in enumerate(lines):
+            if not line.startswith(section):
+                continue
+            suffix = line[len(section) :]
+            if suffix and not suffix[0].isspace():
+                continue
+            matches.append((index, suffix))
         if len(matches) != 1:
             raise InvalidDelegationError(
                 "task description must contain each exact section once"
             )
-        section_indexes.append(matches[0])
+        section_matches.append(matches[0])
+    section_indexes = [index for index, _suffix in section_matches]
     if section_indexes != sorted(section_indexes) or any(
         line.strip() for line in lines[: section_indexes[0]]
     ):
@@ -1240,8 +1248,10 @@ def _validate_task_call(
             "task description must contain the complete stateless envelope"
         )
     section_ends = [*section_indexes[1:], len(lines)]
-    for start, end in zip(section_indexes, section_ends, strict=True):
-        if not any(line.strip() for line in lines[start + 1 : end]):
+    for (start, suffix), end in zip(section_matches, section_ends, strict=True):
+        if not suffix.strip() and not any(
+            line.strip() for line in lines[start + 1 : end]
+        ):
             raise InvalidDelegationError(
                 "task description sections require non-whitespace content"
             )

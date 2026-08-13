@@ -176,10 +176,10 @@ invoker, stop a running service, or guarantee zero cost.
 
 Owner/evaluation runs may use the existing Anthropic path or the signed-in OpenAI
 selector. Anonymous production runs use the exact
-`openai:gpt-5.6-luna / 500000 / 19892` tuple, requiring the restored
-`openai-api-key` resource and one positive numeric version, and combines the 7,892 µUSD
-worst generation allocation with a separate 48,000-token aggregate count-risk ledger
-priced at 12,000 µUSD. This is not a documented count price, hidden-token bound, or
+`openai:gpt-5.6-luna / 500000 / 47892` tuple, requiring the restored
+`openai-api-key` resource and one positive numeric version, and combines the 15,892 µUSD
+worst generation allocation with a separate 128,000-token aggregate count-risk ledger
+priced at 32,000 µUSD. This is not a documented count price, hidden-token bound, or
 provider hard cap; the public billing and account-stop gates remain mandatory. Preview
 has no OpenAI credential; its reviewed `removed` block keeps the retired legacy Preview
 secret out of Terraform state with `destroy = false`.

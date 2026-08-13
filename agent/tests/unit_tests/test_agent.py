@@ -397,6 +397,29 @@ def test_guest_budget_leaves_capacity_for_the_final_answer_after_retrieval():
     assert budget.snapshot().charged_tokens == 16_000
 
 
+def test_guest_budget_admits_the_observed_subagent_synthesis_payload():
+    budget = RunBudget(GUEST_RUN_BUDGET_POLICY)
+    observed_attempts = (
+        (11_563, 1_657),
+        (7_628, 981),
+        (9_950, 1_403),
+        (24_774, 5_547),
+        (57_603, 11_215),
+        (15_306, 2_525),
+    )
+
+    for upper_bound, input_tokens in observed_attempts:
+        attempt = budget.reserve_model_attempt(input_upper_bound=upper_bound)
+        counted = budget.reserve_model_input(attempt, input_tokens=input_tokens)
+        budget.settle_model(counted, actual_tokens=input_tokens + 300)
+
+    snapshot = budget.snapshot()
+    assert snapshot.model_calls == 6
+    assert snapshot.charged_tokens == 25_128
+    assert snapshot.count_risk_tokens == 23_328
+    assert GUEST_RUN_BUDGET_POLICY.max_tool_calls == 24
+
+
 @pytest.fixture(autouse=True)
 def _replace_provider_token_count(monkeypatch):
     monkeypatch.setattr(
@@ -1425,7 +1448,7 @@ async def test_canonical_guest_runtime_forces_low_budget_and_no_paid_capabilitie
     )
     assert WRITE_TODOS_SYSTEM_PROMPT not in guest_system_text
     snapshot = budget.snapshot()
-    assert snapshot.policy_id == "anonymous-public-v4"
+    assert snapshot.policy_id == "anonymous-public-v5"
     assert snapshot.model_calls == 1
     assert snapshot.charged_tokens == 10
 

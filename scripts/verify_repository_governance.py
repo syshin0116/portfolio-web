@@ -239,7 +239,7 @@ AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
         "c74bbc48930c45af877437f0ea820f49913c3dd8d06daabd15a436e9aa1c6427"
     ),
     ".github/workflows/agent-release.yml": (
-        "41dd765c5b2c4735eb2f4fbb7a8819220c0d1791daf42d5f237336f00f9f406c"
+        "8c53b83b15088adb0073ae2dbc5a16781fcec3a439299b106b5f5a0c35485c1d"
     ),
     ".github/workflows/preview-agent.yml": (
         "2d42339a073f8b5c40f3a9b9573554d4f2d8b070f3cbdd93a19655e060f526e8"

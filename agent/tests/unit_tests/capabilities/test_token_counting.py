@@ -31,7 +31,6 @@ from agent import tools as blog_tools
 from agent.capabilities.budget import (
     DEFAULT_RUN_BUDGET_POLICY,
     RunBudget,
-    RunBudgetExceededError,
     RunBudgetMiddleware,
 )
 from agent.capabilities.token_counting import (
@@ -167,12 +166,12 @@ def _guest_count_risk_budget() -> RunBudget:
     return RunBudget(
         replace(
             DEFAULT_RUN_BUDGET_POLICY,
-            policy_id="anonymous-public-v4",
+            policy_id="anonymous-public-v5",
             max_model_calls=8,
             max_output_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS,
-            max_total_tokens=16_000,
-            max_count_risk_tokens_per_attempt=48_000,
-            max_count_risk_tokens_per_run=48_000,
+            max_total_tokens=48_000,
+            max_count_risk_tokens_per_attempt=128_000,
+            max_count_risk_tokens_per_run=128_000,
         )
     )
 
@@ -529,13 +528,13 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     ("attack", "minimum_reservation", "maximum_reservation"),
     [("user", 22_400, 22_650), ("read-post", 22_750, 23_000)],
 )
-async def test_16_kib_guest_input_fails_closed_at_the_actual_token_cap(
+async def test_16_kib_guest_input_is_admitted_within_the_actual_token_cap(
     monkeypatch: pytest.MonkeyPatch,
     attack: str,
     minimum_reservation: int,
     maximum_reservation: int,
 ) -> None:
-    """A bounded 16 KiB payload cannot borrow capacity from count risk."""
+    """A bounded 16 KiB payload fits the reviewed specialist generation budget."""
     if attack == "user":
         messages = [HumanMessage(content="x" * (16 * 1_024))]
     else:
@@ -569,23 +568,23 @@ async def test_16_kib_guest_input_fails_closed_at_the_actual_token_cap(
     budget = _guest_count_risk_budget()
     middleware = _guest_count_risk_middleware(budget)
 
-    with pytest.raises(RunBudgetExceededError, match="token budget"):
-        await middleware.awrap_model_call(
-            _guest_request(messages),
-            lambda _request: pytest.fail("generation must not run"),
-        )
+    await middleware.awrap_model_call(
+        _guest_request(messages),
+        lambda _request: _async_response(input_tokens=16_000),
+    )
 
     snapshot = budget.snapshot()
     assert len(observed_reservations) == 1
     reservation = observed_reservations[0]
     assert minimum_reservation <= reservation <= maximum_reservation
     assert observed_reservations == ledger_reservations
-    assert reservation < 48_000
-    assert snapshot.charged_tokens == OPENAI_GUEST_MAX_OUTPUT_TOKENS
-    assert snapshot.count_risk_tokens == reservation
+    assert reservation < 128_000
+    assert snapshot.charged_tokens == 16_064
+    assert snapshot.count_risk_tokens == 16_000
     assert snapshot.count_risk_tokens_in_flight == 0
     assert snapshot.model_reservations_in_flight == 0
-    assert snapshot.exhausted is True
+    assert snapshot.exhausted is False
+    assert snapshot.provider_usage_complete is True
 
 
 async def test_openai_prepared_count_detects_token_bearing_generation_drift():

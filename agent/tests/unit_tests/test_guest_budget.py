@@ -70,6 +70,8 @@ class _Session:
         ("100000", "6892", "conservative accounting floor"),
         ("100000", "8868", "conservative accounting floor"),
         ("100000", "17945", "conservative accounting floor"),
+        ("100000", "19892", "conservative accounting floor"),
+        ("100000", "47891", "conservative accounting floor"),
     ],
 )
 def test_required_guest_budget_configuration_fails_closed(
@@ -95,21 +97,21 @@ def test_optional_guest_budget_is_absent_or_exact(monkeypatch):
     assert guest_budget_config(required=False) is None
 
     monkeypatch.setenv(GUEST_DAILY_BUDGET_ENV, "500000")
-    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "19892")
+    monkeypatch.setenv(GUEST_RUN_RESERVATION_ENV, "47892")
     assert guest_budget_config(required=False) == GuestBudgetConfig(
         daily_limit_micro_usd=500_000,
-        run_reservation_micro_usd=19_892,
+        run_reservation_micro_usd=47_892,
     )
 
 
 def test_guest_accounting_floor_adds_count_risk_and_uses_exact_ceiling():
-    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 19_892
+    assert GUEST_MIN_RUN_RESERVATION_MICRO_USD == 47_892
     assert (
         minimum_guest_run_reservation_micro_usd(
             max_model_calls=8,
             max_output_tokens=512,
-            max_total_tokens=16_000,
-            max_count_risk_tokens=48_000,
+            max_total_tokens=48_000,
+            max_count_risk_tokens=128_000,
         )
         == GUEST_MIN_RUN_RESERVATION_MICRO_USD
     )
@@ -120,15 +122,15 @@ def test_guest_accounting_floor_is_maximized_at_the_output_ceiling():
         minimum_guest_run_reservation_micro_usd(
             max_model_calls=8,
             max_output_tokens=output_tokens,
-            max_total_tokens=16_000,
-            max_count_risk_tokens=48_000,
+            max_total_tokens=48_000,
+            max_count_risk_tokens=128_000,
         )
         for output_tokens in range(1, 513)
     ]
 
-    assert costs[0] == 16_008
-    assert costs[-2] == 19_884
-    assert costs[-1] == 19_892
+    assert costs[0] == 44_008
+    assert costs[-2] == 47_884
+    assert costs[-1] == 47_892
     assert max(costs) == costs[-1]
 
 

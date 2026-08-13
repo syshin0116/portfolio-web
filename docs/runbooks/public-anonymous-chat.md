@@ -42,7 +42,7 @@ Production alone carries the owner-approved launch tuple:
 - `GUEST_MODEL=openai:gpt-5.6-luna`
 - `GUEST_DAILY_BUDGET_MICRO_USD=500000` ($0.50 per UTC day for the durable
   provider-request accounting ledger)
-- `GUEST_RUN_RESERVATION_MICRO_USD=19892`
+- `GUEST_RUN_RESERVATION_MICRO_USD=47892`
 
 Do not make these values apply-time Terraform variables or change them in the
 console. An ordinary image delivery verifies and preserves the reviewed values;
@@ -60,8 +60,8 @@ Responses input-token count endpoint before every generation. Before provider I/
 runtime captures the final token-bearing payload locally and computes a defense-in-depth
 admission reservation `U` from its canonical UTF-8 bytes plus per-node and fixed framing
 margins. Under one lock, `RunBudget` reserves `U` in a separate count-risk ledger and the
-call's 512-token output ceiling in the 16,000-token generation ledger. Count risk is
-capped at 48,000 per attempt and 48,000 in aggregate per run; concurrent calls cannot
+call's 512-token output ceiling in the 48,000-token generation ledger. Count risk is
+capped at 128,000 per attempt and 128,000 in aggregate per run; concurrent calls cannot
 observe or reuse the same remaining capacity. The prepared canonical count payload is
 sent exactly once and the same request is recaptured before generation. Only a valid
 exact count `n <= U` with matching payload parity settles count risk from `U` to `n` and
@@ -79,16 +79,16 @@ Luna, so this adds no guest-controlled provider choice or cloud secret.
 
 Independently, the durable spend ledger reserves the accepted provider accounting case
 before the first count request. The configured per-run reservation may never be below
-19,892 µUSD, the sum of the reviewed generation and count-risk floors below.
+47,892 µUSD, the sum of the reviewed generation and count-risk floors below.
 
 At eight calls, the per-call output ceiling is 512 tokens, for a maximum of 4,096
-output tokens. The 16,000-token generation ceiling leaves 11,904 generation input
+output tokens. The 48,000-token generation ceiling leaves 43,904 generation input
 tokens. Its worst allocation is
-`11,904 × $0.25/M + 4,096 × $1.20/M = 7,891.2 µUSD`, rounded up to 7,892 µUSD.
-Until OpenAI documents otherwise, separately price the entire 48,000-token aggregate
+`43,904 × $0.25/M + 4,096 × $1.20/M = 15,891.2 µUSD`, rounded up to 15,892 µUSD.
+Until OpenAI documents otherwise, separately price the entire 128,000-token aggregate
 count-risk ledger at the most expensive Luna input bucket:
-`48,000 × $0.25/M = 12,000 µUSD`. The repository floor is therefore
-`7,892 + 12,000 = 19,892 µUSD`. Luna's
+`128,000 × $0.25/M = 32,000 µUSD`. The repository floor is therefore
+`15,892 + 32,000 = 47,892 µUSD`. Luna's
 ordinary uncached input is $0.20/M, implicit cache writes are $0.25/M, and cache reads
 are $0.02/M; a cheaper observed bucket never lowers the pre-dispatch reservation.
 Provider settlement accepts and records exact cache-read and cache-write buckets.
@@ -154,7 +154,7 @@ seventh direct retrieval tool. Canonical guests additionally receive the native 
 tool for the existing server-declared specialists. The guest root mounts no skill,
 filesystem, persistent memory, todo, or QuickJS capability; children are stateless,
 read-only, depth one, and cannot delegate. Task calls share up to eight model calls,
-16,000-token, 45-second, rate, concurrency, and daily spend ceilings, with 512 output
+48,000-token, 45-second, rate, concurrency, and daily spend ceilings, with 512 output
 tokens per call. The separate
 one-task limit is removed, but at most two tasks may run concurrently. Public projection
 keeps child transcripts and task arguments and results private while exposing root task
@@ -177,14 +177,14 @@ succeed before either Vercel public flag becomes `true`.
 
 ## Provider spend stop and rollback boundary
 
-The 19,892 µUSD calculation combines the worst 16,000-token generation allocation with
-the whole 48,000-token count-risk budget priced at the highest Luna input bucket. The
-atomic local `U` reservation blocks attempts above 48,000 and aggregate or overlapping
-count risk above 48,000 before provider I/O, and retains the reservation on failure.
+The 47,892 µUSD calculation combines the worst 48,000-token generation allocation with
+the whole 128,000-token count-risk budget priced at the highest Luna input bucket. The
+atomic local `U` reservation blocks attempts above 128,000 and aggregate or overlapping
+count risk above 128,000 before provider I/O, and retains the reservation on failure.
 However, OpenAI does not publish a hard hidden-framing maximum or count-endpoint billing
 rate; a provider count could exceed the heuristic `U`, and the count request has already
 reached OpenAI when that is learned. The application ledger is therefore not the sole hard
-stop for that edge, and 19,892 µUSD is not a provider-wide mathematical ceiling.
+stop for that edge, and 47,892 µUSD is not a provider-wide mathematical ceiling.
 
 Before either Vercel public flag becomes `true`, isolate the guest API key in its reviewed
 OpenAI project and verify a provider-enforced hard usage/spend stop that bounds count and
@@ -196,9 +196,10 @@ enforce the reviewed stop, public issuance remains disabled.
 If provider telemetry exceeds the conservative reservation, the hard stop cannot be
 verified, or count behavior changes, close both Vercel flags first, revoke the guest key or
 set its provider stop to zero, and follow the exact-project emergency-close sequence below.
-Do not increase the cap to restore service. Do not roll back to a 6,892, 8,868, or 18,892 µUSD
-revision: startup and delivery verification intentionally reject both superseded
-contracts. A Cloud Run rollback target must retain the exact 19,892 µUSD tuple;
+Do not increase the cap to restore service. Do not roll back to a 6,892, 8,868, 18,892,
+or 19,892 µUSD
+revision: startup and delivery verification intentionally reject all superseded
+contracts. A Cloud Run rollback target must retain the exact 47,892 µUSD tuple;
 otherwise keep guest access closed and land a reviewed replacement.
 
 ## Vercel BotID Basic
@@ -241,7 +242,7 @@ guest identity or spend state.
 2. After both environments' migration, grant-probe, and maintenance jobs pass, review
    and apply the exact services-stage plan. It must combine the active Production
    maintenance Scheduler with only Production's `true / openai:gpt-5.6-luna / 500000 /
-   19892` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
+   47892` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
 3. Verify Terraform read-back and the first bounded checkpoint-first scheduled
    maintenance execution. A paused or unverified Scheduler blocks launch.
 4. Release the exact reviewed revision, then run owner, PostgreSQL, public raw-wire,

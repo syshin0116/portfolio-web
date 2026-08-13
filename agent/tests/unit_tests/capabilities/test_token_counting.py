@@ -507,9 +507,11 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
 
     assert len(observed_reservations) == 3
     assert all(earlier < later for earlier, later in pairwise(observed_reservations))
+    # The first interval also covers the 76-77 canonical-byte tool schema
+    # variance between the pinned CPython 3.12 runner and local CPython 3.13.
     for reservation, (minimum, maximum) in zip(
         observed_reservations,
-        ((6_100, 6_250), (11_000, 11_200), (16_250, 16_450)),
+        ((6_100, 6_327), (11_000, 11_200), (16_250, 16_450)),
         strict=True,
     ):
         assert minimum <= reservation <= maximum

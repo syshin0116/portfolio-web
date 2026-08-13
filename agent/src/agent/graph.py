@@ -678,7 +678,11 @@ def create_graph(
         count_openai_input_tokens
         if is_guest
         else (
-            _owner_openai_input_token_counter(model_spec)
+            (
+                _OWNER_OPENAI_INPUT_TOKEN_COUNTER
+                if model_spec == DEFAULT_MODEL
+                else _owner_openai_input_token_counter(model_spec)
+            )
             if owner_uses_server_model
             else (
                 count_openai_input_tokens
@@ -692,7 +696,11 @@ def create_graph(
         if is_guest:
             exact_input_preparer = prepare_openai_input_token_count
         elif owner_uses_server_model:
-            exact_input_preparer = _owner_openai_input_token_preparer(model_spec)
+            exact_input_preparer = (
+                _OWNER_OPENAI_INPUT_TOKEN_PREPARER
+                if model_spec == DEFAULT_MODEL
+                else _owner_openai_input_token_preparer(model_spec)
+            )
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool

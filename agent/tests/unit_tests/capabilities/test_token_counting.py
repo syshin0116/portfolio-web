@@ -167,8 +167,8 @@ def _guest_count_risk_budget() -> RunBudget:
     return RunBudget(
         replace(
             DEFAULT_RUN_BUDGET_POLICY,
-            policy_id="anonymous-public-v3",
-            max_model_calls=4,
+            policy_id="anonymous-public-v4",
+            max_model_calls=8,
             max_output_tokens=OPENAI_GUEST_MAX_OUTPUT_TOKENS,
             max_total_tokens=16_000,
             max_count_risk_tokens_per_attempt=48_000,

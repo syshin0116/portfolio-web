@@ -1,5 +1,5 @@
 ---
-title: "ADR-0006: The chatbot is public, with Turnstile-gated anonymous subjects"
+title: "ADR-0006: The chatbot is public, with Vercel BotID-gated anonymous subjects"
 description: >
   Open the chatbot to visitors with no login, minting short-lived tokens with random
   anon:<uuid> subjects so every existing owner-scoping path keeps working unchanged.
@@ -12,13 +12,13 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-08-03"
+updated: "2026-08-14"
 owners: ["@syshin0116"]
 refs: [../research/public-exposure.md, ../plans/rag-restack.md, 0004-adopt-aegra.md, 0007-postgres-on-neon-split-projects.md]
 template: adr
 ---
 
-# ADR-0006: The chatbot is public, with Turnstile-gated anonymous subjects
+# ADR-0006: The chatbot is public, with Vercel BotID-gated anonymous subjects
 
 > **status: accepted; the application hardening and repository-owned Production launch
 > tuple plus active retention Scheduler are implemented, but public rollout is still
@@ -53,7 +53,7 @@ this ADR carries a rollout gate.
 
 | Option | Pros | Cons |
 |---|---|---|
-| A. Random per-session `anon:<uuid4>` subject, Turnstile-gated, short TTL | Reuses every existing owner filter unchanged; per-visitor isolation for free; one file changes | Needs a Turnstile integration and a cookie; anonymous threads need retention |
+| A. Random per-session `anon:<uuid4>` subject, Vercel BotID Basic-gated, short TTL | Reuses every existing owner filter unchanged; per-visitor isolation for free; one file changes | Needs BotID and a cookie; anonymous threads need retention |
 | B. One shared `public` owner id | Trivial | **Unsafe.** `db.search_threads` filters on `owner_id` alone, so a shared owner is a full cross-visitor read of every conversation |
 | C. Client-supplied identity header | No infrastructure | **Unsafe.** Forgeable - an attacker sets a real Auth.js `users.id` and reads the owner's threads |
 | D. Separate unscoped code path for anonymous | Avoids minting tokens | Two authorization paths, twice the places to get it wrong, and the scoped one is already tested |
@@ -61,11 +61,13 @@ this ADR carries a rollout gate.
 
 ## Decision
 
-Adopt **A**. `web/app/api/agent-token/route.ts` gains an anonymous branch: verify a
-Cloudflare Turnstile token via siteverify, then mint with subject `anon:<uuid4>`, scope
-`anon`, and a 300s TTL, persisting the uuid in an httpOnly `SameSite=Lax` cookie so a
-visitor keeps history on that device. The allowed-email and admin-scope paths are
-unchanged. **No owner-scoping code changes.**
+Adopt **A**. `web/app/api/anonymous-agent-token/route.ts` accepts only a bodyless
+request, runs Vercel BotID Basic protection through `checkBotId`, then mints a token
+with subject `anon:<uuid4>`, scope `anon`, and a 300s TTL, persisting the uuid in an
+httpOnly `SameSite=Lax` cookie so a visitor keeps history on that device. The browser
+registers the same route with `botid/client/core`; a bodyless cookie resume still passes
+BotID before minting a fresh short-lived agent token. The allowed-email and admin-scope
+paths are unchanged. **No owner-scoping code changes.**
 
 Capabilities are tiered:
 
@@ -74,20 +76,22 @@ Capabilities are tiered:
 | The six curated search tools | yes, published posts only | yes | yes, drafts included |
 | Generic filesystem tools (`ls`/`glob`/`grep`/`read_file`) | **no** | **no** | **no** - route removed for everyone |
 | Persistent `/memories/` | no (thread-scoped only) | yes | yes |
-| Model selection | no - server-pinned | limited | yes |
+| Model selection | no - Luna is server-pinned | Luna, Terra, or Sol with `model:select` | Luna, Terra, or Sol |
 | `/store`, `/crons`, `/assistants`, `/models` | denied | limited | yes |
 | Code interpreter | off by default; enable only if P4.5 gain and P5 budget/abuse gates pass | owner/eval experiment first | owner first |
-| Dynamic subagents | off by default; bounded tier only after P4.5/P5 gates | owner/eval experiment first | bounded |
+| Dynamic subagents | bounded server-declared specialists | server permission | bounded |
 | Thread retention | ~14 days, GC'd | persistent | persistent |
 
-The anonymous root model is bound, in literal order, to exactly
+The anonymous root model is directly bound, in literal order, to exactly
 `keyword_search`, `semantic_search`, `metadata_filter`, `graph_traverse`, `list_posts`,
 and `read_post`. Startup and every graph creation assert that this list is unique and
-unchanged; adding a seventh root tool fails closed. The guest prompt carries the complete
-retrieval workflow inline and mounts no skill. Deep Agents' filesystem, todo, skills,
-QuickJS, and `task` schemas are removed from the guest model request, and the same
-middleware rejects a forged or hallucinated call before tool execution. Hiding a schema
-alone is not treated as an authorization boundary.
+unchanged; adding a seventh direct retrieval tool fails closed. The native Deep Agents
+`task` tool is also exposed to canonical guests and may dispatch only the existing
+server-declared, stateless specialists. The guest root mounts no skill, filesystem,
+persistent memory, todo, or QuickJS capability. Children share the root run budget, have
+depth one, cannot delegate, and receive only their reviewed read-only retrieval skill.
+The middleware rejects an undeclared specialist or forged capability before execution.
+Hiding a schema alone is not treated as an authorization boundary.
 
 The production HTTP stack is pinned outer-to-inner as `GuestIngressGuard ->
 NativeThreadGuard -> GuestRunGuard`. After authentication, the outer boundary charges
@@ -271,10 +275,11 @@ blocker, not an alternative retention policy.
 - LLM spend becomes a function of traffic rather than of one person's usage. The durable
   application daily reservation ledger is the repository-owned hard stop for the reviewed
   accepted Luna provider-request accounting envelope; process-local request limits only
-  slow that burn. Because OpenAI does not document input-count billing, the 18,892 µUSD
-  run reservation combines the 6,892 µUSD worst 12,000-token generation allocation with
+  slow that burn. Because OpenAI does not document input-count billing, the 19,892 µUSD
+  run reservation combines the 7,892 µUSD worst 16,000-token generation allocation with
   a separate 48,000-token aggregate count-risk ledger priced at the highest input bucket
-  (12,000 µUSD). Each count attempt reserves its canonical-payload heuristic `U` before
+  (12,000 µUSD). Up to eight model calls share a 512-token output ceiling per call and
+  the 16,000-token generation total. Each count attempt reserves its canonical-payload heuristic `U` before
   provider I/O; success settles `U` to exact `n`, while error, cancellation, overflow,
   parity drift, or generation-ledger rejection retains `U`. That is conservative
   repository accounting, not a provider hidden-token bound or price guarantee.
@@ -291,9 +296,12 @@ blocker, not an alternative retention policy.
       with published-corpus retrieval (P3.1).
 - [x] Add draft-exclusion regression tests through all six tools (P3.2) - the existing
       security tests never covered this, which is why the bugs survived.
-- [x] Turnstile-gated anonymous token minting (P3.3; launch flags remain off).
+- [x] Vercel BotID Basic-gated anonymous token minting with a bodyless bootstrap (P3.3;
+      launch flags remain off).
 - [x] `anon` scope route allowlist; strip `configurable.model`; force
       `multitask_strategy="reject"`; fix the seeded default model (P3.4).
+- [x] Expose the existing bounded, server-declared specialists to canonical anonymous
+      guests while retaining Luna, shared run budgets, and public wire redaction.
 - [x] Outer ingress, inner paid rate limiting, SSE leases, durable storage admission,
       and the durable daily spend reservation (P3.5; paid public launch remains
       separately gated).
@@ -309,7 +317,7 @@ blocker, not an alternative retention policy.
 
 - The owner-approved daily ceiling is no longer appropriate, the durable ledger blocks
   legitimate traffic, or OpenAI routing/pricing changes invalidate its reservation math.
-- Abuse appears that Turnstile plus per-subject rate limiting does not contain - the
+- Abuse appears that BotID Basic plus per-subject rate limiting does not contain - the
   fallback is re-gating to signed-in users, which is cheap because the token route keeps
   both paths.
 - Anonymous thread storage approaches the Postgres cap faster than GC reclaims it.
@@ -347,3 +355,8 @@ blocker, not an alternative retention policy.
   six-tool surface, inline guest retrieval prompt, and server-unique checkpoint message
   IDs with assistant-ui correlation projection. Recurring GC and public flags remain
   launch gates rather than being activated by this application change.
+- 2026-08-14: opened the existing server-declared dynamic specialists to canonical
+  anonymous guests, retained root-only public event projection and all spend, token,
+  time, concurrency, and depth controls, and allowed signed-in users with
+  `model:select` to choose only Luna, Terra, or Sol. Anonymous model configuration
+  remains stripped and pinned to Luna.

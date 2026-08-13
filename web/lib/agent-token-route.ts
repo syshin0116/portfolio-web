@@ -56,9 +56,10 @@ function mintSignedInToken(
   }
 
   try {
-    const scopes = dependencies.isAdmin(session.user?.email)
-      ? ["admin"]
-      : []
+    const scopes = [
+      "model:select",
+      ...(dependencies.isAdmin(session.user?.email) ? ["admin"] : []),
+    ]
     const result = dependencies.createToken(
       subject,
       undefined,

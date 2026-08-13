@@ -19,7 +19,11 @@ export default function ChatSection() {
   // The key is intentional: an auth-subject transition destroys the complete
   // assistant runtime, thread list, token cache, and active APv2 stream.
   return (
-    <AgentRuntimeProvider key={identity} identity={identity}>
+    <AgentRuntimeProvider
+      key={identity}
+      identity={identity}
+      modelSelection
+    >
       <ChatShell />
     </AgentRuntimeProvider>
   )

@@ -49,7 +49,7 @@ READINESS_CONTRACT_PATH = Path(__file__).with_name(
     "gcp_project_readiness_contract.json"
 )
 READINESS_CONTRACT_SHA256 = (
-    "c1d54db7fb4c51efef2f6e68b6e59d6fd5d9f8e3da8e6bd5e7ef07fe570d7bb8"
+    "4b41a648726f81300b1350afbf781af7a163fda1ea9e69ae15c8160594924858"
 )
 
 PRODUCTION_RUNTIME_SA = f"agent-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
@@ -142,7 +142,7 @@ PRODUCTION_RUNTIME_ENV = COMMON_RUNTIME_ENV | {
     "AGENT_ANONYMOUS_ACCESS_ENABLED": "true",
     "GUEST_DAILY_BUDGET_MICRO_USD": "500000",
     "GUEST_MODEL": "openai:gpt-5.6-luna",
-    "GUEST_RUN_RESERVATION_MICRO_USD": "18892",
+    "GUEST_RUN_RESERVATION_MICRO_USD": "19892",
 }
 PREVIEW_RUNTIME_SECRETS = {
     "AGENT_AUTH_SECRET": "agent-preview-auth-secret",

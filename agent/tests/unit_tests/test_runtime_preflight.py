@@ -177,7 +177,7 @@ def test_runtime_accepts_exact_production_luna_launch_tuple(tmp_path):
         AGENT_ANONYMOUS_ACCESS_ENABLED="true",
         GUEST_MODEL="openai:gpt-5.6-luna",
         GUEST_DAILY_BUDGET_MICRO_USD="500000",
-        GUEST_RUN_RESERVATION_MICRO_USD="18892",
+        GUEST_RUN_RESERVATION_MICRO_USD="19892",
         OPENAI_API_KEY="test-openai-runtime-key",
     )
 

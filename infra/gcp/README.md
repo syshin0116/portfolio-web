@@ -174,9 +174,10 @@ it again requires a matching reviewed code change. `AGENT_CLOUD_RUN_ENABLED` gat
 GitHub delivery attempts only; changing it does not pause Scheduler, revoke the public
 invoker, stop a running service, or guarantee zero cost.
 
-The owner/evaluation model remains Anthropic, while the reviewed Production guest model
-uses the exact `openai:gpt-5.6-luna / 500000 / 18892` tuple, requires the restored
-`openai-api-key` resource and one positive numeric version, and combines the 6,892 µUSD
+Owner/evaluation runs may use the existing Anthropic path or the signed-in OpenAI
+selector. Anonymous production runs use the exact
+`openai:gpt-5.6-luna / 500000 / 19892` tuple, requiring the restored
+`openai-api-key` resource and one positive numeric version, and combines the 7,892 µUSD
 worst generation allocation with a separate 48,000-token aggregate count-risk ledger
 priced at 12,000 µUSD. This is not a documented count price, hidden-token bound, or
 provider hard cap; the public billing and account-stop gates remain mandatory. Preview
@@ -249,10 +250,8 @@ validates unsigned structure only and is not a live prerequisite or approval inp
 
 A passing live result proves neither public launch nor bounded or zero spend. The
 production Scheduler must be `ENABLED`; `PAUSED` is drift, but its exact plan/apply and
-first bounded execution still must pass. Keep both Vercel public flags disabled while
-Luna input-count billing and the proven pre-provider upper bound remain unresolved, and
-until the remaining Turnstile, provider, and browser gates pass. Secret injection and
-state recovery remain in
+first bounded execution still must pass. Public launch remains gated by the Vercel BotID
+Basic, provider, and browser checks. Secret injection and state recovery remain in
 [`docs/runbooks/gcp-neon-foundation.md`](../../docs/runbooks/gcp-neon-foundation.md).
 Bootstrap, normal delivery, and rollback are in
 [`docs/runbooks/cloud-run-delivery.md`](../../docs/runbooks/cloud-run-delivery.md).

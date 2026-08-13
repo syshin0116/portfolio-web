@@ -19,6 +19,7 @@ import type {
   LangGraphStreamCallback,
 } from "@assistant-ui/react-langgraph"
 import type { AgentTokenIntent } from "@/lib/agent-token-intent"
+import type { AgentModel } from "@/lib/agent-model"
 
 import {
   AgentLifecycleError,
@@ -98,6 +99,7 @@ export interface NativeAgentClientOptions {
   initialToken?: string
   onAuthenticationExpired?: () => void
   tokenIntent?: AgentTokenIntent
+  getSelectedModel?: () => AgentModel | undefined
   tokenBroker?: AgentTokenBroker
   client?: Client
   getSourceGeneration?: () => number
@@ -1233,6 +1235,26 @@ function runConfigWithNonce(
   }
 }
 
+function runConfigWithModel(
+  runConfig: unknown,
+  model: AgentModel | undefined
+): Record<string, unknown> {
+  const callerConfig = isRecord(runConfig) ? runConfig : {}
+  const { configurable, ...rest } = callerConfig
+  delete rest.model
+  const callerConfigurable = isRecord(configurable) ? configurable : {}
+  const restConfigurable = { ...callerConfigurable }
+  delete restConfigurable.model
+  if (!isRecord(configurable) && model === undefined) return rest
+  return {
+    ...rest,
+    configurable: {
+      ...restConfigurable,
+      ...(model ? { model } : {}),
+    },
+  }
+}
+
 function runMatchesSubmitNonce(
   run: unknown,
   threadId: string,
@@ -1663,6 +1685,7 @@ export class NativeAgentClient {
   readonly tokenBroker: AgentTokenBroker
   readonly assistantId: string
   readonly #apiUrl: string
+  readonly #getSelectedModel?: () => AgentModel | undefined
   readonly #getSourceGeneration: () => number
   readonly #onActivity?: (
     activity: AgentActivity,
@@ -1678,6 +1701,7 @@ export class NativeAgentClient {
 
   constructor(options: NativeAgentClientOptions) {
     this.#apiUrl = options.apiUrl
+    this.#getSelectedModel = options.getSelectedModel
     this.assistantId = options.assistantId
     this.#getSourceGeneration = options.getSourceGeneration ?? (() => 0)
     this.#onActivity = options.onActivity
@@ -1797,6 +1821,7 @@ export class NativeAgentClient {
     ) {
       throw new AgentProtocolBoundaryError()
     }
+    const selectedModel = this.#getSelectedModel?.()
     const active = createActiveStream()
     const signal = AbortSignal.any([
       config.abortSignal,
@@ -2019,8 +2044,12 @@ export class NativeAgentClient {
           ).map((run) => run.run_id)
         )
         const submitNonce = createSubmitNonce()
-        const metadata = runMetadataWithNonce(
+        const runConfigWithSelectedModel = runConfigWithModel(
           config.runConfig,
+          selectedModel
+        )
+        const metadata = runMetadataWithNonce(
+          runConfigWithSelectedModel,
           submitNonce
         )
         // Aegra 0.9.24 persists request metadata for tracing but omits it
@@ -2028,7 +2057,7 @@ export class NativeAgentClient {
         // RunnableConfig metadata, which Aegra persists and returns, so lost
         // command responses can still bind only the exact created run.
         const runConfig = runConfigWithNonce(
-          config.runConfig,
+          runConfigWithSelectedModel,
           submitNonce
         )
         const commandSettlement = settleCommand(
@@ -2308,6 +2337,7 @@ export class NativeAgentClient {
 export const nativeClientTesting = {
   assembledMessageToLangChain,
   eventIdBelongsToRun,
+  runConfigWithModel,
   inspect(client: NativeAgentClient) {
     const read = nativeClientInspectionReaders.get(client)
     if (!read) throw new Error("Unknown NativeAgentClient")

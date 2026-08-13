@@ -69,6 +69,7 @@ from agent.capabilities.token_counting import (
     OPENAI_GUEST_RESPONSE_MODEL_NAMES,
     OPENAI_GUEST_SAFETY_IDENTIFIER_LENGTH,
     OPENAI_GUEST_TIMEOUT_SECONDS,
+    OPENAI_OWNER_MODEL_NAMES,
     InputTokenCounter,
     OpenAIResponsesInputTokenContract,
     count_anthropic_input_tokens,
@@ -96,19 +97,46 @@ MODEL_MAX_OUTPUT_TOKENS = 2_048
 GUEST_MODEL_MAX_OUTPUT_TOKENS = OPENAI_GUEST_MAX_OUTPUT_TOKENS
 MODEL_TIMEOUT_SECONDS = OPENAI_GUEST_TIMEOUT_SECONDS
 OWNER_OPENAI_SAFETY_IDENTIFIER = "owner_runtime"
+MODEL_SELECTION_PERMISSION = "model:select"
 SUPPORTED_OWNER_MODEL_PROVIDERS = frozenset({"openai"})
-_OWNER_OPENAI_MODEL_CONTRACT = OpenAIResponsesInputTokenContract(
-    model_name=OPENAI_GUEST_MODEL_NAME,
-    max_output_tokens=MODEL_MAX_OUTPUT_TOKENS,
-    timeout_seconds=MODEL_TIMEOUT_SECONDS,
-    safety_identifier=OWNER_OPENAI_SAFETY_IDENTIFIER,
+SUPPORTED_OWNER_MODEL_SPECS = frozenset(
+    f"openai:{model_name}" for model_name in OPENAI_OWNER_MODEL_NAMES
 )
-_OWNER_OPENAI_INPUT_TOKEN_COUNTER = openai_responses_input_token_counter(
-    _OWNER_OPENAI_MODEL_CONTRACT
-)
-_OWNER_OPENAI_INPUT_TOKEN_PREPARER = openai_responses_input_token_preparer(
-    _OWNER_OPENAI_MODEL_CONTRACT
-)
+
+
+@lru_cache(maxsize=len(SUPPORTED_OWNER_MODEL_SPECS))
+def _owner_openai_model_contract(
+    model_spec: str,
+) -> OpenAIResponsesInputTokenContract:
+    if model_spec not in SUPPORTED_OWNER_MODEL_SPECS:
+        raise RuntimeError("MODEL is not an allowed owner model specification")
+    return OpenAIResponsesInputTokenContract(
+        model_name=model_spec.partition(":")[2],
+        max_output_tokens=MODEL_MAX_OUTPUT_TOKENS,
+        timeout_seconds=MODEL_TIMEOUT_SECONDS,
+        safety_identifier=OWNER_OPENAI_SAFETY_IDENTIFIER,
+    )
+
+
+@lru_cache(maxsize=len(SUPPORTED_OWNER_MODEL_SPECS))
+def _owner_openai_input_token_counter(model_spec: str) -> InputTokenCounter:
+    return openai_responses_input_token_counter(
+        _owner_openai_model_contract(model_spec)
+    )
+
+
+@lru_cache(maxsize=len(SUPPORTED_OWNER_MODEL_SPECS))
+def _owner_openai_input_token_preparer(model_spec: str):
+    return openai_responses_input_token_preparer(
+        _owner_openai_model_contract(model_spec)
+    )
+
+
+# Keep the Luna names as stable test and maintenance hooks while the selected
+# owner model can now use the same provider-native contract dynamically.
+_OWNER_OPENAI_MODEL_CONTRACT = _owner_openai_model_contract(DEFAULT_MODEL)
+_OWNER_OPENAI_INPUT_TOKEN_COUNTER = _owner_openai_input_token_counter(DEFAULT_MODEL)
+_OWNER_OPENAI_INPUT_TOKEN_PREPARER = _owner_openai_input_token_preparer(DEFAULT_MODEL)
 _MODEL_SPEC = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 NO_GENERAL_PURPOSE_SUBAGENT = HarnessProfile(
     tool_description_overrides={"task": BOUNDED_TASK_TOOL_DESCRIPTION},
@@ -143,15 +171,15 @@ _POSTGRES_CREATE_MEMORY_SQL = """
 """
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
-    policy_id="anonymous-public-v3",
-    max_model_calls=4,
+    policy_id="anonymous-public-v4",
+    max_model_calls=8,
     max_tool_calls=8,
     max_quickjs_calls=1,
     max_quickjs_in_flight=1,
     max_quickjs_output_bytes=1_024,
     max_quickjs_total_output_bytes=1_024,
-    max_task_calls=1,
-    max_tasks_in_flight=1,
+    max_task_calls=8,
+    max_tasks_in_flight=2,
     max_depth=1,
     max_output_tokens=GUEST_MODEL_MAX_OUTPUT_TOKENS,
     max_total_tokens=16_000,
@@ -409,7 +437,7 @@ def _normalize_model_spec(
 
 
 def _normalized_model_spec() -> str:
-    """Return the supported owner/evaluation model in canonical form."""
+    """Return the supported owner model in canonical form."""
     normalized = _normalize_model_spec(
         os.environ.get("MODEL") or DEFAULT_MODEL,
         variable="MODEL",
@@ -418,6 +446,34 @@ def _normalized_model_spec() -> str:
     if normalized != DEFAULT_MODEL:
         raise RuntimeError(f"MODEL must be exactly {DEFAULT_MODEL!r}")
     return normalized
+
+
+def _requested_owner_model_spec(
+    config: Mapping[str, Any],
+    runtime: ServerRuntime[Any],
+    *,
+    is_guest: bool,
+    injected_model: BaseChatModel | None,
+) -> str | None:
+    """Resolve one signed-in model selection from the server-owned permission."""
+    configurable = config.get("configurable", {})
+    requested = configurable.get("model") if isinstance(configurable, Mapping) else None
+    if requested is None:
+        return None
+    if is_guest:
+        raise ValueError("anonymous runs are fixed to the Luna model")
+    if injected_model is not None:
+        raise ValueError("model selection is unavailable for injected models")
+    user = runtime.user
+    permissions = getattr(user, "permissions", None) if user is not None else None
+    if (
+        not isinstance(permissions, list)
+        or MODEL_SELECTION_PERMISSION not in permissions
+    ):
+        raise ValueError("model selection requires the model:select permission")
+    if not isinstance(requested, str) or requested not in OPENAI_OWNER_MODEL_NAMES:
+        raise ValueError("config.configurable.model is not an allowed model")
+    return f"openai:{requested}"
 
 
 def _normalized_guest_model_spec() -> str:
@@ -456,12 +512,13 @@ def _disable_general_purpose_subagent(model: str) -> None:
 
 @lru_cache(maxsize=len(SUPPORTED_OWNER_MODEL_PROVIDERS) * 4)
 def _bounded_model(model_spec: str) -> BaseChatModel:
-    """Create the exact owner Luna Responses client with hard request bounds."""
-    if model_spec != DEFAULT_MODEL:
-        raise RuntimeError(f"MODEL must be exactly {DEFAULT_MODEL!r}")
+    """Create the exact selected owner Responses client with hard request bounds."""
+    if model_spec not in SUPPORTED_OWNER_MODEL_SPECS:
+        raise RuntimeError("MODEL is not an allowed owner model specification")
+    model_name = model_spec.partition(":")[2]
     require_official_openai_routing()
     model = ChatOpenAI(
-        model=OPENAI_GUEST_MODEL_NAME,
+        model=model_name,
         api_key=require_openai_api_key(),
         base_url=OPENAI_API_BASE_URL,
         stream_usage=True,
@@ -480,7 +537,7 @@ def _bounded_model(model_spec: str) -> BaseChatModel:
         raise RuntimeError("MODEL resolved to a runtime-configurable wrapper")
     return require_exact_openai_responses_model(
         model,
-        contract=_OWNER_OPENAI_MODEL_CONTRACT,
+        contract=_owner_openai_model_contract(model_spec),
     )
 
 
@@ -542,8 +599,17 @@ def create_graph(
     from ``ServerRuntime.user.permissions``; client config cannot enable it.
     """
     _validate_guest_root_tool_contract()
-    validate_capability_config(config)
     is_guest = _runtime_is_guest(runtime)
+    user_permissions = getattr(runtime.user, "permissions", None)
+    allow_model_selection = (
+        not is_guest
+        and isinstance(user_permissions, list)
+        and MODEL_SELECTION_PERMISSION in user_permissions
+    )
+    validate_capability_config(
+        config,
+        allow_model_selection=allow_model_selection,
+    )
     if model_provider is not None and model is None:
         raise ValueError("model_provider override requires an injected model")
     if expected_response_models is not None and model is None:
@@ -553,30 +619,45 @@ def create_graph(
     ):
         raise ValueError("guest provider contract cannot be overridden")
     owner_uses_server_model = not is_guest and model is None
+    requested_model_spec = _requested_owner_model_spec(
+        config,
+        runtime,
+        is_guest=is_guest,
+        injected_model=model,
+    )
+    model_spec = (
+        _normalized_guest_model_spec()
+        if is_guest
+        else (requested_model_spec or _normalized_model_spec())
+    )
     usage_model_provider = model_provider or (
         "openai" if is_guest or owner_uses_server_model else "anthropic"
+    )
+    default_response_models = (
+        OPENAI_GUEST_RESPONSE_MODEL_NAMES
+        if is_guest
+        else (
+            frozenset({model_spec.partition(":")[2]})
+            if owner_uses_server_model
+            else frozenset({getattr(model, "model_name", OPENAI_GUEST_MODEL_NAME)})
+        )
     )
     usage_response_models = (
         expected_response_models
         if expected_response_models is not None
         else (
-            OPENAI_GUEST_RESPONSE_MODEL_NAMES
-            if usage_model_provider == "openai"
-            else frozenset()
+            default_response_models if usage_model_provider == "openai" else frozenset()
         )
     )
     if usage_model_provider not in {"anthropic", "openai"}:
         raise ValueError("model_provider must be anthropic or openai")
     if (usage_model_provider == "openai") is not bool(usage_response_models):
         raise ValueError("OpenAI provider contract requires exact response models")
-    if (
-        usage_model_provider == "openai"
-        and usage_response_models != OPENAI_GUEST_RESPONSE_MODEL_NAMES
+    if usage_model_provider == "openai" and (
+        usage_response_models != default_response_models
+        or not usage_response_models <= OPENAI_OWNER_MODEL_NAMES
     ):
         raise ValueError("OpenAI provider contract requires exact response models")
-    model_spec = (
-        _normalized_guest_model_spec() if is_guest else _normalized_model_spec()
-    )
     _disable_general_purpose_subagent(model_spec)
     if model is not None and usage_model_provider == "anthropic":
         _disable_general_purpose_subagent(usage_model_provider)
@@ -597,7 +678,7 @@ def create_graph(
         count_openai_input_tokens
         if is_guest
         else (
-            _OWNER_OPENAI_INPUT_TOKEN_COUNTER
+            _owner_openai_input_token_counter(model_spec)
             if owner_uses_server_model
             else (
                 count_openai_input_tokens
@@ -611,17 +692,17 @@ def create_graph(
         if is_guest:
             exact_input_preparer = prepare_openai_input_token_count
         elif owner_uses_server_model:
-            exact_input_preparer = _OWNER_OPENAI_INPUT_TOKEN_PREPARER
+            exact_input_preparer = _owner_openai_input_token_preparer(model_spec)
     if (
         dynamic_subagents_enabled is not None
         and type(dynamic_subagents_enabled) is not bool
     ):
         raise TypeError("dynamic_subagents_enabled must be a boolean")
-    allow_subagents = not is_guest and dynamic_subagents_allowed(
-        runtime,
-        server_enabled=(
-            True if dynamic_subagents_enabled is None else dynamic_subagents_enabled
-        ),
+    server_subagents_enabled = (
+        True if dynamic_subagents_enabled is None else dynamic_subagents_enabled
+    )
+    allow_subagents = server_subagents_enabled and (
+        is_guest or dynamic_subagents_allowed(runtime, server_enabled=True)
     )
     allow_quickjs = not is_guest and quickjs_allowed(
         runtime,
@@ -646,7 +727,9 @@ def create_graph(
                 "experiment root tool allowlist must exactly match server capabilities"
             )
     effective_root_tool_allowlist = (
-        GUEST_ROOT_TOOL_NAMES if is_guest else root_tool_allowlist
+        GUEST_ROOT_TOOL_NAMES | ({TASK_TOOL_NAME} if allow_subagents else set())
+        if is_guest
+        else root_tool_allowlist
     )
     if experiment_subagent_allowlist is not None and (
         model is None

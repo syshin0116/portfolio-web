@@ -103,9 +103,13 @@ jobs:
           case "$TARGET" in
             preview)
               expected_repository="asia-southeast1-docker.pkg.dev/${GCP_PROJECT_ID}/agent-preview/agent"
+              set --
               ;;
             production)
               expected_repository="asia-southeast1-docker.pkg.dev/${GCP_PROJECT_ID}/agent/agent"
+              set -- \
+                --update-env-vars \
+                "GUEST_RUN_RESERVATION_MICRO_USD=19892"
               ;;
             *)
               printf 'unsupported deployment target\n' >&2
@@ -139,6 +143,7 @@ jobs:
             --no-traffic \
             --tag smoke \
             --deploy-health-check \
+            "$@" \
             --quiet
           revision="$(
             gcloud run services describe "$CLOUD_RUN_SERVICE" \

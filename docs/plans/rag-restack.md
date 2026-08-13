@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-08-03"
+updated: "2026-08-14"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -72,7 +72,7 @@ P5  Public hardening                 anonymous identity, guard, GC, budget caps
 P6  Go public                        PUBLICATION GATE
 ```
 
-### Phase status as of 2026-08-03
+### Phase status as of 2026-08-14
 
 | Phase | Repository status | Exact remaining gate |
 |---|---|---|
@@ -81,9 +81,9 @@ P6  Go public                        PUBLICATION GATE
 | P2 | Delivery code implemented: immutable image, Terraform, WIF, migration/grant jobs, release and rollback workflows | Apply and verify the exact dedicated GCP/Neon foundation, real Neon grants, secrets, preview revision, restart, and owner smoke |
 | P3 | Implemented: native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe wire projection, deterministic AP v2 integration, and Playwright browser evidence | Full deployed owner-authenticated Korean journey against real Cloud Run, Neon, and the provider |
 | P4 | Harness, first dense arm, and topic-review tooling implemented: the default provider-free sweep remains model-free; pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods; a versioned topic seed, deterministic blind pool, checksum seal, finalizer, and dataset-selectable publication gate are present | Owner completion/sealing of `topic-smoke-v1` qrels and a publication-qualified digest-pinned run |
-| P4.5 | Runtime, 2x2 harness, and manual Luna adapter implemented: bounded QuickJS and dynamic subagents share `RunBudget`, and the provider-free fixture executes all four deterministic arms | A complete retained v5 provider-backed quality/cost artifact plus owner/publication review; synthetic evidence and failed local attempts cannot enable either capability for guests |
-| P5 | Repository controls implemented: anonymous JWT/cookie, Turnstile bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secret payload/version, and input-count billing confirmation |
-| P6 | Production desired state approved: anonymous Agent access uses `openai:gpt-5.6-luna`, 500,000 µUSD/day, and 18,892 µUSD/run for the 12,000-token generation ledger plus a separate 48,000-token aggregate count-risk ledger; a numeric OpenAI secret version is pinned, while Preview and both Vercel public flags remain fail-closed | Exact-project plan/apply, first bounded Scheduler execution, input-count billing confirmation, Turnstile/Vercel configuration, deployed abuse/spend/browser proofs, and provider-side spend protection |
+| P4.5 | Runtime, 2x2 harness, and manual Luna adapter implemented: bounded QuickJS and dynamic subagents share `RunBudget`; canonical Luna guests may use the server-declared specialists while QuickJS remains owner/eval-only | A complete retained v5 provider-backed quality/cost artifact plus owner/publication review for evaluation publication |
+| P5 | Repository controls implemented: anonymous JWT/cookie, Vercel BotID Basic bodyless bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secret payload/version, and input-count billing confirmation |
+| P6 | Production desired state approved: anonymous Agent access uses `openai:gpt-5.6-luna`, 500,000 µUSD/day, and 19,892 µUSD/run for up to 8 calls at 512 output tokens each, a 16,000-token generation ledger, and a separate 48,000-token aggregate count-risk ledger; a numeric OpenAI secret version is pinned, while Preview and both Vercel public flags remain fail-closed | Exact-project plan/apply, first bounded Scheduler execution, input-count billing confirmation, Vercel BotID Basic configuration, deployed abuse/spend/browser proofs, and provider-side spend protection |
 
 The operational source of truth for those live gates is the
 [GCP/Neon foundation](../runbooks/gcp-neon-foundation.md),
@@ -117,11 +117,12 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 The anonymous model is a separate fail-closed runtime contract, not an install-time
 dependency. Production accepts only `openai:gpt-5.6-luna`, with
 `reasoning.effort=none`, provider storage disabled, a 500,000 µUSD UTC-day ceiling,
-and an 18,892 µUSD per-run provider-request reservation: 6,892 µUSD for the worst
-generation allocation plus 12,000 µUSD for the separate 48,000-token count-risk ledger.
+and a 19,892 µUSD per-run provider-request reservation: 7,892 µUSD for the worst
+16,000-token generation allocation across up to 8 calls at 512 output tokens per call,
+plus 12,000 µUSD for the separate 48,000-token count-risk ledger.
 Preview remains disabled, unpriced, and
 OpenAI-free. These committed Cloud Run values are desired state, not proof of a live
-public launch; Luna has no API Free tier, so Turnstile/Vercel issuance stays disabled
+public launch; Luna has no API Free tier, so BotID/Vercel issuance stays disabled
 until every operational and provider-spend gate passes.
 
 **Already dropped:** `chromadb` (zero call sites).
@@ -183,7 +184,7 @@ agent/
 │   │   ├── quickjs.py             # bounded async CodeInterpreterMiddleware config
 │   │   ├── subagents.py           # named agents + dynamic dispatch policy
 │   │   ├── budget.py              # shared model/tool/task reservations
-│   │   └── token_counting.py      # fixed Luna serialization and usage accounting
+│   │   └── token_counting.py      # reviewed OpenAI serialization and usage accounting
 │   ├── prompts.py
 │   ├── tools.py                   # thin tool adapters over Retriever
 │   └── retrieval/
@@ -201,17 +202,19 @@ agent/
     ├── unit_tests/                # retrieval, security, capability, and guest boundaries
     └── integration_tests/         # Aegra/PostgreSQL/pool-recreation/quarantine smoke
 web/
+├── lib/
+│   ├── agent-model.ts             # signed Luna/Terra/Sol selection boundary
+│   └── agent-model.test.ts        # exact allowlist and default-model contract
 └── components/assistant/
     ├── chat-section.tsx           # owner/anonymous entry and configuration boundary
     ├── chat-shell.tsx             # assistant-ui primitives + responsive shell
     ├── agent-runtime-provider.tsx # native useLangGraphRuntime composition
-    ├── anonymous-chat-gate.tsx    # fail-closed Turnstile/cookie bootstrap
-    ├── turnstile-widget.tsx
+    ├── anonymous-chat-gate.tsx    # fail-closed BotID Basic/cookie bootstrap
     └── runtime/
         ├── native-client.ts        # official AP v2 ThreadStream + MessageAssembler
         ├── thread-adapter.ts       # official SDK metadata/state/history adapter
         ├── thread-source.ts        # identity-scoped thread-list lifecycle
-        ├── anonymous-bootstrap.ts  # single-use challenge and cookie resume
+        ├── anonymous-bootstrap.ts  # bodyless BotID bootstrap and cookie resume
         ├── inspection.ts           # bounded live-only retrieval projection
         ├── interrupt-projection.ts # bounded HITL UI schema
         ├── token-broker.ts         # identity-scoped token/cancellation lifecycle
@@ -274,7 +277,7 @@ workflow files and reusable-workflow boundaries are also reviewed delivery input
 - `ci/web` runs a frozen Bun install, generated-content prebuild, unit tests, lint,
   typecheck, the production build, pinned Chromium, and `bun run test:browser`. The
   Playwright suite exercises the native AP v2 fixtures, Korean IME, reconnect/reload,
-  409/429 handling, Turnstile bootstrap, 320/390/768/1440 px layouts, reduced motion,
+  409/429 handling, BotID Basic bootstrap, 320/390/768/1440 px layouts, reduced motion,
   focus restoration, and Axe; CI uploads revision-bound browser evidence.
 - `ci/agent`: root `uv sync --frozen`, Ruff, unit/contract/security tests, and the
   published-only mirror build. Its PostgreSQL 17 service runs the host integration
@@ -650,13 +653,12 @@ web/components/assistant/
 ├── chat-section.tsx               # owner/anonymous entry boundary
 ├── chat-shell.tsx                 # assistant-ui Thread/ThreadList primitives
 ├── agent-runtime-provider.tsx     # native runtime + thread adapter
-├── anonymous-chat-gate.tsx        # fail-closed Turnstile/cookie gate
-├── turnstile-widget.tsx
+├── anonymous-chat-gate.tsx        # fail-closed BotID Basic/cookie gate
 └── runtime/
     ├── native-client.ts           # official SDK ThreadStream/MessageAssembler
     ├── thread-adapter.ts          # official SDK metadata/state/history
     ├── thread-source.ts           # identity-scoped thread lifecycle
-    ├── anonymous-bootstrap.ts     # challenge exchange and cookie resume
+    ├── anonymous-bootstrap.ts     # bodyless BotID bootstrap and cookie resume
     ├── inspection.ts              # exact syshin.rag.inspection.v1 projection
     ├── interrupt-projection.ts    # bounded HITL projection
     ├── token-broker.ts            # refresh, identity disposal, cancellation snapshot
@@ -665,8 +667,8 @@ web/components/assistant/
     └── error-state.ts
 ```
 
-- WEB-A signed-out view explains that the preview is owner-only. The WEB-B Turnstile,
-  cookie-resume, example-prompt, privacy/AI-copy, and new-conversation UI exists but is
+- WEB-A signed-out view explains that the preview is owner-only. The WEB-B BotID Basic,
+  bodyless cookie-resume, example-prompt, privacy/AI-copy, and new-conversation UI exists but is
   reachable only when the server and browser public flags are deliberately enabled after
   P5/P6.
 - Message answers render citations inline and a source list below. Retrieval method and
@@ -678,8 +680,9 @@ web/components/assistant/
   is never displayed; guest response bytes additionally pass through the server-side
   projection that drops reasoning/thinking blocks before the browser sees them.
 - Capability authorization is server-owned. The former skill-restriction chips and fake
-  checkpointed system messages are gone; client config cannot grant QuickJS, subagents, or
-  another model, and anonymous users cannot reveal hidden owner controls.
+  checkpointed system messages are gone. Client config cannot grant QuickJS or arbitrary
+  subagents. Signed-in users with `model:select` may request only Luna, Terra, or Sol;
+  anonymous model input is removed before dispatch and remains Luna-pinned.
 - Required states: empty, token minting, ready, streaming, tool running, subagents in
   parallel, interrupted, reconnecting/replaying, stopped, rate-limited, busy-thread,
   expired anonymous thread, server error, and offline. Every state has Korean copy and a
@@ -854,8 +857,9 @@ the bounded code interpreter.
   buckets when those TTL details are present. If a required usage/detail field is absent,
   negative, unknown, or internally inconsistent, `provider_usage_complete` is false and
   every aggregate provider bucket is `null`; no zero-valued usage is fabricated.
-- Start with max depth 1 and max two subagents per run. Parallel fan-out is permitted only
-  after the reservation test proves two concurrent dispatches cannot exceed the cap.
+- The initial owner-only experiment used max depth 1 and max two subagents per run.
+  Production now keeps depth 1, permits two concurrent tasks, and applies the shared guest
+  model, tool, token, elapsed-time, rate, concurrency, and daily spend ceilings.
 
 ### P4.5.3 Combine only after both standalone gates pass
 
@@ -871,7 +875,8 @@ the bounded code interpreter.
 **Accept:** deterministic fixtures prove timeout/memory/output limits, stateless subagent
 instructions, explicit skill assignment, shared nested budgets, max depth/fan-out, and
 failure propagation. The 2×2 report is reproducible. Owner preview can exercise both
-capabilities, while anonymous access remains off until P5 budgets and P6 abuse tests pass.
+capabilities. This was the owner-only P4 acceptance gate. Anonymous access now uses the
+bounded P5/P6 policy and the same server-declared, read-only specialists.
 This run-local finalization evidence does not replace P5's lower guest policy,
 per-identity/global daily dollar ledger, rate limit, or provider-side spend cap.
 
@@ -920,9 +925,10 @@ confirmation, and provider-side spend protection remain mandatory.
 - Extend P1's `agent/src/agent/auth.py` with PyJWT anonymous claims; keep the import-time
   `len(AGENT_AUTH_SECRET) >= 32` assertion. Aegra with no auth file is **fail-open**, where
   this deployment must remain fail-closed.
-- Anonymous identity: Turnstile-gated `anon:<uuid4>` minted in
-  `web/app/api/agent-token/route.ts`. Aegra's `WHERE user_id = identity` predicate isolates
-  them automatically. Return `is_authenticated: True` even for guests.
+- Anonymous identity: Vercel BotID Basic-gated, bodyless `POST
+  /api/anonymous-agent-token` mints `anon:<uuid4>` and an httpOnly session cookie.
+  Aegra's `WHERE user_id = identity` predicate isolates them automatically. Return
+  `is_authenticated: True` even for guests.
 - `GuestRunGuard` as a **pure ASGI class**, not `BaseHTTPMiddleware` - the latter interferes
   with sse-starlette's disconnect detection, which is how `on_disconnect="cancel"` works.
   Per-identity token bucket (429) and per-`(identity, thread)` busy set (409).
@@ -936,26 +942,28 @@ confirmation, and provider-side spend protection remain mandatory.
   apply, and first bounded execution pass.
 - Per-run model/token limits and a durable UTC-day micro-dollar ledger are implemented for
   the fixed `openai:gpt-5.6-luna` guest contract. Production now owns the exact model,
-  500,000/18,892 µUSD ceilings, anonymous Agent flag, and numeric OpenAI secret
+  500,000/19,892 µUSD ceilings, anonymous Agent flag, and numeric OpenAI secret
   reference while Preview remains absent/disabled. The per-run ceiling adds a separately
   capped 48,000-token count-risk ledger, priced at the highest input bucket, to the
-  12,000-token generation allocation because count billing is undocumented. This is not
+  16,000-token generation allocation across up to 8 calls at 512 output tokens per call
+  because count billing is undocumented. This is not
   a documented provider price or hidden-token bound. Input-count billing confirmation,
   provider-account spend protection, and the
   disabled Vercel issuance flags remain live launch gates.
-- Public capability policy is evidence-based: retrieval is always available; QuickJS and
-  dynamic subagents remain owner-only unless P4.5 shows a material quality gain and the
-  deployed anonymous abuse tests prove the shared budget cannot be bypassed. If enabled
-  for visitors, use lower limits than the owner tier and expose neither arbitrary subagent
-  definitions nor a QuickJS-to-`task` bridge.
+- Public capability policy keeps retrieval and the existing server-declared dynamic
+  specialists available to canonical Luna guests. Guest children remain stateless,
+  depth-one, read-only, and inside the shared model, tool, token, time, concurrency, and
+  daily spend budgets. QuickJS, arbitrary subagent definitions, nested delegation, and a
+  QuickJS-to-`task` bridge remain unavailable to visitors.
 
 ---
 
 ## P6 - Go public `~1 day` `PUBLICATION GATE`
 
 - Remove the P2 preview restriction only after every P5 gate passes. The intended surface
-  is a personal-blog testbed that **any visitor can try without signing in**: Turnstile
-  establishes an isolated anonymous subject; it is an abuse gate, not an account wall.
+  is a personal-blog testbed that **any visitor can try without signing in**: Vercel BotID
+  Basic establishes an isolated anonymous subject through a bodyless bootstrap; it is an
+  abuse gate, not an account wall.
 - Verify the P1.2 mirror gate and the P5 guard on the **deployed** service, by actually
   exceeding the rate limit from a browser and firing two concurrent submits on one thread.
 - Confirm the separate administrative retention/GC job measurably reduces orphaned
@@ -965,7 +973,7 @@ confirmation, and provider-side spend protection remain mandatory.
   repository-owned fence must recover an instance killed mid-run without double execution.
 - Decide LangSmith tracing **before**, not after - traces carry full prompts and full
   retrieved content.
-- Watch OpenAI guest spend and Anthropic owner spend separately every day for week one.
+- Watch guest and signed-in OpenAI spend separately every day for week one.
 
 ---
 
@@ -977,7 +985,7 @@ confirmation, and provider-side spend protection remain mandatory.
 | `HIGH` | Auth dispatch differs across legacy and AP v2 streaming/commands paths | Protocol fixtures test every production endpoint; SQL identity predicate plus outer ASGI guard is the boundary. Pin `aegra-api >= 0.9.7` |
 | `HIGH` | Client-supplied `configurable.user_id` wins over the server's | The graph reads the authoritative server runtime identity; PostgreSQL isolation tests retain a forged field and prove it cannot cross namespaces |
 | `HIGH` | Aegra thread deletion strands checkpoints and cannot commit both stores atomically | Native DELETE is fail-closed with 403. Do not expose a faux-safe route; design admin GC separately |
-| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | The Production Agent desired state reserves 500,000 µUSD/day and 18,892 µUSD/run; the run value combines the 12,000-token generation allocation with a separate 48,000-token aggregate count-risk ledger priced at the highest input bucket, but is not a documented provider hard bound. Vercel issuance stays disabled until input-count billing, the implemented ledgers/guard, and a separately verified OpenAI account cap all pass. Luna has no Free tier |
+| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | The Production Agent desired state reserves 500,000 µUSD/day and 19,892 µUSD/run; the run value combines the 16,000-token generation allocation across up to 8 calls at 512 output tokens per call with a separate 48,000-token aggregate count-risk ledger priced at the highest input bucket, but is not a documented provider hard bound. Vercel issuance stays disabled until input-count billing, the implemented ledgers/guard, and a separately verified OpenAI account cap all pass. Luna has no Free tier |
 | `MED` | **Regressing the corrected baseline.** A tokenizer or fitted-artifact change would invalidate every comparison | P1.3 executable literal-term, raw-score, determinism, memory, and registry tests remain required |
 | `MED` | Pre-1.0 churn. Aegra and assistant-ui compatibility can change between patch releases; three `unstable_` assistant-ui options remain on the happy path | Exact pins, committed lockfiles, protocol/browser replay, and `smoke.py` as the bump gate |
 | `MED` | Eval cost creep - embedding N models × M queries × K retrievers plus judge calls | Cache embeddings by fingerprint; local results as system of record; `upload_results=False` while iterating |
@@ -985,21 +993,19 @@ confirmation, and provider-side spend protection remain mandatory.
 
 ## Resolved decisions
 
-1. **Region:** dedicated GCP project and Cloud Run use `us-east4`; each Neon project must
-   be created in the matching reviewed US region.
-2. **Guest model:** the only accepted contract is `openai:gpt-5.6-luna`, distinct from the
-   Anthropic owner model. Production desired state enables it at the reviewed
-   500,000/18,892 µUSD ceilings while Preview remains disabled and OpenAI-free; live
-   visitor issuance stays closed until the external gates pass because Luna has no API
-   Free tier.
+1. **Region:** dedicated GCP project and Cloud Run use `asia-southeast1`; the Neon
+   projects remain in their reviewed US region.
+2. **Model policy:** the guest contract accepts only `openai:gpt-5.6-luna` at the reviewed
+   500,000/19,892 µUSD ceilings. Signed-in users with `model:select` may choose the exact
+   OpenAI GPT-5.6 Luna, Terra, or Sol IDs through the same bounded Responses contract.
 3. **Guest persistence:** an httpOnly anonymous-session cookie resumes the pseudonymous
-   subject; the single-use Turnstile token is never retained.
+   subject; the bodyless BotID Basic verdict is never retained.
 4. **Version policy:** use the repository-tested exact pins, including
    `langgraph==1.2.9` and `langgraph-checkpoint-postgres==3.1.0`, with rollback pins and
    compatibility tests documented.
 5. **Client controls:** the old skill-restriction chips and fake system messages are
-   dropped. Retrieval/capability/model authorization is server-owned, and client config
-   cannot grant a capability.
+   dropped. Retrieval and capability authorization is server-owned. Model selection is
+   an exact signed-in allowlist, not a generic client capability field.
 6. **Web authentication:** keep Auth.js with GitHub/Google OAuth on Neon Postgres; Neon
    Auth is not part of the authentication boundary.
 

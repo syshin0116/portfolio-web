@@ -40,8 +40,8 @@ _BLOG_RETRIEVAL_SKILL_TEXT = _BLOG_RETRIEVAL_SKILL_FILE.read_text(encoding="utf-
 
 SUBAGENT_ROOT_PROMPT = """\
 Dynamic delegation is a bounded RAG capability. Use it only when isolating a
-multi-step investigation materially improves the result. Every `task` description must
-be a complete, stateless envelope with these headings in this exact order:
+multi-step investigation materially improves the result. Structure every `task`
+description as a complete, stateless envelope with these headings in this order:
 
 Question:
 Allowed corpus/method scope:
@@ -62,7 +62,7 @@ Server-enforced RAG harness contract:
 - The shared run budget limits task dispatch count and concurrency. Calls beyond that
   budget fail closed.
 """
-    + "- Every description must contain these exact headings, in order: Question:, "
+    + "- Structure descriptions with these headings, in order: Question:, "
     + "Allowed corpus/method scope:, Expected output schema:, Stopping condition:.\n"
     + """\
 - Children cannot delegate another task, use QuickJS, or retain state between calls.

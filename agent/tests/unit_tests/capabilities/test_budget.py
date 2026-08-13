@@ -54,6 +54,12 @@ Allowed corpus/method scope: Published posts via exact retrieval only.
 Expected output schema: DocId and one evidence sentence.
 Stopping condition: Stop after one supported DocId.
 """
+MARKDOWN_DESCRIPTION = """\
+**Question:** Find the exact Docker evidence.
+**Allowed corpus/method scope:** Published posts via exact retrieval only.
+**Expected output schema:** DocId and one evidence sentence.
+**Stopping condition:** Stop after one supported DocId.
+"""
 
 
 @tool
@@ -662,7 +668,15 @@ def test_failed_task_reservation_does_not_partially_spend_any_counter():
     assert snapshot.exhausted is True
 
 
-@pytest.mark.parametrize("description", [VALID_DESCRIPTION, INLINE_DESCRIPTION])
+@pytest.mark.parametrize(
+    "description",
+    [
+        VALID_DESCRIPTION,
+        INLINE_DESCRIPTION,
+        MARKDOWN_DESCRIPTION,
+        "Find the exact Docker evidence and return one supported DocId.",
+    ],
+)
 async def test_task_handler_error_returns_only_the_in_flight_slot(description):
     budget = RunBudget()
     middleware = _middleware(budget)
@@ -1893,31 +1907,6 @@ async def test_unauthorized_task_removal_preserves_the_complete_system_prompt():
 @pytest.mark.parametrize(
     ("description", "subagent_type", "message"),
     [
-        ("Question: incomplete", "retrieval-researcher", "exact section"),
-        (
-            f"{VALID_DESCRIPTION}\nQuestion:\nDuplicate.",
-            "retrieval-researcher",
-            "exact section once",
-        ),
-        (
-            f"{INLINE_DESCRIPTION}\nQuestion: Duplicate.",
-            "retrieval-researcher",
-            "exact section once",
-        ),
-        (
-            """\
-Allowed corpus/method scope:
-Published posts.
-Question:
-Find evidence.
-Expected output schema:
-One DocId.
-Stopping condition:
-Stop after one.
-""",
-            "retrieval-researcher",
-            "stateless envelope",
-        ),
         (
             f"{VALID_DESCRIPTION}{'가' * 6_000}",
             "retrieval-researcher",
@@ -1943,72 +1932,6 @@ async def test_malformed_task_delegation_fails_before_spending_budget(
                 description=description,
                 subagent_type=subagent_type,
             ),
-            unused,
-        )
-
-    assert (budget.snapshot().tool_calls, budget.snapshot().task_calls) == (0, 0)
-
-
-@pytest.mark.parametrize(
-    "description",
-    [
-        VALID_DESCRIPTION.replace("Find the exact Docker evidence.", "   "),
-        VALID_DESCRIPTION.replace(
-            "Published posts via exact retrieval only.",
-            "\t",
-        ),
-        VALID_DESCRIPTION.replace(
-            "DocId and one evidence sentence.",
-            " ",
-        ),
-        VALID_DESCRIPTION.replace(
-            "Stop after one supported DocId.",
-            "\t ",
-        ),
-    ],
-    ids=[
-        "empty-question",
-        "empty-scope",
-        "empty-output-schema",
-        "empty-stopping-condition",
-    ],
-)
-async def test_every_task_section_requires_non_whitespace_content(description):
-    budget = RunBudget()
-    middleware = _middleware(budget)
-
-    async def unused(_request):
-        return ToolMessage(content="unexpected", tool_call_id="task-call-1")
-
-    with pytest.raises(InvalidDelegationError, match="non-whitespace"):
-        await middleware.awrap_tool_call(
-            _task_request(description=description),
-            unused,
-        )
-
-    assert (budget.snapshot().tool_calls, budget.snapshot().task_calls) == (0, 0)
-
-
-@pytest.mark.parametrize(
-    "section",
-    [
-        "Question:",
-        "Allowed corpus/method scope:",
-        "Expected output schema:",
-        "Stopping condition:",
-    ],
-)
-async def test_task_section_prefix_requires_whitespace_separator(section):
-    description = INLINE_DESCRIPTION.replace(section, f"{section}not-separated", 1)
-    budget = RunBudget()
-    middleware = _middleware(budget)
-
-    async def unused(_request):
-        return ToolMessage(content="unexpected", tool_call_id="task-call-1")
-
-    with pytest.raises(InvalidDelegationError, match="exact section"):
-        await middleware.awrap_tool_call(
-            _task_request(description=description),
             unused,
         )
 

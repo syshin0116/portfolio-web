@@ -31,12 +31,6 @@ from agent.capabilities.token_counting import (
 
 TASK_TOOL_NAME = "task"
 MAX_TASK_DESCRIPTION_BYTES = 16_000
-REQUIRED_TASK_SECTIONS = (
-    "Question:",
-    "Allowed corpus/method scope:",
-    "Expected output schema:",
-    "Stopping condition:",
-)
 
 
 class RunBudgetExceededError(RuntimeError):
@@ -48,7 +42,7 @@ class CapabilityDeniedError(PermissionError):
 
 
 class InvalidDelegationError(ValueError):
-    """Raised when a task dispatch is not a complete stateless envelope."""
+    """Raised when a task dispatch violates a server-owned boundary."""
 
 
 class RunBudgetUnsettledError(RuntimeError):
@@ -1224,38 +1218,6 @@ def _validate_task_call(
     if not isinstance(subagent_type, str) or subagent_type not in allowed_subagents:
         raise InvalidDelegationError("task subagent_type is not server-declared")
 
-    lines = description.splitlines()
-    section_matches: list[tuple[int, str]] = []
-    for section in REQUIRED_TASK_SECTIONS:
-        matches: list[tuple[int, str]] = []
-        for index, line in enumerate(lines):
-            if not line.startswith(section):
-                continue
-            suffix = line[len(section) :]
-            if suffix and not suffix[0].isspace():
-                continue
-            matches.append((index, suffix))
-        if len(matches) != 1:
-            raise InvalidDelegationError(
-                "task description must contain each exact section once"
-            )
-        section_matches.append(matches[0])
-    section_indexes = [index for index, _suffix in section_matches]
-    if section_indexes != sorted(section_indexes) or any(
-        line.strip() for line in lines[: section_indexes[0]]
-    ):
-        raise InvalidDelegationError(
-            "task description must contain the complete stateless envelope"
-        )
-    section_ends = [*section_indexes[1:], len(lines)]
-    for (start, suffix), end in zip(section_matches, section_ends, strict=True):
-        if not suffix.strip() and not any(
-            line.strip() for line in lines[start + 1 : end]
-        ):
-            raise InvalidDelegationError(
-                "task description sections require non-whitespace content"
-            )
-
 
 _ACTIVE_TASK_RESERVATION: ContextVar[TaskReservation | None] = ContextVar(
     "active_run_budget_task_reservation",
@@ -1629,7 +1591,6 @@ class RunBudgetMiddleware(AgentMiddleware[Any, Any, Any]):
 __all__ = [
     "DEFAULT_RUN_BUDGET_POLICY",
     "MAX_TASK_DESCRIPTION_BYTES",
-    "REQUIRED_TASK_SECTIONS",
     "BudgetSnapshot",
     "CapabilityDeniedError",
     "InvalidDelegationError",

@@ -18,8 +18,8 @@ A personal tech blog, portfolio, and AI chatbot - built with [Next.js 16](https:
 ## Features
 
 ### AI Chat Assistant
-- RAG-powered chatbot via LangGraph SDK
-- Multiple search modes: Auto (single/multi agent) and Manual (metadata, filesystem, vector, graph)
+- Public Luna chat without login, plus signed-in Luna, Terra, and Sol selection
+- RAG-powered dynamic specialists over the published blog corpus
 - Real-time streaming with tool call visualization and source attribution
 
 ### Blog
@@ -51,7 +51,7 @@ A personal tech blog, portfolio, and AI chatbot - built with [Next.js 16](https:
 | AI / RAG | Aegra Agent Protocol v2, LangGraph, Deep Agents |
 | Visualization | D3.js, Mermaid, Framer Motion |
 | Auth | Auth.js v5 + Postgres (Google / GitHub OAuth) |
-| Deployment | Vercel |
+| Deployment | Vercel web + Cloud Run agent + Neon Postgres |
 | Package Manager | Bun |
 
 ## Getting Started
@@ -60,7 +60,8 @@ A personal tech blog, portfolio, and AI chatbot - built with [Next.js 16](https:
 
 - [Bun](https://bun.sh/) 1.3.14 - for `web/`
 - [uv](https://github.com/astral-sh/uv) and Python 3.12+ - for `agent/` and `eval/`
-- Postgres database (Neon, Supabase, or local) and API keys (Anthropic, OAuth providers) - see `.env.example`
+- Postgres database (Neon or local) and OpenAI/OAuth provider keys - see
+  [web/.env.example](web/.env.example) and [agent/.env.example](agent/.env.example)
 
 ### Installation
 
@@ -94,21 +95,24 @@ openssl rand -hex 32
 ```
 
 Production sign-in fails closed when `AUTH_ALLOWED_EMAILS` is empty. Aegra's
-`/info`, `/live`, and `/ready` health surfaces remain public; Agent Protocol routes require
-a signed, short-lived token issued from an allowed Auth.js session.
+`/info`, `/live`, and `/ready` health surfaces remain public. Agent Protocol routes always
+require a signed, short-lived token. Production can issue one either from an allowed
+Auth.js session or from the bodyless Vercel BotID Basic anonymous bootstrap. Anonymous
+subjects are isolated, fixed to Luna, and covered by the public run and daily budgets.
 
-Use a direct Postgres/Neon endpoint for migrations, not a Neon `-pooler` endpoint. Run the
-same-image migration entrypoint before starting Aegra:
+Use a direct Postgres/Neon endpoint for migrations, not a Neon `-pooler` endpoint. For an
+approved schema change, run the migration entrypoint separately from the service release:
 
 ```bash
 uv run --frozen --project agent --package syshin0116-dev-agent \
   --env-file .env python -m agent.migrate
 ```
 
-Production sets `RUN_MIGRATIONS_ON_STARTUP=false`; migration is an explicit deployment
-step. Aegra 0.9.24 cannot atomically delete thread metadata and LangGraph checkpoints, so
-thread deletion is intentionally unsupported. A future administrative retention/GC job is
-a separate operational feature, not user-facing deletion.
+Production sets `RUN_MIGRATIONS_ON_STARTUP=false`; the normal image release does not run
+the migration job. Aegra 0.9.25 cannot atomically delete thread metadata and LangGraph
+checkpoints, so thread deletion is intentionally unsupported. The repository implements
+bounded anonymous retention and checkpoint cleanup; deployed execution evidence remains
+an operational check and this is not user-facing deletion.
 
 ### Development
 

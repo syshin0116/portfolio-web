@@ -8,7 +8,7 @@ when_to_read: >
   ordering, capability tiers, or QuickJS execution-detail UI.
 tags: [agent, quickjs, langchain, deep-agents, security, evaluation]
 status: stable
-updated: "2026-07-28"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0006-public-anonymous-chat-access.md
@@ -25,10 +25,8 @@ out of the retrieval leaderboard.
 
 ## Version and framework boundary
 
-- `langchain-quickjs==0.3.4` is pinned directly. The reviewed upstream release
-  is tag
-  [`langchain-quickjs==0.3.4`](https://github.com/langchain-ai/deepagents/tree/langchain-quickjs%3D%3D0.3.4/libs/partners/quickjs)
-  at commit `196a0870fcf8a7f29d1fb37886dd323b190f9c16`.
+- `langchain-quickjs==0.3.5` is pinned directly and verified through the frozen lock and
+  runtime package contract.
 - `quickjs-rs==0.2.5` is also a direct exact dependency, not merely a
   transitive resolution. Runtime contract tests verify both installed package
   metadata versions and the concrete native `Runtime`/`ThreadWorker` classes.
@@ -55,8 +53,9 @@ state cannot grant the capability. Reserved client keys such as `quickjs`,
 The 2×2 experiment may force dynamic subagents on or off only through the
 server-owned exact-boolean `create_graph(dynamic_subagents_enabled=...)`
 argument. `None` preserves the normal permission policy, `False` forces the
-axis off, and `True` still requires `admin`/`eval`; integers, strings, client
-config, and environment variables cannot select this axis.
+axis off, and `True` still requires `admin`/`eval` for a non-guest experiment
+runtime. Canonical guests follow their separate fixed specialist policy.
+Integers, strings, client config, and environment variables cannot select this axis.
 
 The middleware and tool node remain topology-stable across Aegra access
 contexts. When unauthorized, both the QuickJS middleware and shared budget
@@ -65,8 +64,8 @@ reject a forged tool call before reserving or executing it. Anonymous and
 ordinary signed-in users therefore cannot observe or execute the capability.
 
 QuickJS middleware precedes `RunBudgetMiddleware`. This ordering is
-load-bearing: Anthropic's exact input counter must see the same prompt and tool
-payload delivered to generation after the bounded QuickJS prompt is appended.
+load-bearing: the selected provider's exact input counter must see the same prompt and
+tool payload delivered to generation after the bounded QuickJS prompt is appended.
 
 ## Sandbox
 

@@ -12,13 +12,18 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-28"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs: [../research/aegra-native-stack.md, ../plans/rag-restack.md, 0004-adopt-aegra.md]
 template: adr
 ---
 
 # ADR-0005: Rebuild the chat UI on assistant-ui with an Agent Protocol v2 transport
+
+> **Current runtime amendment (2026-08-15):** the original adoption pins were
+> `@assistant-ui/react` 0.15.0 and `@assistant-ui/react-langgraph` 0.14.15. The current
+> tested pins are 0.15.13 and 0.14.23. The thin `chat-section.tsx` identity boundary
+> remains; the vendored prompt-kit and custom transport are gone.
 
 > **status: accepted.** An earlier draft the same day proposed repairing the existing UI
 > and deferring assistant-ui. It was `proposed` so the owner could decide; the owner chose
@@ -66,7 +71,8 @@ Three findings de-risked this substantially:
 ## Decision
 
 Adopt `@assistant-ui/react` 0.15.0 and
-`@assistant-ui/react-langgraph` 0.14.15 through native `useLangGraphRuntime`.
+`@assistant-ui/react-langgraph` 0.14.15 through native `useLangGraphRuntime`. The current
+tested pins are 0.15.13 and 0.14.23.
 The runtime callback uses the official `@langchain/langgraph-sdk` 1.9.28
 `Client.threads.stream` / `ThreadStream` / `MessageAssembler` surface with
 `streamProtocol: "v2"`. `submitRun` and `respondInput` still send Aegra's supported
@@ -106,28 +112,28 @@ inspection contract's legal 64 KiB payload still fits after AP/SSE framing. Unkn
 malformed responses fail closed without forwarding the offending body bytes. Owner
 responses remain unprojected.
 
-One pinned compatibility edge is explicit. Aegra 0.9.24 can observe a nested copy of an
-interrupt before its root copy, mark the identifier as sent, then remove the nested event
+One pinned compatibility edge is explicit. The edge was first observed on Aegra 0.9.24
+and remains a regression boundary for the current 0.9.25 pin: Aegra can observe a nested
+copy of an interrupt before its root copy, mark the identifier as sent, then remove the nested event
 for a root/depth-zero subscription and suppress the root event as a duplicate. The public
 wire does not widen either browser subscription to compensate. On a root `interrupted`
 lifecycle without a matching input event, the client must instead read the official,
 already-projected thread state, accept exactly one schema-valid root interrupt, and resume
 that exact identifier with `namespace: []`; absence, ambiguity, or malformed state fails
 closed. Projected `input.requested` events carry the same sanitized schema under both the
-pinned SDK's `payload` field and Aegra's direct-event `value` field. WEB-B stays disabled
-until that SDK/state fallback is merged and browser-verified.
+pinned SDK's `payload` field and Aegra's direct-event `value` field. That fallback is now
+merged and browser-verified; WEB-B is enabled in Production and remains closed in Preview.
 
 Run cancellation, thread metadata, history, and state use the official SDK clients. Edit,
 Regenerate, branch mutation, and delete remain visibly unavailable where Aegra cannot
 perform them with the required atomicity; this implementation does not add a custom REST
 facade to imitate missing AP v2 commands.
 
-The server-side public-wire prerequisites for WEB-B are implemented, but that does not
-turn anonymous access on by itself. WEB-B remains rollout-gated by ADR-0006's identity,
-durable spend, retention, deployment, and browser-verification requirements. The boundary
-is intentionally guest-only: a signed owner can still inspect complete checkpoints and
-native events, while a canonical `anon:<uuid4>` subject receives only the public
-projection. UI sanitization remains defense in depth rather than the network boundary.
+The server-side public-wire prerequisites for WEB-B are implemented and active in
+Production. Preview remains closed. The boundary is intentionally guest-only: a signed
+owner can still inspect complete checkpoints and native events, while a canonical
+`anon:<uuid4>` subject receives only the public projection. UI sanitization remains
+defense in depth rather than the network boundary.
 
 The PostgreSQL integration's `rawPrivateStateObserved=false` assertion proves that the
 current fixture sentinel does not appear on either AP v2 SSE connection. It is a regression
@@ -138,9 +144,9 @@ that provider chain-of-thought cannot reach the browser.
 it wraps `useStream`; that reasoning applied to keeping the old backend, and the package is
 for LangChain.js runnables rather than an Agent Protocol server.
 
-Delete `chat-section.tsx` and the vendored prompt-kit layer. Keep `web/lib/agent-auth.ts`
-unchanged - it is the only place that knows the Auth.js session, and it becomes the
-anonymous-identity minter too.
+Keep `chat-section.tsx` as the thin auth and identity boundary, and delete the vendored
+prompt-kit layer. Keep `web/lib/agent-auth.ts` unchanged - it is the only place that knows
+the Auth.js session, and it becomes the anonymous-identity minter too.
 
 Exact pins, no `^`.
 
@@ -149,7 +155,7 @@ Exact pins, no `^`.
 **Positive**
 
 - The bespoke prompt-kit and custom SSE/Agent Protocol transport are deleted.
-- A thread list and thread persistence across reload, neither of which exists today.
+- A thread list and thread persistence across reload.
 - AP v2 content blocks are assembled by the official `MessageAssembler`.
 - Root-only stream filters prevent open graph state and nested transcript text from
   traversing the primary browser SSE connection.
@@ -160,7 +166,7 @@ Exact pins, no `^`.
 
 - **Branch switching, Edit, Regenerate, and delete are disabled**, not emulated over a
   partially compatible mutation surface.
-- Four `unstable_` APIs sit on the recommended happy path.
+- Three `unstable_` assistant-ui options remain in the Production runtime integration.
 - The application still owns a bounded AP v2-to-assistant-ui projection until an upstream
   adapter exists.
 - Guest state/history and both SSE connections are a deliberately smaller wire contract
@@ -170,16 +176,16 @@ Exact pins, no `^`.
 
 **Follow-ups**
 
-- [ ] Build and verify on a deployed owner preview URL before merging.
-- [ ] **Verify the Korean IME guard in a real browser**, do not assume it. The native
+- [ ] Retain a deployed signed-in owner journey with model selection and two Korean turns.
+- [x] **Verify the Korean IME guard in a real browser**, do not assume it. The native
       composer guards Enter with both `e.nativeEvent.isComposing` and a `compositionRef`,
       but this is the single highest-risk regression for a Korean-language chat.
-- [ ] Keep `remark-breaks` in the markdown pipeline - the agent's Korean prose relies on
+- [x] Keep `remark-breaks` in the markdown pipeline - the agent's Korean prose relies on
       single-newline line breaks - and memoize components at module scope for streaming.
-- [ ] `load()` must read `state.interrupts` first: Aegra returns interrupts as a top-level
+- [x] `load()` must read `state.interrupts` first: Aegra returns interrupts as a top-level
       field (`models/threads.py:127`), so the quickstart's `state.tasks[0].interrupts` is
       the wrong read here.
-- [ ] Async `onRequest` token hook with a 60s margin. Capturing the token once at mount
+- [x] Async `onRequest` token hook with a 60s margin. Capturing the token once at mount
       401s mid-conversation.
 - [x] Pin the SDK/protocol dependencies and replay committed plus actual Aegra AP v2
       fixtures, including an isolated PostgreSQL 17 integration.
@@ -211,3 +217,5 @@ Exact pins, no `^`.
   thread/run/command/state/history JSON response and complete AP v2 SSE frame, forced the
   SDK watcher to root depth zero, and closed the reasoning plus raw entity/tool/input/error
   network blockers without changing owner traffic.
+- 2026-08-15: updated the tested assistant-ui pins and recorded Production WEB-B as live
+  while keeping Preview closed and signed-in Production verification open.

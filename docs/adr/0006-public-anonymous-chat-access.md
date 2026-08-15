@@ -12,7 +12,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-08-14"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs: [../research/public-exposure.md, ../plans/rag-restack.md, 0004-adopt-aegra.md, 0007-postgres-on-neon-split-projects.md]
 template: adr
@@ -20,16 +20,17 @@ template: adr
 
 # ADR-0006: The chatbot is public, with Vercel BotID-gated anonymous subjects
 
-> **status: accepted; the application hardening and repository-owned Production launch
-> tuple plus active retention Scheduler are implemented, but public rollout is still
-> gated.** Preview and both Vercel public flags remain disabled. Repository desired state
-> does not prove live Terraform, the numeric Secret Manager payload/version, the first
-> bounded scheduled execution, input-count billing, provider spend protection, browser,
-> or exact-project operational state; those gates remain in the public rollout runbook.
+> **status: accepted and live in Production.** The logged-out surface bootstraps with an
+> enabled composer at `syshin0116.vercel.app`; Preview remains fail closed. Luna and the
+> server-declared specialist contracts are deployed, but a completed provider and
+> specialist answer on the final revision is not yet verified. The application budgets
+> and deployment smoke do not replace the outstanding provider spend-stop, input-count
+> billing, Scheduler, retention, rate, and recovery evidence tracked in the public rollout
+> runbook.
 
 ## Context
 
-The chatbot currently fails closed: `web/lib/allowed-user.ts` gates sign-in on
+The original chatbot failed closed: `web/lib/allowed-user.ts` gated sign-in on
 `AUTH_ALLOWED_EMAILS`, `/api/agent-token` mints only for an allowed session, and the
 agent rejects every path except `/ok` and `/info` without a valid HS256 JWT. Every
 resource is scoped to the token subject, which is an Auth.js `users.id` - a decision
@@ -44,10 +45,10 @@ from.** `auth.py:174` reads `claims["sub"]`, and from there `deps.get_user_id`,
 operate on an opaque string. So anonymous access does not require touching the
 owner-scoping code at all - only the one file that mints tokens.
 
-Investigation also surfaced two **live content-leak bugs** and several route-level gaps
-that are latent today and become exploitable the moment the gate comes off. Those are
-detailed in [`public-exposure.md`](../research/public-exposure.md) and are the reason
-this ADR carries a rollout gate.
+The original investigation also surfaced two **live content-leak bugs** and several
+route-level gaps that would have become exploitable when the gate opened. Those are
+detailed in [`public-exposure.md`](../research/public-exposure.md) and explain the
+hardening requirements retained by this ADR.
 
 ## Considered options
 
@@ -183,13 +184,15 @@ Once accepted, the guest guard canonicalizes the request, consumes the process-l
 rate token, reserves the durable worst-case amount, and calls Aegra immediately;
 post-dispatch failures remain intentionally charged.
 
-**Rollout remains gated.** The repository now selects only Production's reviewed Luna
+**Production rollout is active.** The repository selects only Production's reviewed Luna
 guest tuple and a numeric-version `OPENAI_API_KEY` reference while leaving Preview fail
-closed, and configures recurring GC active. It does not create a Secret Manager
-payload/version, apply Terraform, enable the two Vercel public flags, verify the first
-bounded scheduled execution, or prove provider billing/spend protection. A paused or
-unverified Scheduler is a launch
-blocker, not an alternative retention policy.
+closed. The 2026-08-15 final-revision browser observation proves logged-out bootstrap,
+composer availability, and responsive overflow behavior. It did not submit a message. A
+prior candidate executed a specialist but ended without a complete final answer, so a
+completed provider and specialist journey on the final revision remains unverified. The
+evidence also does not prove input-count billing, the provider account spend stop, the
+first bounded scheduled execution, or the deployed rate, retention, and recovery limits.
+Those remain post-launch operational evidence, not application implementation gaps.
 
 ## Consequences
 
@@ -243,7 +246,7 @@ blocker, not an alternative retention policy.
   monitor can drain its owner. Recovery therefore writes a namespaced marker into that
   run's `execution_params` in the same active-to-error UPDATE. Project schema migration
   `0002_recovered_guest_run_fence` installs a `BEFORE UPDATE` trigger that makes a marked
-  run monotonically terminal. Aegra 0.9.24 updates the run before the thread in one
+  run monotonically terminal. Aegra 0.9.25 updates the run before the thread in one
   `finalize_run` transaction, so a late success, error, interrupt, worker, or API writer
   fails before it can overwrite either recovered status. DELETE remains allowed.
 - Project migration `0003_guest_execution_quarantine` adds one durable row keyed by
@@ -285,8 +288,8 @@ blocker, not an alternative retention policy.
   repository accounting, not a provider hidden-token bound or price guarantee. An OpenAI
   response must report a complete terminal state with no incomplete details; otherwise
   the run fails closed and does not expose the partial answer as a successful result.
-  Input-count billing evidence and provider-account spend protection remain launch
-  blockers; this ADR assumes no provider-side hard cap.
+  Input-count billing evidence and provider-account spend protection remain post-launch
+  operational risks; this ADR assumes no provider-side hard cap.
 - Reputational surface: content generated under this domain by anonymous prompting.
   Cost controls do nothing about a screenshot.
 - `web/lib/allowed-user.ts` **fails open** in non-production when `AUTH_ALLOWED_EMAILS`
@@ -298,21 +301,21 @@ blocker, not an alternative retention policy.
       with published-corpus retrieval (P3.1).
 - [x] Add draft-exclusion regression tests through all six tools (P3.2) - the existing
       security tests never covered this, which is why the bugs survived.
-- [x] Vercel BotID Basic-gated anonymous token minting with a bodyless bootstrap (P3.3;
-      launch flags remain off).
+- [x] Vercel BotID Basic-gated anonymous token minting with a bodyless bootstrap (P3.3),
+      enabled for Production and disabled for Preview.
 - [x] `anon` scope route allowlist; strip `configurable.model`; force
       `multitask_strategy="reject"`; fix the seeded default model (P3.4).
 - [x] Expose the existing bounded, server-declared specialists to canonical anonymous
       guests while retaining Luna, shared run budgets, and public wire redaction.
 - [x] Outer ingress, inner paid rate limiting, SSE leases, durable storage admission,
-      and the durable daily spend reservation (P3.5; paid public launch remains
-      separately gated).
+      and the durable daily spend reservation (P3.5; retained provider-spend evidence
+      remains open).
 - [x] `expires_at` + bounded GC that calls `checkpointer.adelete_thread` first,
       including session-fenced stale Redis-off guest-run reconciliation (P3.6).
 - [x] Deterministic 16 KiB UTF-8 `read_post` truncation with an explicit marker
       (P3.7 partial).
-- [ ] Prompt hardening, AI-generated disclaimer, and privacy note (remaining P3.7).
-- [ ] Amend the 2026-07-11 `DECISIONS.md` entry and rewrite the `README.md` paragraph
+- [x] Prompt hardening, AI-generated disclaimer, and privacy note (P3.7).
+- [x] Amend the 2026-07-11 `DECISIONS.md` entry and rewrite the `README.md` paragraph
       claiming an allowed Auth.js session is required.
 
 ## Revisit when
@@ -362,3 +365,6 @@ blocker, not an alternative retention policy.
   time, concurrency, and depth controls, and allowed signed-in users with
   `model:select` to choose only Luna, Terra, or Sol. Anonymous model configuration
   remains stripped and pinned to Luna.
+- 2026-08-15: recorded the live Production rollout at `syshin0116.vercel.app`, retained
+  Preview fail closed, and separated observed public availability from the remaining
+  provider billing, spend-stop, Scheduler, rate, retention, and recovery evidence.

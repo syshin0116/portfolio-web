@@ -9,7 +9,7 @@ when_to_read: >
   Singapore database.
 tags: [operations, gcp, neon, workload-identity, cloud-run, secrets, terraform]
 status: stable
-updated: "2026-08-03"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs:
   - ../../infra/gcp/README.md
@@ -42,16 +42,32 @@ That snapshot also found mutable Artifact Registry tags and both deployers holdi
 project-wide `roles/run.admin`, repository writer, and access to the same production
 runtime. Those are the pre-hardening facts, not the accepted target.
 
-After this foundation is reviewed and applied, the target is:
+### Production status recorded on 2026-08-15
 
-- isolated `agent` and `agent-preview` repositories with never-reused delivery tags,
-  digest-only deployment, and bounded cleanup retention;
+- the native release deploys an immutable digest to a no-traffic revision, checks
+  `/live`, `/ready`, and an unauthenticated APv2 `401`, then promotes it to 100% traffic;
+- anonymous Luna chat is live on `https://syshin0116.vercel.app` in Production;
+- Preview remains closed to anonymous chat;
+- live Auth.js owner-login verification remains unrecorded;
+- no provider hard-cap proof, first bounded Scheduler execution, or retained
+  abuse/retention/recovery evidence is claimed here.
+
+The reviewed Terraform target remains:
+
+- four `agent` and `agent-preview` repository resources across the active Singapore and
+  legacy US regions, with never-reused delivery tags, digest-only deployment, and bounded
+  cleanup retention;
+- Production-only Cloud Run resources: four jobs at `jobs`, one service at `services`,
+  and the maintenance Scheduler plus its invoker at `launch`; Preview registry,
+  identities, and secret containers remain dormant;
 - distinct preview/production builder, runtime, migrator, and deployer identities;
 - the managed direct act-as role on each runtime containing only its matching deployer,
   with known project- and resource-level bypasses rejected by the live verifier;
 - no project-wide Cloud Run role and no image-writer role on either deployer;
-- five Production and four disjoint Preview runtime Secret Manager resources, each with
-  one managed direct `secretAccessor` member for the matching runtime;
+- five Production and four disjoint Preview runtime Secret Manager resources. The
+  Production runtime has direct `secretAccessor` only on auth, database, and OpenAI;
+  Anthropic and LangSmith remain unbound containers. Each dormant Preview runtime secret
+  retains its matching Preview runtime accessor;
 - a separate migration-only database secret per environment, readable only by its
   migrator;
 - one canonical active `github-production` federation provider that explicitly maps the
@@ -71,25 +87,29 @@ After this foundation is reviewed and applied, the target is:
   no caller at all, and that carries no GCP or deployment secrets;
 - each Artifact Registry repository writable only by its matching builder and readable
   only by its matching deployer plus the Google-managed Cloud Run service agent;
-- the exact seven-permission `cloudRunAgentDelivery` custom role bound only to each
-  matching deployer's Service and Jobs, with no delete, create, IAM-policy mutation, or
-  job-override permission;
-- a dedicated keyless scheduler identity with `roles/run.invoker` only on production
-  maintenance, and no database-secret access or project-wide role;
+- the exact seven-permission `cloudRunAgentDelivery` custom role bound only to the
+  Production service and its migration, grant-probe, and manual-maintenance jobs, with no
+  delete, create, IAM-policy mutation, or job-override permission;
+- the `run.jobs.get`, `run.jobs.update`, and `run.operations.get` scheduled-maintenance
+  delivery role bound to the Production scheduled-maintenance job without execution
+  permission;
+- a dedicated keyless scheduler identity with `roles/run.invoker` only on
+  `agent-scheduled-maintenance`, and no database-secret access or project-wide role;
 - no user-managed service-account keys.
 
 Post-apply direct-state verification is available through the explicit `--live` mode. It
 runs the credential-free static contract first, then permits only a fixed read-only
 `gcloud` catalogue against project `festive-ally-503605-v7`, and finally requires the
 canonical exact-repository GitHub governance verifier to pass. The GCP catalogue checks
-the project identity and direct IAM, enabled APIs, custom delivery role, both registries
-and their direct IAM, state-bucket and state-object metadata, exact-project service
+the project identity and direct IAM, enabled APIs, custom delivery roles, all four active
+and legacy registries and their direct IAM, state-bucket and state-object metadata, exact-project service
 accounts and user-managed keys, Secret Manager metadata and direct IAM, WIF, Cloud Run
-services/jobs and their direct IAM, and the maintenance Scheduler.
+Production service/jobs and their direct IAM, and the maintenance Scheduler.
 For anonymous runtime drift, Production must expose exactly
-`openai:gpt-5.6-luna / 500000 / 53837`; Preview must remain disabled with blank guest
-model, daily budget, and run reservation. This verifies deployed direct state only and
-does not authorize public launch or claim a provider-side hard spend stop.
+`openai:gpt-5.6-luna / 500000 / 53837`; Preview has no Cloud Run service or job to inspect.
+Its registry, identities, and secret containers remain dormant. This verifies deployed
+direct state only and does not prove a provider-side hard spend stop, Scheduler execution,
+or retained operational evidence.
 
 The live verifier never reads a secret payload or Terraform state contents, executes a
 job, inspects logs, mutates a resource, follows or queries an organization/folder/
@@ -107,8 +127,8 @@ The repository stores only a SHA-256 digest of the expected account name. Matchi
 digest prevents accidental use of another local account; it does not authenticate the
 account's company-admin provenance or make claims about inherited IAM. A passing result
 therefore proves only the checked exact-project direct state plus canonical GitHub
-repository/environment governance. It does not prove public-launch readiness, zero or
-bounded spend, complete inherited policy, or project-parent linkage.
+repository/environment governance. It does not prove bounded spend, complete inherited
+policy, or project-parent linkage.
 
 Invoke this verifier only from a trusted local workstation, shell, checkout, and
 toolchain, and only through its executable path, for example
@@ -182,15 +202,10 @@ environment secrets or variables. It must never be added to the GCP WIF provider
 conditions.
 
 Both agent environments require reviewer `syshin0116`, allow the solo owner to review,
-forbid admin bypass, and contain exactly one environment secret,
-`AGENT_SMOKE_BEARER_TOKEN`, plus zero environment variables. The unreviewed build phase
-can write only to its target's isolated registry; migrations, runtime secrets, smoke, and
-traffic remain behind the one release approval.
-Immediately before each approval, replace that secret with a newly minted owner JWT whose
-total lifetime is at most two hours and whose remaining lifetime is at least 65 minutes.
-The release gate checks those public claims before GCP authentication; the authenticated
-APv2 smoke proves the signature. Automatic per-release minting is not implemented, so
-this rotation is a required external gate and a long-lived static token is forbidden.
+forbid admin bypass, and contain zero environment secrets and zero environment variables.
+The image build job references no environment. The release job crosses the environment
+approval boundary before GCP authentication and deployment. It does not consume an owner
+JWT or run an authenticated APv2 smoke.
 
 As of 2026-07-28, the live repository has the `Evaluation Publication` environment with
 required reviewer `syshin0116`, `prevent_self_review=false`, admin bypass disabled, and one
@@ -274,9 +289,9 @@ Routine operator flow:
 scripts/verify_ops_foundation.sh --static
 terraform -chdir=infra/gcp init
 terraform -chdir=infra/gcp plan \
-  -var 'agent_delivery_stage=services' \
+  -var 'agent_delivery_stage=launch' \
   -var 'agent_bootstrap_image=REVIEWED_PRODUCTION_REGISTRY_DIGEST' \
-  -var 'agent_preview_bootstrap_image=REVIEWED_PREVIEW_REGISTRY_DIGEST' \
+  -var 'agent_preview_bootstrap_image=null' \
   -var-file=/absolute/private/path/agent-secret-versions.tfvars
 ```
 
@@ -284,8 +299,9 @@ Use Terraform `1.15.8`; `required_version` and `infra/gcp/.terraform-version` pi
 exact release. A fresh remote plan is mandatory before every apply. Review the full plan,
 including imports and IAM removals, and stop on any persistent-resource replacement or
 destroy. The mock plan in CI is not evidence of live safety and cannot substitute for
-this review. During first-time setup, use the explicit `foundation → jobs → services`
-sequence in the [Cloud Run delivery runbook](cloud-run-delivery.md), never `-target`.
+this review. During first-time setup, use the explicit
+`foundation -> jobs -> services -> launch` sequence in the
+[Cloud Run delivery runbook](cloud-run-delivery.md), never `-target`.
 
 CI deliberately uses `terraform init -backend=false` and mock-provider tests. It never
 receives GCP credentials and cannot read or modify remote state.
@@ -330,10 +346,11 @@ The exact-project live gate checks secret metadata, exact direct accessors, and 
 positive numeric references exposed by Cloud Run. It never reads or validates a secret
 payload, so payload correctness remains an independent smoke-test responsibility.
 
-Both Cloud Run environments declare Luna as the default model. Production injects
+The Production Cloud Run service declares Luna as the default model, injects
 `openai-api-key`, pins anonymous runs to Luna, and lets signed runs select the reviewed
-Luna, Terra, or Sol models. Preview remains OpenAI-free, so it cannot complete provider
-calls until a separately reviewed Preview provider contract is added. The previously
+Luna, Terra, or Sol models. Preview has no Cloud Run service and remains OpenAI-free. It
+cannot be enabled until its resources and provider contract are restored through a
+reviewed change. The previously
 managed Preview OpenAI secret stays forgotten from Terraform state without destroying
 the external Secret Manager object; removal of that object is a separate, explicitly
 approved cleanup.
@@ -383,27 +400,29 @@ does not copy new Auth.js rows back into the old database.
 
 ## Agent cutover
 
-The target agent project starts empty. Do not copy test threads or legacy checkpoint
-tables. The repository migration entrypoint is `python -m agent.migrate`; it upgrades
-Aegra metadata and initializes the LangGraph checkpointer and store schema. The checked-in
-Cloud Run migration jobs execute that entrypoint before service delivery, followed by
-separate least-privileged grant-probe and guest-retention maintenance jobs. Runtime startup Alembic migration must be
-disabled with the non-secret setting
+The repository migration entrypoint is `python -m agent.migrate`; it upgrades Aegra
+metadata and initializes the LangGraph checkpointer and store schema. Terraform declares
+four jobs: `agent-migrate`, `agent-grants`, the manually runnable `agent-maintenance`, and
+the Scheduler-only `agent-scheduled-maintenance`. The first three require separate
+operator approval to run. After the launch stage, Scheduler invokes only
+`agent-scheduled-maintenance`. Normal native CD does not update or execute those jobs.
+Runtime startup Alembic migration must be disabled with the
+non-secret setting
 `RUN_MIGRATIONS_ON_STARTUP=false`; a service revision is never the migration runner.
 The serving template also fixes `REDIS_BROKER_ENABLED=false` and
-`BG_JOB_MAX_RETRIES=0`; together with the other reviewed values, Preview has four numeric
-secret references and 21 total environment entries, while Production has five and 22.
-The migration, grant-probe,
-and maintenance entrypoints do not import `agent.graph` or its runtime preflight and retain
-their separate exact three-entry Job environment.
+`BG_JOB_MAX_RETRIES=0`; together with the other reviewed values, Production has 16 plain
+values and three numeric secret references for 19 total environment entries. Preview has
+no serving template.
+The migration, grant-probe, and both maintenance entrypoints do not import `agent.graph`
+or its runtime preflight and retain their separate exact three-entry Job environment.
 
-The migration job uses the same immutable image digest as the service, receives an
-elevated direct Neon `DATABASE_URL` only for the duration of the job, and must succeed
-before deployment. The service receives a separate least-privileged direct runtime URL.
-Preview must exercise every Aegra 0.9.24 async and synchronous database path before
-cutover; a `-pooler` endpoint is not an allowed substitute.
+Any manual migration run receives an elevated direct Neon `DATABASE_URL` only for the
+duration of the job. The service receives a separate least-privileged direct runtime URL.
+Job image selection and execution require a separate approval; a successful service
+release is not evidence that any job ran. A `-pooler` endpoint is not an allowed
+substitute.
 
-Aegra 0.9.24 still invokes the LangGraph saver and store `setup()` methods from its
+Aegra 0.9.25 still invokes the LangGraph saver and store `setup()` methods from its
 lifespan database initialization even when `RUN_MIGRATIONS_ON_STARTUP=false`. That setting
 disables startup Alembic migration; it does not provide a no-DDL runtime startup.
 Consequently, in addition to its normal narrow DML grants, the separated runtime role
@@ -411,8 +430,8 @@ temporarily needs only the schema-local, idempotent DDL privileges required by t
 setup calls. It must not receive the broader migration credential, database
 administration, role management, or cross-schema privileges.
 
-This temporary grant is a deployment gate, not an assumed permission recipe. Before
-preview or production rollout, prove the proposed grants with the actual Neon runtime
+This temporary grant is a deployment gate, not an assumed permission recipe. Before a
+new environment or schema change, prove the proposed grants with the actual Neon runtime
 credential: initial startup and restart must complete, checkpoint and store operations
 must pass, and the project-owned `agent_guest_execution_quarantine` table must permit
 `SELECT`, `INSERT`, `UPDATE`, and `DELETE` for the shared runtime/maintenance credential.
@@ -423,63 +442,39 @@ grant shape and outcomes. Do not deploy until those real-Neon tests pass. Tighte
 runtime role to DML-only as soon as Aegra offers a supported startup path that skips
 saver/store schema setup.
 
-1. Confirm or create `syshin0116-agent-prod`.
-2. Create an isolated preview branch and credentials that cannot access the `production`
-   branch.
-3. Provision the checked-in one-shot migration, grant-probe, and maintenance jobs at the explicit
-   `jobs` Terraform stage, using the exact image digest selected for deployment and
-   positive numeric secret versions.
-4. Give the preview migration job its separately held direct `DATABASE_URL`, run it, and
-   require success before creating or updating the service revision.
-5. Inject only the preview branch's least-privileged direct runtime endpoint into
-   `agent-preview-database-url`, and set `RUN_MIGRATIONS_ON_STARTUP=false`.
-6. Prove the preview runtime role's schema-local grant and denial boundaries on real Neon
-   as specified above; never print a connection string.
-7. Record table names and migration revision only.
-8. Deploy the same immutable image digest with the matching runtime service account,
-   Cloud Run `max-instances=1`, and exactly one application server worker.
-9. Prove the direct runtime endpoint works through every Aegra database path exercised by
-   the preview smoke; reject any accidental `-pooler` hostname before startup.
-10. Verify `/live`, `/ready`, owner auth, anonymous policy, two-turn persistence, restart
-    persistence, exact Agent Protocol v2 streaming, and the deployed instance/worker
-    limits.
-11. Run the same digest's migration job against production through a separately held
-    elevated direct endpoint, inject only its least-privileged direct runtime endpoint,
-    repeat the real-Neon grant tests, and shift traffic after all gates pass.
+For a future Production cutover or schema change, follow the four-stage
+`foundation -> jobs -> services -> launch` sequence in the
+[Cloud Run delivery runbook](cloud-run-delivery.md). Use one reviewed Production digest,
+keep `agent_preview_bootstrap_image=null`, and supply exactly four positive numeric
+Production secret version IDs. Run only migration, grant-probe, and manual maintenance
+after the `jobs` apply. Do not run scheduled maintenance manually. Preview requires a
+separate reviewed restoration before it can participate in this sequence.
 
-Rollback reassigns Cloud Run traffic to the previous healthy revision. That revision
-already retains its previous numeric secret references; do not mutate them in place.
-Database migrations must remain compatible with one previous application revision.
+The release workflow has no automated rollback path. A separately approved operator can
+manually reassign Cloud Run traffic to a known healthy previous revision. That revision
+retains its previous numeric secret references; do not mutate them in place. Database
+migrations must remain compatible with one previous application revision.
 
 ## Cloud Run and CD
 
-The repository-side follow-up is implemented. It declares preview/production services,
-separate runtime/migration identities and URLs, isolated image builders and registries, one
-active four-role WIF provider with a disabled legacy provider, split secretless build and
-reviewer-gated release workflows, same-digest migration, grant-probe, and maintenance
-jobs, an active production-only 15-minute OAuth-authenticated Cloud Scheduler
-trigger, exact Cloud Run REST v2 read-back plus etag-bound Job execution before traffic
-movement, owner-auth APv2 smoke on the tagged no-traffic revision before promotion, and
-revision-traffic rollback. Production deploy rechecks current `main` and all three exact
-required GitHub Actions checks after approval; emergency rollback instead requires manual
-dispatch, current `main`, an exact revision, and approval while remaining usable on red
-CI. The root frozen uv workspace, delivery-specific Docker context allowlist, and real
-Linux amd64 CI image build keep the deployed package graph and image inputs reproducible.
+The native build resolves an immutable image digest. After `Agent Production` approval,
+the Production release rechecks current `main` and its exact required checks, deploys that
+digest to a tagged no-traffic revision, verifies `/live`, `/ready`, and unauthenticated
+APv2 `401`, then sends 100% traffic to the new revision and removes the smoke tag.
 
-Nothing in that change applies Terraform or creates/configures GCP, Neon, GitHub
-environment, or secret external state. Follow
-[`cloud-run-delivery.md`](cloud-run-delivery.md) for bootstrap and keep
-`AGENT_CLOUD_RUN_ENABLED` false until its live gates pass. That variable gates future
-delivery workflows only; it does not pause Scheduler, revoke the public invoker, stop a
-service, or guarantee zero cost. After explicit owner approval, Terraform creates the
-production 15-minute schedule active. Keep both web public flags disabled until the exact
-plan is applied and the first bounded scheduled execution succeeds.
+The normal workflow does not apply Terraform, run migration/grant/maintenance jobs, run
+an authenticated two-turn provider smoke, or automate rollback. Manual traffic
+reassignment to a known healthy revision requires separate approval. Terraform resources
+for jobs and Scheduler remain staged infrastructure operated outside normal CD.
+
+Production anonymous Luna chat is live on `https://syshin0116.vercel.app`; Preview remains
+closed and has no Cloud Run resource. Its workflow requires a separate Preview flag, and
+the current release does not recheck the pull-request head or CI after approval. Do not
+enable it until the resources are restored and that gap is closed. Auth.js owner-login
+verification, provider hard-cap proof, the first bounded Scheduler execution, and retained
+abuse/retention/recovery evidence remain unverified.
 The public-access policy remains in
-[ADR-0006](../adr/0006-public-anonymous-chat-access.md); application auth is still
-owner-only until that later hardening lands.
-Anonymous visitors enter only through a separately reviewed Agent Production release
-after ADR-0006's isolation, concurrency, retention, and spend gates pass; a pull-request
-preview is never the guest release path.
+[ADR-0006](../adr/0006-public-anonymous-chat-access.md).
 
 ## Verification
 
@@ -491,8 +486,7 @@ scripts/verify_ops_foundation.sh --terraform-fmt
 scripts/verify_ops_foundation.sh --terraform-init
 scripts/verify_ops_foundation.sh --terraform-validate
 scripts/verify_ops_foundation.sh --terraform-test
-shellcheck scripts/deploy_cloud_run.sh scripts/verify_ops_foundation.sh \
-  scripts/validate_agent_delivery_identity.sh
+shellcheck scripts/verify_ops_foundation.sh scripts/validate_agent_delivery_identity.sh
 ```
 
 Each `--terraform-*` wrapper performs an on-disk preflight before invoking Terraform.
@@ -526,9 +520,11 @@ over `cloud_run.tf`; the total reviewed inventory is 44 resources.
 The only reviewed Terraform test file is
 `infra/gcp/tests/foundation.tftest.hcl`; static verification pins its exact SHA-256.
 `--terraform-test` runs Terraform's JSON test output through the contract and succeeds
-only when that exact file's service, foundation-only, and jobs-only runs are discovered in
-the reviewed order and the summary is exactly
-`3 passed, 0 failed, 0 errored, 0 skipped`. Terraform's otherwise-successful zero-test
+only when that exact file's `foundation_security_contract`,
+`foundation_bootstrap_contract`, `jobs_bootstrap_contract`, and
+`services_bootstrap_contract` runs are discovered in the reviewed order and the summary is
+exactly
+`4 passed, 0 failed, 0 errored, 0 skipped`. Terraform's otherwise-successful zero-test
 result is a failure. `fmt`, fresh `init -backend=false`, and `validate` remain independent
 gates.
 
@@ -596,12 +592,12 @@ project parentage, or inherited-policy completeness. Introduce signed company-ad
 evidence only through a separate reviewed contract if those broader claims become
 necessary; do not add organization/folder traversal to this repository.
 
-Even a passing `--live` result is not public-launch or spend acceptance. Keep both Vercel
-anonymous flags disabled until the exact services-stage plan/apply, first bounded
-Scheduler execution, real-Neon migration/grant/retention probes, Vercel BotID Basic
-configuration, and browser journey pass. Luna input-count billing, including rejected or oversized
-count requests and a proven pre-provider upper bound, remains unresolved; the configured
-daily ledger and per-run reservation do not prove a provider-wide hard cap or zero spend.
+Even a passing `--live` result is not spend acceptance. Production anonymous chat is
+already live and Preview remains closed. The first bounded Scheduler execution and
+retained migration/grant/retention, abuse, and recovery evidence remain unverified. Luna
+input-count billing, including rejected or oversized count requests and a proven
+pre-provider upper bound, remains unresolved; the configured daily ledger and per-run
+reservation do not prove a provider-wide hard cap or zero spend.
 
 ## Deletion policy
 

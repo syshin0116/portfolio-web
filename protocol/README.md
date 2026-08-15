@@ -9,8 +9,8 @@ bindings are byte-for-byte copies of that release.
 - Agent Protocol: `langchain-ai/agent-protocol`
   `langchain-protocol==0.0.18`,
   commit `0ff7cd3962e8b4b3e347b76203be7dfeba003928`
-- Aegra runtime: `ibbybuilds/aegra` `v0.9.24`,
-  commit `51cb5a61f0b5e709d423e3d14978619a2a7c3960`
+- Aegra runtime: `ibbybuilds/aegra` `v0.9.25`,
+  commit `1f0076a69bc7cdf5f61b5487bc17d112ee64eb0c`
 - Canonical schema: upstream `streaming/protocol.cddl`
 - Fixture wire profile: the official generated snake_case bindings
 
@@ -84,7 +84,7 @@ No server is contacted unless `--base-url` is present:
 python scripts/smoke.py \
   --base-url http://127.0.0.1:8000 \
   --assistant-id agent \
-  --profile aegra-0.9.24
+  --profile aegra-0.9.25
 ```
 
 Pass `--token-env AGENT_PROTOCOL_TOKEN` when authentication is enabled. The live
@@ -98,7 +98,7 @@ Process restart, trusted identity injection, and store namespace isolation need
 runtime orchestration and credentials; they belong to the Aegra runtime/security
 PR rather than this transport-only contract.
 
-## Aegra 0.9.24 gaps
+## Aegra 0.9.25 gaps
 
 Aegra's SSE endpoint is
 `POST /threads/{thread_id}/stream/events`; the locked upstream OpenAPI endpoint

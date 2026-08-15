@@ -1,14 +1,15 @@
 ---
 title: "Public anonymous chat rollout"
 description: >
-  Configure and safely enable the Vercel BotID Basic-gated anonymous assistant-ui
-  experience after the agent-side wire, spend, and retention gates pass.
+  Operate and, after an incident, safely re-enable the Vercel BotID Basic-gated
+  anonymous assistant-ui experience.
 when_to_read: >
   Before enabling Vercel BotID Basic, setting Vercel anonymous-chat variables,
-  enabling either public flag, or closing public access during an incident.
+  re-enabling either public flag, or closing public access during an incident.
 tags: [runbook, web, botid, anonymous, assistant-ui, vercel]
-status: accepted
+status: stable
 date: "2026-07-28"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0005-adopt-assistant-ui.md
@@ -19,17 +20,20 @@ template: runbook
 
 # Public anonymous chat rollout
 
-Both Vercel public flags stay exactly `false` until the final browser rollout.
-Preview also remains fail closed. The repository now records the separately
-approved Production agent launch values, but merging this configuration does not
-apply Terraform, create a secret version, or enable the browser gate. Enabling the
-browser gate before the agent's public-safe state/history/SSE projection is
-verified violates ADR-0005 even if the visible UI appears sanitized.
+As of 2026-08-15, Production at `https://syshin0116.vercel.app` serves public
+anonymous chat with both Vercel public flags set to `true`. Production Cloud Run
+accepts anonymous access with Luna fixed for guests. Preview remains fail closed
+with both public flags set to `false`.
+
+The live rollout does not close the remaining operational evidence: OpenAI input-count
+billing and a provider-enforced hard spend stop, the first bounded Scheduler execution,
+retention, abuse controls, and recovery must still be verified. An observed spend,
+isolation, or capability-boundary breach requires the emergency close procedure below.
 
 ## Cloud Run repository-owned launch contract
 
-The repository-owned Cloud Run template and delivery verifier require these exact
-Preview values:
+The Terraform foundation retains this dormant Preview runtime map. No Preview Cloud Run
+service or job is deployed:
 
 - `AGENT_ANONYMOUS_ACCESS_ENABLED=false`
 - `GUEST_MODEL=` (empty)
@@ -44,13 +48,16 @@ Production alone carries the owner-approved launch tuple:
   provider-request accounting ledger)
 - `GUEST_RUN_RESERVATION_MICRO_USD=53837`
 
-Do not make these values apply-time Terraform variables or change them in the
-console. An ordinary image delivery verifies and preserves the reviewed values;
-it must refuse a revision with console or out-of-band drift. Preview and Production
-have separate repository-owned runtime maps, and Preview must not inherit the paid
-model, budget, credential, or access flag unless it receives its own reviewed
-public-test contract. Do not replace the reviewed constants with apply-time launch
-variables or a generic runtime toggle.
+Do not make these values apply-time Terraform variables or change them in the console.
+Terraform plans plus repository static and scoped live verification own the complete
+Production environment and numeric Secret Manager version contract. The ordinary native
+image release does not attest that tuple. For Production it updates only
+`GUEST_RUN_RESERVATION_MICRO_USD=53837`, then verifies the deployed digest, `/live`,
+`/ready`, and unauthenticated APv2 `401` before traffic promotion. Preview remains a
+dormant repository-owned map, not a directly deployed runtime. It must not inherit the
+paid model, budget, credential, or access flag unless a separate reviewed public-test
+contract first provisions its resources. Do not replace the reviewed constants with
+apply-time launch variables or a generic runtime toggle.
 
 The runtime accepts only `openai:gpt-5.6-luna` as the eventual non-empty
 `GUEST_MODEL`. It uses the OpenAI Responses API with reasoning disabled,
@@ -139,8 +146,8 @@ counts all stored rows for that identity and all exact canonical `anon:<uuid>` s
 and holds the lock through the downstream response/commit. The durable caps are 6 stored
 threads per identity and 256 globally. Expired rows count until checkpoint-first GC removes
 them. An existing owned ID is idempotent even at cap; a foreign collision is hidden; lock
-or count failure returns 503. Before launch, the real-PostgreSQL proof must demonstrate
-that a concurrent second admission sees the first committed create before deciding.
+or count failure returns 503. The retained real-PostgreSQL evidence must demonstrate that
+a concurrent second admission sees the first committed create before deciding.
 
 Guest `run.start` carries exactly one `user` message containing plain UTF-8 text or only
 assistant-ui text blocks. It must reject client assistant/tool history and non-text
@@ -173,11 +180,10 @@ until `langchain-core` moves beyond 1.4.9. The model's
 does not support the API Free tier. The owner approved the exact non-zero
 500,000 µUSD UTC-day accounting ceiling above, and the Production template now
 requires `OPENAI_API_KEY` from a reviewed positive numeric Secret Manager version.
-That approval and wiring still do **not** authorize the final browser launch: input-count
-billing and observed framing behavior must be verified, the separately reviewed Scheduler
-rollout must pass, the secret payload/version must be injected out of band,
-provider-account spend protection must be verified, and all operational proofs below must
-succeed before either Vercel public flag becomes `true`.
+Production public access is live, but input-count billing and observed framing behavior,
+the first bounded Scheduler execution, provider-account spend protection, retention,
+abuse controls, and recovery remain open evidence. If those checks fail or reveal exposure
+beyond the approved boundary, close public access before further investigation.
 
 ## Provider spend stop and rollback boundary
 
@@ -190,16 +196,19 @@ rate; a provider count could exceed the heuristic `U`, and the count request has
 reached OpenAI when that is learned. The application ledger is therefore not the sole hard
 stop for that edge, and 53,837 µUSD is not a provider-wide mathematical ceiling.
 
-Before either Vercel public flag becomes `true`, isolate the guest API key in its reviewed
-OpenAI project and verify a provider-enforced hard usage/spend stop that bounds count and
-generation together within the owner's approved exposure. A dashboard alert, emailed
-budget, or other soft notification does not qualify. Record only non-secret read-back
-evidence; never place the key or provider credential in a report. If the provider cannot
-enforce the reviewed stop, public issuance remains disabled.
+Keep the guest API key isolated in its reviewed OpenAI project and verify a
+provider-enforced hard usage/spend stop that bounds count and generation together within
+the owner's approved exposure. A dashboard alert, emailed budget, or other soft
+notification does not qualify. Record only non-secret read-back evidence; never place the
+key or provider credential in a report. This retained proof is urgent post-launch work.
+Its absence alone is the recorded open risk, not a new incident signal. Close both Vercel
+public flags if verification establishes that no enforceable stop exists or that the key
+is not isolated as reviewed.
 
-If provider telemetry exceeds the conservative reservation, the hard stop cannot be
-verified, or count behavior changes, close both Vercel flags first, revoke the guest key or
-set its provider stop to zero, and follow the exact-project emergency-close sequence below.
+If provider telemetry exceeds the conservative reservation, an attempted verification
+finds no enforceable stop, key isolation fails, or count behavior exceeds the reviewed
+boundary, close both Vercel flags first, revoke the guest key or set its provider stop to
+zero, and follow the exact-project emergency-close sequence below.
 Do not change the cap out of band to restore service. Do not roll back to a 6,892, 8,868,
 18,892, 19,892, 47,892, or 51,892 µUSD
 revision: startup and delivery verification intentionally reject all superseded
@@ -226,40 +235,43 @@ is stored.
 Set these server-only Production values:
 
 - `AGENT_AUTH_SECRET`: the exact secret used by the production Cloud Run agent.
-- `AGENT_ANONYMOUS_TOKEN_ENABLED=false` until the final enable deployment.
+- `AGENT_ANONYMOUS_TOKEN_ENABLED=true`.
 - `ANONYMOUS_SESSION_SECRET`: an independent random value of at least 32 bytes.
 
 Set these browser-visible Production values:
 
 - `NEXT_PUBLIC_AGENT_API_URL`: the production Cloud Run service origin.
 - `NEXT_PUBLIC_AGENT_ASSISTANT_ID=agent`.
-- `NEXT_PUBLIC_AGENT_ANONYMOUS_ENABLED=false` until the final enable deployment.
+- `NEXT_PUBLIC_AGENT_ANONYMOUS_ENABLED=true`.
 
-Do not copy secrets into any `NEXT_PUBLIC_*` value. Preview uses its own BotID,
-hostname, agent origin, database, and secrets; it must not share production
-guest identity or spend state.
+Set both anonymous flags to `false` in Preview. Do not copy secrets into any
+`NEXT_PUBLIC_*` value. A future restored Preview must use its own BotID, hostname,
+agent origin, database, and secrets; it must not share production guest identity or
+spend state.
 
-## Enable order
+## Re-enable procedure
+
+Production is already enabled. Use this sequence after an emergency close or when
+activating a separately approved environment. It does not assert that the open
+operational evidence above passed during the initial rollout.
 
 1. Keep both Vercel public flags false. Inject the reviewed Production OpenAI payload and
    record only its positive numeric version alongside the other exact secret versions.
-2. After both environments' migration, grant-probe, and maintenance jobs pass, review
-   and apply the exact services-stage plan. It must combine the active Production
-   maintenance Scheduler with only Production's `true / openai:gpt-5.6-luna / 500000 /
-   53837` tuple and numeric `OPENAI_API_KEY`; Preview stays disabled and OpenAI-free.
-3. Verify Terraform read-back and the first bounded checkpoint-first scheduled
-   maintenance execution. A paused or unverified Scheduler blocks launch.
-4. Release the exact reviewed revision, then run owner, PostgreSQL, public raw-wire,
-   rate, concurrency, spend, retention, input-count billing, and provider-cap proofs
-   while Vercel BotID still cannot mint or display anonymous access.
-5. Set both Vercel anonymous flags to exactly `true`, redeploy, and complete a
-   real browser challenge, Korean message, reload/history, rate-limit, and
+2. Verify the exact Production runtime tuple and the migrations, grants, or maintenance
+   path affected by the incident. Review current provider protection and input-count
+   telemetry. If spend protection, key isolation, or count behavior triggered the close,
+   require that boundary to be fixed before reopening. Keep Preview disabled and OpenAI-free.
+3. Release the reviewed revision and verify the signed-in, PostgreSQL, public raw-wire,
+   and incident-specific controls while BotID cannot mint anonymous credentials. Keep
+   unrelated post-launch evidence recorded as open rather than claiming it passed.
+4. Set both Production Vercel anonymous flags to exactly `true`, redeploy, and complete a
+   logged-out browser challenge, Korean message, reload/history, rate-limit, and
    expired-session smoke.
 
 The production maintenance Scheduler is repository-configured active after the separate
 owner approval. Do not pause or activate it with an untracked console-only toggle, and do
-not interpret the configuration change as proof that step 3 completed: the exact plan,
-apply, and first bounded execution remain required before either public flag is enabled.
+not interpret configuration as proof of execution. The first bounded execution remains
+open evidence for the live rollout.
 
 The web gate first attempts the bodyless `/api/anonymous-agent-token` cookie resume.
 A missing or expired cookie still passes Vercel BotID Basic before the server creates a

@@ -13,7 +13,7 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-26"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs:
   - ../reference/retrieval-methods.md
@@ -74,14 +74,12 @@ Three consequences follow directly and are binding:
    *harness*, and to anything not on the method axis.
 2. **A correct baseline is a prerequisite, not a nice-to-have.** A broken baseline does not
    merely answer questions badly, it **invalidates every comparison drawn against it**. The
-   current BM25 is broken in exactly this way: `_tokenize("도커")` returns `['크']`, so the
-   top hit for a Docker query is an unrelated coding-test post scored 1.0 while 13 files
-   containing the term are missed, and the score normalisation forces a 1.0 top hit for any
-   query at all, including nonsense. Under a product goal this is a bug to schedule. Under
-   this goal it is a **blocker**.
+   legacy BM25 had exactly this defect: `_tokenize("도커")` returned `['크']`, relevant
+   files were missed, and score normalization forced a 1.0 top hit for any query. The
+   fitted current baseline fixes that defect and keeps executable regression gates.
 3. **Retrievers are plugs, not tools.** The chat must consume retrieval through the
-   shared interface that the evaluation harness will also consume. Chat wiring is complete;
-   that does not count as an evaluation harness, which remains separate follow-up work.
+   shared interface that the evaluation harness also consumes. Chat wiring and the harness
+   are complete; owner-reviewed topic qrels and a publication-qualified result remain.
 
 The living catalogue of methods lives in
 [`../reference/retrieval-methods.md`](../reference/retrieval-methods.md) - a registry, not
@@ -114,7 +112,7 @@ an ADR, because it changes continuously.
 - [x] Point `CLAUDE.md`'s "What this repo is" at this ADR.
 - [x] Fix or rebuild the BM25 baseline **before** any comparison is run.
 - [x] Define the retriever interface once and wire the chat serving path to it.
-- [ ] Build the evaluation harness against that same retriever interface.
+- [x] Build the evaluation harness against that same retriever interface.
 - [x] Select the deployed method through server-owned config and the servable registry.
 
 ## Revisit when
@@ -129,5 +127,7 @@ an ADR, because it changes continuously.
 
 ## Changelog
 
+- 2026-08-15: recorded the corrected fitted BM25 baseline and implemented evaluation
+  harness while keeping publication-qualified results open.
 - 2026-07-26: created. Recorded after the unstated goal produced a confidently wrong
   recommendation to collapse the retrieval surface.

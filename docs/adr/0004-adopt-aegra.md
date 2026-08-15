@@ -1,8 +1,8 @@
 ---
 title: "ADR-0004: Adopt Aegra and delete the hand-rolled Agent Protocol server"
 description: >
-  Replace the 4,700-LOC hand-written Agent Protocol server with Aegra 0.9.24, keeping
-  the graph, and discard the existing agent data rather than migrating it.
+  Replace the 4,700-LOC hand-written Agent Protocol server with Aegra, keep the graph,
+  and discard the existing agent data rather than migrating it.
 when_to_read: >
   Before changing the agent runtime, before pinning or bumping Aegra, or when
   wondering why run serialization is weaker than it used to be.
@@ -12,13 +12,17 @@ date: "2026-07-26"
 deciders: ["@syshin0116"]
 supersedes:
 superseded_by:
-updated: "2026-07-28"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs: [../research/aegra-native-stack.md, ../plans/rag-restack.md, ../../DECISIONS.md]
 template: adr
 ---
 
 # ADR-0004: Adopt Aegra and delete the hand-rolled Agent Protocol server
+
+> **Current runtime amendment (2026-08-15):** the decision remains accepted and the
+> tested exact Aegra pin is 0.9.25. References to 0.9.24 below record the original
+> adoption evidence.
 
 > **status: accepted.** An earlier draft of this ADR, written the same day, proposed the
 > opposite (keep the custom server, hold Aegra behind a spike). It was recorded as
@@ -50,7 +54,7 @@ non-issues:
 - Anonymous per-visitor isolation is free: Aegra hard-codes `WHERE user_id = <identity>`
   on every threads/runs/assistants query, independent of any auth handler.
 
-Nothing is deployed today, so there is no working production system to regress.
+At decision time, nothing was deployed, so there was no working production system to regress.
 
 ## Considered options
 
@@ -62,13 +66,13 @@ Nothing is deployed today, so there is no working production system to regress.
 
 ## Decision
 
-Adopt **A**. Register the existing deepagents graph with Aegra 0.9.24, delete the
-hand-rolled server, and **discard the existing agent data** rather than migrating it.
+Adopt **A**. The original implementation registered the existing deepagents graph with
+Aegra 0.9.24, deleted the hand-rolled server, and **discarded the existing agent data**
+rather than migrating it.
 
-Pin exactly: `aegra-api==0.9.24`, `aegra-cli==0.9.24`. **Never install the `aegra`
-meta-package** - it is stuck at 0.2.0 (2026-02-11) and cannot be version-pinned
-meaningfully. Hard floor `>=0.9.7`, because GHSA-m98r-6667-4wq7 was a HIGH-severity
-cross-tenant IDOR fixed there.
+The adoption pin was `aegra-api==0.9.24`, `aegra-cli==0.9.24`; the current exact pin is
+0.9.25. **Never install the `aegra` meta-package**. Hard floor `>=0.9.7`, because
+GHSA-m98r-6667-4wq7 was a HIGH-severity cross-tenant IDOR fixed there.
 
 Being native is the governing constraint: prefer Aegra's idioms over porting the existing
 implementation. The point of adopting it is to stop maintaining a parallel one.
@@ -84,8 +88,8 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
   idempotent `setup()` methods during every lifespan, so the runtime role temporarily
   retains only their tested schema-local DDL in addition to narrow DML; real-Neon
   grant/denial tests block deployment until Aegra supports a no-DDL startup.
-- Crons actually fire. The current ones are stored and never execute - there is no
-  scheduler and nothing computes `next_run_date`.
+- Aegra makes scheduled execution possible. At decision time, the custom server stored
+  crons but had no scheduler to compute `next_run_date`.
 - The spike (plan phase P0) turned "deepagents under Aegra is unverified" from a caveat
   into a gate with an acceptance test.
 
@@ -102,7 +106,7 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
   and P0 found Aegra's AP v2 path/commands differ from upstream. The production frontend
   uses `/threads/{id}/stream/events`, but authorization still cannot depend on handler
   dispatch: the SQL predicate and outer ASGI middleware are the real boundary.
-- Owner preview exposes AP v2 `run.start`/`input.respond` as the only model-spending
+- The adopted runtime exposes AP v2 `run.start`/`input.respond` as the only model-spending
   mutations. Legacy threaded/stateless run creation, checkpoint state update, and cron
   creation/activation return a non-enumerating 404 because they bypass the in-process guard.
   Read/history and run-cancel compatibility remain native.
@@ -112,7 +116,7 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
   a typo aborts startup instead of degrading to anonymous access.
 - Aegra 0.9.24 deletes thread metadata without deleting LangGraph checkpoints and exposes
   no supported atomic operation spanning both. Native thread deletion is therefore denied
-  with 403. A future administrative orphan-GC/retention job is separate and must not be
+  with 403. The later administrative orphan-GC/retention job remains separate and must not be
   presented as user-facing deletion.
 - Pre-1.0 with bus factor 1: `ibbybuilds` holds 629 of ~800 commits, three releases shipped
   in three weeks, and `server.py` will import `aegra_api.*` internals with no stability
@@ -127,7 +131,7 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
 - [x] Static graph injection plus PostgreSQL migration/pool-recreation/store persistence on
       Python 3.12.
 - [ ] Provider-backed two-turn Korean conversation on the deployed service.
-- [ ] `scripts/smoke.py` as the permanent gate for every version bump.
+- [x] `scripts/smoke.py` as the permanent gate for every version bump.
 - [x] Assert `len(AGENT_AUTH_SECRET) >= 32` at import so the process refuses to start.
 - [x] Keep the custom HTTP extension minimal: startup checks, single-process AP v2
       mutation guard, and no custom protocol routes.
@@ -156,3 +160,5 @@ implementation. The point of adopting it is to stop maintaining a parallel one.
   proof, minimal native-route guard, and deletion-disabled contract.
 - 2026-07-28: recorded Aegra's unconditional saver/store setup, the temporary schema-local
   runtime DDL constraint, and the real-Neon grant/denial deployment gate.
+- 2026-08-15: recorded the tested 0.9.25 pin while preserving the original 0.9.24
+  adoption evidence.

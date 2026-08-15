@@ -9,7 +9,7 @@ when_to_read: >
   or when deciding what comes next.
 tags: [plan, aegra, assistant-ui, deepagents, retrieval, evaluation, deploy]
 status: draft
-updated: "2026-08-14"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs:
   - ../adr/0008-chatbot-is-a-rag-evaluation-testbed.md
@@ -29,14 +29,15 @@ template: plan
 
 # Plan: rebuild the agent on Aegra, get basic chat working, then evaluate
 
-> **Status: in progress.** The repository-side runtime, retrieval layer, native UI,
-> deterministic evaluation harness, capability lab, and anonymous-safety controls are
-> implemented. The remaining gates are external deployment acceptance, provider-backed
-> evidence, owner-reviewed evaluation data, and live activation of the approved
-> Production guest and retention desired state.
-> The table below distinguishes merged code from live acceptance; neither deterministic CI
-> nor a checked-in Terraform plan is evidence that Cloud Run, Neon, OAuth, or a provider
-> works in production. Read [How to dispatch](#how-to-dispatch) first.
+> **Status: public surface live; evaluation publication in progress.** The Aegra runtime,
+> retrieval layer, native assistant-ui, anonymous bootstrap, Luna guest contract, safety
+> controls, and Production delivery are active at `syshin0116.vercel.app`. Dynamic
+> specialists are implemented, but the final revision has only logged-out bootstrap,
+> composer, and no-overflow browser evidence; a prior candidate's specialist run ended
+> without a complete final answer. The remaining work is owner-reviewed RAG evaluation
+> publication plus the post-launch provider billing, spend-stop, Scheduler, abuse,
+> retention, recovery, and signed-in journey evidence below. Read
+> [How to dispatch](#how-to-dispatch) first.
 
 > **Read [ADR-0008](../adr/0008-chatbot-is-a-rag-evaluation-testbed.md) before touching
 > anything here.** The purpose is comparing retrieval methods; the chat is an inspection
@@ -58,7 +59,9 @@ The sequencing rule now is the owner's: **get basic chat working first.** Not be
 chat is the product, but because it is the only thing that proves the whole infrastructure
 chain actually connects.
 
-## Sequence
+## Implementation sequence
+
+This is the historical build order. Current state is recorded in the table below.
 
 ```
 P0  Aegra spike (local)              gates everything
@@ -72,18 +75,18 @@ P5  Public hardening                 anonymous identity, guard, GC, budget caps
 P6  Go public                        PUBLICATION GATE
 ```
 
-### Phase status as of 2026-08-14
+### Phase status as of 2026-08-15
 
 | Phase | Repository status | Exact remaining gate |
 |---|---|---|
-| P0 | Implemented: pinned Aegra runtime, AP v2 fixtures/codegen, PostgreSQL pool-recreation and isolation tests | Provider-backed two-turn Korean smoke against the deployed revision |
+| P0 | Implemented and deployed: pinned Aegra runtime, AP v2 fixtures/codegen, PostgreSQL pool-recreation and isolation tests | No implementation gate remains |
 | P1 | Implemented: shared retriever Protocol, 335-document published mirror, corrected fitted BM25, exact and field-weighted serving, native Deep Agents graph | No repository implementation gate remains; future methods extend the same contracts |
-| P2 | Delivery code implemented: immutable image, Terraform, WIF, migration/grant jobs, release and rollback workflows | Apply and verify the exact dedicated GCP/Neon foundation, real Neon grants, secrets, preview revision, restart, and owner smoke |
-| P3 | Implemented: native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe wire projection, deterministic AP v2 integration, and Playwright browser evidence | Full deployed owner-authenticated Korean journey against real Cloud Run, Neon, and the provider |
+| P2 | Production delivery is active through immutable images, WIF, exact-main CI, a tagged no-traffic smoke revision, and 100% promotion; Preview remains intentionally disabled | Retain one real-Neon grant/maintenance proof if the staged Terraform foundation remains in scope |
+| P3 | Native `useLangGraphRuntime`, official SDK `ThreadStream`/`MessageAssembler`, guest-safe projection, and AP v2 integration are implemented; the final Production revision has logged-out bootstrap, enabled-composer, and no-overflow browser evidence | Retain a completed provider-backed Luna and specialist answer on the final Production revision, plus one signed-in Production journey covering model selection and two Korean turns |
 | P4 | Harness, first dense arm, and topic-review tooling implemented: the default provider-free sweep remains model-free; pinned multilingual E5 and BM25/dense RRF are explicit opt-in methods; a versioned topic seed, deterministic blind pool, checksum seal, finalizer, and dataset-selectable publication gate are present | Owner completion/sealing of `topic-smoke-v1` qrels and a publication-qualified digest-pinned run |
 | P4.5 | Runtime, 2x2 harness, and manual Luna adapter implemented: bounded QuickJS and dynamic subagents share `RunBudget`; canonical Luna guests may use the server-declared specialists while QuickJS remains owner/eval-only | A complete retained v5 provider-backed quality/cost artifact plus owner/publication review for evaluation publication |
-| P5 | Repository controls implemented: anonymous JWT/cookie, Vercel BotID Basic bodyless bootstrap, guest guard, spend ledger, retention/GC, quarantine/recovery, public wire, and anonymous UI | Deployed rate/concurrency/spend/retention/browser proofs, provider-side cap, exact secret payload/version, and input-count billing confirmation |
-| P6 | Production desired state approved: anonymous Agent access uses `openai:gpt-5.6-luna`, 500,000 µUSD/day, and 53,837 µUSD/run for up to 8 calls at 768 output tokens each, a 64,000-token generation ledger, and a separate 128,000-token aggregate count-risk ledger; a numeric OpenAI secret version is pinned, while Preview and both Vercel public flags remain fail-closed | Exact-project plan/apply, first bounded Scheduler execution, input-count billing confirmation, Vercel BotID Basic configuration, deployed abuse/spend/browser proofs, and provider-side spend protection |
+| P5 | Anonymous JWT/cookie, BotID Basic bootstrap, guard, spend ledger, retention/GC, quarantine/recovery, public wire, and UI are implemented; a prior Production candidate executed a specialist but ended without a complete final answer, while the final revision was observed passively | Retain a completed final-revision provider and specialist journey, deployed rate/concurrency/spend/retention/recovery evidence, input-count billing confirmation, and the provider-side spend stop |
+| P6 | Live at `syshin0116.vercel.app`: anonymous Luna uses 500,000 µUSD/day and 53,837 µUSD/run for up to 8 calls at 768 output tokens, with a 64,000-token generation ledger and separate 128,000-token count-risk ledger; Preview remains fail closed | Complete the remaining P5 operational evidence and connect `syshin0116.dev` DNS if the custom domain is required |
 
 The operational source of truth for those live gates is the
 [GCP/Neon foundation](../runbooks/gcp-neon-foundation.md),
@@ -101,16 +104,16 @@ Exact `==` pins. No `^` on Aegra or assistant-ui.
 
 | Package | Pin | Note |
 |---|---|---|
-| `aegra-api`, `aegra-cli` | `==0.9.24` | Latest release verified 2026-07-31; includes a feature-flagged draft Agent Protocol v2 dialect via native v3. **Never `pip install aegra`** |
-| `langgraph` | `==1.2.9` | Aegra's own lock resolves 1.2.6. Rollback pin documented |
+| `aegra-api`, `aegra-cli` | `==0.9.25` | Includes the pinned Agent Protocol v2 dialect. **Never `pip install aegra`** |
+| `langgraph` | `==1.2.10` | Repository-tested exact pin |
 | `langgraph-sdk` | `==0.4.2` | `Auth`, `AuthContext`, `ServerRuntime` |
-| `langgraph-checkpoint-postgres` | `==3.1.0` | Above Aegra's locked 3.0.4, so untested by Aegra CI. Rollback: `==3.0.4` |
-| `deepagents` | `==0.6.12` | `permissions=` is new in 0.6.0 |
+| `langgraph-checkpoint-postgres` | `==3.1.1` | Resolved in the root lock |
+| `deepagents` | `==0.7.5` | Native `task` specialists and permission-bounded backends |
 | `langchain` | `==1.3.14` | |
-| `langchain-quickjs` | `==0.3.4` | async execution only; owner/eval tier first |
+| `langchain-quickjs` | `==0.3.5` | async execution only; owner/eval tier |
 | `pyjwt` | `==2.13.0` | replaces 130 LOC of hand-rolled base64url + HMAC |
-| `@assistant-ui/react` | `0.15.0` | |
-| `@assistant-ui/react-langgraph` | `0.14.15` | native `useLangGraphRuntime`; **not** `react-langchain` |
+| `@assistant-ui/react` | `0.15.13` | |
+| `@assistant-ui/react-langgraph` | `0.14.23` | native `useLangGraphRuntime`; **not** `react-langchain` |
 | `@langchain/langgraph-sdk` | `1.9.28` | |
 | `@langchain/protocol` | `0.0.18` | Exact upstream schema/binding release recorded with its commit and hashes in the protocol lock |
 
@@ -121,9 +124,9 @@ and a 53,837 µUSD per-run provider-request reservation: 21,837 µUSD for the wo
 64,000-token generation allocation across up to 8 calls at 768 output tokens per call,
 plus 32,000 µUSD for the separate 128,000-token count-risk ledger.
 Preview remains disabled, unpriced, and
-OpenAI-free. These committed Cloud Run values are desired state, not proof of a live
-public launch; Luna has no API Free tier, so BotID/Vercel issuance stays disabled
-until every operational and provider-spend gate passes.
+OpenAI-free. Production is live with these committed values. Luna has no API Free tier,
+so the application ledger remains a local safety boundary while provider-side spend-stop
+and input-count billing evidence remain operational follow-ups.
 
 **Already dropped:** `chromadb` (zero call sites).
 
@@ -245,8 +248,9 @@ eval/
 infra/gcp/                          # staged, fail-closed Cloud Run/Neon delivery contract
 ```
 
-Not present yet, by design: serving graph expansion/fusion modules, heavyweight
-`eval/src/blogeval/lab/` methods, and the reviewed `topic-smoke-v1.review.json` plus
+Not present yet, by design: serving graph expansion/fusion modules, additional
+heavyweight `eval/src/blogeval/lab/` methods, and the reviewed
+`topic-smoke-v1.review.json` plus
 `topic-smoke-v1.json`. They land only with their method implementation or real owner
 judgements. The superseded implementations under
 `agent/src/agent/lib/` are gone; one unused package marker remains for a later hygiene
@@ -264,9 +268,9 @@ workflow files and reusable-workflow boundaries are also reviewed delivery input
 ├── protocol-compat.yml       # AP v2 schema/codegen/fixture drift
 ├── wiki-verify.yml           # immutable source/wiki contract
 ├── agent-image-build.yml     # reusable secretless isolated image builder
-├── agent-release.yml         # reusable owner-gated release + pre-traffic smoke
-├── preview-agent.yml         # same-repository PR caller -> fixed preview service
-├── deploy-agent.yml          # reviewed main caller -> production or rollback
+├── agent-release.yml         # reusable owner-gated release + bounded pre-traffic smoke
+├── preview-agent.yml         # gated same-repository PR caller; currently dormant
+├── deploy-agent.yml          # reviewed main caller -> production
 ├── eval-publication.yml      # manual main-only attested evaluation candidate
 ├── vercel-production.yml     # canonical Vercel production observer/guard
 └── dependency-audit.yml      # scheduled latest-release/security report
@@ -296,7 +300,7 @@ workflow files and reusable-workflow boundaries are also reviewed delivery input
   `protocol/agent-protocol.lock.json`, regenerate bindings in a temporary directory, and
   fail on a diff. Replay committed content-block, tool, nested namespace, replay, error,
   and HITL fixtures through both Python and TypeScript consumers.
-- The lock records upstream `@langchain/protocol` 0.0.18 and Aegra 0.9.24 with exact
+- The lock records upstream `@langchain/protocol` 0.0.18 and Aegra 0.9.25 with exact
   commits and artifact hashes. Aegra implements a tested subset of that draft AP v2
   event model at
   `POST /threads/{thread_id}/stream/events`, while upstream documents
@@ -315,36 +319,36 @@ workflow files and reusable-workflow boundaries are also reviewed delivery input
 
 ### Preview and production
 
-- Vercel continues to create the web preview. When the repository variable
-  `AGENT_CLOUD_RUN_ENABLED=true`, `preview-agent.yml` handles `opened`, `reopened`, and
-  `synchronize` events from same-repository, non-Dependabot pull requests. It builds the
-  exact PR head in the isolated secretless builder, then waits for an owner approval in
-  `Agent Preview` before releasing to the fixed shared `agent-preview` service. One global
-  caller concurrency group serializes that shared target with `cancel-in-progress=false`.
-  There is no trusted-label trigger, per-PR service, URL comment, or automatic expiry.
+- Vercel continues to create the web preview. The Cloud Run preview caller requires both
+  `AGENT_CLOUD_RUN_ENABLED=true` and `AGENT_CLOUD_RUN_PREVIEW_ENABLED=true`. The repository
+  has only the first flag; the Preview flag is absent, and Terraform creates no Preview
+  Cloud Run service or jobs. The caller is therefore dormant until a separate reviewed
+  change restores those resources and enables the flag. The current release workflow also
+  does not revalidate the PR head or required CI after the `Agent Preview` approval, so
+  that check must land before the caller can become a supported deployment path.
 - GitHub authenticates to GCP through Workload Identity Federation; no long-lived service
   account JSON key is stored. Preview and production use isolated builders and Artifact
   Registry repositories. Each delivery attempt pushes a fresh git-SHA/run/attempt tag,
-  records its digest/SBOM in that builder job, and deploys only that digest—never trust a
-  pre-existing tag or rebuild between migration, smoke, and promotion.
+  records its registry digest, and deploys only that digest. The current builder explicitly
+  disables provenance and SBOM generation. Never trust a pre-existing tag or rebuild between
+  build, smoke, and promotion.
 - `deploy-agent.yml` releases only the current reviewed `main` candidate whose exact
-  `ci/check`, `protocol/compat`, and `wiki/verify` check-runs succeeded. Before P6 it
-  deploys the owner-only service; after P6 it uses the same digest-bound path for the
-  reviewed public revision.
-- The full authenticated AP v2 smoke is integrated into `agent-release.yml`: it targets
-  the exact newly tagged revision while that revision still has 0% traffic, alongside
-  `/live`, `/ready`, and the unauthenticated 401 boundary. Only a successful pre-traffic
-  smoke permits promotion. Post-promotion checks are intentionally limited to health and
-  the cheap unauthenticated AP v2 boundary; there is no separate
-  `smoke-production.yml`.
+  `ci/check`, `protocol/compat`, and `wiki/verify` check-runs succeeded. The same
+  digest-bound path now deploys the public Production revision.
+- `agent-release.yml` deploys that digest to a no-traffic revision with a temporary
+  `smoke` tag, verifies the deployed digest, `/live`, `/ready`, and an unauthenticated
+  AP v2 `401`, then promotes the revision to 100% and removes the tag. It does not run
+  migration, grant-probe, or maintenance jobs, an authenticated or provider-backed
+  two-turn smoke, or an automated rollback.
 - The PR container smoke proves packaging, migration, startup, health, and fail-closed
   routing without provider spend. It does not replace the P2/P3 deployed gates against
   real Neon, a real model provider, the browser Korean-IME journey, or capability-policy
   evidence.
-- Cloud Run keeps the previous healthy revision at zero traffic. Rollback is traffic
-  reassignment to that known digest, not a rebuild. Database migrations must be backward
-  compatible with one previous application revision; destructive migrations require a
-  separate ADR and backup/restore rehearsal.
+- Cloud Run retains older revisions, but the repository has no rollback workflow.
+  Recovery currently requires a separately approved manual traffic reassignment to a
+  verified Ready revision. Database migrations must remain backward compatible with one
+  previous application revision; destructive migrations require a separate ADR and
+  backup/restore rehearsal.
 - Use dedicated GitHub environments `Agent Preview` and `Agent Production`; the Vercel
   environments remain `Preview` and `Production`. Reviewers, self-review, and deployment
   branches are defined only in `.github/repository-governance.json` and checked by
@@ -372,9 +376,10 @@ deepagents.
   `agent.auth:auth`, and minimal `agent.http:app`. The custom FastAPI object becomes
   Aegra's application before native routers are included, so its pure-ASGI guard wraps
   native AP v2 commands without reimplementing them.
-- Set `FF_V2_EVENT_STREAMING=true`; Aegra 0.9.24 returns 503 from its AP v2 event route
-  without this feature flag. Probe capabilities before starting the conversation.
-- Install `aegra-api==0.9.24 aegra-cli==0.9.24`; confirm no resolver conflict.
+- The accepted spike used `FF_V2_EVENT_STREAMING=true`; its Aegra 0.9.24 event route
+  returned 503 without this feature flag.
+- The accepted spike pinned `aegra-api==0.9.24 aegra-cli==0.9.24`. The current tested
+  runtime pin is 0.9.25 as recorded in the version table and protocol lock.
 - Minimal `graph.py` rewrite: drop `checkpointer=`/`store=` and `_lazy_graph`. Aegra does
   `graph.copy(update={checkpointer, store})` per request, so a compiled graph registers
   as-is. **The `backend=` factory form is deprecated** (0.5.0, removal 0.7.0) - pass a
@@ -396,7 +401,7 @@ deepagents.
   a separate check that may spend provider tokens.
 
 **Accept:** a **two-turn** Korean conversation with at least one tool call completes over
-Aegra 0.9.24's AP v2 `POST /threads/{thread_id}/stream/events`, using content-block
+the pinned Aegra AP v2 `POST /threads/{thread_id}/stream/events`, using content-block
 deltas, tool and run lifecycle events, and nested namespaces where applicable. Within one
 server lifetime, persist the last event/replay cursor, disconnect, reconnect, and prove that
 no visible content is duplicated or lost. Separately close every database/checkpointer
@@ -427,7 +432,7 @@ acceptance check, not something the deterministic fixture claims to replace.
 
 ## P1 - Rebuild the agent layer `~3 days`
 
-From scratch, native to deepagents 0.6.12. Absorbs the old leak-fix phase.
+This phase was built from scratch against Deep Agents. The current tested pin is 0.7.5.
 
 ### P1.1 The retriever Protocol - do this first
 - `agent/src/agent/retrieval/protocol.py`, **stdlib only, zero dependencies**. `Hit`,
@@ -559,7 +564,7 @@ gate**. Add a macro gate only with owner-reviewed `topic-smoke-v1` in P4.
 - `agent/src/agent/auth.py` carries the owner token flow, the P5 anonymous extension, and a
   mandatory `AGENT_AUTH_SECRET` length check. Never deploy an Aegra graph with no auth
   file.
-- Disable native thread deletion with `@auth.on.threads.delete`. Aegra 0.9.24 deletes
+- Disable native thread deletion with `@auth.on.threads.delete`. Aegra 0.9.25 deletes
   metadata without checkpoints and exposes no supported atomic extension, so there is no
   honest user-facing delete operation. The implemented admin GC/retention job remains a
   separate privileged operation.
@@ -576,17 +581,19 @@ later server deletion, so a LOC-based cleanup cannot remove them accidentally.
 
 ## P2 - Deploy a restricted Cloud Run preview `~1.5 days`
 
-First deployment, but **not yet a public chatbot**. P1's fail-closed owner auth is the
+This was the first-deployment phase, when the service was **not yet a public chatbot**.
+P1's fail-closed owner auth was the
 application boundary so the browser preview can reach Cloud Run without creating a second
 IAM-token exchange. IAM and ingress restriction may be added where compatible, but an
 unlisted URL is never an access-control boundary. Aegra without the registered auth file
 is fail-open under one shared `anonymous` identity, so deployment must refuse to proceed
 if auth registration or its secret is missing.
 
-**Repository status:** the image, Terraform stages, identity validators, migration and
-grant jobs, preview/production callers, pre-traffic smoke, and rollback path are
-implemented. This phase is not accepted until the exact external GCP/Neon foundation is
-applied and the real preview passes every gate below.
+**Repository status:** the native image build and Production release path are active.
+Terraform still declares migration, grant-probe, and maintenance jobs, but normal CD does
+not execute them and the repository has no automated rollback. Production is live and
+Preview remains closed. Retained real-Neon job evidence is still required if the staged
+Terraform foundation remains in scope.
 
 - Dockerfile is greenfield - Aegra's own copies `libs/aegra-api/...` paths that do not
   exist here. `python:3.12-slim-bookworm`.
@@ -601,7 +608,8 @@ applied and the real preview passes every gate below.
   credential to the runtime.
 - Give the service a separate least-privileged direct Neon URL. Reject `-pooler` hostnames
   before startup in accordance with ADR-0007, and exercise both async and synchronous
-  database paths in preview. Aegra 0.9.24 still invokes the LangGraph saver/store
+  database paths against the isolated real-Neon branch before a Production schema change.
+  The pinned Aegra runtime still invokes the LangGraph saver/store
   `setup()` methods during lifespan startup, so the separated runtime role temporarily
   needs the exact schema-local idempotent DDL those calls exercise in addition to narrow
   DML. Treat the grant shape as a real-Neon deployment gate: startup/restart and
@@ -619,16 +627,16 @@ applied and the real preview passes every gate below.
   exact streaming route used by the frontend, not only on a metadata route.
 - `max_instances=1` and one application worker are both load-bearing: either setting
   exceeding one splits P5's in-process guard.
-- Set the Anthropic organization spend cap. Grep startup logs for Aegra's
+- Verify the OpenAI project's enforced spend stop. Grep startup logs for Aegra's
   data-not-isolated warning.
 
 **Accept:** the same-digest direct-URL `python -m agent.migrate` job succeeds before deployment;
 the service starts with `RUN_MIGRATIONS_ON_STARTUP=false`, rejects `-pooler` hostnames, and
 proves its separate direct runtime URL and the required grant/denial matrix against real
 Neon across the exercised async/sync database paths;
-`/live` returns 200, `/ready` is healthy, and `scripts/smoke.py` passes with owner preview
-credentials. The same streaming requests without credentials or with a forged subject
-receive 401/403; cold-start-to-first-token and full-image cold-start plus concurrency-8
+`/live` returns 200, `/ready` is healthy, and `scripts/smoke.py` passes with signed-in
+Production owner credentials. The same streaming requests without credentials or with a
+forged subject receive 401/403; cold-start-to-first-token and full-image cold-start plus concurrency-8
 memory are measured and recorded without approaching the 1 GiB limit. Starting a fresh
 revision from the same image digest restores persisted checkpoint/thread/memory state. Do
 not continue if graph routes are anonymously reachable, a pooler endpoint is configured,
@@ -639,8 +647,8 @@ the process settings split the guard, or measured memory leaves inadequate headr
 ## P3 - assistant-ui `~3 days`
 
 Preview URL first. The native assistant-ui implementation and the WEB-B guest-only network
-projection are merged. The deployed surface remains WEB-A owner-only because all public
-flags are false until P5's live gates and P6's explicit launch approval pass.
+projection are merged. Production now serves WEB-B anonymous Luna chat while Preview
+remains fail closed.
 
 ### P3.1 UI contract
 
@@ -823,7 +831,7 @@ the bounded code interpreter.
 
 ### P4.5.1 QuickJS, independently
 
-- Add `CodeInterpreterMiddleware` using `langchain-quickjs==0.3.4`. All execution paths are
+- Add `CodeInterpreterMiddleware` using `langchain-quickjs==0.3.5`. All execution paths are
   async: never call sync `ctx.eval()` or sync `invoke()`.
 - Start in eval and owner tiers only. No environment, filesystem, or network bridge; expose
   only the minimum pure-data helpers needed to inspect and transform retrieved results.
@@ -852,10 +860,11 @@ the bounded code interpreter.
 - Treat `snapshot()` as observation only. Capability evaluation must call the atomic
   `finalize()` boundary, which terminalizes the run, rejects any open model or task
   reservation, enforces `elapsed < limit`, and returns an immutable frozen snapshot.
-  Provider usage comes only from middleware-parsed Anthropic metadata, never executor
-  observations. The pricing buckets are uncached input, output, cache-read input, and
-  cache-write input; cache-write combines Anthropic's five-minute and one-hour creation
-  buckets when those TTL details are present. If a required usage/detail field is absent,
+  Provider usage comes only from middleware-parsed response metadata, never executor
+  observations. The normalized pricing buckets are uncached input, output, cache-read
+  input, and cache-write input. The initial Anthropic fixture combines its five-minute and
+  one-hour cache-creation buckets when those TTL details are present. If a required
+  usage/detail field is absent,
   negative, unknown, or internally inconsistent, `provider_usage_complete` is false and
   every aggregate provider bucket is `null`; no zero-valued usage is fabricated.
 - The initial owner-only experiment used max depth 1 and max two subagents per run.
@@ -875,8 +884,8 @@ the bounded code interpreter.
 
 **Accept:** deterministic fixtures prove timeout/memory/output limits, stateless subagent
 instructions, explicit skill assignment, shared nested budgets, max depth/fan-out, and
-failure propagation. The 2×2 report is reproducible. Owner preview can exercise both
-capabilities. This was the owner-only P4 acceptance gate. Anonymous access now uses the
+failure propagation. The 2×2 report is reproducible. The owner/eval test runtime can
+exercise both capabilities. This was the owner-only P4 acceptance gate. Anonymous access now uses the
 bounded P5/P6 policy and the same server-declared, read-only specialists.
 This run-local finalization evidence does not replace P5's lower guest policy,
 per-identity/global daily dollar ledger, rate limit, or provider-side spend cap.
@@ -903,21 +912,22 @@ the child-tool accounting distinction now encoded by `delegated_tool_calls`, whi
 second ended before a complete combined observation. No v5 quality, result, or exact cost
 is claimed, and another paid attempt requires separate explicit owner acceptance.
 Official input-token-count request pricing is undocumented and requires a separate
-acknowledgement. Any complete future output is
-deliberately `provider-backed-local-unattested`, is not a signed publication or
-public-launch gate, and guests remain server-side denied both capabilities.
+acknowledgement. Any complete future output is deliberately
+`provider-backed-local-unattested` and is not a signed publication. Production guests may
+use the bounded server-declared specialists, while QuickJS remains owner/eval-only.
 
 ---
 
-## P5 - Public hardening `~2 days` `GATE for P6`
+## P5 - Public hardening `implemented; post-launch evidence remains`
 
 Nothing here is optional. Full detail in
 [`public-exposure.md`](../research/public-exposure.md).
 
-**Repository status:** the code controls below are implemented and covered by unit,
-PostgreSQL, protocol, and browser fixtures. They do not authorize public traffic. Real
-Cloud Run/Neon/provider proofs, the exact secret payload/version, input-count billing
-confirmation, and provider-side spend protection remain mandatory.
+**Repository status:** the controls below are implemented, tested, and active for the
+Production anonymous path. The retained deployment evidence proves availability and the
+cheap unauthenticated boundary. It does not yet prove input-count billing, the provider
+account spend stop, first bounded Scheduler execution, or deployed abuse, retention, and
+recovery behavior.
 
 - **The governing constraint:** authorization must not depend on `@auth.on.*` dispatch.
   Legacy streaming paths skip handlers, and AP v2 thread-stream/commands coverage must be
@@ -939,8 +949,8 @@ confirmation, and provider-side spend protection remain mandatory.
 - `/admin/gc` plus the dedicated maintenance job, quarantine, stale-run recovery, and
   Terraform-owned Cloud Scheduler. **Deleting a thread does not delete its checkpoints** -
   sweep children before parents. Neon free has no `pg_cron`; the approved production
-  Scheduler desired state is active, but remains a live launch gate until its exact plan,
-  apply, and first bounded execution pass.
+  Scheduler desired state is active. Its exact plan, apply, and first bounded execution
+  remain post-launch evidence.
 - Per-run model/token limits and a durable UTC-day micro-dollar ledger are implemented for
   the fixed `openai:gpt-5.6-luna` guest contract. Production now owns the exact model,
   500,000/53,837 µUSD ceilings, anonymous Agent flag, and numeric OpenAI secret
@@ -950,7 +960,7 @@ confirmation, and provider-side spend protection remain mandatory.
   because count billing is undocumented. This is not
   a documented provider price or hidden-token bound. Input-count billing confirmation,
   provider-account spend protection, and the
-  disabled Vercel issuance flags remain live launch gates.
+  enabled Production issuance flags do not replace those remaining operational proofs.
 - Public capability policy keeps retrieval and the existing server-declared dynamic
   specialists available to canonical Luna guests. Guest children remain stateless,
   depth-one, read-only, and inside the shared model, tool, token, time, concurrency, and
@@ -959,12 +969,15 @@ confirmation, and provider-side spend protection remain mandatory.
 
 ---
 
-## P6 - Go public `~1 day` `PUBLICATION GATE`
+## P6 - Public rollout `live; post-launch acceptance remains`
 
-- Remove the P2 preview restriction only after every P5 gate passes. The intended surface
-  is a personal-blog testbed that **any visitor can try without signing in**: Vercel BotID
-  Basic establishes an isolated anonymous subject through a bodyless bootstrap; it is an
-  abuse gate, not an account wall.
+Production is public at `syshin0116.vercel.app`. The checks below are the remaining
+post-launch acceptance work, not a claim that anonymous access is still disabled.
+
+- Keep Production available as a personal-blog testbed that **any visitor can try without
+  signing in**. Vercel BotID Basic establishes an isolated anonymous subject through a
+  bodyless bootstrap; it is an abuse gate, not an account wall. Preview stays closed until
+  it receives a separate reviewed public-test contract.
 - Verify the P1.2 mirror gate and the P5 guard on the **deployed** service, by actually
   exceeding the rate limit from a browser and firing two concurrent submits on one thread.
 - Confirm the separate administrative retention/GC job measurably reduces orphaned
@@ -972,7 +985,7 @@ confirmation, and provider-side spend protection remain mandatory.
 - Verify the implemented quarantine, heartbeat, and stale-run recovery on the deployed
   revision: with `REDIS_BROKER_ENABLED=false` there is no upstream lease reaper, so the
   repository-owned fence must recover an instance killed mid-run without double execution.
-- Decide LangSmith tracing **before**, not after - traces carry full prompts and full
+- Decide LangSmith tracing before activating it; traces carry full prompts and full
   retrieved content.
 - Watch guest and signed-in OpenAI spend separately every day for week one.
 
@@ -986,7 +999,7 @@ confirmation, and provider-side spend protection remain mandatory.
 | `HIGH` | Auth dispatch differs across legacy and AP v2 streaming/commands paths | Protocol fixtures test every production endpoint; SQL identity predicate plus outer ASGI guard is the boundary. Pin `aegra-api >= 0.9.7` |
 | `HIGH` | Client-supplied `configurable.user_id` wins over the server's | The graph reads the authoritative server runtime identity; PostgreSQL isolation tests retain a forged field and prove it cannot cross namespaces |
 | `HIGH` | Aegra thread deletion strands checkpoints and cannot commit both stores atomically | Native DELETE is fail-closed with 403. Do not expose a faux-safe route; design admin GC separately |
-| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | The Production Agent desired state reserves 500,000 µUSD/day and 53,837 µUSD/run; the run value combines the 64,000-token generation allocation across up to 8 calls at 768 output tokens per call with a separate 128,000-token aggregate count-risk ledger priced at the highest input bucket, but is not a documented provider hard bound. Vercel issuance stays disabled until input-count billing, the implemented ledgers/guard, and a separately verified OpenAI account cap all pass. Luna has no Free tier |
+| `HIGH` | Unbounded LLM spend from anonymous traffic. Aegra supplies no sufficient public rate/budget boundary | Production reserves 500,000 µUSD/day and 53,837 µUSD/run; the run value combines the 64,000-token generation allocation across up to 8 calls at 768 output tokens per call with a separate 128,000-token aggregate count-risk ledger priced at the highest input bucket, but is not a documented provider hard bound. Production issuance is active, so input-count billing and a separately verified OpenAI account cap remain urgent operational evidence. Luna has no Free tier |
 | `MED` | **Regressing the corrected baseline.** A tokenizer or fitted-artifact change would invalidate every comparison | P1.3 executable literal-term, raw-score, determinism, memory, and registry tests remain required |
 | `MED` | Pre-1.0 churn. Aegra and assistant-ui compatibility can change between patch releases; three `unstable_` assistant-ui options remain on the happy path | Exact pins, committed lockfiles, protocol/browser replay, and `smoke.py` as the bump gate |
 | `MED` | Eval cost creep - embedding N models × M queries × K retrievers plus judge calls | Cache embeddings by fingerprint; local results as system of record; `upload_results=False` while iterating |
@@ -1002,8 +1015,8 @@ confirmation, and provider-side spend protection remain mandatory.
 3. **Guest persistence:** an httpOnly anonymous-session cookie resumes the pseudonymous
    subject; the bodyless BotID Basic verdict is never retained.
 4. **Version policy:** use the repository-tested exact pins, including
-   `langgraph==1.2.9` and `langgraph-checkpoint-postgres==3.1.0`, with rollback pins and
-   compatibility tests documented.
+   `langgraph==1.2.10` and `langgraph-checkpoint-postgres==3.1.1`, with compatibility
+   tests documented.
 5. **Client controls:** the old skill-restriction chips and fake system messages are
    dropped. Retrieval and capability authorization is server-owned. Model selection is
    an exact signed-in allowlist, not a generic client capability field.
@@ -1015,14 +1028,15 @@ confirmation, and provider-side spend protection remain mandatory.
 - Retain and qualify the pinned multilingual-E5 first experiment; selecting,
   fingerprinting, and locally replaying the model path are complete, but no local result
   can substitute for the owner-reviewed, publication-qualified evidence gate.
-- Whether a genuinely free guest provider path will replace Luna or the owner will approve
-  a non-zero public budget; no current code path permits a free Luna launch.
+- Whether a genuinely free guest provider path will replace the current owner-approved
+  non-zero Luna budget.
 - Cold-start-to-first-token and full-image memory on the real revision. Those measurements
   decide whether `min-instances=1` is worth recurring cost.
 - Whether public LangSmith tracing is enabled; traces contain full prompts and retrieved
-  content, so this must land before—not after—public launch.
-- Real GCP/Neon/OAuth/provider acceptance, including the signed company-admin foundation
-  evidence, remains an operational gate rather than a repository decision.
+  content, so an explicit privacy decision must land before tracing is activated.
+- Signed-in model-selection acceptance, provider billing/spend-stop evidence, and the
+  retained GCP/Neon maintenance proofs remain operational follow-ups rather than repository
+  implementation gates.
 - Continue watching Aegra multitask/stream-auth changes; delete local guards only after a
   pinned release passes the same protocol, isolation, browser, and recovery suites.
 
@@ -1031,13 +1045,9 @@ confirmation, and provider-side spend protection remain mandatory.
 - **Read [ADR-0008](../adr/0008-chatbot-is-a-rag-evaluation-testbed.md) and
   [ADR-0003](../adr/0003-agent-code-changes-via-pr.md) first.** Purpose, then process:
   feature branch, PR, never a direct commit to `main`, never merge on red CI.
-- One phase per agent. Give it the phase section plus the linked research, not this file.
-- **P0 gates everything. P1.3 gates P4. P1.2 and P5 gate P6.**
-- P4.5 starts only after the P4 harness can record quality, latency, and cost. Its standalone
-  QuickJS and subagent arms gate the combined arm.
-- **P1.1 first within P1** - the Protocol is what everything else plugs into.
-- P4 implementation may parallelise with P2 and P3 once P1 lands, but the first official
-  sweep waits until the basic-chat path passes so the documented basic-chat-first gate
-  remains meaningful. Nothing else parallelises cleanly, because `graph.py` is touched by
-  P0, P1, and P5.
+- Dispatch only an exact remaining gate from the phase-status table; do not repeat a
+  completed build phase.
+- Owner-reviewed evaluation publication and post-launch operational evidence may proceed
+  independently in separate worktrees and PRs.
+- Rebase before review when parallel work touches the same planning or governance files.
 - Every phase ends with its acceptance check actually run, and the result stated plainly.

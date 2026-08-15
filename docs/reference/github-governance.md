@@ -9,7 +9,7 @@ when_to_read: >
   dependency and upstream-version audit.
 tags: [github, governance, ci, dependabot, runbook]
 status: stable
-updated: "2026-08-03"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs:
   - ../../.github/repository-governance.json
@@ -86,11 +86,11 @@ and every project-bound
 sync and silently replace the environment that CI was meant to verify. The
 local verifier binds this contract to the AST-selected `agent` job and its
 root-workspace execution, tokenizes executable `run` scalars with shell
-comments removed, and binds every run step—including the fail-closed and
-unaffected-component reports—to an exact name, condition, command-token, and
-order inventory. The four frozen commands and their complete scopes—Ruff
+comments removed, and binds every run step, including the fail-closed and
+unaffected-component reports, to an exact name, condition, command-token, and
+order inventory. The four frozen commands and their complete scopes, Ruff
 check, Ruff format check, index build/audit, and pytest restricted to
-`agent/tests`—are exact within that
+`agent/tests`, are exact within that
 inventory, so variable executables, wrapper commands, deletions, renames, and
 extra direct or indirect runs require a deliberate contract change. The final
 reviewed step is the one intentional exception to the ordinary run-step key
@@ -237,8 +237,8 @@ The verifier also contains a deliberately hardcoded reviewed baseline for the
 repository/API/main identities, required-check emitters, Actions object,
 environment payloads, Dependabot configuration, and ruleset parameters. This
 prevents changing the manifest and implementation under test together from
-silently redefining the contract. An intentional evolution—such as adding a
-Cloud Run `Staging` environment—updates the manifest, hardcoded baseline,
+silently redefining the contract. An intentional evolution, such as adding a
+Cloud Run `Staging` environment, updates the manifest, hardcoded baseline,
 mutation tests, and this runbook in the same PR.
 
 ## Full-SHA Actions policy
@@ -313,9 +313,9 @@ permission for CI to promote, alias, redeploy, or change environment variables.
 The image builder runs first through `agent-image-build.yml` without any GitHub
 environment, environment secret, or deployment credential. It can write only to the
 target's isolated registry. The one subsequent `agent-release.yml` job references the
-exact agent environment, so a normal preview or production delivery needs one approval
-before migration credentials, the smoke token, runtime validation, or traffic are
-available. Manual rollback uses the same release boundary and also needs one approval.
+exact target environment. Production delivery needs one approval before the deployer
+identity or traffic update is available; a restored Preview delivery would use the same
+boundary through `Agent Preview`.
 This two-workflow shape keeps registry-writer and deployer credentials on different
 runners without claiming that one environment review yields two independent approvals.
 The sole active `github-production` WIF provider explicitly maps numeric repository and
@@ -323,40 +323,33 @@ owner IDs plus the four phase-specific delivery roles, and its condition referen
 those mapped attributes. The legacy `github-preview` provider is managed disabled as
 described in the [Cloud Run delivery runbook](../runbooks/cloud-run-delivery.md).
 
-When `AGENT_CLOUD_RUN_ENABLED=true`, the agent preview caller handles only
-`opened`, `reopened`, and `synchronize` events from same-repository, non-Dependabot pull
-requests. Its secretless builder resolves the exact PR head before the owner-gated
-`Agent Preview` release targets the fixed shared `agent-preview` service. A single global
-caller concurrency group serializes that shared service with
-`cancel-in-progress=false`; there is no label, per-PR service, URL comment, or expiry
-automation.
+The Cloud Run preview caller requires both `AGENT_CLOUD_RUN_ENABLED=true` and
+`AGENT_CLOUD_RUN_PREVIEW_ENABLED=true`. Only the first repository variable exists.
+Terraform retains Preview identities, registries, and empty secret containers, but creates
+no Preview Cloud Run service or jobs. The caller is therefore dormant until a reviewed
+change restores those resources and enables the second flag. Its builder resolves the PR
+head before approval, but the release workflow does not revalidate that head or required
+CI after `Agent Preview` approval. That check must land before this becomes a supported
+deployment path.
 
-After the reviewer releases `agent-release.yml` and before GCP authentication, a pinned
-repository validator binds the exact target/environment/mode, source SHA, isolated digest
-or rollback revision, and a fresh bounded smoke token. Preview rechecks the still-open
-same-repository PR head. Production deploy rechecks current `main` before and after the
-exact successful `ci/check`, `protocol/compat`, and `wiki/verify` check-runs from GitHub
-Actions. Manual rollback requires `workflow_dispatch`, current `main`, an exact revision,
-and the production review but deliberately does not require green candidate checks.
-Caller-only preview/production concurrency never cancels an approved release.
+After the reviewer releases `agent-release.yml`, Production rechecks current `main` and
+the exact successful `ci/check`, `protocol/compat`, and `wiki/verify` check runs before
+GCP authentication. The release deploys the immutable digest to a no-traffic revision,
+verifies `/live`, `/ready`, and an unauthenticated APv2 `401`, then promotes 100% traffic.
+It does not execute migration, grant-probe, or maintenance jobs, run an authenticated
+provider smoke, or automate rollback. Caller-only preview/production concurrency never
+cancels an approved release.
 
 Environment inventory is also exact. `Evaluation Publication` contains no secrets or
-variables. `Agent Preview` and `Agent Production` each contain only
-`AGENT_SMOKE_BEARER_TOKEN` and no variables. The verifier compares names but never reads
-or logs secret values. Immediately before every agent approval, the operator must replace
-that secret with an owner JWT valid for at most two hours and with at least 65 minutes
-remaining. The release gate rejects stale or long-lived public claims before GCP auth,
-and the live smoke verifies the signature. Automatic minting is not implemented; storing
-one long-lived static JWT is forbidden. Vercel environment secrets are outside this
-repository-governance inventory.
+variables. `Agent Preview` and `Agent Production` also contain zero secrets and zero
+variables. Vercel environment secrets are outside this repository-governance inventory.
 
 Environment reviewers are independent of branch policy. A solo-owner approval
 is usable only when `prevent_self_review` is disabled. Keep routine Vercel previews free
-of mandatory review; retain owner approval for both spend-bearing agent releases and
-production.
-Anonymous visitor access can be enabled only by a reviewed Agent Production release after
-ADR-0006's gates pass. Agent Preview validates a candidate; it is never the public guest
-path.
+of mandatory review; retain owner approval for Vercel Production and Agent Production.
+Anonymous visitor access remains authorized only through reviewed Agent Production
+releases under ADR-0006. The retained `Agent Preview` environment is not a current
+deployment validation surface and is never the public guest path.
 
 ## Dependabot and scheduled audit
 
@@ -501,7 +494,7 @@ re-resolution or add temporary transitive packages to `package.json`.
    both branch policies.
 8. Create or reconcile `Agent Preview` and `Agent Production` with required reviewer
    `syshin0116`, self-review allowed, admin bypass disabled, the branch policies above,
-   only `AGENT_SMOKE_BEARER_TOKEN`, and zero variables.
+   zero secrets, and zero variables.
 9. Run the `--live` command from this runbook; it must pass.
 10. Manually dispatch **Dependency audit** once. Require the web vulnerability, Python
    vulnerability, and upstream-version jobs to pass; triage each finding in a focused PR.

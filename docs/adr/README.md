@@ -7,7 +7,7 @@ when_to_read: >
   an ADR.
 tags: [index, adr]
 status: stable
-updated: "2026-07-26"
+updated: "2026-08-15"
 owners: ["@syshin0116"]
 refs: [template.md, ../conventions/frontmatter.md, ../../DECISIONS.md]
 template: index
@@ -45,7 +45,7 @@ New ADR: copy [`template.md`](template.md). Frontmatter schema:
 | [0003](0003-agent-code-changes-via-pr.md) | Agent changes to `web/` and `agent/` go through a branch and PR | accepted |
 | [0004](0004-adopt-aegra.md) | Adopt Aegra and delete the hand-rolled Agent Protocol server | accepted |
 | [0005](0005-adopt-assistant-ui.md) | Rebuild the chat UI on assistant-ui with the react-langgraph adapter | accepted |
-| [0006](0006-public-anonymous-chat-access.md) | The chatbot is public, with Turnstile-gated anonymous subjects | accepted (rollout gated) |
+| [0006](0006-public-anonymous-chat-access.md) | The chatbot is public, with Vercel BotID-gated anonymous subjects | accepted (live in Production, Preview closed) |
 | [0007](0007-postgres-on-neon-split-projects.md) | Postgres stays on Neon, split into two projects | accepted |
 | [0008](0008-chatbot-is-a-rag-evaluation-testbed.md) | **The chatbot is a RAG evaluation testbed, not a search product** | accepted |
 

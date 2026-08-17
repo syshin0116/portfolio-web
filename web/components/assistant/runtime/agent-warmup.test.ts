@@ -58,6 +58,22 @@ describe("agent warm-up probe", () => {
     expect(attempts).toBe(4)
   })
 
+  test("gives up immediately when the origin has no readiness route", async () => {
+    let attempts = 0
+    const ready = await warmAgent({
+      apiUrl: API_URL,
+      signal: new AbortController().signal,
+      sleep: immediateSleep,
+      fetch: async () => {
+        attempts += 1
+        return new Response(null, { status: 404 })
+      },
+    })
+
+    expect(ready).toBe(false)
+    expect(attempts).toBe(1)
+  })
+
   test("stops probing once the caller aborts", async () => {
     const controller = new AbortController()
     let attempts = 0

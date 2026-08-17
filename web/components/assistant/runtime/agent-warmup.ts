@@ -6,6 +6,7 @@ const READY_PATH = "/ready"
 const ATTEMPT_TIMEOUT_MS = 30_000
 const RETRY_DELAY_MS = 2_000
 const MAX_ATTEMPTS = 4
+const RETRYABLE_STATUSES = new Set([408, 429])
 
 /**
  * The agent scales to zero, so the first visitor after an idle period otherwise
@@ -69,6 +70,11 @@ export async function warmAgent(options: WarmAgentOptions): Promise<boolean> {
       })
       await response.body?.cancel()
       if (response.ok) return true
+      // A booting or overloaded revision answers again; a route that is not
+      // there will not appear on a retry, and each retry costs a console error.
+      if (!RETRYABLE_STATUSES.has(response.status) && response.status < 500) {
+        return false
+      }
     } catch {
       options.signal.throwIfAborted()
     }

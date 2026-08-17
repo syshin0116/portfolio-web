@@ -10,7 +10,6 @@ import {
   ThreadListPrimitive,
   ThreadPrimitive,
   type ReasoningMessagePartProps,
-  type TextMessagePartProps,
   type ToolCallMessagePartProps,
   useAui,
   useAuiState,
@@ -52,9 +51,6 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react"
-import ReactMarkdown, { type Components } from "react-markdown"
-import remarkBreaks from "remark-breaks"
-import remarkGfm from "remark-gfm"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -77,6 +73,7 @@ import {
 import { cn } from "@/lib/utils"
 
 import { useAgentRuntimeUi } from "./agent-runtime-provider"
+import { MarkdownText } from "./markdown-text"
 import {
   inspectionSourcesFromUnknown,
   safeSourceUrl,
@@ -108,43 +105,6 @@ const SUGGESTIONS = [
   },
 ] as const
 
-const MARKDOWN_PLUGINS = [remarkGfm, remarkBreaks]
-const MARKDOWN_COMPONENTS = {
-  a: ({ children, href }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="font-medium underline underline-offset-4"
-    >
-      {children}
-    </a>
-  ),
-  code: ({ children }) => (
-    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em]">
-      {children}
-    </code>
-  ),
-  pre: ({ children }) => (
-    <pre className="my-3 overflow-x-auto rounded-xl border bg-muted/60 p-4 text-sm">
-      {children}
-    </pre>
-  ),
-} satisfies Components
-
-const MarkdownText = memo(function MarkdownText({
-  text,
-}: TextMessagePartProps) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={MARKDOWN_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
-    >
-      {text}
-    </ReactMarkdown>
-  )
-})
-
 const ReasoningPart = memo(function ReasoningPart({
   status,
 }: ReasoningMessagePartProps) {
@@ -175,6 +135,10 @@ const ToolPart = memo(function ToolPart({
   const running =
     status.type === "running" ||
     status.type === "requires-action"
+  // Opens while the call is in flight, then follows the reader. Binding `open`
+  // to `running` would reopen on every streaming re-render and slam the panel
+  // shut the moment the call finishes.
+  const [open, setOpen] = useState(running)
   const query = toolQueryFromArgs(argsText)
   const subagentType =
     toolName === "task" ? taskSubagentTypeFromArgs(argsText) : undefined
@@ -185,7 +149,11 @@ const ToolPart = memo(function ToolPart({
         : "서브에이전트"
       : toolName
   return (
-    <details className="my-3 rounded-xl bg-muted/50" open={running}>
+    <details
+      className="my-3 rounded-xl bg-muted/50"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm">
         <ToolCase
           className={cn(

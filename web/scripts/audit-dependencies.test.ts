@@ -180,6 +180,7 @@ describe("dependency audit policy", () => {
   test.each([
     "@assistant-ui/react",
     "@assistant-ui/react-langgraph",
+    "@assistant-ui/react-markdown",
     "@langchain/langgraph-sdk",
     "@langchain/protocol",
   ])("rejects a non-exact native agent manifest pin for %s", (name) => {
@@ -222,6 +223,7 @@ describe("dependency audit policy", () => {
   test.each([
     ["@assistant-ui/react", "0.15.13", "0.15.12"],
     ["@assistant-ui/react-langgraph", "0.14.23", "0.14.22"],
+    ["@assistant-ui/react-markdown", "0.14.10", "0.14.9"],
     ["@langchain/langgraph-sdk", "1.9.28", "1.9.27"],
     ["@langchain/protocol", "0.0.18", "0.0.17"],
   ])(

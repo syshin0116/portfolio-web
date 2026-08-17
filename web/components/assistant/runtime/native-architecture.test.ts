@@ -126,10 +126,11 @@ describe("native assistant-ui architecture contract", () => {
   })
 
   test("keeps inspection, recovery, responsive, and motion boundaries explicit", async () => {
-    const [provider, shell, nativeClient, inspection, ime, sheet] =
+    const [provider, shell, markdownText, nativeClient, inspection, ime, sheet] =
       await Promise.all([
         read("../agent-runtime-provider.tsx"),
         read("../chat-shell.tsx"),
+        read("../markdown-text.tsx"),
         read("./native-client.ts"),
         read("./inspection.ts"),
         read("./ime.ts"),
@@ -151,7 +152,13 @@ describe("native assistant-ui architecture contract", () => {
     expect(shell).not.toContain("QuickJS")
     expect(shell).not.toContain("서브에이전트 목적")
     expect(shell).toContain("근거 수")
-    expect(shell).toContain("MARKDOWN_COMPONENTS")
+    // 마크다운은 assistant-ui의 MarkdownTextPrimitive가 렌더한다.
+    expect(shell).not.toContain("ReactMarkdown")
+    expect(markdownText).toContain("MarkdownTextPrimitive")
+    expect(markdownText).toContain("memoizeMarkdownComponents")
+    expect(markdownText).toContain("CodeHeader")
+    // <details open={running}>은 스트리밍 리렌더마다 사용자의 토글을 덮어썼다.
+    expect(shell).not.toContain("open={running}")
     // 대화가 아래로 쌓이도록 Viewport 기본값(turnAnchor="bottom")을 쓴다.
     expect(shell).not.toContain("turnAnchor")
     expect(shell).toContain("AuiIf")

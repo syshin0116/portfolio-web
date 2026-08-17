@@ -38,6 +38,10 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
     "@assistant-ui/react-langgraph",
     "@assistant-ui/react-langgraph@0.14.23",
   ],
+  [
+    "@assistant-ui/react-markdown",
+    "@assistant-ui/react-markdown@0.14.10",
+  ],
   ["@auth/neon-adapter", "@auth/neon-adapter@1.11.3"],
   ["@langchain/core", "@langchain/core@1.2.5"],
   ["@langchain/langgraph-sdk", "@langchain/langgraph-sdk@1.9.28"],
@@ -55,6 +59,7 @@ const EXPECTED_SECURITY_DIRECT_RESOLUTIONS = new Map([
 const EXPECTED_NATIVE_AGENT_PINS = new Map([
   ["@assistant-ui/react", "0.15.13"],
   ["@assistant-ui/react-langgraph", "0.14.23"],
+  ["@assistant-ui/react-markdown", "0.14.10"],
   ["@langchain/langgraph-sdk", "1.9.28"],
   ["@langchain/protocol", "0.0.18"],
 ])

@@ -24,6 +24,7 @@
   "dependencies": {
     "@assistant-ui/react": "0.15.13",
     "@assistant-ui/react-langgraph": "0.14.23",
+    "@assistant-ui/react-markdown": "0.14.10",
     "@auth/neon-adapter": "1.11.3",
     "@giscus/react": "^3.1.0",
     "@langchain/core": "1.2.5",

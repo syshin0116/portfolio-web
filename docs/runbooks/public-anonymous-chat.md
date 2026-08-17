@@ -22,8 +22,9 @@ template: runbook
 
 As of 2026-08-15, Production at `https://syshin0116.vercel.app` serves public
 anonymous chat with both Vercel public flags set to `true`. Production Cloud Run
-accepts anonymous access with Luna fixed for guests. Preview remains fail closed
-with both public flags set to `false`.
+accepts anonymous access with Luna fixed for guests. Preview serves the same anonymous
+surface, pointed at the Production agent and therefore sharing its budget - see
+[Vercel variables](#vercel-variables).
 
 The live rollout does not close the remaining operational evidence: OpenAI input-count
 billing and a provider-enforced hard spend stop, the first bounded Scheduler execution,
@@ -244,10 +245,17 @@ Set these browser-visible Production values:
 - `NEXT_PUBLIC_AGENT_ASSISTANT_ID=agent`.
 - `NEXT_PUBLIC_AGENT_ANONYMOUS_ENABLED=true`.
 
-Set both anonymous flags to `false` in Preview. Do not copy secrets into any
-`NEXT_PUBLIC_*` value. A future restored Preview must use its own BotID, hostname,
-agent origin, database, and secrets; it must not share production guest identity or
-spend state.
+Preview runs the same anonymous surface against the **Production** agent origin, because
+no Preview Cloud Run service exists (`infra/gcp/cloud_run.tf` provisions services only for
+`local.production_cloud_run_environments`). Set the same five values above in Preview,
+with its own `ANONYMOUS_SESSION_SECRET`. Do not copy secrets into any `NEXT_PUBLIC_*`
+value.
+
+That sharing is the accepted cost of testing anonymous flows on a PR: Preview guests draw
+on the Production daily budget, guest thread capacity, and rate limits, and every Preview
+URL is publicly reachable. Close Preview first when spend or abuse evidence turns bad. A
+Preview environment that needs its own budget must first get its own Cloud Run service,
+BotID, hostname, database, and secrets.
 
 ## Re-enable procedure
 
@@ -260,7 +268,8 @@ operational evidence above passed during the initial rollout.
 2. Verify the exact Production runtime tuple and the migrations, grants, or maintenance
    path affected by the incident. Review current provider protection and input-count
    telemetry. If spend protection, key isolation, or count behavior triggered the close,
-   require that boundary to be fixed before reopening. Keep Preview disabled and OpenAI-free.
+   require that boundary to be fixed before reopening. Keep Preview closed until
+   Production reopens, because Preview spends against the same budget.
 3. Release the reviewed revision and verify the signed-in, PostgreSQL, public raw-wire,
    and incident-specific controls while BotID cannot mint anonymous credentials. Keep
    unrelated post-launch evidence recorded as open rather than claiming it passed.

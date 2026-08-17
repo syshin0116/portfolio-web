@@ -152,7 +152,8 @@ describe("native assistant-ui architecture contract", () => {
     expect(shell).not.toContain("서브에이전트 목적")
     expect(shell).toContain("근거 수")
     expect(shell).toContain("MARKDOWN_COMPONENTS")
-    expect(shell).toContain('turnAnchor="top"')
+    // 대화가 아래로 쌓이도록 Viewport 기본값(turnAnchor="bottom")을 쓴다.
+    expect(shell).not.toContain("turnAnchor")
     expect(shell).toContain("AuiIf")
     expect(shell).not.toContain("ThreadPrimitive.If")
     expect(shell).not.toContain("ThreadPrimitive.Empty")

@@ -762,10 +762,7 @@ function Composer({ centered = false }: { centered?: boolean }) {
 function Conversation() {
   return (
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col bg-background">
-      <ThreadPrimitive.Viewport
-        turnAnchor="top"
-        className="relative min-h-0 flex-1 overflow-y-auto"
-      >
+      <ThreadPrimitive.Viewport className="relative min-h-0 flex-1 overflow-y-auto">
         <EmptyConversation />
         <ThreadPrimitive.Messages>
           {() => <ChatMessage />}

@@ -117,6 +117,28 @@ uv run --frozen --package syshin0116-dev-eval blogeval validate-topic-review \
 Candidate, seed, corpus, or method drift fails because validation reconstructs the pool
 from the reviewed registry. A manual DocId outside the exact published mirror also fails.
 
+### Judging in a browser instead of the JSON
+
+Editing 228 `judgement` fields by hand while opening each document separately is the
+slow path. `eval/tools/` renders the same pending manifest as one self-contained page:
+
+```bash
+python3 eval/tools/build_topic_review_ui.py . ~/topic-review.html
+```
+
+The page embeds every pooled document in full, keeps the blind IDs blind, records
+judgements in `localStorage`, and searches the whole mirror for the additions of step 3.2.
+Exporting writes a decisions file that only carries the three owner-editable fields:
+
+```bash
+python3 eval/tools/apply_topic_review_decisions.py ~/topic-decisions.json .
+```
+
+The merge refuses an unknown blind ID, an illegal judgement, a manual addition that is
+already pooled, and one outside the published mirror; it leaves every checksummed field
+byte-identical and re-serializes exactly as `generate-topic-review` does. Validate with
+step 3's command afterwards - the page is an editor, not an authority.
+
 ## 4. Owner-only seal and finalization
 
 First commit the fully judged but still-pending manifest. That commit is the immutable

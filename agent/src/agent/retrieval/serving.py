@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import posixpath
@@ -25,6 +26,8 @@ from agent.retrieval.corpus import (
 )
 from agent.retrieval.exact import EXACT_METHOD_ID
 from agent.retrieval.protocol import DocId, Retrieval
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_RETRIEVER_METHOD = "bm25"
 _AGENT_ROOT = Path(__file__).parents[3]
@@ -866,6 +869,23 @@ def get_serving_runtime() -> ServingRuntime:
         return _cached_runtime(str(index_root), method_id)
 
 
+def warm_serving_runtime() -> bool:
+    """Build the cached runtime at startup so no visitor pays for it mid-request.
+
+    Best effort by design: a process without the generated artifacts - tests, a
+    checkout that has not run ``build_index.py`` - must still import and fall back
+    to the lazy path, where the same failure surfaces against the caller that
+    actually needs retrieval.
+    """
+
+    try:
+        get_serving_runtime()
+    except Exception:
+        logger.warning("retrieval warm-up failed; falling back to lazy loading")
+        return False
+    return True
+
+
 def reset_serving_runtime_cache() -> None:
     """Clear process-local serving state for tests and controlled reloads."""
 
@@ -883,4 +903,5 @@ __all__ = [
     "get_serving_runtime",
     "load_validated_wikilink_graph",
     "reset_serving_runtime_cache",
+    "warm_serving_runtime",
 ]

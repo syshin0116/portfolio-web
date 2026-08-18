@@ -723,6 +723,11 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url)
     if (request.method === "OPTIONS") return emptyResponse()
+    // The chat mount warms the agent before the first question; the real service
+    // answers this from Cloud Run's startup probe path.
+    if (url.pathname === "/ready" && request.method === "GET") {
+      return emptyResponse()
+    }
     if (url.pathname === "/__fixture/state" && request.method === "GET") {
       return responseJson(publicState())
     }

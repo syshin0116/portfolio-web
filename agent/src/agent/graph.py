@@ -85,6 +85,7 @@ from agent.capabilities.token_counting import (
 )
 from agent.inspection import InspectionEventTransformer
 from agent.prompts import GUEST_SYSTEM_PROMPT, SYSTEM_PROMPT
+from agent.retrieval.serving import warm_serving_runtime
 from agent.run_liveness import (
     GUEST_RUN_MAX_ELAPSED_SECONDS,
     acquire_guest_execution_fence,
@@ -930,6 +931,7 @@ def _validate_aegra_registration() -> None:
 
 
 _validate_aegra_registration()
+warm_serving_runtime()
 
 __all__ = [
     "GUEST_MODEL_MAX_OUTPUT_TOKENS",

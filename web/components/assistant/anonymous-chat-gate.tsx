@@ -18,7 +18,6 @@ import { ANONYMOUS_AGENT_TOKEN_INTENT } from "@/lib/agent-token-intent"
 
 import { AgentRuntimeProvider } from "./agent-runtime-provider"
 import { ChatShell, SignedOutChat } from "./chat-shell"
-import { useAgentWarmup, type AgentWarmupPhase } from "./runtime/agent-warmup"
 import {
   AnonymousBootstrapError,
   bootstrapAnonymousSession,
@@ -83,27 +82,10 @@ function GateCard({
   )
 }
 
-function WarmupStatus({ phase }: { phase: AgentWarmupPhase }) {
-  if (phase === "ready") return null
-  return (
-    <span className="inline-flex items-center gap-1.5" role="status">
-      {phase === "warming" ? (
-        <>
-          <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" />
-          AI 준비 중
-        </>
-      ) : (
-        "첫 응답이 느릴 수 있습니다"
-      )}
-    </span>
-  )
-}
-
 export function AnonymousChatGate() {
   const config = resolveAnonymousChatConfig(
     process.env.NEXT_PUBLIC_AGENT_ANONYMOUS_ENABLED
   )
-  const warmup = useAgentWarmup(config.state === "enabled")
   const [state, setState] = useState<GateState>({ phase: "resuming" })
   const generationRef = useRef(0)
   const controllerRef = useRef<AbortController | undefined>(undefined)
@@ -171,7 +153,6 @@ export function AnonymousChatGate() {
       <div className="border-t">
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
           <span>공개 체험 · Luna · 대화 최대 14일 보관</span>
-          <WarmupStatus phase={warmup} />
           <Link className="font-medium underline underline-offset-4" href="/login">
             소유자 로그인
           </Link>

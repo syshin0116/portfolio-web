@@ -184,7 +184,9 @@ class StaticVerifierMutationTests(unittest.TestCase):
         self.assertEqual(1, production.count("OPENAI_API_KEY"))
         self.assertEqual(2, production.count('"openai-api-key"'))
         self.assertNotIn("ANTHROPIC_API_KEY", production_definition)
-        self.assertNotIn("LANGCHAIN_API_KEY", production_definition)
+        # Production traces to LangSmith; Anthropic stays unbound in both.
+        self.assertEqual(1, production_definition.count("LANGCHAIN_API_KEY"))
+        self.assertEqual(2, production.count('"langsmith-api-key"'))
         self.assertEqual(1, production_definition.count("AGENT_AUTH_SECRET"))
         self.assertEqual(1, production_definition.count("DATABASE_URL"))
         self.assertEqual(1, production_definition.count("OPENAI_API_KEY"))
@@ -194,20 +196,22 @@ class StaticVerifierMutationTests(unittest.TestCase):
         )
         self.assertIn('MODEL                     = "openai:gpt-5.6-luna"', production)
 
-    def test_delivery_versions_are_four_production_numeric_pins(self) -> None:
+    def test_delivery_versions_are_five_production_numeric_pins(self) -> None:
         variables = (REPO_ROOT / "infra/gcp/variables.tf").read_text(encoding="utf-8")
         version_contract = variables.split('variable "agent_secret_versions" {', 1)[1]
         for secret in (
             "agent-auth-secret",
             "agent-database-url",
             "agent-migration-database-url",
+            "langsmith-api-key",
             "openai-api-key",
         ):
             self.assertEqual(1, version_contract.count(f'"{secret}"'))
+        # Anthropic stays a versionless container; LangSmith is now a pinned
+        # production runtime credential.
         for dormant_secret in (
             "agent-preview-auth-secret",
             "anthropic-api-key",
-            "langsmith-api-key",
         ):
             self.assertNotIn(dormant_secret, version_contract)
         self.assertIn('can(regex("^[1-9][0-9]*$", version))', version_contract)

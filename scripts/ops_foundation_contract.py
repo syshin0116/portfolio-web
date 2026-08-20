@@ -32,7 +32,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "a8cae494e6c50ae72c918ecef60b10cf4f65a1e1ff0e14d334a8afcb5f0d5dc3"
+        "f1f243f7595f9bcb71d9a658b686b5fa349787422d9e9ab9442bd59418029bc8"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -40,7 +40,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "e1df7ddad9752d15b738030bd262d42bf2fe21d164b11c1e809dac86b08da7f7"
+        "39dc2dee1d8e4fd13e3774d57d709efcd54f820466c90e59d7b49d3260b91587"
     )
 }
 EXPECTED_PINNED_READINESS_FILES = {
@@ -444,7 +444,7 @@ EXPECTED_VARIABLES = {
     },
     "agent_secret_versions": {
         "description": (
-            "Reviewed numeric versions for the four production delivery secrets; "
+            "Reviewed numeric versions for the five production delivery secrets; "
             "null only during foundation bootstrap. Dormant secret containers stay "
             "versionless here and payloads never enter Terraform."
         ),
@@ -467,11 +467,12 @@ EXPECTED_VARIABLES = {
                     "${var.agent_secret_versions == null ? True : "
                     "toset(keys(var.agent_secret_versions)) == toset(["
                     "agent-auth-secret, agent-database-url, "
-                    "agent-migration-database-url, openai-api-key])}"
+                    "agent-migration-database-url, langsmith-api-key, "
+                    "openai-api-key])}"
                 ),
                 "error_message": (
                     "agent_secret_versions must contain exactly auth, runtime DB, "
-                    "migration DB, and OpenAI production secret IDs."
+                    "migration DB, LangSmith, and OpenAI production secret IDs."
                 ),
             },
         ],
@@ -940,7 +941,8 @@ EXPECTED_LOCALS_BY_FILE = {
                 "langsmith-api-key, openai-api-key])}"
             ),
             "production_runtime_secret_names": (
-                "${toset([agent-auth-secret, agent-database-url, openai-api-key])}"
+                "${toset([agent-auth-secret, agent-database-url, "
+                "langsmith-api-key, openai-api-key])}"
             ),
             "preview_secret_names": (
                 "${toset([agent-preview-anthropic-api-key, "
@@ -958,7 +960,8 @@ EXPECTED_LOCALS_BY_FILE = {
             ),
             "required_production_delivery_secret_names": (
                 "${toset([agent-auth-secret, agent-database-url, "
-                "agent-migration-database-url, openai-api-key])}"
+                "agent-migration-database-url, langsmith-api-key, "
+                "openai-api-key])}"
             ),
             "deployers": {
                 "preview": {
@@ -1095,7 +1098,7 @@ EXPECTED_CHECK_BLOCKS = [
                         "local.required_production_delivery_secret_names)}"
                     ),
                     "error_message": (
-                        "every non-foundation stage requires exactly the four production "
+                        "every non-foundation stage requires exactly the five production "
                         "delivery secret IDs, with no missing or extra version keys."
                     ),
                 }

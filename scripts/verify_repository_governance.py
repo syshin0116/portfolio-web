@@ -220,7 +220,7 @@ CI_CHANGES_JOB = "changes"
 CI_CHANGES_TIMEOUT_MINUTES = 10
 AGENT_CI_JOB = "agent"
 AGENT_CI_JOB_AST_SHA256 = (
-    "303650144569abb75e12295cb4f84fba2f67a53d860a508f4e1c4413f1ac2d0a"
+    "4c3880629826c0c15e96c8195e314ebfe7c941288ff9eb4700b0aacafda72e60"
 )
 AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
@@ -228,11 +228,11 @@ AGENT_CI_ENV = {
 }
 EVAL_CI_JOB = "eval"
 EVAL_CI_JOB_AST_SHA256 = (
-    "43be9fbe8ed98e2e0e4471e0c2b71f19da778546e52303cb010410ce4d3c3558"
+    "b91edce7381132eca8efc95f0f5d9befdc5e411fb09891090456535505e296bb"
 )
 EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
 EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
-    "d6c1b4ba793526ab68973178be50c86feb8f5055e4c2df3e6b4fb97d103afad0"
+    "4c85712a63664f9b2caeb11e7fa26684da9dbef675992927f72498061e2116b8"
 )
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (

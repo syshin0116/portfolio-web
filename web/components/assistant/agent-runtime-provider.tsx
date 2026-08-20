@@ -26,6 +26,7 @@ import {
   type AgentActivity,
 } from "./runtime/native-client"
 import { normalizeAgentApiUrl } from "./runtime/agent-config"
+import { warmAgent } from "./runtime/agent-warmup"
 import {
   reduceAgentError,
   type AgentErrorRoutingState,
@@ -252,8 +253,14 @@ function ConfiguredAgentRuntimeProvider({
     setErrorRouting({
       connectionStatus: "connecting",
     })
-    void native.tokenBroker
-      .get(controller.signal)
+    // A minted credential only proves Vercel answered. The badge claims the
+    // agent is reachable, so wait for the agent itself before saying so.
+    void Promise.all([
+      native.tokenBroker.get(controller.signal),
+      warmAgent({ apiUrl, signal: controller.signal }).then((ready) => {
+        if (!ready) throw new Error("Agent readiness probe did not succeed")
+      }),
+    ])
       .then(() =>
         setErrorRouting({
           connectionStatus: "ready",
@@ -274,7 +281,7 @@ function ConfiguredAgentRuntimeProvider({
     return () => {
       controller.abort()
     }
-  }, [connectionAttempt, native])
+  }, [apiUrl, connectionAttempt, native])
 
   useEffect(() => {
     const lifecycles = nativeLifecyclesRef.current

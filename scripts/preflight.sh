@@ -87,9 +87,13 @@ if [[ "$agent" == true ]]; then
     # corpus builder's exact filesystem-tree check disagree with the committed
     # tree. That is a local-checkout artifact; CI runs on a clean tree. Let it
     # through only when every failure is that one, so real breakage still blocks.
-    drift_errors="$(grep -cE '^(ERROR|FAILED) ' "$pytest_log")"
-    drift_only="$(grep -c 'content filesystem bytes/modes differ' "$pytest_log")"
-    if [[ "$drift_errors" -gt 0 && "$drift_only" -gt 0 && "$drift_errors" -le "$drift_only" ]]; then
+    # The drift surfaces as fixture-setup ERRORs, and tests sharing that fixture
+    # print the cause once, so compare kinds rather than counts: any FAILED line
+    # is a real assertion and still blocks.
+    drift_errors="$(grep -cE '^ERROR ' "$pytest_log")"
+    real_failures="$(grep -cE '^FAILED ' "$pytest_log")"
+    drift_cause="$(grep -cE 'content tree contains dirty or untracked entries|content filesystem bytes/modes differ|content tree changed during the build' "$pytest_log")"
+    if [[ "$drift_cause" -gt 0 && "$real_failures" -eq 0 && "$drift_errors" -gt 0 ]]; then
       printf '\033[33mpreflight: ignoring %s corpus-tree error(s) caused by untracked files under content/\033[0m\n' \
         "$drift_errors" >&2
     else

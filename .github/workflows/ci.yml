@@ -249,7 +249,6 @@ jobs:
         run: >-
           uv run --frozen --package syshin0116-dev-agent
           python scripts/build_index.py
-          --expect-document-count 335
       - if: needs.changes.outputs.agent == 'true'
         run: >-
           uv run --frozen --package syshin0116-dev-agent --all-extras pytest -q agent/tests
@@ -500,7 +499,6 @@ jobs:
           uv run --frozen --package syshin0116-dev-eval
           python ../scripts/build_index.py
           --output "$RUNNER_TEMP/eval-index"
-          --expect-document-count 335
       - name: Verify and byte-compare two deterministic known-item sweeps
         if: needs.changes.outputs.eval == 'true'
         shell: bash

@@ -34,6 +34,19 @@ emitter. GitHub recognizes workflow YAML only directly under
 `.github/workflows/`; YAML in a subdirectory is rejected rather than counted as
 a workflow or required-check emitter.
 
+Reviewed AST digests for the Agent CI job, Eval CI job, and Eval publication workflow
+live in
+[`workflow-ast-baselines.json`](../../.github/workflow-ast-baselines.json). After an
+intentional change to one of those workflow surfaces, regenerate all three values with:
+
+```bash
+uv run --frozen --package syshin0116-dev-agent \
+  python scripts/verify_repository_governance.py --update-workflow-baselines
+```
+
+The command calculates the values. Approval still happens by reviewing the workflow and
+baseline diff together before merge.
+
 The verifier parses YAML syntax trees with the same PyYAML dependency already
 locked by the agent; duplicate keys, anchors, aliases, merge keys, directives,
 explicit tags, and multiple documents fail closed. It follows only executable

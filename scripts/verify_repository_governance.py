@@ -43,6 +43,15 @@ except ModuleNotFoundError:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = REPO_ROOT / ".github/repository-governance.json"
+WORKFLOW_AST_BASELINES = ".github/workflow-ast-baselines.json"
+WORKFLOW_AST_BASELINE_KEYS = frozenset(
+    {
+        "agent_ci_job",
+        "eval_ci_job",
+        "eval_publication_workflow",
+    }
+)
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 FULL_SHA_ACTION = re.compile(
     r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     r"(?:/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}$"
@@ -219,21 +228,12 @@ AGENT_CI_WORKFLOW = ".github/workflows/ci.yml"
 CI_CHANGES_JOB = "changes"
 CI_CHANGES_TIMEOUT_MINUTES = 10
 AGENT_CI_JOB = "agent"
-AGENT_CI_JOB_AST_SHA256 = (
-    "303650144569abb75e12295cb4f84fba2f67a53d860a508f4e1c4413f1ac2d0a"
-)
 AGENT_CI_ENV = {
     "AEGRA_POSTGRES_TEST_URL": "postgresql://postgres@localhost:5432/aegra_ci",
     "AGENT_AUTH_SECRET": "ci-only-agent-secret-ci-only-agent-secret",
 }
 EVAL_CI_JOB = "eval"
-EVAL_CI_JOB_AST_SHA256 = (
-    "43be9fbe8ed98e2e0e4471e0c2b71f19da778546e52303cb010410ce4d3c3558"
-)
 EVAL_PUBLICATION_WORKFLOW = ".github/workflows/eval-publication.yml"
-EVAL_PUBLICATION_WORKFLOW_AST_SHA256 = (
-    "d6c1b4ba793526ab68973178be50c86feb8f5055e4c2df3e6b4fb97d103afad0"
-)
 AGENT_DELIVERY_WORKFLOW_AST_SHA256 = {
     ".github/workflows/agent-image-build.yml": (
         "c74bbc48930c45af877437f0ea820f49913c3dd8d06daabd15a436e9aa1c6427"
@@ -861,6 +861,26 @@ def load_policy(path: Path = DEFAULT_POLICY) -> JsonObject:
     return payload
 
 
+def load_workflow_ast_baselines(root: Path = REPO_ROOT) -> dict[str, str]:
+    """Load the reviewed workflow AST digests."""
+    path = root.resolve() / WORKFLOW_AST_BASELINES
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GovernanceError(f"cannot load workflow baselines {path}: {exc}") from exc
+    if not isinstance(payload, dict) or set(payload) != WORKFLOW_AST_BASELINE_KEYS:
+        raise GovernanceError(
+            "workflow baselines must contain exactly "
+            f"{sorted(WORKFLOW_AST_BASELINE_KEYS)!r}"
+        )
+    if any(
+        type(value) is not str or SHA256_HEX.fullmatch(value) is None
+        for value in payload.values()
+    ):
+        raise GovernanceError("workflow baselines must be lowercase SHA-256 values")
+    return {key: payload[key] for key in sorted(WORKFLOW_AST_BASELINE_KEYS)}
+
+
 def _dockerignore_rules(path: Path) -> tuple[str, ...]:
     """Return effective non-comment rules from one Docker ignore file."""
     try:
@@ -1320,7 +1340,11 @@ def validate_ci_changes_timeout_contract(document: YamlDocument) -> list[str]:
     return []
 
 
-def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
+def validate_agent_ci_resolution(
+    document: YamlDocument,
+    *,
+    expected_sha256: str,
+) -> list[str]:
     """Pin the root-workspace agent CI job, including its real image build."""
     errors: list[str] = []
     for inherited_key in ("defaults", "env"):
@@ -1337,10 +1361,10 @@ def validate_agent_ci_resolution(document: YamlDocument) -> list[str]:
     context = f"{AGENT_CI_WORKFLOW}: job {AGENT_CI_JOB!r}"
     actual_agent_job = _node_to_data(agent)
     actual_sha256 = _canonical_ast_sha256(actual_agent_job)
-    if actual_sha256 != AGENT_CI_JOB_AST_SHA256:
+    if actual_sha256 != expected_sha256:
         errors.append(
             f"{context} exact job AST differs; "
-            f"expected_sha256={AGENT_CI_JOB_AST_SHA256}, "
+            f"expected_sha256={expected_sha256}, "
             f"actual_sha256={actual_sha256}"
         )
 
@@ -1375,9 +1399,47 @@ def _canonical_ast_sha256(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def measure_workflow_ast_baselines(root: Path = REPO_ROOT) -> dict[str, str]:
+    """Measure every workflow AST that requires explicit approval."""
+    root = root.resolve()
+    ci = load_yaml_document(root / AGENT_CI_WORKFLOW)
+    jobs = _workflow_jobs(ci)
+    try:
+        agent = jobs[AGENT_CI_JOB]
+        eval_job = jobs[EVAL_CI_JOB]
+    except KeyError as exc:
+        raise GovernanceError(f"required CI job is missing: {exc.args[0]}") from exc
+    publication = load_yaml_document(root / EVAL_PUBLICATION_WORKFLOW)
+    return {
+        "agent_ci_job": _canonical_ast_sha256(_node_to_data(agent)),
+        "eval_ci_job": _canonical_ast_sha256(_node_to_data(eval_job)),
+        "eval_publication_workflow": _canonical_ast_sha256(
+            _node_to_data(publication.root)
+        ),
+    }
+
+
+def write_workflow_ast_baselines(root: Path = REPO_ROOT) -> Path:
+    """Write measured workflow AST digests for review."""
+    root = root.resolve()
+    path = root / WORKFLOW_AST_BASELINES
+    path.write_text(
+        json.dumps(
+            measure_workflow_ast_baselines(root),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def validate_eval_workflow_contracts(
     root: Path,
     documents: dict[Path, YamlDocument],
+    baselines: dict[str, str],
 ) -> list[str]:
     """Bind eval CI and its trusted publication boundary to reviewed ASTs."""
 
@@ -1392,10 +1454,11 @@ def validate_eval_workflow_contracts(
             errors.append(f"{AGENT_CI_WORKFLOW}: job {EVAL_CI_JOB!r} is missing")
         else:
             actual = _canonical_ast_sha256(_node_to_data(eval_job))
-            if actual != EVAL_CI_JOB_AST_SHA256:
+            expected = baselines["eval_ci_job"]
+            if actual != expected:
                 errors.append(
                     f"{AGENT_CI_WORKFLOW}: job {EVAL_CI_JOB!r} exact AST differs; "
-                    f"expected_sha256={EVAL_CI_JOB_AST_SHA256}, "
+                    f"expected_sha256={expected}, "
                     f"actual_sha256={actual}"
                 )
 
@@ -1405,10 +1468,11 @@ def validate_eval_workflow_contracts(
         errors.append(f"{EVAL_PUBLICATION_WORKFLOW}: workflow is missing or invalid")
     else:
         actual = _canonical_ast_sha256(_node_to_data(publication.root))
-        if actual != EVAL_PUBLICATION_WORKFLOW_AST_SHA256:
+        expected = baselines["eval_publication_workflow"]
+        if actual != expected:
             errors.append(
                 f"{EVAL_PUBLICATION_WORKFLOW}: exact workflow AST differs; "
-                f"expected_sha256={EVAL_PUBLICATION_WORKFLOW_AST_SHA256}, "
+                f"expected_sha256={expected}, "
                 f"actual_sha256={actual}"
             )
     return errors
@@ -2639,6 +2703,11 @@ def _status_check_parameters(main: JsonObject) -> JsonObject:
 def validate_local(root: Path, policy: JsonObject) -> list[str]:
     """Validate contracts represented in the repository itself."""
     errors: list[str] = []
+    try:
+        workflow_ast_baselines = load_workflow_ast_baselines(root)
+    except GovernanceError as exc:
+        errors.append(f"local: {exc}")
+        workflow_ast_baselines = None
     workflows = workflow_files(root)
     if not workflows:
         return ["local: no workflow files found"]
@@ -2774,19 +2843,29 @@ def validate_local(root: Path, policy: JsonObject) -> list[str]:
         except GovernanceError as exc:
             errors.append(f"local: invalid ci/changes timeout contract: {exc}")
         try:
+            if workflow_ast_baselines is None:
+                raise GovernanceError("workflow AST baselines are unavailable")
             errors.extend(
                 f"local: {error}"
-                for error in validate_agent_ci_resolution(documents[ci_workflow])
+                for error in validate_agent_ci_resolution(
+                    documents[ci_workflow],
+                    expected_sha256=workflow_ast_baselines["agent_ci_job"],
+                )
             )
         except GovernanceError as exc:
             errors.append(f"local: invalid ci/agent resolution contract: {exc}")
-    try:
-        errors.extend(
-            f"local: {error}"
-            for error in validate_eval_workflow_contracts(root, documents)
-        )
-    except GovernanceError as exc:
-        errors.append(f"local: invalid eval workflow contract: {exc}")
+    if workflow_ast_baselines is not None:
+        try:
+            errors.extend(
+                f"local: {error}"
+                for error in validate_eval_workflow_contracts(
+                    root,
+                    documents,
+                    workflow_ast_baselines,
+                )
+            )
+        except GovernanceError as exc:
+            errors.append(f"local: invalid eval workflow contract: {exc}")
     errors.extend(
         f"local: {error}" for error in validate_vercel_git_autodeploy_contract(root)
     )
@@ -3739,12 +3818,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="absolute preflighted gh executable; required with --live",
     )
+    parser.add_argument(
+        "--update-workflow-baselines",
+        action="store_true",
+        help="measure reviewed workflow ASTs and update their baseline file",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if args.update_workflow_baselines:
+            if args.live:
+                raise GovernanceError(
+                    "--update-workflow-baselines cannot be combined with --live"
+                )
+            path = write_workflow_ast_baselines(args.root)
+            print(f"updated workflow AST baselines: {path}")
+            return 0
         policy = load_policy(args.policy)
         errors = validate_local(args.root, policy)
         if args.live:

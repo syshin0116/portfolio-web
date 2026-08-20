@@ -305,6 +305,47 @@ class LocalGovernanceTests(unittest.TestCase):
         policy = governance.load_policy()
         self.assertEqual([], governance.validate_local(REPO_ROOT, policy))
 
+    def test_workflow_ast_baseline_update_is_deterministic_and_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_local_governance_fixture(directory)
+            baseline_path = root / governance.WORKFLOW_AST_BASELINES
+            baseline_path.write_text(
+                json.dumps(
+                    {key: "0" * 64 for key in governance.WORKFLOW_AST_BASELINE_KEYS}
+                ),
+                encoding="utf-8",
+            )
+            self.assertTrue(governance.validate_local(root, governance.load_policy()))
+
+            written = governance.write_workflow_ast_baselines(root)
+
+            self.assertEqual(baseline_path.resolve(), written)
+            self.assertEqual(
+                governance.measure_workflow_ast_baselines(root),
+                governance.load_workflow_ast_baselines(root),
+            )
+            self.assertEqual(
+                [], governance.validate_local(root, governance.load_policy())
+            )
+
+    def test_workflow_ast_baselines_reject_invalid_shapes(self) -> None:
+        valid = governance.measure_workflow_ast_baselines(REPO_ROOT)
+        cases = {
+            "missing": {"agent_ci_job": valid["agent_ci_job"]},
+            "extra": valid | {"extra": "0" * 64},
+            "non-string": valid | {"agent_ci_job": 1},
+            "uppercase": valid | {"agent_ci_job": "A" * 64},
+        }
+        for name, payload in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / governance.WORKFLOW_AST_BASELINES
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps(payload), encoding="utf-8")
+
+                with self.assertRaises(governance.GovernanceError):
+                    governance.load_workflow_ast_baselines(root)
+
     def test_ci_changes_timeout_has_the_exact_plain_literal(self) -> None:
         document = governance.load_yaml_document(
             REPO_ROOT / governance.AGENT_CI_WORKFLOW

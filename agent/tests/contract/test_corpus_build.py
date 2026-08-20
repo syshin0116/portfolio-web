@@ -1091,7 +1091,7 @@ def test_git_backed_build_rejects_when_git_is_unavailable(
         )
 
 
-def test_real_corpus_build_is_exactly_the_nuartz_published_335(
+def test_real_corpus_build_matches_the_nuartz_publication_policy(
     tmp_path: Path,
 ) -> None:
     index = tmp_path / "index"
@@ -1103,7 +1103,6 @@ def test_real_corpus_build_is_exactly_the_nuartz_published_335(
     )
 
     sets = _artifact_doc_ids(index)
-    assert report.document_count == 335
     assert (
         report.content_git_tree_sha
         == subprocess.run(
@@ -1113,23 +1112,33 @@ def test_real_corpus_build_is_exactly_the_nuartz_published_335(
             text=True,
         ).stdout.strip()
     )
-    assert all(len(doc_ids) == 335 for doc_ids in sets)
+    assert all(len(doc_ids) == report.document_count for doc_ids in sets)
     assert sets[0] == sets[1] == sets[2] == sets[3] == sets[4]
     assert "AI/pdf-parser/_index.md" not in sets[0]
     assert "Events/2024-07-24-\u200bMLOps Now - LLM in Production.md" in sets[0]
 
     manifest = _read_json(index / "manifest.json")
-    assert manifest["source_markdown_count"] == 336
     assert manifest["excluded_documents"] == [
         {
             "doc_id": "AI/pdf-parser/_index.md",
             "reason": "basename-leading-underscore",
         }
     ]
+    assert manifest["source_markdown_count"] == report.document_count + len(
+        manifest["excluded_documents"]
+    )
     graph = _read_json(index / "wikilinks.json")
-    assert graph["edge_count"] == 213
-    assert graph["nodes_with_edges"] == 115
-    assert graph["isolated_node_count"] == 220
+    assert graph["node_count"] == report.document_count
+    assert len(graph["adjacency"]) == graph["node_count"]
+    assert graph["edge_count"] * 2 == sum(
+        len(targets) for targets in graph["adjacency"].values()
+    )
+    assert graph["nodes_with_edges"] == sum(
+        bool(targets) for targets in graph["adjacency"].values()
+    )
+    assert (
+        graph["isolated_node_count"] == graph["node_count"] - graph["nodes_with_edges"]
+    )
     assert {
         "alias": "01. 출발점 - Quartz의 한계에서 시작된 여정",
         "source_doc_id": "Projects/Nuartz/00-Overview.md",

@@ -55,7 +55,7 @@ From the repository root:
 uv lock --check
 uv sync --frozen --package syshin0116-dev-agent --all-extras --dev
 uv run --frozen --package syshin0116-dev-agent \
-  python scripts/build_index.py --expect-document-count 335
+  python scripts/build_index.py
 
 uv sync --frozen --package syshin0116-dev-eval --all-groups
 content_tree_sha="$(git rev-parse HEAD:content)"
@@ -154,7 +154,7 @@ PY
 E5's exact `query: ` and `passage: ` prefixes, 384 dimensions, 512-token truncation,
 CPU float32 runtime, exact NumPy/sentence-transformers/Torch/Transformers versions, model
 revision, and normalization policy are all part of the retriever fingerprint. The
-335-document scale does not justify adding a vector database before measurements show a
+current corpus scale does not justify adding a vector database before measurements show a
 need.
 
 After caching the pinned snapshot, run the planned three-arm comparison explicitly:
@@ -219,7 +219,7 @@ Promotion into the retrieval-method catalogue requires all of these external che
    expected_commit=<40-character-main-commit>
    test "$(git rev-parse HEAD)" = "$expected_commit"
    uv run --frozen --package syshin0116-dev-agent \
-     python scripts/build_index.py --expect-document-count 335
+     python scripts/build_index.py
    content_tree_sha="$(git rev-parse HEAD:content)"
    uv run --frozen --package syshin0116-dev-eval \
      blogeval verify-publication \

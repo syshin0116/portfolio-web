@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
 from agent.inspection import emit_retrieval_inspection, validate_retrieval_query
-from agent.retrieval.protocol import Retrieval
+from agent.retrieval.protocol import DocId, Retrieval
 from agent.retrieval.serving import (
     CatalogEntry,
     ServingRuntime,
@@ -20,6 +20,7 @@ from agent.retrieval.serving import (
 _MAX_RESULTS = 50
 _CANONICAL_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 READ_POST_MAX_OUTPUT_BYTES = 16 * 1024
+SITE_BASE_URL = "https://syshin0116.vercel.app"
 READ_POST_TRUNCATION_MARKER = (
     f"\n\n[read_post truncated at the {READ_POST_MAX_OUTPUT_BYTES} "
     "UTF-8 byte output limit]"
@@ -64,6 +65,24 @@ def _cap_read_post_output(output: str) -> str:
     return f"{prefix}{READ_POST_TRUNCATION_MARKER}"
 
 
+def post_url(doc_id: DocId) -> str:
+    """Build the published URL for a document.
+
+    The site serves each post at its content path minus the ``.md`` suffix.
+    Only the characters that would break the link are escaped: a space stops a
+    URL from parsing, and parentheses end a Markdown link early. Hangul is left
+    as it is - the browser encodes it on navigation, and escaping it here
+    tripled the size of every tool result and pushed guest runs over their
+    token budget.
+    """
+
+    slug = str(doc_id)
+    slug = slug[: -len(".md")] if slug.endswith(".md") else slug
+    for char, escape in ((" ", "%20"), ("(", "%28"), (")", "%29")):
+        slug = slug.replace(char, escape)
+    return f"{SITE_BASE_URL}/blog/{slug}"
+
+
 def _format_retrieval(
     runtime: ServingRuntime,
     retrieval: Retrieval,
@@ -83,6 +102,7 @@ def _format_retrieval(
         lines.append(
             f'{hit.rank}. [{entry.doc_id}] "{entry.title}" (raw score: {score})'
         )
+        lines.append(f"   {post_url(entry.doc_id)}")
         snippet = hit.text or _snippet(runtime, entry)
         if snippet:
             lines.append(f"   {snippet.replace(chr(10), ' ').strip()}")
@@ -103,6 +123,7 @@ def _format_entries(
         tags = ", ".join(entry.tags[:5])
         suffix = f" — {tags}" if tags else ""
         lines.append(f'{rank}. [{entry.doc_id}] "{entry.title}" ({published}){suffix}')
+        lines.append(f"   {post_url(entry.doc_id)}")
     return "\n".join(lines)
 
 
@@ -220,6 +241,7 @@ def graph_traverse(slug: str, depth: int = 1) -> str:
     for rank, (doc_id, distance) in enumerate(results, start=1):
         entry = runtime.entry(doc_id)
         lines.append(f'{rank}. [{entry.doc_id}] "{entry.title}" (distance: {distance})')
+        lines.append(f"   {post_url(doc_id)}")
     return "\n".join(lines)
 
 

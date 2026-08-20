@@ -72,6 +72,8 @@ import {
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 
+import { toolArgumentSummary } from "./runtime/tool-arguments"
+
 import { useAgentRuntimeUi } from "./agent-runtime-provider"
 import { MarkdownText } from "./markdown-text"
 import {
@@ -139,7 +141,7 @@ const ToolPart = memo(function ToolPart({
   // to `running` would reopen on every streaming re-render and slam the panel
   // shut the moment the call finishes.
   const [open, setOpen] = useState(running)
-  const query = toolQueryFromArgs(argsText)
+  const argumentSummary = toolArgumentSummary(argsText)
   const subagentType =
     toolName === "task" ? taskSubagentTypeFromArgs(argsText) : undefined
   const label =
@@ -173,7 +175,7 @@ const ToolPart = memo(function ToolPart({
       </summary>
       <div className="space-y-2 border-t border-border/60 px-3 py-3 text-xs">
         <p className="text-muted-foreground">
-          질의: {query ?? "서버 미제공"}
+          입력: {argumentSummary ?? "인자 없음"}
         </p>
         <p className="text-muted-foreground">
           검증된 결과 세부 정보는 실행 상세 패널에만 표시됩니다.
@@ -182,27 +184,6 @@ const ToolPart = memo(function ToolPart({
     </details>
   )
 })
-
-function toolQueryFromArgs(argsText: string): string | undefined {
-  if (!argsText) return undefined
-  try {
-    const parsed = JSON.parse(argsText) as unknown
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      "query" in parsed &&
-      typeof parsed.query === "string" &&
-      parsed.query.trim() &&
-      parsed.query.length <= 1_000
-    ) {
-      return parsed.query.trim()
-    }
-  } catch {
-    return undefined
-  }
-  return undefined
-}
 
 function taskSubagentTypeFromArgs(argsText: string): string | undefined {
   if (!argsText) return undefined

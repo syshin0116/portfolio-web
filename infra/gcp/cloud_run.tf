@@ -211,9 +211,11 @@ resource "google_cloud_run_v2_service" "agent" {
 
   lifecycle {
     prevent_destroy = true
+    # Image stays ignored so the release workflow owns which digest ships.
+    # Traffic is not ignored: the declared LATEST allocation must actually take
+    # effect, or a configuration apply silently leaves the old revision serving.
     ignore_changes = [
       template[0].containers[0].image,
-      traffic,
     ]
   }
 }

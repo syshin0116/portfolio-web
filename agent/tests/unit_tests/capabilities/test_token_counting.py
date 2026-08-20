@@ -448,7 +448,7 @@ async def test_published_semantic_top10_answer_fits_both_guest_ledgers(
     # independently reviewed literal interval accepts both and rejects material
     # payload/schema drift without becoming a production-derived constant.
     assert len(observed_reservations) == 1
-    assert 11_000 <= observed_reservations[0] <= 11_350
+    assert 11_875 <= observed_reservations[0] <= 12_200
     assert observed_reservations == ledger_reservations
     assert sum(observed_reservations) < 64_000
     assert snapshot.charged_tokens == 2_564
@@ -510,7 +510,7 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     # variance between the pinned CPython 3.12 runner and local CPython 3.13.
     for reservation, (minimum, maximum) in zip(
         observed_reservations,
-        ((6_100, 6_425), (11_000, 11_350), (16_250, 16_600)),
+        ((6_250, 6_575), (11_875, 12_200), (17_125, 17_450)),
         strict=True,
     ):
         assert minimum <= reservation <= maximum
@@ -524,9 +524,12 @@ async def test_published_semantic_then_read_post_is_cumulatively_admitted(
     assert snapshot.provider_usage_complete is True
 
 
+# Each interval spans both runners: the pinned CPython 3.12 reserves 76 more
+# canonical bytes than local CPython 3.13, measured at 22_744/22_820 and
+# 23_093/23_169 once tool results carry a post URL.
 @pytest.mark.parametrize(
     ("attack", "minimum_reservation", "maximum_reservation"),
-    [("user", 22_400, 22_750), ("read-post", 22_750, 23_100)],
+    [("user", 22_450, 22_850), ("read-post", 22_850, 23_250)],
 )
 async def test_16_kib_guest_input_is_admitted_within_the_actual_token_cap(
     monkeypatch: pytest.MonkeyPatch,

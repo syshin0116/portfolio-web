@@ -93,6 +93,7 @@ locals {
       GUEST_RUN_RESERVATION_MICRO_USD = ""
     })
     production = merge(local.cloud_run_runtime_environment_common, {
+      LANGCHAIN_CALLBACKS_BACKGROUND  = "false"
       LANGCHAIN_PROJECT               = "syshin0116's dev (GCP)"
       LANGCHAIN_TRACING_V2            = "true"
       AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"

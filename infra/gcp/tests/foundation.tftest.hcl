@@ -444,7 +444,7 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
-      && length(service.template[0].containers[0].env) == 22
+      && length(service.template[0].containers[0].env) == 23
       && !contains(keys(local.cloud_run_runtime_environment_common), "PORT")
       && {
         for env in service.template[0].containers[0].env :

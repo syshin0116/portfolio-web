@@ -65,8 +65,8 @@ The reviewed Terraform target remains:
   with known project- and resource-level bypasses rejected by the live verifier;
 - no project-wide Cloud Run role and no image-writer role on either deployer;
 - five Production and four disjoint Preview runtime Secret Manager resources. The
-  Production runtime has direct `secretAccessor` only on auth, database, and OpenAI;
-  Anthropic and LangSmith remain unbound containers. Each dormant Preview runtime secret
+  Production runtime has direct `secretAccessor` on auth, database, OpenAI, and
+  LangSmith; Anthropic remains an unbound container. Each dormant Preview runtime secret
   retains its matching Preview runtime accessor;
 - a separate migration-only database secret per environment, readable only by its
   migrator;
@@ -332,7 +332,7 @@ Production resource names:
 - `agent-database-url`;
 - `agent-auth-secret`;
 - `anthropic-api-key`;
-- `langsmith-api-key`;
+- `langsmith-api-key` (Production tracing runtime only);
 - `openai-api-key` (Production guest runtime only).
 
 Preview owns `agent-preview-database-url`, `agent-preview-auth-secret`,

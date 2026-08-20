@@ -27,6 +27,7 @@ locals {
   production_runtime_secret_names = toset([
     "agent-auth-secret",
     "agent-database-url",
+    "langsmith-api-key",
     "openai-api-key",
   ])
 
@@ -52,6 +53,7 @@ locals {
     "agent-auth-secret",
     "agent-database-url",
     "agent-migration-database-url",
+    "langsmith-api-key",
     "openai-api-key",
   ])
 
@@ -439,7 +441,7 @@ check "agent_secret_version_inventory" {
       var.agent_secret_versions != null
       && toset(keys(var.agent_secret_versions)) == local.required_production_delivery_secret_names
     )
-    error_message = "every non-foundation stage requires exactly the four production delivery secret IDs, with no missing or extra version keys."
+    error_message = "every non-foundation stage requires exactly the five production delivery secret IDs, with no missing or extra version keys."
   }
 }
 

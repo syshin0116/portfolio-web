@@ -111,7 +111,7 @@ variable "agent_preview_bootstrap_image" {
 }
 
 variable "agent_secret_versions" {
-  description = "Reviewed numeric versions for the four production delivery secrets; null only during foundation bootstrap. Dormant secret containers stay versionless here and payloads never enter Terraform."
+  description = "Reviewed numeric versions for the five production delivery secrets; null only during foundation bootstrap. Dormant secret containers stay versionless here and payloads never enter Terraform."
   type        = map(string)
   default     = null
 
@@ -128,8 +128,9 @@ variable "agent_secret_versions" {
       "agent-auth-secret",
       "agent-database-url",
       "agent-migration-database-url",
+      "langsmith-api-key",
       "openai-api-key",
     ])
-    error_message = "agent_secret_versions must contain exactly auth, runtime DB, migration DB, and OpenAI production secret IDs."
+    error_message = "agent_secret_versions must contain exactly auth, runtime DB, migration DB, LangSmith, and OpenAI production secret IDs."
   }
 }

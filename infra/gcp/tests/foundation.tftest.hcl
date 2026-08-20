@@ -164,6 +164,7 @@ run "foundation_security_contract" {
       agent-auth-secret            = "11"
       agent-database-url           = "12"
       agent-migration-database-url = "13"
+      langsmith-api-key            = "14"
       openai-api-key               = "16"
     }
   }
@@ -347,7 +348,7 @@ run "foundation_security_contract" {
   }
 
   assert {
-    condition     = toset(keys(google_secret_manager_secret_iam_member.runtime_accessor)) == local.production_runtime_secret_names && length(google_secret_manager_secret_iam_member.runtime_accessor) == 3 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
+    condition     = toset(keys(google_secret_manager_secret_iam_member.runtime_accessor)) == local.production_runtime_secret_names && length(google_secret_manager_secret_iam_member.runtime_accessor) == 4 && length(google_secret_manager_secret_iam_member.preview_runtime_accessor) == 4
     error_message = "Production runtime access must be limited to auth, database, and OpenAI while Preview remains limited to its four fail-closed runtime secrets."
   }
 
@@ -443,7 +444,7 @@ run "foundation_security_contract" {
         "1",
       ])
       && service.deletion_protection
-      && length(service.template[0].containers[0].env) == 19
+      && length(service.template[0].containers[0].env) == 22
       && !contains(keys(local.cloud_run_runtime_environment_common), "PORT")
       && {
         for env in service.template[0].containers[0].env :
@@ -453,7 +454,7 @@ run "foundation_security_contract" {
       && length([
         for env in service.template[0].containers[0].env : env
         if try(env.value_source[0].secret_key_ref[0].version, null) != null
-      ]) == 3
+      ]) == 4
       && alltrue([
         for env in service.template[0].containers[0].env :
         try(
@@ -463,7 +464,7 @@ run "foundation_security_contract" {
         )
       ])
     ])
-    error_message = "The production-only service must keep the immutable image, zero-to-one scaling, one worker, and exactly three numeric secret pins."
+    error_message = "The production-only service must keep the immutable image, zero-to-one scaling, one worker, and exactly four numeric secret pins."
   }
 
   assert {
@@ -769,6 +770,7 @@ run "jobs_bootstrap_contract" {
       agent-auth-secret            = "11"
       agent-database-url           = "12"
       agent-migration-database-url = "13"
+      langsmith-api-key            = "14"
       openai-api-key               = "16"
     }
   }
@@ -867,6 +869,7 @@ run "services_bootstrap_contract" {
       agent-auth-secret            = "11"
       agent-database-url           = "12"
       agent-migration-database-url = "13"
+      langsmith-api-key            = "14"
       openai-api-key               = "16"
     }
   }

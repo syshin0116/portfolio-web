@@ -58,6 +58,10 @@ locals {
           secret  = google_secret_manager_secret.runtime["openai-api-key"].secret_id
           version = try(var.agent_secret_versions["openai-api-key"], null)
         }
+        LANGCHAIN_API_KEY = {
+          secret  = google_secret_manager_secret.runtime["langsmith-api-key"].secret_id
+          version = try(var.agent_secret_versions["langsmith-api-key"], null)
+        }
       }
     }
   }
@@ -89,6 +93,8 @@ locals {
       GUEST_RUN_RESERVATION_MICRO_USD = ""
     })
     production = merge(local.cloud_run_runtime_environment_common, {
+      LANGCHAIN_PROJECT               = "syshin0116's dev (GCP)"
+      LANGCHAIN_TRACING_V2            = "true"
       AGENT_ANONYMOUS_ACCESS_ENABLED  = "true"
       GUEST_DAILY_BUDGET_MICRO_USD    = "500000"
       GUEST_MODEL                     = "openai:gpt-5.6-luna"

@@ -223,7 +223,7 @@ remote state and advance the explicit `agent_delivery_stage` in order:
 
    A tag is not accepted.
 
-3. **Jobs.** Put the four non-secret Production version IDs in a mode-`0600` variable
+3. **Jobs.** Put the five non-secret Production version IDs in a mode-`0600` variable
    file outside the repository as `agent_secret_versions = { ... }`. Plan and apply with
    the reviewed Production digest and a null Preview image:
 

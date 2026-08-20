@@ -143,6 +143,8 @@ PRODUCTION_RUNTIME_ENV = COMMON_RUNTIME_ENV | {
     "GUEST_DAILY_BUDGET_MICRO_USD": "500000",
     "GUEST_MODEL": "openai:gpt-5.6-luna",
     "GUEST_RUN_RESERVATION_MICRO_USD": "53837",
+    "LANGCHAIN_PROJECT": "syshin0116's dev (GCP)",
+    "LANGCHAIN_TRACING_V2": "true",
 }
 PREVIEW_RUNTIME_SECRETS = {
     "AGENT_AUTH_SECRET": "agent-preview-auth-secret",
@@ -153,6 +155,7 @@ PREVIEW_RUNTIME_SECRETS = {
 PRODUCTION_RUNTIME_SECRETS = {
     "AGENT_AUTH_SECRET": "agent-auth-secret",
     "DATABASE_URL": "agent-database-url",
+    "LANGCHAIN_API_KEY": "langsmith-api-key",
     "OPENAI_API_KEY": "openai-api-key",
 }
 

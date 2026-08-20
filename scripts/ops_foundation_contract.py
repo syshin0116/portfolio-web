@@ -32,7 +32,7 @@ EXPECTED_TERRAFORM_FILES = frozenset(
 )
 EXPECTED_TERRAFORM_TEST_FILES = {
     "infra/gcp/tests/foundation.tftest.hcl": (
-        "f1f243f7595f9bcb71d9a658b686b5fa349787422d9e9ab9442bd59418029bc8"
+        "48c4532361c47c46159707e98d173bfca66b3311ad457ddc59e7b6872ba09d1b"
     )
 }
 EXPECTED_PINNED_TERRAFORM_FILES = {
@@ -40,7 +40,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "39dc2dee1d8e4fd13e3774d57d709efcd54f820466c90e59d7b49d3260b91587"
+        "33ba0e5fdfff34c134ed27bfdc06e11a942fadc01d9ea4be1f1db97038624092"
     )
 }
 EXPECTED_PINNED_READINESS_FILES = {

@@ -1268,12 +1268,14 @@ function ModelSelector() {
 
 function WorkspaceHeader() {
   const { connectionStatus } = useAgentRuntimeUi()
+  // The agent scales to zero, so this state lasts as long as a container boot -
+  // measured near a minute. Naming it tells the visitor why nothing is ready yet.
   const status =
     connectionStatus === "ready"
       ? "연결됨"
       : connectionStatus === "error"
         ? "연결 확인 필요"
-        : "연결 중"
+        : "AI 깨우는 중"
 
   return (
     <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border/70 px-3 sm:px-4">

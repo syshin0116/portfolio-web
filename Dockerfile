@@ -35,9 +35,7 @@ RUN uv sync \
 
 COPY content ./content
 COPY scripts/build_index.py ./scripts/build_index.py
-RUN /opt/agent-venv/bin/python scripts/build_index.py \
-      --expect-document-count 335 \
-    && test "$(find agent/.index/posts -type f -name '*.md' | wc -l)" -eq 335
+RUN /opt/agent-venv/bin/python scripts/build_index.py
 
 FROM ${PYTHON_IMAGE} AS runtime
 

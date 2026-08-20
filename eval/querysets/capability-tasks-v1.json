@@ -1,5 +1,5 @@
 {
-  "content_tree_sha": "71c5bbda097cc20be0cb15ca4666fd6917f89d5f",
+  "content_tree_sha": "ba0f643fec95bec1bb03ea606d81d56a11794d9a",
   "dataset_id": "capability-tasks-v1",
   "description": "Structured capability tasks that isolate direct answering, deterministic JavaScript transforms, stateless evidence delegation, and their bounded combination.",
   "label_status": "synthetic-only",

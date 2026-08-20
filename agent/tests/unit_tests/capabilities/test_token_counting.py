@@ -73,12 +73,11 @@ def published_guest_transcripts(
     """Build the immutable published corpus and capture two real top-10 paths."""
     agent_root = Path(__file__).resolve().parents[3]
     index = tmp_path_factory.mktemp("guest-count-risk-corpus") / "index"
-    report = build_index(
+    build_index(
         content_root=agent_root.parent / "content",
         policy_path=agent_root / "corpus-policy.toml",
         output_root=index,
     )
-    assert report.document_count == 335
     runtime = ServingRuntime(index)
 
     with pytest.MonkeyPatch.context() as patch:

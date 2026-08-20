@@ -55,7 +55,7 @@ uv lock --check
 uv sync --frozen --package syshin0116-dev-agent --all-extras --dev
 uv sync --frozen --package syshin0116-dev-eval --extra dense --all-groups
 uv run --frozen --package syshin0116-dev-agent \
-  python scripts/build_index.py --expect-document-count 335
+  python scripts/build_index.py
 content_tree_sha="$(git rev-parse HEAD:content)"
 ```
 

@@ -8,7 +8,7 @@ when_to_read: >
   or when looking for what has already been tried and what it scored.
 tags: [reference, retrieval, rag, evaluation, registry]
 status: draft
-updated: "2026-08-01"
+updated: "2026-08-20"
 owners: ["@syshin0116"]
 refs: [../adr/0008-chatbot-is-a-rag-evaluation-testbed.md, ../plans/rag-restack.md]
 template: reference
@@ -57,8 +57,8 @@ Two things gate every entry in this table, both from
 
 ## The corpus, and what it affords
 
-336 source Markdown files, of which **335 are published by Nuartz** at content tree
-`71c5bbda097cc20be0cb15ca4666fd6917f89d5f`; basename-leading `_` files are excluded.
+337 source Markdown files, of which **336 are published by Nuartz** at content tree
+`ba0f643fec95bec1bb03ea606d81d56a11794d9a`; basename-leading `_` files are excluded.
 The evaluation corpus follows that published set. It is Korean-language technical writing
 with heavy English loanwords and code, YAML frontmatter (title, date, tags, categories),
 and a `[[wikilink]]` graph between posts.
@@ -72,7 +72,7 @@ matter:
    [below](#aliased-wikilinks---free-known-item-ground-truth).
 2. **Mixed script.** Korean prose with English technical terms is where sparse and dense
    methods diverge most sharply, and it is under-tested in English-only benchmarks.
-3. **The link graph** - but it is thinner than it looks (**65.67%** of files are
+3. **The link graph** - but it is thinner than it looks (**65.77%** of files are
    isolated), so it supports expansion stages rather than standalone graph retrieval.
    Measured numbers are [below](#graph-and-link-structure).
 
@@ -119,7 +119,7 @@ to immutable revision
 Its fingerprint fixes the E5 `query: ` / `passage: ` asymmetric prefixes,
 384-dimensional normalized embeddings, 512-token truncation, CPU float32 execution,
 exact NumPy/sentence-transformers/Torch/Transformers versions, PyTorch's CPU-only wheel
-source, and an offline-only local-cache policy. The frozen 335-document corpus is embedded
+source, and an offline-only local-cache policy. The frozen 336-document corpus is embedded
 once per retriever instance and searched by exact in-memory cosine similarity; there is
 no vector database whose index policy could become an accidental second experimental
 variable. Torch and the model runtime remain an optional `eval/` extra and never enter the
@@ -147,7 +147,7 @@ publication-qualified result digest exists yet.
 ### Graph and link structure
 
 > **Measured, and weaker than assumed.** The graph over the published corpus:
-> **115 of 335 files have any edge, 220 are isolated (65.67%)**, and non-singleton
+> **115 of 336 files have any edge, 221 are isolated (65.77%)**, and non-singleton
 > components are `[48, 39, 11, 4, 3, 3, 3, 2, 2]`. The `wiki/index.md` hub is degree
 > **29**, not the ~100 an earlier pass estimated. The ambiguity-safe resolver emits
 > **213 edges** after content-relative and source-relative resolution and excludes seven
@@ -157,7 +157,7 @@ publication-qualified result digest exists yet.
 > Two consequences, both binding. **A graph method is a `Stage` over a first-stage
 > retriever, never a standalone retriever** - on two-thirds of queries it has nothing to
 > say. And **`coverage` is a mandatory reported metric** alongside recall@k, or a method
-> that declines to answer on 65.67% of the corpus looks strong on the third where it fires.
+> that declines to answer on 65.77% of the corpus looks strong on the third where it fires.
 
 | Method | Status | Meant to teach |
 |---|---|---|
@@ -165,7 +165,7 @@ publication-qualified result digest exists yet.
 | Link-weighted reranking (PageRank-ish) | `planned` | Whether "well-connected" predicts "relevant". With 9 non-singleton components and a 48-node largest component, expect this to be mostly a prior on one cluster |
 | Bidirectional traversal (links + backlinks) | `planned` | Whether backlinks carry different signal from forward links |
 | Hierarchical summarisation (RAPTOR-style) | `planned` | Whether a synthesised tree beats the author's hand-made links. **Now more interesting than before**, because the hand-made graph turns out to cover only a third of the corpus |
-| GraphRAG-style entity graph | `planned` | Whether an inferred entity graph beats an explicit link graph that is 65.67% empty. A likely-positive result rather than the likely-negative one assumed earlier |
+| GraphRAG-style entity graph | `planned` | Whether an inferred entity graph beats an explicit link graph that is 65.77% empty. A likely-positive result rather than the likely-negative one assumed earlier |
 
 ### Aliased wikilinks - free known-item ground truth
 
@@ -192,7 +192,7 @@ retrieval method. All current implementations use one whole published document p
 
 | Strategy | Status | Meant to teach |
 |---|---|---|
-| Whole document | `implemented` | The current baseline over 335 published documents; hits and qrels resolve to content-relative document IDs |
+| Whole document | `implemented` | The current baseline over 336 published documents; hits and qrels resolve to content-relative document IDs |
 | Markdown-header-aware | `planned` | Whether the author's own structure is the right unit |
 | Fixed-size with overlap | `planned` | The generic default, as a control |
 | Semantic / embedding-based | `planned` | Whether inferred boundaries beat authored ones |

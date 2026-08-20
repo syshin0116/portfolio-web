@@ -40,7 +40,7 @@ EXPECTED_PINNED_TERRAFORM_FILES = {
     # service/job templates are materially easier to weaken through small drift
     # than through a reviewed replacement of the complete file.
     "infra/gcp/cloud_run.tf": (
-        "33ba0e5fdfff34c134ed27bfdc06e11a942fadc01d9ea4be1f1db97038624092"
+        "1f896bd0ceb8f1a643c23349c2e82108b5fb85a05bda72c312181d3c8e20ec9c"
     )
 }
 EXPECTED_PINNED_READINESS_FILES = {

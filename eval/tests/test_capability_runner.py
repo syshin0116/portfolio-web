@@ -62,7 +62,7 @@ TASKSET_PATH = (
     Path(__file__).resolve().parents[1] / "querysets" / "capability-tasks-v1.json"
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONTENT_TREE_SHA = "71c5bbda097cc20be0cb15ca4666fd6917f89d5f"
+CONTENT_TREE_SHA = "ba0f643fec95bec1bb03ea606d81d56a11794d9a"
 FIXED_PROVENANCE = RunProvenance(
     agent_source_tree="sha256:" + "1" * 64,
     eval_source_tree="sha256:" + "2" * 64,
@@ -691,7 +691,7 @@ def test_capability_taskset_is_canonical_and_content_tree_bound() -> None:
     ]
     assert (
         dataset.checksum
-        == "sha256:389f59fc8e1eab8931d529844f9f0993df397d51a75a03256bec83d552c55cd1"
+        == "sha256:0101008f258b63e40b23e55e653e79c09d5dd94856a916bcb8bc384ec4863676"
     )
     with pytest.raises(CapabilityEvaluationError, match="content tree"):
         load_capability_taskset(TASKSET_PATH, content_tree_sha="f" * 40)

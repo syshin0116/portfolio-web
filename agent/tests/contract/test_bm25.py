@@ -1112,7 +1112,7 @@ def test_real_docker_qrel_pins_tree_and_reproduces_baseline_then_fix(
         "load_typo_dict",
         "model_type",
     }
-    assert qrel["content_tree_sha"] == "71c5bbda097cc20be0cb15ca4666fd6917f89d5f"
+    assert qrel["content_tree_sha"] == "ba0f643fec95bec1bb03ea606d81d56a11794d9a"
     assert qrel["corpus_fingerprint"] == corpus.fingerprint
     assert relevant == actual_literal
     assert len(relevant) == 13

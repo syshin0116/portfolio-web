@@ -148,7 +148,7 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-wei
   <div class="panel">
     <h3>후보에 없는 관련 문서 추가</h3>
     <p class="warn">여섯 방법 모두가 놓친 글이 있다면 여기서 찾아 추가하세요. 이미 후보에 있는 글은 추가할 수 없습니다.</p>
-    <input type="search" id="q" placeholder="제목 또는 경로 검색 (335개 전체)">
+    <input type="search" id="q" placeholder="제목 또는 경로 검색">
     <div class="hits" id="hits"></div>
     <div id="added" style="margin-top:12px"></div>
   </div>

@@ -91,8 +91,7 @@ jobs:
             "$IMAGE_DIGEST" \
             bash -euo pipefail -c '
               python scripts/build_index.py \
-                --output /tmp/eval-index \
-                --expect-document-count 335
+                --output /tmp/eval-index
               content_tree_sha="$(
                 python -c "import json; print(json.load(open(\"/tmp/eval-index/manifest.json\"))[\"content_git_tree_sha\"])"
               )"

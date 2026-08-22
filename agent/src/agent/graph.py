@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -94,7 +95,12 @@ from agent.run_liveness import (
 from agent.tools import TOOLS
 
 DEFAULT_MODEL = OPENAI_GUEST_MODEL_SPEC
-MODEL_MAX_OUTPUT_TOKENS = 2_048
+# Effectively uncapped: no answer approaches this, so the real limits are the
+# 60-second model timeout and the 90-second run budget. A literal absence is
+# not available - the counting contract requires a positive integer that the
+# client must match - and 2_048 truncated real answers, which the usage
+# contract then rejected outright, leaving the visitor with nothing.
+MODEL_MAX_OUTPUT_TOKENS = 128_000
 GUEST_MODEL_MAX_OUTPUT_TOKENS = OPENAI_GUEST_MAX_OUTPUT_TOKENS
 MODEL_TIMEOUT_SECONDS = OPENAI_GUEST_TIMEOUT_SECONDS
 OWNER_OPENAI_SAFETY_IDENTIFIER = "owner_runtime"
@@ -170,6 +176,24 @@ _POSTGRES_CREATE_MEMORY_SQL = """
     ON CONFLICT (prefix, key) DO NOTHING
     RETURNING key
 """
+
+OWNER_RUN_BUDGET_POLICY = RunBudgetPolicy(
+    policy_id="owner-capability-lab-v5",
+    max_model_calls=12,
+    max_tool_calls=24,
+    max_quickjs_calls=4,
+    max_quickjs_in_flight=1,
+    max_quickjs_output_bytes=4_096,
+    max_quickjs_total_output_bytes=16_384,
+    max_task_calls=2,
+    max_tasks_in_flight=2,
+    max_depth=1,
+    max_output_tokens=MODEL_MAX_OUTPUT_TOKENS,
+    max_total_tokens=sys.maxsize,
+    max_count_risk_tokens_per_attempt=sys.maxsize,
+    max_count_risk_tokens_per_run=sys.maxsize,
+    max_elapsed_seconds=90,
+)
 
 GUEST_RUN_BUDGET_POLICY = RunBudgetPolicy(
     policy_id="anonymous-public-v7",
@@ -673,7 +697,9 @@ def create_graph(
     if is_guest and budget is not None and budget.policy != GUEST_RUN_BUDGET_POLICY:
         raise ValueError("guest graph requires the anonymous run budget policy")
     run_budget = budget or (
-        RunBudget(GUEST_RUN_BUDGET_POLICY) if is_guest else RunBudget()
+        RunBudget(GUEST_RUN_BUDGET_POLICY)
+        if is_guest
+        else RunBudget(OWNER_RUN_BUDGET_POLICY)
     )
     exact_input_counter = input_token_counter or (
         count_openai_input_tokens
@@ -841,7 +867,11 @@ async def graph(
 ) -> AsyncIterator[Any]:
     """Aegra 0.9.25 factory: one non-serializable ledger per run/access call."""
     is_guest = _runtime_is_guest(runtime)
-    budget = RunBudget(GUEST_RUN_BUDGET_POLICY) if is_guest else RunBudget()
+    budget = (
+        RunBudget(GUEST_RUN_BUDGET_POLICY)
+        if is_guest
+        else RunBudget(OWNER_RUN_BUDGET_POLICY)
+    )
     quickjs_middleware = BoundedQuickJSMiddleware(
         enabled=not is_guest and quickjs_allowed(runtime)
     )
@@ -937,6 +967,7 @@ __all__ = [
     "GUEST_MODEL_MAX_OUTPUT_TOKENS",
     "GUEST_ROOT_TOOL_NAMES",
     "GUEST_RUN_BUDGET_POLICY",
+    "OWNER_RUN_BUDGET_POLICY",
     "MODEL_MAX_OUTPUT_TOKENS",
     "MODEL_TIMEOUT_SECONDS",
     "create_graph",

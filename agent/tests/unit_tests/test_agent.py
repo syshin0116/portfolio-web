@@ -517,8 +517,8 @@ async def test_graph_factory_creates_a_fresh_budget_for_every_run(monkeypatch):
         ]
     )
 
-    def create_budget():
-        budget = RunBudget()
+    def create_budget(policy=None):
+        budget = RunBudget() if policy is None else RunBudget(policy)
         created_budgets.append(budget)
         return budget
 
@@ -3060,3 +3060,26 @@ def test_persistent_memory_namespace_fails_closed_without_runtime_identity():
                 )
             )
         )
+
+
+def test_owner_output_ceiling_is_high_enough_not_to_truncate_an_answer() -> None:
+    """A 2_048-token ceiling cut real answers short, and the usage contract then
+    rejected the truncated response outright, so the visitor received nothing."""
+    from agent.graph import MODEL_MAX_OUTPUT_TOKENS, OWNER_RUN_BUDGET_POLICY
+
+    assert MODEL_MAX_OUTPUT_TOKENS >= 64_000
+    assert OWNER_RUN_BUDGET_POLICY.max_output_tokens == MODEL_MAX_OUTPUT_TOKENS
+
+
+def test_guests_keep_their_own_far_lower_ceiling() -> None:
+    """Only the signed-in path is uncapped; anonymous output stays bounded
+    because it spends from the reviewed public budget."""
+    from agent.graph import (
+        GUEST_MODEL_MAX_OUTPUT_TOKENS,
+        GUEST_RUN_BUDGET_POLICY,
+        MODEL_MAX_OUTPUT_TOKENS,
+    )
+
+    assert GUEST_RUN_BUDGET_POLICY.max_output_tokens == GUEST_MODEL_MAX_OUTPUT_TOKENS
+    assert GUEST_MODEL_MAX_OUTPUT_TOKENS < MODEL_MAX_OUTPUT_TOKENS
+    assert GUEST_RUN_BUDGET_POLICY.max_total_tokens < MODEL_MAX_OUTPUT_TOKENS * 2

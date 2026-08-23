@@ -35,12 +35,11 @@ import {
   Pencil,
   Plus,
   RotateCcw,
-  Search,
-  Sparkles,
   ToolCase,
   UserRound,
   WifiOff,
 } from "lucide-react"
+import Image from "next/image"
 import Link from "next/link"
 import {
   memo,
@@ -96,18 +95,9 @@ import {
 } from "./runtime/focus-restoration"
 
 const SUGGESTIONS = [
-  {
-    prompt: "LangGraph 관련 글을 찾아줘",
-    icon: Search,
-  },
-  {
-    prompt: "최근 AI 프로젝트를 요약해줘",
-    icon: Sparkles,
-  },
-  {
-    prompt: "RAG 평가 계획을 설명해줘",
-    icon: BrainCircuit,
-  },
+  { prompt: "LangGraph 관련 글을 찾아줘" },
+  { prompt: "최근 AI 프로젝트를 요약해줘" },
+  { prompt: "RAG 평가 계획을 설명해줘" },
 ] as const
 
 const ReasoningPart = memo(function ReasoningPart({
@@ -358,31 +348,28 @@ function EmptyConversation() {
   return (
     <AuiIf condition={(state) => state.thread.isEmpty}>
       <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-4 py-10 md:px-6 md:py-16">
-        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <Sparkles className="size-4" />
-          <span>Syshin AI</span>
-        </div>
-        <h1 className="mt-5 text-balance text-3xl font-medium tracking-[-0.035em] sm:text-4xl">
+        <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.035em] sm:text-4xl">
           무엇이 궁금하세요?
         </h1>
-        <p className="mt-3 max-w-xl text-pretty text-sm leading-6 text-muted-foreground sm:text-base">
+        <p className="mx-auto mt-3 max-w-md text-pretty text-center text-sm leading-6 text-muted-foreground">
           블로그와 프로젝트를 검색하고, 사용된 방법과 출처를 함께 확인할 수
           있어요.
         </p>
-        <Composer centered />
-        <div className="mt-3 flex w-full flex-col gap-2 sm:flex-row">
-          {SUGGESTIONS.map(({ prompt, icon: Icon }) => (
+        {/* Above the composer, the way every familiar chat app places them:
+            a starting point to pick from, then the box you type in. */}
+        <div className="mt-8 flex w-full flex-wrap justify-center gap-2">
+          {SUGGESTIONS.map(({ prompt }) => (
             <ThreadPrimitive.Suggestion
               key={prompt}
               prompt={prompt}
               send
-              className="group flex min-h-11 flex-1 items-center gap-2 rounded-xl border border-border/70 bg-background px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors motion-reduce:transition-none hover:bg-muted hover:text-foreground"
+              className="min-h-9 rounded-full border border-border/70 bg-background px-3.5 py-2 text-left text-[13px] text-muted-foreground transition-colors motion-reduce:transition-none hover:border-border hover:bg-muted hover:text-foreground"
             >
-              <Icon className="size-3.5 shrink-0" />
-              <span>{prompt}</span>
+              {prompt}
             </ThreadPrimitive.Suggestion>
           ))}
         </div>
+        <Composer centered />
       </div>
     </AuiIf>
   )
@@ -592,19 +579,10 @@ function Composer({ centered = false }: { centered?: boolean }) {
       className={cn(
         "w-full px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6",
         centered
-          ? "mt-8 px-0 pb-0 md:px-0"
+          ? "mt-4 px-0 pb-0 md:px-0"
           : "bg-gradient-to-t from-background via-background to-transparent pt-6"
       )}
     >
-      {runtimeUi.connectionStatus === "connecting" ? (
-        <div
-          role="status"
-          className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-muted-foreground"
-        >
-          <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-          안전한 연결을 준비하고 있습니다.
-        </div>
-      ) : null}
       {runtimeUi.connectionStatus === "error" && connectionError ? (
         <div
           role="alert"
@@ -652,7 +630,11 @@ function Composer({ centered = false }: { centered?: boolean }) {
           }
           aria-invalid={composerError !== undefined}
           placeholder={
-            ready ? "블로그와 프로젝트에 관해 물어보세요…" : "연결 중…"
+            ready
+              ? "블로그와 프로젝트에 관해 물어보세요…"
+              : runtimeUi.connectionStatus === "error"
+                ? "연결을 확인해 주세요"
+                : "AI를 깨우는 중…"
           }
           disabled={!ready}
           rows={1}
@@ -724,18 +706,25 @@ function Conversation() {
     <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col bg-background">
       <ThreadPrimitive.Viewport className="relative min-h-0 flex-1 overflow-y-auto">
         <EmptyConversation />
-        <ThreadPrimitive.Messages>
-          {() => <ChatMessage />}
-        </ThreadPrimitive.Messages>
-        <AuiIf condition={(state) => state.thread.isRunning}>
-          <div
-            role="status"
-            aria-live="polite"
-            className="mx-auto flex w-full max-w-3xl items-center gap-3 px-6 py-3 text-sm text-muted-foreground"
-          >
-            <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
-            검색하고 답변을 구성하고 있습니다.
-          </div>
+        {/* Every familiar chat app grows the transcript upward from the
+            composer. Top-anchored messages left a single question stranded
+            above hundreds of pixels of nothing. */}
+        <AuiIf condition={(state) => !state.thread.isEmpty}>
+        <div className="flex min-h-full flex-col justify-end">
+          <ThreadPrimitive.Messages>
+            {() => <ChatMessage />}
+          </ThreadPrimitive.Messages>
+          <AuiIf condition={(state) => state.thread.isRunning}>
+            <div
+              role="status"
+              aria-live="polite"
+              className="mx-auto flex w-full max-w-3xl items-center gap-2.5 px-4 py-3 text-sm text-muted-foreground md:px-6"
+            >
+              <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
+              검색하고 답변을 구성하고 있습니다.
+            </div>
+          </AuiIf>
+        </div>
         </AuiIf>
         <AuiIf condition={(state) => !state.thread.isEmpty}>
           <ThreadPrimitive.ScrollToBottom
@@ -1102,8 +1091,8 @@ function ActivityPanel() {
                   실행 상세는 실시간 실행 중에만 제공됩니다.
                 </p>
                 <p className="mt-2 text-xs leading-5">
-                  질문을 보내면 정본 inspection 이벤트가 도착한 동안 검색
-                  방법과 근거가 여기에 표시됩니다.
+                  질문을 보내면 어떤 검색을 어떤 순서로 했는지, 무엇을 근거로
+                  삼았는지가 실행되는 동안 여기에 표시됩니다.
                 </p>
               </>
             )}
@@ -1156,7 +1145,7 @@ function ThreadSheet() {
           className="gap-2 rounded-xl px-2.5 sm:px-3"
         >
           <Menu className="size-4" />
-          <span className="hidden lg:inline">대화</span>
+          <span className="hidden sm:inline">대화</span>
         </Button>
       </SheetTrigger>
       <SheetContent
@@ -1184,14 +1173,14 @@ function DetailSheet() {
           className="gap-2 rounded-xl px-2.5 sm:px-3"
         >
           <ListTree className="size-4" />
-          <span className="hidden lg:inline">실행</span>
+          <span className="hidden sm:inline">실행</span>
         </Button>
       </SheetTrigger>
       <SheetContent side="right" className="w-[min(92vw,420px)] p-0">
         <SheetHeader className="sr-only">
           <SheetTitle>실행 상세</SheetTitle>
           <SheetDescription>
-            검색, 도구, 중첩 작업 진행 상태입니다.
+            검색과 도구 실행 상태입니다.
           </SheetDescription>
         </SheetHeader>
         <ActivityPanel />
@@ -1205,7 +1194,7 @@ function NewThreadButton() {
     <ThreadListPrimitive.Root>
       <ThreadListPrimitive.New
         aria-label="새 대화"
-        className="flex min-h-9 items-center gap-2 rounded-xl bg-primary px-2.5 text-sm font-medium text-primary-foreground transition-opacity motion-reduce:transition-none hover:opacity-90 data-[active=true]:opacity-60 sm:px-3"
+        className="flex min-h-9 items-center gap-2 rounded-xl border border-border/70 px-2.5 text-sm font-medium transition-colors motion-reduce:transition-none hover:bg-muted data-[active=true]:opacity-60 sm:px-3"
       >
         <Plus className="size-4" />
         <span className="hidden sm:inline">새 대화</span>
@@ -1272,9 +1261,14 @@ function WorkspaceHeader() {
   return (
     <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border/70 px-3 sm:px-4">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-          <Sparkles className="size-4" />
-        </div>
+        <Image
+          src="/logo.png"
+          alt=""
+          width={64}
+          height={64}
+          priority
+          className="size-8 shrink-0 rounded-xl object-cover"
+        />
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold tracking-tight">Syshin AI</p>
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -1331,9 +1325,9 @@ export function ChatShell() {
   return (
     <section
       aria-label="RAG 평가 챗봇"
-      className="relative flex h-[calc(100svh-4.5rem)] min-h-0 bg-muted/30 p-0 sm:p-3 md:p-5 supports-[height:100dvh]:h-[calc(100dvh-4.5rem)]"
+      className="relative flex h-[calc(100svh-4.5rem)] min-h-0 bg-muted/20 p-0 sm:p-3 md:p-4 supports-[height:100dvh]:h-[calc(100dvh-4.5rem)]"
     >
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden bg-background sm:rounded-[28px] sm:border sm:border-border/70 sm:shadow-[0_24px_80px_rgb(0_0_0/0.08)]">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col overflow-hidden bg-background sm:rounded-2xl sm:border sm:border-border/60 sm:shadow-[0_1px_3px_rgb(0_0_0/0.04),0_8px_24px_-12px_rgb(0_0_0/0.10)]">
         <OnlineStatus />
         <WorkspaceHeader />
         <Conversation />

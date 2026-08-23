@@ -50,3 +50,28 @@ export function toolArgumentSummary(argsText: string): string | undefined {
   }
   return pairs.length ? pairs.join(" · ").slice(0, MAX_ARGUMENT_TEXT) : undefined
 }
+
+// The result is already what the model saw, and every tool here reads public
+// blog content, so there is nothing to withhold. Bounded only so a long
+// retrieval dump cannot push the composer off screen.
+const MAX_RESULT_TEXT = 4_000
+
+export function toolResultText(result: unknown): string | undefined {
+  if (result === undefined || result === null) return undefined
+  const text =
+    typeof result === "string" ? result : safeStringify(result)
+  if (!text) return undefined
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+  return trimmed.length > MAX_RESULT_TEXT
+    ? `${trimmed.slice(0, MAX_RESULT_TEXT)}\n…(생략됨)`
+    : trimmed
+}
+
+function safeStringify(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return undefined
+  }
+}

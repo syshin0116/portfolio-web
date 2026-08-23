@@ -23,6 +23,7 @@ import type { AgentModel } from "@/lib/agent-model"
 
 import {
   AgentLifecycleError,
+  AgentTurnAbandonedError,
   sanitizeAgentError,
 } from "./error-state"
 import {
@@ -1841,6 +1842,8 @@ export class NativeAgentClient {
     let looseThreadClosePromise: Promise<void> | undefined
     let runId: string | undefined
     let terminal = false
+    let deliveredContent = false
+    let reportedFailure = false
     let cancelIssued = false
     const presentedInterruptKeys = new Set<string>()
     const nestedInputs = new NestedInputQueue()
@@ -2174,7 +2177,10 @@ export class NativeAgentClient {
           // is locally removed but may already have crossed the SSE boundary.
           if (event.params.namespace.length > 0) continue
           const projected = projection.consume(event)
-          if (projected) yield projected
+          if (projected) {
+            deliveredContent = true
+            yield projected
+          }
           continue
         }
         if (event.method === "input.requested") {
@@ -2206,7 +2212,10 @@ export class NativeAgentClient {
           const activity = inspection.consumeTool(event)
           this.#onActivity?.(activity, runtimeSource(boundThreadId))
           const result = projectToolResult(activity)
-          if (result) yield result
+          if (result) {
+            deliveredContent = true
+            yield result
+          }
           continue
         }
         if (event.method === "custom") {
@@ -2223,6 +2232,7 @@ export class NativeAgentClient {
           )
           const root = event.params.namespace.length === 0
           if (root && event.params.data.event === "failed") {
+            reportedFailure = true
             this.#onError?.(
               new AgentLifecycleError(),
               runtimeSource(boundThreadId)
@@ -2275,6 +2285,7 @@ export class NativeAgentClient {
     } catch (error) {
       if (!signal.aborted) {
         const normalized = sanitizeAgentError(error)
+        reportedFailure = true
         this.#onError?.(normalized, runtimeSource())
         throw normalized
       }
@@ -2302,6 +2313,7 @@ export class NativeAgentClient {
           })
           await cancelRunAndWait(cancellationClient, threadId, runId)
         } catch (error) {
+          reportedFailure = true
           this.#onError?.(
             sanitizeAgentError(error),
             runtimeSource()
@@ -2329,6 +2341,22 @@ export class NativeAgentClient {
       active.cancellationSnapshot?.dispose()
       this.#activeStreams.delete(active)
       if (this.#streamLease === streamLease) this.#streamLease = undefined
+      // An abort used to end the turn in complete silence: no answer, no
+      // spinner, no error, while the run kept going and succeeded on the
+      // server. Whatever already reached the reader stands on its own, and a
+      // failure already reported needs no second voice, and a caller-issued
+      // abort is the reader stopping the turn on purpose - but a turn that
+      // ended on its own and showed nothing at all has to say so, and offer
+      // the retry. Disposal counts: replacing the client mid-turn strands the
+      // run on a provider that is still mounted and still owes an answer.
+      if (
+        !terminal &&
+        !deliveredContent &&
+        !reportedFailure &&
+        !config.abortSignal.aborted
+      ) {
+        this.#onError?.(new AgentTurnAbandonedError(), runtimeSource())
+      }
       active.settle()
     }
   }.bind(this)

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   AgentLifecycleError,
+  AgentTurnAbandonedError,
   classifyAgentError,
   humanizeAgentError,
   reduceAgentError,
@@ -156,5 +157,14 @@ describe("classifyAgentError", () => {
     expect(safe.stack).toBeUndefined()
     expect(JSON.stringify(safe)).not.toContain(sentinel)
     expect(Object.values(safe)).not.toContain(sentinel)
+  })
+})
+
+describe("abandoned turn", () => {
+  test("asks for a retry instead of ending in silence", () => {
+    const presentation = classifyAgentError(new AgentTurnAbandonedError())
+    expect(presentation.channel).toBe("turn")
+    expect(presentation.action).toBe("retry-turn")
+    expect(presentation.message).toContain("응답을 받지 못했습니다")
   })
 })

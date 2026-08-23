@@ -35,6 +35,18 @@ export class AgentLifecycleError extends Error {
   }
 }
 
+/**
+ * The turn ended before any answer reached the reader, without a lifecycle
+ * failure to blame. The run itself may well have succeeded on the server, so
+ * the copy asks for a retry rather than reporting an agent fault.
+ */
+export class AgentTurnAbandonedError extends Error {
+  constructor() {
+    super("Agent turn ended without delivering a response")
+    this.name = "AgentTurnAbandonedError"
+  }
+}
+
 export class SanitizedAgentError extends Error {
   readonly status?: number
 
@@ -193,6 +205,15 @@ export function classifyAgentError(
           action: "retry-turn",
           actionLabel: "같은 대화에서 다시 시도",
         }
+  }
+  if (error instanceof AgentTurnAbandonedError) {
+    return {
+      channel: "turn",
+      kind: "lifecycle",
+      message: "응답을 받지 못했습니다. 같은 대화에서 다시 시도해 주세요.",
+      action: "retry-turn",
+      actionLabel: "같은 대화에서 다시 시도",
+    }
   }
   if (error instanceof AgentLifecycleError) {
     return {

@@ -17,7 +17,10 @@ import aegraDialect from "../../../../protocol/fixtures/aegra-dialect-translatio
 import contentToolRun from "../../../../protocol/fixtures/content-tool-run.json"
 import inspectionEvents from "../../../../protocol/fixtures/inspection-events-v1.json"
 import nestedNamespace from "../../../../protocol/fixtures/nested-namespace.json"
-import { AgentLifecycleError } from "./error-state"
+import {
+  AgentLifecycleError,
+  AgentTurnAbandonedError,
+} from "./error-state"
 import {
   NativeAgentClient,
   NativeMessageProjection,
@@ -1537,7 +1540,11 @@ describe("native stream lifecycle", () => {
       disposed: true,
       pendingInterrupts: 0,
     })
-    expect(observedErrors).toEqual([])
+    // Disposal cancels the turn without the reader asking. The provider that
+    // replaced the client is still mounted and still shows this thread, so the
+    // stranded turn is reported rather than left as an empty gap.
+    expect(observedErrors).toHaveLength(1)
+    expect(observedErrors[0]).toBeInstanceOf(AgentTurnAbandonedError)
   })
 
   test("ignores a public state fallback that resolves after its deadline", async () => {

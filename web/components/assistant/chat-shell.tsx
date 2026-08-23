@@ -72,7 +72,10 @@ import {
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 
-import { toolArgumentSummary } from "./runtime/tool-arguments"
+import {
+  toolArgumentSummary,
+  toolResultText,
+} from "./runtime/tool-arguments"
 
 import { useAgentRuntimeUi } from "./agent-runtime-provider"
 import { MarkdownText } from "./markdown-text"
@@ -131,6 +134,7 @@ const ReasoningPart = memo(function ReasoningPart({
 const ToolPart = memo(function ToolPart({
   toolName,
   argsText,
+  result,
   isError,
   status,
 }: ToolCallMessagePartProps) {
@@ -142,6 +146,7 @@ const ToolPart = memo(function ToolPart({
   // shut the moment the call finishes.
   const [open, setOpen] = useState(running)
   const argumentSummary = toolArgumentSummary(argsText)
+  const resultText = toolResultText(result)
   const subagentType =
     toolName === "task" ? taskSubagentTypeFromArgs(argsText) : undefined
   const label =
@@ -177,9 +182,15 @@ const ToolPart = memo(function ToolPart({
         <p className="text-muted-foreground">
           입력: {argumentSummary ?? "인자 없음"}
         </p>
-        <p className="text-muted-foreground">
-          검증된 결과 세부 정보는 실행 상세 패널에만 표시됩니다.
-        </p>
+        {resultText ? (
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background/60 p-2 font-mono text-[11px] leading-5 text-muted-foreground">
+            {resultText}
+          </pre>
+        ) : (
+          <p className="text-muted-foreground">
+            {running ? "결과를 기다리는 중입니다." : "결과가 없습니다."}
+          </p>
+        )}
       </div>
     </details>
   )

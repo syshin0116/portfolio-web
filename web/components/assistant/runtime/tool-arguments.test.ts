@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
-import { toolArgumentSummary } from "./tool-arguments"
+import {
+  toolArgumentSummary,
+  toolResultText,
+} from "./tool-arguments"
 
 const summary = (args: Record<string, unknown>) =>
   toolArgumentSummary(JSON.stringify(args))
@@ -55,5 +58,26 @@ describe("tool argument summary", () => {
   test("bounds a very long argument", () => {
     const value = summary({ query: "가".repeat(5_000) })
     expect(value?.length).toBe(1_000)
+  })
+})
+
+describe("toolResultText", () => {
+  test("passes plain text through", () => {
+    expect(toolResultText("검색 결과 3건")).toBe("검색 결과 3건")
+  })
+
+  test("renders structured results as readable JSON", () => {
+    expect(toolResultText({ hits: 2 })).toBe('{\n  "hits": 2\n}')
+  })
+
+  test("has nothing to show for an absent or blank result", () => {
+    expect(toolResultText(undefined)).toBeUndefined()
+    expect(toolResultText("   ")).toBeUndefined()
+  })
+
+  test("truncates a dump that would push the composer off screen", () => {
+    const text = toolResultText("가".repeat(5_000))
+    expect(text).toHaveLength(4_000 + "\n…(생략됨)".length)
+    expect(text?.endsWith("…(생략됨)")).toBe(true)
   })
 })

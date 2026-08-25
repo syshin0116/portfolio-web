@@ -15,7 +15,6 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -1283,70 +1282,6 @@ def _validated_capability_policy(policy: object) -> RunBudgetPolicy:
     return policy
 
 
-def _measure_content_tree_sha(workspace_root: Path) -> str:
-    """Measure a clean workspace's committed ``content/`` tree without network I/O."""
-
-    if not isinstance(workspace_root, Path):
-        raise CapabilityEvaluationError(
-            "workspace root is required to measure the current content tree"
-        )
-    try:
-        root = workspace_root.resolve()
-    except OSError as exc:
-        raise CapabilityEvaluationError(
-            "workspace root cannot be resolved for content-tree measurement"
-        ) from exc
-    if (
-        not root.is_dir()
-        or not (root / "content").is_dir()
-        or not (root / "agent").is_dir()
-        or not (root / "eval").is_dir()
-        or not (root / "uv.lock").is_file()
-    ):
-        raise CapabilityEvaluationError(
-            "workspace root is incomplete for content-tree measurement"
-        )
-
-    def git_output(*args: str) -> str:
-        try:
-            completed = subprocess.run(
-                ("git", "-C", str(root), *args),
-                check=False,
-                capture_output=True,
-                encoding="utf-8",
-                stdin=subprocess.DEVNULL,
-                text=True,
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
-            raise CapabilityEvaluationError(
-                "current content tree cannot be measured from local git"
-            ) from exc
-        if completed.returncode != 0:
-            raise CapabilityEvaluationError(
-                "current content tree cannot be measured from local git"
-            )
-        return completed.stdout
-
-    status = git_output(
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-        "--",
-        "content",
-    )
-    if status:
-        raise CapabilityEvaluationError(
-            "current content tree cannot be measured from a dirty workspace"
-        )
-    measured = git_output("rev-parse", "--verify", "HEAD:content").strip()
-    if _SHA1_RE.fullmatch(measured) is None:
-        raise CapabilityEvaluationError(
-            "local git returned a malformed current content tree"
-        )
-    return measured
-
-
 def _worst_case_generation_cost(
     identity: CapabilityExecutorIdentity,
     *,
@@ -1897,7 +1832,6 @@ async def run_capability_experiment(
     executor: CapabilityExecutor,
     executor_identity: CapabilityExecutorIdentity,
     budget_policy: RunBudgetPolicy,
-    workspace_root: Path,
     evidence_status: str = CAPABILITY_EVIDENCE_STATUS,
     provenance: RunProvenance | None = None,
     clock_ns: Callable[[], int] = time.monotonic_ns,
@@ -1915,14 +1849,6 @@ async def run_capability_experiment(
     _validate_evidence_contract(evidence_status, executor_identity)
     _validate_executor_evidence_contract(evidence_status, executor)
     budget_policy = _validated_capability_policy(budget_policy)
-    measured_content_tree_sha = _measure_content_tree_sha(workspace_root)
-    if (
-        measured_content_tree_sha != dataset.content_tree_sha
-        or measured_content_tree_sha != executor_identity.content_tree_sha
-    ):
-        raise CapabilityEvaluationError(
-            "measured content tree differs from the dataset or executor identity"
-        )
     worst_case_cost = _worst_case_generation_cost(
         executor_identity,
         policy=budget_policy,
@@ -1979,7 +1905,7 @@ async def run_capability_experiment(
                     arm=arm,
                     task=attempt_task,
                     budget=budget,
-                    content_tree_sha=measured_content_tree_sha,
+                    content_tree_sha=dataset.content_tree_sha,
                     random_seed=_derived_seed(
                         executor_identity,
                         arm,

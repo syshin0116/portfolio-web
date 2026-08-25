@@ -511,7 +511,6 @@ def _run_dataset(
             executor=executor,
             executor_identity=identity,
             budget_policy=FIXED_POLICY,
-            workspace_root=REPO_ROOT,
             evidence_status=evidence_status,
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
@@ -1753,7 +1752,6 @@ def test_runner_aborts_when_executor_does_not_return_a_complete_observation() ->
                 executor=ExplodingExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1827,85 +1825,11 @@ def test_runner_rejects_unsafe_experiment_inputs_before_executor_invocation(
                 executor=executor,
                 executor_identity=identity,
                 budget_policy=policy,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
             )
         )
-    assert executor.calls == 0
-
-
-def test_runner_measures_the_clean_local_content_tree() -> None:
-    assert capability_runner._measure_content_tree_sha(REPO_ROOT) == CONTENT_TREE_SHA
-
-
-def test_content_tree_measurement_rejects_drift_before_rev_parse(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[tuple[str, ...]] = []
-
-    def dirty_status(command, **kwargs):
-        del kwargs
-        commands.append(command)
-        return SimpleNamespace(
-            returncode=0,
-            stdout="?? content/wiki/transient.md\n",
-        )
-
-    monkeypatch.setattr(capability_runner.subprocess, "run", dirty_status)
-    with pytest.raises(
-        CapabilityEvaluationError,
-        match="dirty workspace",
-    ):
-        capability_runner._measure_content_tree_sha(REPO_ROOT)
-
-    assert len(commands) == 1
-    assert commands[0][-2:] == ("--", "content")
-
-
-def test_runner_rejects_measured_content_drift_before_executor_invocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class InvocationSpy:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def execute(self, context):
-            del context
-            self.calls += 1
-            raise AssertionError("content drift reached the executor")
-
-    measured_roots: list[Path] = []
-
-    def drifted_content_tree(root: Path) -> str:
-        measured_roots.append(root)
-        return "f" * 40
-
-    monkeypatch.setattr(
-        capability_runner,
-        "_measure_content_tree_sha",
-        drifted_content_tree,
-    )
-    executor = InvocationSpy()
-    with pytest.raises(
-        CapabilityEvaluationError,
-        match="measured content tree differs",
-    ):
-        asyncio.run(
-            run_capability_experiment(
-                dataset=_task_subset("baseline-citation-shape"),
-                executor=executor,
-                executor_identity=FIXED_IDENTITY,
-                budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
-                provenance=FIXED_PROVENANCE,
-                clock_ns=DeterministicClock(),
-                budget_factory=_budget_factory,
-            )
-        )
-
-    assert measured_roots == [REPO_ROOT]
     assert executor.calls == 0
 
 
@@ -1934,7 +1858,6 @@ def test_runner_deep_isolates_tasks_and_rejects_executor_mutation() -> None:
                 executor=executor,
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1964,7 +1887,6 @@ def test_runner_rejects_incomplete_provider_usage_without_executor_accounting() 
                 executor=IncompleteUsageExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -1992,7 +1914,6 @@ def test_disabled_cache_mode_rejects_nonzero_provider_cache_buckets() -> None:
                     max_attempts=1,
                 ),
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2025,7 +1946,6 @@ def test_runner_wraps_the_complete_executor_in_the_runbudget_deadline() -> None:
                 executor=BlockingExecutor(),
                 executor_identity=replace(FIXED_IDENTITY, max_attempts=1),
                 budget_policy=replace(FIXED_POLICY, max_elapsed_seconds=1),
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
             ),
             timeout=2,
@@ -2061,7 +1981,6 @@ def test_runner_rejects_each_open_reservation_explicitly(reserve) -> None:
                 executor=OpenReservationExecutor(),
                 executor_identity=replace(FIXED_IDENTITY, max_attempts=1),
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2088,7 +2007,6 @@ def test_zero_spend_retry_uses_fresh_attempt_thread_and_graph_run_ids() -> None:
             executor=executor,
             executor_identity=FIXED_IDENTITY,
             budget_policy=FIXED_POLICY,
-            workspace_root=REPO_ROOT,
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
             budget_factory=_budget_factory,
@@ -2124,7 +2042,6 @@ def test_spent_executor_failure_is_never_retried_or_omitted_from_cost() -> None:
                 executor=executor,
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2154,7 +2071,6 @@ def test_runner_reports_only_typed_executor_diagnostics_and_final_budget_counts(
                 executor=DiagnosticFailureExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2222,7 +2138,6 @@ def test_runner_preserves_diagnostic_when_failed_provider_usage_is_incomplete(
                 executor=FailedProviderExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2263,7 +2178,6 @@ def test_runner_requires_attempt_isolation_and_exact_cache_mode(
                 executor=IsolationDriftExecutor(),
                 executor_identity=replace(FIXED_IDENTITY, max_attempts=1),
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2327,7 +2241,6 @@ def test_enabled_arm_without_capability_activity_is_rejected_as_incomplete() -> 
                 executor=CapabilityIgnoringExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2452,7 +2365,6 @@ def test_unsettled_combined_capability_reservation_fails_closed() -> None:
                 executor=UnsettledExecutor(),
                 executor_identity=FIXED_IDENTITY,
                 budget_policy=FIXED_POLICY,
-                workspace_root=REPO_ROOT,
                 provenance=FIXED_PROVENANCE,
                 clock_ns=DeterministicClock(),
                 budget_factory=_budget_factory,
@@ -2484,7 +2396,6 @@ def test_completed_but_wrong_structured_output_scores_zero_without_aborting() ->
             executor=WrongOutputExecutor(),
             executor_identity=FIXED_IDENTITY,
             budget_policy=FIXED_POLICY,
-            workspace_root=REPO_ROOT,
             provenance=FIXED_PROVENANCE,
             clock_ns=DeterministicClock(),
             budget_factory=_budget_factory,

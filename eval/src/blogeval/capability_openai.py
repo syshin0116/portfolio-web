@@ -615,7 +615,6 @@ async def run_openai_capability_sweep(
             executor=executor,
             executor_identity=identity,
             budget_policy=OPENAI_CAPABILITY_POLICY,
-            workspace_root=workspace_root,
             evidence_status=CAPABILITY_PROVIDER_EVIDENCE_STATUS,
         )
     return write_capability_artifacts(run, output_root=output_root)

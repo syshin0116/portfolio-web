@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#151922; --muted:#6b7280; --rule:#e4e7ec; --bg:#ffffff;
+    --keep:#cfd5de; --waste:#d99b86; --good:#256d3f; --box:#f4f6f9;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    width:1600px;height:900px;background:var(--bg);color:var(--ink);
+    font-family:"Apple SD Gothic Neo","Pretendard",-apple-system,sans-serif;
+    padding:54px 76px;display:flex;flex-direction:column;
+  }
+  h1{font-size:39px;font-weight:700;letter-spacing:-.5px}
+  .sub{font-size:19px;color:var(--muted);margin-top:11px}
+
+  .eq{margin-top:28px;background:var(--box);border:1px solid var(--rule);border-radius:8px;padding:20px 26px;
+      font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:22px;letter-spacing:-.2px}
+  .eq .a{color:var(--muted)}
+  .eq .b{color:#a03e26;font-weight:700}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:52px;margin-top:26px}
+  .col h2{font-size:17px;font-weight:600;color:var(--muted);letter-spacing:.3px;padding-bottom:10px;border-bottom:1px solid var(--rule)}
+  .col p{margin-top:15px;font-size:18px;line-height:1.55}
+  .col b{font-weight:600}
+  .f{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:16px;color:var(--muted);margin-top:11px}
+
+  .cmp{margin-top:30px;padding-top:24px;border-top:1px solid var(--rule)}
+  .cmp h2{font-size:17px;font-weight:600;color:var(--muted);letter-spacing:.3px}
+  .grp{margin-top:17px}
+  .grp .cap{display:flex;justify-content:space-between;font-size:17px;margin-bottom:7px}
+  .grp .cap .r{color:var(--muted)}
+  .bar{display:flex;height:42px;border-radius:4px;overflow:hidden}
+  .seg{display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600}
+  .seg.keep{background:var(--keep);color:#2b3240}
+  .seg.waste{background:var(--waste);color:#4a1e12}
+
+  .howto{margin-top:auto;background:var(--box);border:1px solid var(--rule);border-radius:8px;padding:18px 24px;
+          display:grid;grid-template-columns:auto auto 1fr;align-items:center;gap:20px}
+  .howto .k{font-size:17px;color:var(--muted);font-weight:600;white-space:nowrap}
+  .howto .c{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:19px;font-weight:600;white-space:nowrap}
+  .howto .d{font-size:16px;color:var(--muted)}
+  .foot{margin-top:24px;padding-top:20px;border-top:2px solid var(--ink);font-size:18px;line-height:1.6}
+  .foot .g{color:var(--good);font-weight:600}
+</style>
+<body>
+  <h1>테스트를 줄이는 대신 테스트당 고정비를 줄였다</h1>
+  <div class="sub">테스트 수는 그대로, N에 곱해지던 항만 제거</div>
+
+  <div class="eq">
+    전체 시간 = <span class="a">Σ(각 테스트가 실제로 하는 일)</span> &nbsp;+&nbsp; <span class="b">N × (테스트당 고정비)</span>
+  </div>
+
+  <div class="cols">
+    <div class="col">
+      <h2>첫째 항 &nbsp;줄이면 검증이 줄어드는 몫</h2>
+      <p>검증이 촘촘할수록 커지는 N<br>경계 조합을 parametrize로 펼친 파일 하나 &rarr; 527개</p>
+      <div class="f">tests/&hellip;/mapper_scoring.py &nbsp;527 passed</div>
+    </div>
+    <div class="col">
+      <h2>둘째 항 &nbsp;검증과 무관하게 N에 비례하는 몫</h2>
+      <p>매 테스트 종료 시 185개 테이블 DELETE<br>경로 이름이 <b>infra</b>면 DB 미사용 테스트도 대상</p>
+      <div class="f">185 × (context switch 2 + socket 왕복 1) = 25ms</div>
+    </div>
+  </div>
+
+  <div class="cmp">
+    <h2>고정비 비중 &nbsp;<span style="font-weight:400">테스트 성격에 따른 차이</span></h2>
+
+    <div class="grp">
+      <div class="cap"><span>계산 전용 파일 527개 &nbsp;<span style="color:#6b7280">DB 미사용</span></span><span class="r">13.87초</span></div>
+      <div class="bar">
+        <div class="seg keep" style="width:7%">0.97s</div>
+        <div class="seg waste" style="width:93%">정리에 12.9s &nbsp;93%</div>
+      </div>
+    </div>
+
+    <div class="grp">
+      <div class="cap"><span>API 전체 스위트 8천여 개 &nbsp;<span style="color:#6b7280">DB 사용 44%</span></span><span class="r">67.6초</span></div>
+      <div class="bar">
+        <div class="seg keep" style="width:62.4%">42.2s</div>
+        <div class="seg waste" style="width:37.6%">정리에 25.4s &nbsp;38%</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="howto">
+    <div class="k">확인 방법</div>
+    <div class="c">pytest --durations=0</div>
+    <div class="d">setup, call, teardown 분리 출력 &nbsp;teardown 합이 call 합에 근접하면 동일 증상</div>
+  </div>
+
+  <div class="foot">
+    쓰기가 간 테이블만 삭제로 변경 &rarr; 전체 스위트 <span class="g">67.6초 → 42.2초</span>.
+    테스트 수를 손대기 전에 확인할 것은 테스트당 고정비.
+  </div>
+</body>

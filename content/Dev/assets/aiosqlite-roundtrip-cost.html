@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#151922; --muted:#6b7280; --rule:#e4e7ec; --bg:#ffffff;
+    --box:#f4f6f9; --line:#9aa3b0; --hot:#b4432c; --good:#256d3f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    width:1600px;height:900px;background:var(--bg);color:var(--ink);
+    font-family:"Apple SD Gothic Neo","Pretendard",-apple-system,sans-serif;
+    padding:60px 76px;display:flex;flex-direction:column;
+  }
+  h1{font-size:40px;font-weight:700;letter-spacing:-.5px}
+  .sub{font-size:20px;color:var(--muted);margin-top:12px}
+  .main{display:grid;grid-template-columns:1fr 420px;gap:60px;margin-top:44px;flex:1}
+
+  .diagram{position:relative;display:flex;flex-direction:column;justify-content:center}
+  .lane{display:grid;grid-template-columns:230px 1fr 230px;align-items:center;gap:26px}
+  .node{background:var(--box);border:1px solid var(--rule);border-radius:8px;padding:18px 20px;text-align:center}
+  .node .t{font-size:20px;font-weight:600}
+  .node .d{font-size:15px;color:var(--muted);margin-top:5px;font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  .arrow{text-align:center;position:relative;height:52px}
+  .arrow .ln{position:absolute;top:25px;left:0;right:0;height:1.5px;background:var(--line)}
+  .arrow .tag{position:relative;display:inline-block;background:var(--bg);padding:0 14px;font-size:16px;color:var(--muted);top:15px}
+  .arrow .head{position:absolute;top:19px;width:0;height:0;border-top:6px solid transparent;border-bottom:6px solid transparent}
+  .r .head{right:0;border-left:9px solid var(--line)}
+  .l .head{left:0;border-right:9px solid var(--line)}
+  .mid{text-align:center;font-size:17px;color:var(--muted);padding:8px 0}
+  .cost{margin-top:36px;border:1.5px dashed var(--hot);border-radius:8px;padding:20px 24px;background:#fdf7f5}
+  .cost .h{font-size:19px;font-weight:600;color:var(--hot)}
+  .cost .b{font-size:18px;color:var(--ink);margin-top:8px;line-height:1.55}
+  .x185{display:inline-block;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-weight:700}
+
+  .side{border-left:1px solid var(--rule);padding-left:46px;display:flex;flex-direction:column;justify-content:center}
+  .side h2{font-size:17px;color:var(--muted);font-weight:600;letter-spacing:.4px}
+  .stat{margin-top:22px}
+  .stat .n{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:38px;font-weight:600;letter-spacing:-1px}
+  .stat .c{font-size:16px;color:var(--muted);margin-top:4px}
+  .rulehr{height:1px;background:var(--rule);margin:26px 0}
+  .res{font-size:18px;line-height:1.6}
+  .res b{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  .after{margin-top:34px;border-top:2px solid var(--ink);padding-top:20px;font-size:18px;line-height:1.6}
+  .after .g{color:var(--good);font-weight:600}
+</style>
+<body>
+  <h1>빈 테이블을 지우는데 왜 25ms가 드나</h1>
+  <div class="sub">비용의 정체는 SQL이 아니라 문장당 왕복</div>
+
+  <div class="main">
+    <div class="diagram">
+      <div class="lane">
+        <div class="node"><div class="t">event loop</div><div class="d">asyncio</div></div>
+        <div class="mid">queue</div>
+        <div class="node"><div class="t">worker thread</div><div class="d">sqlite3</div></div>
+      </div>
+
+      <div class="arrow r" style="margin:12px 0">
+        <div class="ln"></div><div class="head"></div>
+        <span class="tag">DELETE 문장 전달</span>
+      </div>
+
+      <div class="mid" style="font-size:16px">worker thread에서 동기 실행</div>
+
+      <div class="arrow l" style="margin:12px 0">
+        <div class="ln"></div><div class="head"></div>
+        <span class="tag">self-pipe socket으로 loop 깨움</span>
+      </div>
+
+      <div class="mid" style="font-size:16px">selector 깨어나 결과 수신</div>
+
+      <div class="cost">
+        <div class="h">문장당 context switch 2회, socket 왕복 1회</div>
+        <div class="b">빈 테이블도 동일, 정리 1회당 <span class="x185">×185</span></div>
+      </div>
+    </div>
+
+    <div class="side">
+      <h2>cProfile, route 테스트 39개</h2>
+
+      <div class="stat"><div class="n">83,434</div><div class="c">selector.select 호출</div></div>
+      <div class="stat"><div class="n">79,845</div><div class="c">socket.recv 호출</div></div>
+
+      <div class="rulehr"></div>
+
+      <div class="res">
+        DB 사용 테스트 1개당 loop wakeup 약 <b>2,000</b>회<br>
+        정리 구간만 분리 측정 &nbsp;<b>25.0 ms</b>
+      </div>
+
+      <div class="res" style="margin-top:24px;color:#6b7280;font-size:17px">
+        Postgres도 동일 &nbsp;스레드 왕복 대신 네트워크 왕복 185회<br>
+        결정 변수는 driver가 아니라 <span style="color:#151922;font-weight:600">문장 수</span>
+      </div>
+
+      <div class="after">
+        쓰기가 간 테이블만 삭제로 변경<br>
+        전체 스위트 <span class="g">67.6s → 42.2s</span><br>
+        system time <span class="g">73.1s → 21.2s</span>
+      </div>
+    </div>
+  </div>
+</body>

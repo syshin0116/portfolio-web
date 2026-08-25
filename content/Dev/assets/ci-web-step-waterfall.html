@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#151922; --muted:#6b7280; --rule:#e4e7ec; --bg:#ffffff;
+    --bad:#b4432c; --good:#256d3f; --bar:#cfd5de;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    width:1600px;height:900px;background:var(--bg);color:var(--ink);
+    font-family:"Apple SD Gothic Neo","Pretendard",-apple-system,sans-serif;
+    padding:64px 76px;display:flex;flex-direction:column;
+  }
+  h1{font-size:40px;font-weight:700;letter-spacing:-.5px}
+  .sub{font-size:20px;color:var(--muted);margin-top:12px;line-height:1.5}
+  .chart{margin-top:46px;flex:1;display:flex;flex-direction:column;justify-content:center}
+  .row{display:grid;grid-template-columns:310px 1fr;align-items:center;height:146px;border-top:1px solid var(--rule)}
+  .row:last-child{border-bottom:1px solid var(--rule)}
+  .label{padding-right:28px}
+  .label .n{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:38px;font-weight:600;letter-spacing:-1px}
+  .label .cap{font-size:17px;color:var(--muted);margin-top:5px;line-height:1.35}
+  .track{position:relative;height:52px}
+  .bar{position:absolute;left:0;top:0;height:52px;background:var(--bar);border-radius:3px}
+  .bar.first{background:#e6b6a8}
+  .bar.last{background:#a9cdb8}
+  .delta{position:absolute;top:15px;font-size:19px;font-weight:600;font-family:ui-monospace,"SF Mono",Menlo,monospace;color:var(--good)}
+  .cause{position:absolute;top:66px;font-size:17px;color:var(--muted)}
+  .foot{margin-top:34px;padding-top:22px;border-top:2px solid var(--ink);display:flex;justify-content:space-between;align-items:baseline}
+  .foot .k{font-size:19px;color:var(--muted)}
+  .foot .v{font-size:19px;color:var(--muted)}
+  .foot b{color:var(--ink)}
+</style>
+<body>
+  <h1>Web 테스트 스텝 626초 → 90초</h1>
+  <div class="sub">원인이 다른 네 구간, 순서대로 제거</div>
+
+  <div class="chart">
+    <div class="row">
+      <div class="label"><div class="n">626s</div><div class="cap">runner 설정이 회귀한 장애 상태</div></div>
+      <div class="track"><div class="bar first" style="width:100%"></div></div>
+    </div>
+
+    <div class="row">
+      <div class="label"><div class="n">394s</div><div class="cap">CPU request 복구</div></div>
+      <div class="track">
+        <div class="bar" style="width:62.9%"></div>
+        <div class="delta" style="left:64.5%">&minus;232s</div>
+        <div class="cause" style="left:64.5%">Terraform apply로 수동 Helm 값 소실</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="label"><div class="n">294s</div><div class="cap">Vitest 설정 정리, worker 수 고정</div></div>
+      <div class="track">
+        <div class="bar" style="width:47%"></div>
+        <div class="delta" style="left:48.6%">&minus;100s</div>
+        <div class="cause" style="left:48.6%">worker 4 → 3, CPU 작업량 46% 감소</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="label"><div class="n">90s</div><div class="cap">vmThreads 전환, node 팩킹 재조정</div></div>
+      <div class="track">
+        <div class="bar last" style="width:14.4%"></div>
+        <div class="delta" style="left:16%">&minus;204s</div>
+        <div class="cause" style="left:16%">파일별 import 고정비 제거</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="k">CI Web test step 중앙값</div>
+    <div class="v">최대 감소 두 구간 &nbsp;<b>runner 설정</b>, <b>격리 방식</b></div>
+  </div>
+</body>

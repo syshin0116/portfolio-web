@@ -57,8 +57,8 @@ Two things gate every entry in this table, both from
 
 ## The corpus, and what it affords
 
-337 source Markdown files, of which **336 are published by Nuartz** at content tree
-`ba0f643fec95bec1bb03ea606d81d56a11794d9a`; basename-leading `_` files are excluded.
+337 source Markdown files, of which **336 are published by Nuartz**; basename-leading
+`_` files are excluded.
 The evaluation corpus follows that published set. It is Korean-language technical writing
 with heavy English loanwords and code, YAML frontmatter (title, date, tags, categories),
 and a `[[wikilink]]` graph between posts.

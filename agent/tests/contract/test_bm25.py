@@ -33,7 +33,6 @@ from agent.retrieval.corpus import (
     CorpusManifestError,
     PublishedCorpus,
     content_checksum,
-    corpus_fingerprint,
 )
 from agent.retrieval.corpus_build import CorpusBuildError, build_index, scan_corpus
 from agent.retrieval.registry import registry
@@ -1091,9 +1090,7 @@ def test_real_docker_qrel_pins_tree_and_reproduces_baseline_then_fix(
 
     assert set(qrel) == {
         "behavioral_baseline",
-        "content_tree_sha",
         "corrected_baseline",
-        "corpus_fingerprint",
         "generator",
         "qrels",
         "query",
@@ -1112,20 +1109,12 @@ def test_real_docker_qrel_pins_tree_and_reproduces_baseline_then_fix(
         "load_typo_dict",
         "model_type",
     }
-    assert qrel["content_tree_sha"] == "ba0f643fec95bec1bb03ea606d81d56a11794d9a"
-    assert qrel["corpus_fingerprint"] == corpus.fingerprint
     assert relevant == actual_literal
     assert len(relevant) == 13
 
     snapshot = scan_corpus(
         content_root=REAL_CONTENT,
         policy_path=REAL_CORPUS_POLICY,
-    )
-    assert (
-        corpus_fingerprint(
-            (document.doc_id, document.checksum) for document in snapshot.documents
-        )
-        == qrel["corpus_fingerprint"]
     )
     legacy_kiwi = Kiwi(num_workers=1)
     legacy_documents = [

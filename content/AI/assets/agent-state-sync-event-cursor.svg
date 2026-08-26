@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">이벤트와 대화별 cursor를 사용한 변경 전달 흐름</title>
+  <desc id="desc">제품 row와 이벤트 r41 저장부터 대화 B의 조회, ModelRequest 주입, 성공 시 cursor 확정과 실패 시 재전달까지의 흐름</desc>
+  <defs>
+    <pattern id="grid2" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#1e293b" stroke-width="0.7"/></pattern>
+    <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3L0 6Z" fill="#94a3b8"/></marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3L0 6Z" fill="#34d399"/></marker>
+    <marker id="arrowRed2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3L0 6Z" fill="#fb7185"/></marker>
+    <style>
+      .bg{fill:#020617}.title{font:700 29px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#f8fafc}.sub{font:15px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#94a3b8}.card{fill:#0f172a;stroke:#334155;stroke-width:1.4}.current{fill:#082f49;stroke:#38bdf8;stroke-width:1.8}.event{fill:#312e81;stroke:#818cf8;stroke-width:1.8}.model{fill:#052e2b;stroke:#34d399;stroke-width:1.8}.fail{fill:#4c0519;stroke:#fb7185;stroke-width:1.8}.head{font:700 16px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#f8fafc}.body{font:13px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#cbd5e1}.small{font:12px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#94a3b8}.num{font:700 13px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#020617}.badge{fill:#a7f3d0}.line{stroke:#94a3b8;stroke-width:2.1;fill:none;marker-end:url(#arrow2)}.green{stroke:#34d399;stroke-width:2.4;fill:none;marker-end:url(#arrowGreen)}.red{stroke:#fb7185;stroke-width:2.2;stroke-dasharray:7 6;fill:none;marker-end:url(#arrowRed2)}.code{font:700 13px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#c7d2fe}
+    </style>
+  </defs>
+  <rect class="bg" width="1280" height="720"/><rect width="1280" height="720" fill="url(#grid2)" opacity=".75"/>
+  <text x="54" y="61" class="title">변경 1건이 다른 대화의 LLM 입력에 들어가는 과정</text>
+  <text x="54" y="90" class="sub">현재값은 답변 기준, 이벤트는 이전 답변이 낡은 이유, cursor는 처리 완료 위치</text>
+
+  <circle cx="88" cy="154" r="18" class="badge"/><text x="84" y="159" class="num">1</text>
+  <rect x="54" y="180" width="260" height="132" rx="16" class="current"/>
+  <text x="78" y="215" class="head">화면 또는 AI 도구 저장</text>
+  <text x="78" y="245" class="body">제품 row v8</text>
+  <text x="78" y="270" class="body">workspace event r41</text>
+  <text x="78" y="296" class="small">같은 DB 트랜잭션</text>
+
+  <circle cx="398" cy="154" r="18" class="badge"/><text x="394" y="159" class="num">2</text>
+  <rect x="364" y="180" width="250" height="132" rx="16" class="event"/>
+  <text x="388" y="215" class="head">대화 B run 시작</text>
+  <text x="388" y="245" class="code">cursor = r40</text>
+  <text x="388" y="270" class="code">HEAD = r41</text>
+  <text x="388" y="296" class="small">checkpointer에서 복원</text>
+
+  <circle cx="698" cy="154" r="18" class="badge"/><text x="694" y="159" class="num">3</text>
+  <rect x="664" y="180" width="250" height="132" rx="16" class="card"/>
+  <text x="688" y="215" class="head">abefore_agent</text>
+  <text x="688" y="245" class="body">현재 row + r41 조회</text>
+  <text x="688" y="270" class="code">pending = r41</text>
+  <text x="688" y="296" class="small">아직 LLM은 모름</text>
+
+  <circle cx="998" cy="154" r="18" class="badge"/><text x="994" y="159" class="num">4</text>
+  <rect x="964" y="180" width="262" height="132" rx="16" class="model"/>
+  <text x="988" y="215" class="head">wrap_model_call</text>
+  <text x="988" y="245" class="body">CURRENT  9월 30일</text>
+  <text x="988" y="270" class="body">CHANGES  r41, user</text>
+  <text x="988" y="296" class="small">이 시점부터 LLM이 확인</text>
+
+  <path d="M314 246H362" class="line"/><path d="M614 246H662" class="line"/><path d="M914 246H962" class="green"/>
+
+  <rect x="238" y="412" width="330" height="130" rx="16" class="model"/>
+  <text x="264" y="447" class="head">성공</text>
+  <text x="264" y="477" class="body">최종 agent invocation 완료</text>
+  <text x="264" y="506" class="code">aafter_agent: cursor = r41</text>
+  <text x="264" y="529" class="small">다음 run은 r42부터 조회</text>
+
+  <rect x="712" y="412" width="330" height="130" rx="16" class="fail"/>
+  <text x="738" y="447" class="head">모델 호출 또는 출력 검증 실패</text>
+  <text x="738" y="477" class="code">cursor = r40 유지</text>
+  <text x="738" y="506" class="body">다음 run에서 r41 재전달</text>
+  <text x="738" y="529" class="small">중복 가능, 누락 방지</text>
+
+  <path d="M1095 312C1095 360 520 356 460 410" class="green"/>
+  <path d="M1095 312C1095 360 940 362 900 410" class="red"/>
+
+  <rect x="54" y="610" width="1172" height="60" rx="14" class="card"/>
+  <text x="82" y="646" class="body">불변식: cursor는 HEAD가 아니라 실제로 처리한 마지막 revision까지만 이동</text>
+</svg>

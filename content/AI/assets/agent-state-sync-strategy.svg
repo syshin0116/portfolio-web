@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Dynamic snapshot과 event cursor 비교</title>
+  <desc id="desc">현재 상태를 전달하는 dynamic snapshot과 대화별 미처리 변경을 관리하는 event cursor의 차이, 두 방식을 결합한 권장 구조</desc>
+  <defs>
+    <pattern id="grid3" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#1e293b" stroke-width="0.7"/></pattern>
+    <marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3L0 6Z" fill="#94a3b8"/></marker>
+    <style>
+      .bg{fill:#020617}.title{font:700 29px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#f8fafc}.sub{font:15px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#94a3b8}.panel{fill:#0f172a;stroke:#334155;stroke-width:1.5}.snap{fill:#082f49;stroke:#38bdf8;stroke-width:1.7}.cursor{fill:#312e81;stroke:#818cf8;stroke-width:1.7}.hybrid{fill:#052e2b;stroke:#34d399;stroke-width:1.9}.head{font:700 18px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#f8fafc}.body{font:14px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#cbd5e1}.small{font:12px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#94a3b8}.label{font:700 13px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#bae6fd}.labelPurple{font:700 13px Pretendard,"Apple SD Gothic Neo",sans-serif;fill:#c7d2fe}.code{font:700 13px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#a7f3d0}.line{stroke:#94a3b8;stroke-width:2.2;fill:none;marker-end:url(#arrow3)}.divider{stroke:#334155;stroke-width:1}.chip{fill:#1e293b;stroke:#475569;stroke-width:1}
+    </style>
+  </defs>
+  <rect class="bg" width="1280" height="720"/><rect width="1280" height="720" fill="url(#grid3)" opacity=".75"/>
+  <text x="54" y="61" class="title">현재 상태 전달과 변경 처리 보장은 다른 문제</text>
+  <text x="54" y="90" class="sub">Dynamic snapshot은 현재값, event cursor는 대화별 미처리 변경을 담당</text>
+
+  <rect x="54" y="132" width="550" height="340" rx="18" class="snap"/>
+  <text x="82" y="170" class="head">Dynamic snapshot</text>
+  <text x="82" y="198" class="label">지금 유효한 상태는 무엇인가</text>
+  <line x1="82" y1="220" x2="576" y2="220" class="divider"/>
+  <rect x="82" y="246" width="140" height="52" rx="10" class="chip"/>
+  <text x="101" y="267" class="body">run 시작</text><text x="101" y="286" class="small">DB snapshot</text>
+  <rect x="260" y="246" width="140" height="52" rx="10" class="chip"/>
+  <text x="281" y="267" class="body">system prompt</text><text x="281" y="286" class="small">현재 상태</text>
+  <rect x="438" y="246" width="138" height="52" rx="10" class="chip"/>
+  <text x="475" y="267" class="body">LLM</text><text x="459" y="286" class="small">최신값 확인</text>
+  <path d="M222 272H258" class="line"/><path d="M400 272H436" class="line"/>
+  <text x="82" y="342" class="body">장점  구현과 운영이 가벼움</text>
+  <text x="82" y="374" class="body">한계  무엇이, 누가, 왜 바꿨는지 알기 어려움</text>
+  <text x="82" y="406" class="body">적합  현재값 중심 안내, 매 턴 재조회</text>
+  <text x="82" y="442" class="small">별도 이벤트 스키마와 cursor 불필요</text>
+
+  <rect x="676" y="132" width="550" height="340" rx="18" class="cursor"/>
+  <text x="704" y="170" class="head">Event + per-thread cursor</text>
+  <text x="704" y="198" class="labelPurple">마지막 성공 뒤 무엇이 바뀌었는가</text>
+  <line x1="704" y1="220" x2="1198" y2="220" class="divider"/>
+  <rect x="704" y="246" width="140" height="52" rx="10" class="chip"/>
+  <text x="725" y="267" class="body">event log</text><text x="725" y="286" class="small">revision, actor</text>
+  <rect x="882" y="246" width="140" height="52" rx="10" class="chip"/>
+  <text x="901" y="267" class="body">thread cursor</text><text x="903" y="286" class="small">미처리 범위</text>
+  <rect x="1060" y="246" width="138" height="52" rx="10" class="chip"/>
+  <text x="1097" y="267" class="body">LLM</text><text x="1084" y="286" class="small">변경 확인</text>
+  <path d="M844 272H880" class="line"/><path d="M1022 272H1058" class="line"/>
+  <text x="704" y="342" class="body">장점  출처 보존, 누락 방지, 실패 재전달</text>
+  <text x="704" y="374" class="body">한계  이벤트, cursor, 배치와 동시성 관리 필요</text>
+  <text x="704" y="406" class="body">적합  여러 대화, 긴 공백, 이전 답변 교정</text>
+  <text x="704" y="442" class="small">현재 최종값 판단에는 제품 row 조회도 필요</text>
+
+  <rect x="178" y="536" width="924" height="128" rx="18" class="hybrid"/>
+  <text x="208" y="573" class="head">권장 결합</text>
+  <text x="208" y="604" class="code">current snapshot + unseen events + conversation → ModelRequest</text>
+  <text x="208" y="635" class="body">현재 상태로 답하고, 미처리 변경으로 이전 대화가 낡은 이유를 설명</text>
+  <path d="M330 472C330 510 440 514 500 534" class="line"/><path d="M950 472C950 510 840 514 780 534" class="line"/>
+</svg>

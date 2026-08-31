@@ -22,9 +22,9 @@
     "test:site-browser": "env -u NO_COLOR playwright test --config=playwright.site.config.ts"
   },
   "dependencies": {
-    "@assistant-ui/react": "0.15.13",
-    "@assistant-ui/react-langgraph": "0.14.23",
-    "@assistant-ui/react-markdown": "0.14.10",
+    "@assistant-ui/react": "0.15.17",
+    "@assistant-ui/react-langgraph": "0.14.25",
+    "@assistant-ui/react-markdown": "0.14.13",
     "@auth/neon-adapter": "1.11.3",
     "@giscus/react": "^3.1.0",
     "@langchain/core": "1.2.5",
